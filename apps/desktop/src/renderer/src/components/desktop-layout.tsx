@@ -100,7 +100,8 @@ function MainTopBar({ sidebarMounted }: { sidebarMounted: boolean }) {
         data-slot="main-top-bar-content"
         className="relative z-10 flex h-full min-w-0 max-w-full items-center"
       >
-        <TabBar />
+        {isCompact ? null : <TabBar />}
+
       </div>
     </header>
   );
@@ -277,10 +278,11 @@ export function DesktopShell() {
               <MainTopBar sidebarMounted={Boolean(slug)} />
               <MainCanvas showWorkspaceLoading={!slug}>
                 {/* Same indicator, same anchor as web: DashboardLayout puts it
-                    at the top of SidebarInset, and MainCanvas is desktop's
-                    equivalent relative/overflow-hidden content box. Desktop
-                    used to have no navigation feedback at all — a click just
-                    froze until the destination committed (MUL-6404). */}
+                    at the top of the session canvas (below the tab strip), and
+                    MainCanvas is desktop's equivalent relative/overflow-hidden
+                    content box. Desktop used to have no navigation feedback at
+                    all — a click just froze until the destination committed
+                    (MUL-6404). */}
                 <NavigationProgress />
                 <TabContent />
                 {slug && <FloatingChat />}

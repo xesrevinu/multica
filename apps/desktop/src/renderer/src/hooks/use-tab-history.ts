@@ -5,12 +5,13 @@ import {
   useActiveBrowsingHistory,
   useActiveBrowsingHistoryTitles,
   useActiveTabHistory,
-} from "@/stores/tab-store";
+} from "@multica/core/tabs";
 
 export interface BrowsingHistoryEntry {
   url: string;
   title?: string;
 }
+
 
 /**
  * Shell back/forward for the active tab (MUL-4741 session architecture).
