@@ -420,6 +420,9 @@ const MODEL_PRICING: Record<
   //    Composer rows). Long-context surcharges (GPT >272K input) can't be
   //    seen in aggregated rows, so those requests are underestimated. --
   "cursor/claude-opus-5-5":      { input: 4,    output: 20,   cacheRead: 0.2,   cacheWrite: 5 },
+  // Fast mode of Opus 5: 2× the standard row, mirroring
+  // server/internal/metrics/pricing.go.
+  "cursor/claude-opus-5-fast":   { input: 10,   output: 50,   cacheRead: 1,     cacheWrite: 12.5 },
   "cursor/claude-opus-5":        { input: 5,    output: 25,   cacheRead: 0.5,   cacheWrite: 6.25 },
   "cursor/claude-opus-4-8":      { input: 5,    output: 25,   cacheRead: 0.5,   cacheWrite: 6.25 },
   // Published as "3x lower per-token pricing than Opus 4.7 fast mode".
