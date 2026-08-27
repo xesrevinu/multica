@@ -1,4 +1,4 @@
-import { statusCategoryOfKey } from "@multica/core/issues";
+import { statusCategoryOfKey } from "@multica/core/issues/status-category";
 import { isBuiltInIssueStatus } from "@multica/core/issue-statuses";
 import type {
   BuiltInIssueStatus,

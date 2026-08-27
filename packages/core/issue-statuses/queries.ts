@@ -123,7 +123,6 @@ export interface IssueStatusCatalog {
 }
 
 const BUILT_IN = new Set<string>(BUILT_IN_STATUS_ORDER);
-const CATEGORY = new Set<string>(STATUS_ORDER);
 
 const CATEGORY_RANK = new Map<string, number>(STATUS_ORDER.map((c, i) => [c, i]));
 const BUILT_IN_RANK = new Map<string, number>(
@@ -151,10 +150,6 @@ export function compareIssueStatusEntries(a: IssueStatusEntry, b: IssueStatusEnt
     if (builtInRank !== 0) return builtInRank;
   }
   return a.key.localeCompare(b.key);
-}
-
-export function isIssueStatusCategory(value: string): value is IssueStatusCategory {
-  return CATEGORY.has(value);
 }
 
 export function isBuiltInIssueStatus(value: string): value is BuiltInIssueStatus {

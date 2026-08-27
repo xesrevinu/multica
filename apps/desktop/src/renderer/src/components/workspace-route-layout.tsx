@@ -11,7 +11,7 @@ import { isWorkspaceDeletePending } from "@multica/core/workspace/pending-delete
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceSeen } from "@multica/views/workspace/use-workspace-seen";
 import { WorkspacePresencePrefetch } from "@multica/views/layout";
-import { SourceBackfillModal } from "@multica/views/onboarding";
+import { SourceBackfillModal } from "@multica/views/onboarding/source-backfill-modal";
 import { useTabStore } from "@multica/core/tabs";
 import { useWindowOverlayStore } from "@/stores/window-overlay-store";
 
