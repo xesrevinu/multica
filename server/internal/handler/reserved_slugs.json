@@ -150,6 +150,7 @@
         "robots.txt",
         "sitemap.xml",
         "manifest.json",
+        "sw.js",
         ".well-known"
       ]
     }
