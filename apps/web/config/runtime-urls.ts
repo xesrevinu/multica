@@ -134,6 +134,9 @@ export function runtimeRewriteDestination(
   if (pathname === "/ws") {
     return appendPath(remoteApiUrl, "/ws");
   }
+  if (pathname === "/ws/pty") {
+    return appendPath(remoteApiUrl, "/ws/pty");
+  }
   // `multica setup self-host` probes `{server-url}/health` and treats any
   // non-200 as "Server not reachable". The backend serves it, but a
   // same-origin reverse proxy that forwards everything to the web image left

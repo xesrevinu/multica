@@ -11,6 +11,7 @@
     "usage": "分析",
     "runtimes": "ランタイム",
     "skills": "スキル",
+    "terminal": "ターミナル",
     "settings": "設定"
   },
   "tab": {
@@ -51,6 +52,7 @@
     "log_out": "ログアウト",
     "new_issue": "新規タスク",
     "new_issue_shortcut": "C",
+    "terminal": "ターミ널",
     "pinned_label": "ピン留め済み",
     "workspace_group": "ワークスペース",
     "configure_group": "設定",
@@ -63,5 +65,25 @@
   "tab_history": {
     "back": "戻る",
     "forward": "進む"
+  },
+  "terminal": {
+    "project": "プロジェクト",
+    "machine": "マシン",
+    "agent": "エージェント",
+    "none": "なし",
+    "open_shell": "シェルを開く",
+    "start_agent": "エージェントを起動",
+    "disconnect": "切断",
+    "connecting": "接続中…",
+    "connected": "接続済み",
+    "disconnected": "切断",
+    "daemon_offline": "そのマシンは接続されていません",
+    "select_machine": "シェルを開くマシンを選択",
+    "select_agent": "バインド済みでオンラインのエージェントを選択",
+    "no_online_machines": "オンラインのマシンがありません",
+    "no_online_agents": "バインド済みでオンラインのエージェントがありません",
+    "cwd_home": "cwd: $HOME",
+    "cwd_project": "cwd: {{path}}",
+    "error": "{{message}}"
   }
 }

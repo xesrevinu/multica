@@ -11,6 +11,7 @@
     "usage": "Analytics",
     "runtimes": "Runtimes",
     "skills": "Skills",
+    "terminal": "Terminal",
     "settings": "Settings"
   },
   "tab": {
@@ -51,6 +52,7 @@
     "log_out": "Log out",
     "new_issue": "New Issue",
     "new_issue_shortcut": "C",
+    "terminal": "Terminal",
     "pinned_label": "Pinned",
     "workspace_group": "Workspace",
     "configure_group": "Configure",
@@ -63,5 +65,25 @@
   "tab_history": {
     "back": "Go back",
     "forward": "Go forward"
+  },
+  "terminal": {
+    "project": "Project",
+    "machine": "Machine",
+    "agent": "Agent",
+    "none": "None",
+    "open_shell": "Open Shell",
+    "start_agent": "Start Agent",
+    "disconnect": "Disconnect",
+    "connecting": "Connecting…",
+    "connected": "Connected",
+    "disconnected": "Disconnected",
+    "daemon_offline": "That machine is not connected",
+    "select_machine": "Select a machine to open a shell",
+    "select_agent": "Select a bound online agent",
+    "no_online_machines": "No online machines",
+    "no_online_agents": "No bound online agents",
+    "cwd_home": "cwd: $HOME",
+    "cwd_project": "cwd: {{path}}",
+    "error": "{{message}}"
   }
 }

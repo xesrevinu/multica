@@ -303,6 +303,11 @@ describe("runtimeRewriteDestination", () => {
         REMOTE_API_URL: "http://backend:8080",
       }),
     ).toBe("http://backend:8080/ws");
+    expect(
+      runtimeRewriteDestination("/ws/pty", {
+        REMOTE_API_URL: "http://backend:8080",
+      }),
+    ).toBe("http://backend:8080/ws/pty");
   });
 });
 

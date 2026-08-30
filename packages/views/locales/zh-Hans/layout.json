@@ -11,6 +11,7 @@
     "usage": "统计",
     "runtimes": "运行时",
     "skills": "Skills",
+    "terminal": "终端",
     "settings": "设置"
   },
   "tab": {
@@ -51,6 +52,7 @@
     "log_out": "退出登录",
     "new_issue": "新建任务",
     "new_issue_shortcut": "C",
+    "terminal": "终端",
     "pinned_label": "固定",
     "workspace_group": "工作区",
     "configure_group": "配置",
@@ -63,5 +65,25 @@
   "tab_history": {
     "back": "后退",
     "forward": "前进"
+  },
+  "terminal": {
+    "project": "项目",
+    "machine": "机器",
+    "agent": "智能体",
+    "none": "无",
+    "open_shell": "打开 Shell",
+    "start_agent": "启动 Agent",
+    "disconnect": "断开",
+    "connecting": "连接中…",
+    "connected": "已连接",
+    "disconnected": "已断开",
+    "daemon_offline": "该机器未连接",
+    "select_machine": "选择一台机器以打开 Shell",
+    "select_agent": "选择已绑定且在线的智能体",
+    "no_online_machines": "没有在线机器",
+    "no_online_agents": "没有已绑定且在线的智能体",
+    "cwd_home": "cwd: $HOME",
+    "cwd_project": "cwd: {{path}}",
+    "error": "{{message}}"
   }
 }
