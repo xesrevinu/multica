@@ -61,5 +61,9 @@
       "title": "Discord に参加",
       "dismiss": "閉じる"
     }
+  },
+  "tab_history": {
+    "back": "戻る",
+    "forward": "進む"
   }
 }
