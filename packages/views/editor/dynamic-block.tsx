@@ -162,7 +162,7 @@ export function DynamicBlock({
           className={cn(
             "flex shrink-0 items-center gap-2 transition-opacity duration-150 ease-out",
             !actionsPinned &&
-              "group-focus-within/dynamic-block:opacity-100 group-hover/dynamic-block:opacity-100 [@media(hover:hover)]:opacity-0",
+              "group-focus-within/dynamic-block:opacity-100 group-hover/dynamic-block:opacity-100 [@media(hover:hover)_and_(pointer:fine)]:opacity-0",
           )}
         >
           <TabsList

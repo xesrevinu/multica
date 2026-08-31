@@ -33,6 +33,7 @@ import {
 } from "@multica/core/runtimes";
 import { useConfigStore } from "@multica/core/config";
 import { Badge } from "@multica/ui/components/ui/badge";
+import { hoverRevealOpacity } from "@multica/ui/lib/pointer-affordances";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Popover,
@@ -839,7 +840,7 @@ function LocalDirectoryRow({
       <button
         type="button"
         onClick={() => onEditMode(resource)}
-        className="opacity-0 group-hover:opacity-100 transition-opacity rounded-sm p-0.5 hover:bg-accent"
+        className={`${hoverRevealOpacity} transition-opacity rounded-sm p-0.5 hover:bg-accent`}
         title={t(($) => $.resources.mode_edit_tooltip)}
       >
         <GitBranch className="size-3 text-muted-foreground" />
@@ -847,7 +848,7 @@ function LocalDirectoryRow({
       <button
         type="button"
         onClick={onRemove}
-        className="opacity-0 group-hover:opacity-100 transition-opacity rounded-sm p-0.5 hover:bg-accent"
+        className=`${hoverRevealOpacity} transition-opacity rounded-sm p-0.5 hover:bg-accent`
         title={t(($) => $.resources.remove_tooltip)}
       >
         <Trash2 className="size-3 text-muted-foreground" />
