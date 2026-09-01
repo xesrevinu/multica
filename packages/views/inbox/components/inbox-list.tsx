@@ -18,6 +18,7 @@ import type { InboxView } from "./inbox-view";
 import { InboxListItem } from "./inbox-list-item";
 import { VirtuosoSeed, VIRTUOSO_SEED_COUNT } from "../../common/virtuoso-seed";
 import { useRestoredScrollOffset, useRestoredScrollRef } from "../../platform";
+import { PAGE_GUTTER } from "../../layout/page-header";
 import { useT } from "../../i18n";
 
 // Sizing only (like the board's card estimate): the seed's trailing spacer
@@ -213,7 +214,7 @@ export function InboxList({
         </div>}
         {/* Still offer the archive when the main list is empty — that is
             exactly when a user goes looking for what they filed away. */}
-        <div className="px-2"><Footer /></div>
+        <div className={PAGE_GUTTER}><Footer /></div>
       </div>
     );
   }
@@ -243,7 +244,7 @@ export function InboxList({
       onKeyDown={handleKeyDown}
       className="flex-1 min-h-0 overflow-y-auto outline-none"
     >
-      <div className="px-2 py-1">
+      <div className={`${PAGE_GUTTER} py-1`}>
         {scrollEl ? (
           <Virtuoso
             ref={virtuosoRef}

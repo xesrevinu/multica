@@ -63,7 +63,7 @@ import {
 } from "@multica/ui/components/ui/dialog";
 import { useT } from "../../i18n";
 import type { SkillRow } from "./skill-list-filter";
-import { PAGE_TOOLBAR } from "../../layout/page-header";
+import { PAGE_TOOLBAR_INLINE } from "../../layout/page-header";
 
 export type OriginType = SkillOriginType;
 
@@ -206,7 +206,7 @@ export function SkillListToolbar({
   );
 
   return (
-    <div className={PAGE_TOOLBAR}>
+    <div className={PAGE_TOOLBAR_INLINE}>
       {/* Left: name search + result count. The count only appears while
           search/filters narrow the list — in the idle state it would just
           duplicate the total already shown in the page header. Below md the

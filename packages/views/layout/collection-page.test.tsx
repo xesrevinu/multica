@@ -1,6 +1,11 @@
 import { render, screen } from "@testing-library/react";
 import { Plus, Users } from "lucide-react";
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("./session-tabs", () => ({
+  useSessionTabsEnabled: () => false,
+}));
+
 import {
   CollectionPageHeader,
   CollectionPageHeaderAction,

@@ -98,10 +98,10 @@ function ListRowContent({
         data-peeked={peeked ? "" : undefined}
         style={containerStyle}
         {...containerProps}
-        className={`group/row flex h-[var(--issue-row-height)] items-center gap-2 px-4 text-body transition-colors ${
+        className={`group/row flex h-[var(--issue-row-height)] cursor-pointer items-center gap-2 px-4 text-body transition-colors duration-75 ${
           selected
-            ? "bg-surface-selected hover:not-data-[popup-open]:bg-surface-selected data-[popup-open]:bg-surface-selected"
-            : "hover:not-data-[popup-open]:bg-surface-hover data-[popup-open]:bg-surface-hover"
+            ? "bg-surface-selected hover:not-data-[popup-open]:bg-surface-selected active:bg-surface-selected data-[popup-open]:bg-surface-selected"
+            : "hover:not-data-[popup-open]:bg-surface-hover active:not-data-[popup-open]:bg-surface-selected data-[popup-open]:bg-surface-hover"
         } ${PEEKED_ROW_CLASS} ${isDragging ? "opacity-30" : ""}`}
       >
         <div

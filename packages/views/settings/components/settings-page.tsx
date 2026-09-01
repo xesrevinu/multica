@@ -432,7 +432,7 @@ export function SettingsPage({ extraDeviceTabs = [] }: SettingsPageProps = {}) {
   );
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background md:flex-row">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background md:flex-row">
       <aside className="shrink-0 border-b border-surface-border md:flex md:w-60 md:flex-col md:border-b-0 md:border-r">
         <div className="flex h-16 shrink-0 items-center gap-1 px-4 md:px-5">
           <CollapsedNavTrigger />

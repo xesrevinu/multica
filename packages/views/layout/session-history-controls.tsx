@@ -54,7 +54,7 @@ export function SessionHistoryControls() {
     "relative flex size-7 items-center justify-center rounded-md text-faint-foreground transition-colors hover:bg-muted/50 hover:text-muted-foreground disabled:pointer-events-none disabled:opacity-30 before:absolute before:inset-[-8px] before:content-[''] [@media(hover:hover)_and_(pointer:fine)]:before:content-none";
 
   return (
-    <div className="flex h-full shrink-0 items-center gap-0.5 pl-2 pr-1">
+    <div className="flex h-full shrink-0 items-center gap-0.5">
       <button
         type="button"
         onClick={goBack}

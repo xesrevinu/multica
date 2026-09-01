@@ -18,6 +18,19 @@
  * right as before. It has to clear the launcher vertically instead. On a wide
  * viewport a centred toolbar never gets near the corner, so its clearance is
  * usually applied under a `max-md:` variant. */
+/* Keep overflow scrolling, hide the 6px overlay from the global scrollbar
+ * rules. Use on compact chrome strips (settings tabs, machine rail, toolbars)
+ * so a horizontal swipe does not grow the strip or paint a thumb. */
+@utility no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+}
+
 @utility pe-chat-launcher {
   padding-inline-end: var(--chat-launcher-clearance);
 }

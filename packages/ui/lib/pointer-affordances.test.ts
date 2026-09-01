@@ -9,6 +9,7 @@ import {
   hoverRevealHeaderOpacity,
   hoverRevealOpacity,
   hoverRevealRowOpacity,
+  interactiveRowSurface,
 } from "./pointer-affordances";
 
 describe("pointer affordances", () => {
@@ -26,5 +27,7 @@ describe("pointer affordances", () => {
     expect(hoverRevealCodeOpacity).toContain("group-hover/code:opacity-100");
     expect(coarseAlwaysFineRowHoverBlock.startsWith("block ")).toBe(true);
     expect(fineOnlyUntilRowHoverHidden.startsWith("hidden ")).toBe(true);
+    expect(interactiveRowSurface).toContain("active:bg-surface-selected");
+    expect(interactiveRowSurface).toContain("duration-75");
   });
 });

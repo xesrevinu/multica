@@ -13,6 +13,14 @@
 export const FINE_HOVER =
   "[@media(hover:hover)_and_(pointer:fine)]" as const;
 
+/**
+ * Clickable list/nav rows. Hover is a light wash; press uses the selected
+ * token so a click is visible even when the pointer was already hovering.
+ * 75ms is short enough that a press registers before navigation paints.
+ */
+export const interactiveRowSurface =
+  "cursor-pointer transition-colors duration-75 hover:bg-surface-hover active:bg-surface-selected" as const;
+
 /** Hide this control where a mouse can hover; keep it for touch. */
 export const hideWhenFineHover =
   "[@media(hover:hover)_and_(pointer:fine)]:hidden" as const;

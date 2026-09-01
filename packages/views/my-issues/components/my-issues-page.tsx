@@ -30,6 +30,7 @@ export function MyIssuesPage() {
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
+
       {user ? (
         <IssueSurface
           scope={{

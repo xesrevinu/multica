@@ -41,7 +41,6 @@ export type SidebarNavItem = {
 // always agree. See route-icon-components.tsx.
 export const personalNav: SidebarNavItem[] = [
   { key: "inbox", labelKey: "inbox" },
-  { key: "myIssues", labelKey: "my_issues" },
   { key: "chat", labelKey: "chat" },
 ];
 

@@ -328,7 +328,7 @@ export function AgentOverviewPane({
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-background">
       <div
-        className="shrink-0 overflow-x-auto border-b"
+        className="no-scrollbar shrink-0 overflow-x-auto overflow-y-hidden overscroll-x-contain border-b"
         role="tablist"
         aria-label={t(($) => $.tabs.page_navigation_aria)}
       >
@@ -406,7 +406,7 @@ export function AgentOverviewPane({
                 nav: in-card panels must not break the desktop tab merge (MUL-4439). */}
             <aside
               className={cn(
-                "shrink-0 overflow-x-auto border-b border-surface-border py-2 md:w-52 md:overflow-y-auto md:border-b-0 md:border-r md:py-4",
+                "no-scrollbar min-w-0 shrink-0 overflow-x-auto overflow-y-hidden overscroll-x-contain border-b border-surface-border py-2 md:w-52 md:overflow-y-auto md:overflow-x-hidden md:border-b-0 md:border-r md:py-4",
                 PAGE_GUTTER,
               )}
             >

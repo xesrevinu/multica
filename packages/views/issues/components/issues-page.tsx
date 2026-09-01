@@ -61,6 +61,7 @@ export function IssuesPage() {
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
+
       <IssueSurface
         scope={{ type: "workspace", actorKind: scope }}
         modes={["board", "list", "table", "swimlane"]}
