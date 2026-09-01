@@ -37,9 +37,9 @@ export const PAGE_TOOLBAR = cn(
  * Renders nothing in the two cases where it would not be the way back:
  * outside a `SidebarProvider` (a page that stands alone, with no nav to
  * reopen), and under a shell that declares `hasExternalTrigger` — the desktop
- * window toolbar's trigger never scrolls away or hides, so a second copy in
- * every page header stacked two identical icons 50px apart, and a third
- * whenever a detail pane brought its own header along (MUL-6218).
+ * window toolbar and the web session-tab strip keep their own trigger, so a
+ * second copy in every page header stacked two identical icons 50px apart
+ * (MUL-6218).
  */
 export function CollapsedNavTrigger() {
   const sidebar = useSidebarSafe();
