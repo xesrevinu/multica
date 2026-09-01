@@ -48,13 +48,13 @@ export const personalNav: SidebarNavItem[] = [
 export const workspaceNav: SidebarNavItem[] = [
   { key: "issues", labelKey: "issues" },
   { key: "projects", labelKey: "projects" },
+  { key: "autopilots", labelKey: "autopilots" },
 ];
 
-// Agents live under the Runtimes item (see AgentsRuntimesPage). Autopilot,
-// Squads, and Analytics moved here from the Workspace group.
+// Agents live on the Runtimes page (see AgentsRuntimesPage). Squads and
+// Analytics moved here from the Workspace group.
 export const configureNav: SidebarNavItem[] = [
   { key: "runtimes", labelKey: "runtimes" },
-  { key: "autopilots", labelKey: "autopilots" },
   { key: "squads", labelKey: "squads" },
   { key: "usage", labelKey: "usage" },
   { key: "skills", labelKey: "skills" },

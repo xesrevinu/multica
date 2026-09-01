@@ -7,7 +7,11 @@ import {
   EMPTY_AGENT_FILTERS,
   type AgentListFilters,
 } from "@multica/core/agents/stores";
-import { rowMatchesFilters, type AgentListRow } from "./agents-page";
+import {
+  rowMatchesFilters,
+  rowMatchesMachine,
+  type AgentListRow,
+} from "./agents-page";
 
 function makeRow(
   overrides: Partial<AgentListRow["agent"]> = {},
@@ -219,5 +223,29 @@ describe("rowMatchesFilters — access dimension", () => {
         label,
       ).toBe(expected);
     }
+  });
+});
+
+describe("rowMatchesMachine", () => {
+  it("passes every row when no machine is selected", () => {
+    const bound = makeRow({ runtime_id: "rt-1" }, {
+      runtime: { id: "rt-1" } as AgentListRow["runtime"],
+    });
+    expect(rowMatchesMachine(bound, null)).toBe(true);
+    expect(rowMatchesMachine(bound, undefined)).toBe(true);
+  });
+
+  it("keeps agents bound to the selected machine's runtimes", () => {
+    const onMachine = makeRow({ runtime_id: "rt-1" }, {
+      runtime: { id: "rt-1" } as AgentListRow["runtime"],
+    });
+    const elsewhere = makeRow({ runtime_id: "rt-2" }, {
+      runtime: { id: "rt-2" } as AgentListRow["runtime"],
+    });
+    const unbound = makeRow({ runtime_id: "" }, { runtime: null });
+    const ids = new Set(["rt-1"]);
+    expect(rowMatchesMachine(onMachine, ids)).toBe(true);
+    expect(rowMatchesMachine(elsewhere, ids)).toBe(false);
+    expect(rowMatchesMachine(unbound, ids)).toBe(false);
   });
 });

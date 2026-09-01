@@ -84,7 +84,7 @@ export interface WorkspacePage {
 /**
  * Single source of truth for workspace nav pages. Keep aligned with the nav
  * destinations in paths.ts. Sidebar groups live in sidebar-nav.ts — Agents is
- * still a page (palette + routes) but shares the Runtimes sidebar row.
+ * still a page (palette + routes) but shares the Runtimes sidebar row and page.
  */
 export const WORKSPACE_PAGES: Record<WorkspacePageKey, WorkspacePage> = {
   inbox: { segment: "inbox", icon: "Inbox", navKey: "inbox" },
