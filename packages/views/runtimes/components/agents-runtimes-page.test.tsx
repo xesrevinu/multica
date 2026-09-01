@@ -142,6 +142,7 @@ describe("AgentsRuntimesPage", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /All machines/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /dev.local/ })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Add a computer" })).toHaveLength(1);
     expect(screen.getByText(/agents-panel/)).toHaveTextContent("hide-header");
     expect(screen.queryByText("runtimes-panel")).toBeNull();
   });

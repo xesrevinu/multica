@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Bot, Cloud, Plus, Server } from "lucide-react";
+import { Bot, Cloud, Server } from "lucide-react";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { AgentsPage, type AgentsPageProps } from "../../agents/components/agents-page";
 import {
@@ -97,11 +97,6 @@ export function AgentsRuntimesPage({
                 onClick={() => setShowCloudRuntimeDialog(true)}
               />
             )}
-            <CollectionPageHeaderAction
-              icon={Plus}
-              label={t(($) => $.page.connect_remote)}
-              onClick={() => setShowConnectDialog(true)}
-            />
             <CollectionPageHeaderAction
               icon={Bot}
               label={agentsT(($) => $.page.new_agent)}
