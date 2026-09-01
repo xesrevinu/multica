@@ -681,6 +681,10 @@ export class ApiClient {
     this.token = token;
   }
 
+  getToken(): string | null {
+    return this.token;
+  }
+
   private readCsrfToken(): string | null {
     if (typeof document === "undefined") return null;
     const match = document.cookie
@@ -3980,6 +3984,17 @@ export class ApiClient {
     const raw = await this.fetch<unknown>(`/api/issue-view-preferences?${qs.toString()}`);
     return parseWithFallback(raw, IssueViewPreferenceSchema, EMPTY_ISSUE_VIEW_PREFERENCE, {
       endpoint: "GET /api/issue-view-preferences",
+    });
+  }
+
+  async getTerminalWorkspaceState(): Promise<{ state: unknown; updated_at?: string }> {
+    return this.fetch("/api/terminal-workspace-state");
+  }
+
+  async putTerminalWorkspaceState(state: unknown): Promise<{ state: unknown; updated_at?: string }> {
+    return this.fetch("/api/terminal-workspace-state", {
+      method: "PUT",
+      body: JSON.stringify({ state }),
     });
   }
 

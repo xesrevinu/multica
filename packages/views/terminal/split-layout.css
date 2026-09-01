@@ -1,0 +1,96 @@
+/* Orca-style split: the element is a wide hit target; the visible line is ::after. */
+.pty-split {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.pty-split.is-vertical {
+  flex-direction: row;
+}
+
+.pty-split.is-horizontal {
+  flex-direction: column;
+}
+
+.pty-split-child {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pty-split-child > * {
+  flex: 1 1 0%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.pty-divider {
+  --pty-divider-thickness: 4px;
+  --pty-divider-extension: 5px;
+  position: relative;
+  flex: none;
+  background: transparent;
+  touch-action: none;
+  z-index: 20;
+}
+
+.pty-divider.is-vertical {
+  width: 10px;
+  cursor: col-resize;
+}
+
+.pty-divider.is-horizontal {
+  height: 10px;
+  cursor: row-resize;
+}
+
+.pty-divider::after {
+  content: "";
+  position: absolute;
+  border-radius: 1px;
+  background: color-mix(in oklab, var(--surface-border) 85%, transparent);
+  transition: background 100ms ease;
+}
+
+.pty-divider.is-vertical::after {
+  top: calc(-1 * var(--pty-divider-extension));
+  bottom: calc(-1 * var(--pty-divider-extension));
+  left: 50%;
+  width: var(--pty-divider-thickness);
+  transform: translateX(-50%);
+}
+
+.pty-divider.is-horizontal::after {
+  left: calc(-1 * var(--pty-divider-extension));
+  right: calc(-1 * var(--pty-divider-extension));
+  top: 50%;
+  height: var(--pty-divider-thickness);
+  transform: translateY(-50%);
+}
+
+.pty-divider:hover::after,
+.pty-divider.is-dragging::after {
+  background: color-mix(in oklab, var(--foreground) 35%, transparent);
+}
+
+.pty-split.is-dragging {
+  user-select: none;
+  cursor: inherit;
+}
+
+.pty-split.is-dragging.is-vertical,
+.pty-split.is-dragging.is-vertical * {
+  cursor: col-resize !important;
+}
+
+.pty-split.is-dragging.is-horizontal,
+.pty-split.is-dragging.is-horizontal * {
+  cursor: row-resize !important;
+}

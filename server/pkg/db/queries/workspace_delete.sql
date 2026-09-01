@@ -545,6 +545,10 @@ deleted_issue_views AS (
 deleted_issue_view_preferences AS (
     DELETE FROM issue_view_preference
     WHERE issue_view_preference.workspace_id = $1
+),
+deleted_terminal_workspace_state AS (
+    DELETE FROM terminal_workspace_state
+    WHERE terminal_workspace_state.workspace_id = $1
 )
 DELETE FROM quick_action WHERE quick_action.workspace_id = $1;
 

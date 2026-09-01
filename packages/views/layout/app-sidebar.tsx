@@ -721,6 +721,19 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                 </SidebarMenuItem>
               );
             })}
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                className={SIDEBAR_ITEM_CLASS}
+                isActive={isNavActive(pathname, p.terminal())}
+                render={<AppLink href={p.terminal()} />}
+              >
+                {(() => {
+                  const Icon = routeIconForPath(p.terminal());
+                  return <Icon />;
+                })()}
+                <span>{t(($) => $.sidebar.terminal)}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
           </SidebarMenu>
         </SidebarHeader>
 

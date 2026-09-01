@@ -93,6 +93,10 @@ const nextConfig: NextConfig = {
                 destination: `${remoteApiUrl}/ws`,
               },
               {
+                source: "/ws/pty",
+                destination: `${remoteApiUrl}/ws/pty`,
+              },
+              {
                 source: "/health",
                 destination: `${remoteApiUrl}/health`,
               },

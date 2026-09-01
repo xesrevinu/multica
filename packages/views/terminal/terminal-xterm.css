@@ -1,0 +1,26 @@
+.multica-xterm {
+  height: 100%;
+  width: 100%;
+}
+
+.multica-xterm .xterm {
+  height: 100%;
+  width: 100%;
+}
+
+.multica-xterm .xterm-viewport {
+  overflow-y: scroll;
+  background-color: transparent !important;
+}
+
+.multica-xterm .xterm-helpers {
+  left: 0;
+}
+
+.multica-xterm .xterm-helper-textarea {
+  caret-color: transparent;
+}
+
+.multica-xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-slider {
+  border-radius: 4px;
+}
