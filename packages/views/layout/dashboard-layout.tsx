@@ -94,7 +94,7 @@ export function DashboardLayout({
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <div className="relative z-10 flex h-10 shrink-0 items-center">
               <div className="flex h-full shrink-0 items-center gap-0.5 pl-2 pr-1">
-                <SidebarTrigger className="xl:hidden size-7 text-faint-foreground hover:bg-muted/50 hover:text-muted-foreground" />
+                <SidebarTrigger className="size-7 text-faint-foreground hover:bg-muted/50 hover:text-muted-foreground" />
                 <SessionHistoryControls />
               </div>
               <div className="min-h-0 min-w-0 flex-1 self-stretch">
