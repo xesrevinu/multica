@@ -84,6 +84,7 @@ import {
 import { useIsCompact } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { PAGE_GUTTER, PageHeader } from "../../layout/page-header";
+import { TabChromeActions } from "../../layout/tab-chrome-actions";
 import { useSessionTabsEnabled } from "../../layout/session-tabs";
 import { useTimeAgo } from "./inbox-list-item";
 import { InboxList } from "./inbox-list";
@@ -514,22 +515,17 @@ export function InboxPage() {
   // -- Shared sub-components --------------------------------------------------
 
   const sessionTabs = useSessionTabsEnabled();
-  const listHeader = (
-    <PageHeader>
-      <div className="flex flex-1 items-center gap-2">
-        {!sessionTabs && (
-          <h1 className="text-body font-semibold">{t(($) => $.page.title)}</h1>
-        )}
-        {unreadCount > 0 && (
-          <NumberFlow
-            value={unreadCount}
-            animated={false}
-            format={{ maximumFractionDigits: 0 }}
-            aria-label={String(unreadCount)}
-            className="text-caption text-muted-foreground"
-          />
-        )}
-      </div>
+  const inboxHeaderActions = (
+    <>
+      {unreadCount > 0 && (
+        <NumberFlow
+          value={unreadCount}
+          animated={false}
+          format={{ maximumFractionDigits: 0 }}
+          aria-label={String(unreadCount)}
+          className="text-caption text-muted-foreground"
+        />
+      )}
       <InboxFilterMenu
         wsId={wsId}
         items={viewItems}
@@ -572,6 +568,16 @@ export function InboxPage() {
         </DropdownMenuContent>
       </DropdownMenu>
       )}
+    </>
+  );
+  const listHeader = sessionTabs ? (
+    <TabChromeActions>{inboxHeaderActions}</TabChromeActions>
+  ) : (
+    <PageHeader>
+      <div className="flex flex-1 items-center gap-2">
+        <h1 className="text-body font-semibold">{t(($) => $.page.title)}</h1>
+      </div>
+      {inboxHeaderActions}
     </PageHeader>
   );
 
