@@ -41,7 +41,7 @@ export function IssueActionsDropdown({
     <span className="relative inline-flex">
       <DropdownMenu>
         <DropdownMenuTrigger
-          nativeButton={typeof trigger.type === "string" ? trigger.type === "button" : false}
+          nativeButton={typeof trigger.type !== "string" || trigger.type === "button"}
           render={trigger}
         />
         <DropdownMenuContent align={align} className="w-auto">
