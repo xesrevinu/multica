@@ -193,13 +193,16 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
       value={activeTab}
       onValueChange={handleTabChange}
       orientation={isMobile ? "horizontal" : "vertical"}
-      className="flex flex-1 min-h-0 flex-col gap-0 overflow-y-auto md:flex-row md:overflow-hidden"
+      className="flex min-h-0 min-w-0 flex-1 flex-col gap-0 overflow-x-hidden overflow-y-auto md:flex-row md:overflow-hidden"
     >
       {/* Structural navigation; bounded setting groups remain in the content surface.
           Stays on the content surface color (no shell tint): the desktop's active
           tab merges into the card top, and a tinted panel under the first tabs
-          breaks that seam (MUL-4439). Zoning comes from the divider instead. */}
-      <div className="shrink-0 overflow-x-auto border-b border-surface-border p-2 md:w-56 md:overflow-y-auto md:border-b-0 md:border-r md:p-4">
+          breaks that seam (MUL-4439). Zoning comes from the divider instead.
+          On compact widths the tab strip is wider than the pane: min-w-0 on
+          this page and on the strip keeps the overflow inside the strip, so
+          the dashboard shell does not grow a horizontal scrollbar. */}
+      <div className="min-w-0 max-w-full shrink-0 overflow-x-auto border-b border-surface-border p-2 md:w-56 md:max-w-none md:overflow-y-auto md:border-b-0 md:border-r md:p-4">
         {/* This page builds its own chrome instead of a PageHeader, so it has
             to supply the nav trigger itself — below `xl` the nav is a sheet or
             auto-collapsed, and settings has no other way back to it. */}

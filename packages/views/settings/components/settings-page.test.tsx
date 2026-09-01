@@ -105,6 +105,19 @@ describe("SettingsPage nav trigger", () => {
     expect(trigger().className).toContain("xl:hidden");
   });
 
+  it("scrolls the compact tab strip inside itself instead of the page", () => {
+    renderWithI18n(<SettingsPage />);
+
+    const tablist = screen.getByRole("tablist");
+    expect(tablist.className).toContain("w-max");
+    expect(tablist.parentElement?.className).toContain("overflow-x-auto");
+    expect(tablist.parentElement?.className).toContain("min-w-0");
+    expect(tablist.parentElement?.parentElement?.className).toContain(
+      "overflow-x-hidden",
+    );
+    expect(tablist.parentElement?.parentElement?.className).toContain("min-w-0");
+  });
+
   it("still renders standalone, without a sidebar around it", () => {
     // Desktop mounts settings inside its own shell; the trigger has to no-op
     // rather than throw when there is no SidebarProvider above it.
