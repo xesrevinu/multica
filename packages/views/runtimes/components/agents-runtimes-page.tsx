@@ -81,22 +81,6 @@ export function AgentsRuntimesPage({
       <CollectionPageHeader
         icon={Server}
         title={t(($) => $.page.title)}
-        actions={
-          <>
-            {cloudRuntimeEnabled && (
-              <CollectionPageHeaderAction
-                icon={Cloud}
-                label={t(($) => $.cloud_runtime.action)}
-                onClick={() => setShowCloudRuntimeDialog(true)}
-              />
-            )}
-            <CollectionPageHeaderAction
-              icon={Bot}
-              label={agentsT(($) => $.page.new_agent)}
-              onClick={() => navigation.push(paths.newAgent())}
-            />
-          </>
-        }
       />
 
       <MachineRail
@@ -119,6 +103,22 @@ export function AgentsRuntimesPage({
 
       <AgentsPage
         hideHeader
+        headerActions={
+          <>
+            {cloudRuntimeEnabled && (
+              <CollectionPageHeaderAction
+                icon={Cloud}
+                label={t(($) => $.cloud_runtime.action)}
+                onClick={() => setShowCloudRuntimeDialog(true)}
+              />
+            )}
+            <CollectionPageHeaderAction
+              icon={Bot}
+              label={agentsT(($) => $.page.new_agent)}
+              onClick={() => navigation.push(paths.newAgent())}
+            />
+          </>
+        }
         machineRuntimeIds={machineRuntimeIds}
         machineTitle={selectedMachine?.title ?? null}
         localDaemonId={localDaemonId}

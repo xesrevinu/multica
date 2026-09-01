@@ -25,6 +25,12 @@ export const PAGE_TOOLBAR = cn(
   PAGE_GUTTER,
 );
 
+/** Search/filter cluster when it shares a `CollectionPageHeader` row with
+ *  the title and primary action. Standalone filter rows still use
+ *  `PAGE_TOOLBAR`. */
+export const PAGE_TOOLBAR_INLINE =
+  "flex min-w-0 flex-1 items-center justify-between gap-2";
+
 /**
  * The way back to the nav wherever it is not a permanent column: a sheet below
  * the compact breakpoint, auto-collapsed from there up to `xl`.

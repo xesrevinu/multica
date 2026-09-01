@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlertCircle,
   AlertTriangle,
@@ -174,9 +174,11 @@ export interface SkillRow {
 function PageHeaderBar({
   totalCount,
   onCreate,
+  toolbar,
 }: {
   totalCount: number;
   onCreate: () => void;
+  toolbar?: ReactNode;
 }) {
   const { t } = useT("skills");
   return (
@@ -184,6 +186,7 @@ function PageHeaderBar({
       icon={SkillIcon}
       title={t(($) => $.page.title)}
       count={totalCount}
+      toolbar={toolbar}
       actions={
         <CollectionPageHeaderAction
           icon={Plus}
@@ -823,6 +826,25 @@ export default function SkillsPage() {
       <PageHeaderBar
         totalCount={totalCount}
         onCreate={() => setCreateOpen(true)}
+        toolbar={
+          isLoading || showEmpty ? undefined : (
+            <SkillListToolbar
+              search={search}
+              onSearchChange={setSearch}
+              filters={filters}
+              onToggleFilter={toggleFilter}
+              onClearFilters={clearFilters}
+              sortField={sortField}
+              sortDirection={sortDirection}
+              onSortFieldChange={handleSortFieldSelect}
+              onSortDirectionChange={setSortDirection}
+              hiddenColumns={hiddenColumns}
+              onToggleColumn={toggleColumn}
+              allRows={allRows}
+              visibleCount={rows.length}
+            />
+          )
+        }
       />
 
       {supportingQueryDown && (
@@ -845,21 +867,6 @@ export default function SkillsPage() {
         </div>
       ) : (
         <>
-          <SkillListToolbar
-            search={search}
-            onSearchChange={setSearch}
-            filters={filters}
-            onToggleFilter={toggleFilter}
-            onClearFilters={clearFilters}
-            sortField={sortField}
-            sortDirection={sortDirection}
-            onSortFieldChange={handleSortFieldSelect}
-            onSortDirectionChange={setSortDirection}
-            hiddenColumns={hiddenColumns}
-            onToggleColumn={toggleColumn}
-            allRows={allRows}
-            visibleCount={rows.length}
-          />
           <div
             ref={listScrollRef}
             className="min-h-0 flex-1 overflow-auto @container"

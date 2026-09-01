@@ -83,14 +83,17 @@ vi.mock("../../agents/components/agents-page", () => ({
   AgentsPage: ({
     hideHeader,
     machineTitle,
+    headerActions,
   }: {
     hideHeader?: boolean;
     machineTitle?: string | null;
+    headerActions?: React.ReactNode;
   }) => (
     <div>
       agents-panel
       {hideHeader ? " hide-header" : " show-header"}
       {machineTitle ? ` machine:${machineTitle}` : " machine:all"}
+      {headerActions}
     </div>
   ),
 }));

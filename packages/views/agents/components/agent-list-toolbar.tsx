@@ -53,7 +53,8 @@ import { FILTER_ITEM_CLASS, HoverCheck } from "../../common/hover-check";
 import { availabilityConfig } from "../presence";
 import { useT } from "../../i18n";
 import type { AgentListRow } from "./agents-page";
-import { PAGE_GUTTER } from "../../layout/page-header";
+import type { ReactNode } from "react";
+import { PAGE_GUTTER, PAGE_TOOLBAR_INLINE } from "../../layout/page-header";
 import { cn } from "@multica/ui/lib/utils";
 
 const COLUMN_KEYS: AgentColumnKey[] = [
@@ -112,6 +113,8 @@ export function AgentListToolbar({
   allRows,
   members,
   visibleCount,
+  embedded = false,
+  actions,
 }: {
   scope: AgentsScope;
   onScopeChange: (scope: AgentsScope) => void;
@@ -134,6 +137,9 @@ export function AgentListToolbar({
   members: MemberWithUser[];
   /** Rows surviving the filters — shown as "n / total" when narrowed. */
   visibleCount: number;
+  /** Sit inside CollectionPageHeader instead of drawing a second h-12 row. */
+  embedded?: boolean;
+  actions?: ReactNode;
 }) {
   const { t } = useT("agents");
 
@@ -204,7 +210,19 @@ export function AgentListToolbar({
   );
 
   return (
-    <div className={cn("no-scrollbar h-12 shrink-0 overflow-x-auto overflow-y-hidden overscroll-x-contain [-webkit-overflow-scrolling:touch]", PAGE_GUTTER)}>
+    <div
+      className={
+        embedded
+          ? cn(
+              "no-scrollbar min-w-0 flex-1 overflow-x-auto overflow-y-hidden overscroll-x-contain [-webkit-overflow-scrolling:touch]",
+              PAGE_TOOLBAR_INLINE,
+            )
+          : cn(
+              "no-scrollbar h-12 shrink-0 overflow-x-auto overflow-y-hidden overscroll-x-contain [-webkit-overflow-scrolling:touch]",
+              PAGE_GUTTER,
+            )
+      }
+    >
       <div className="flex h-full w-max min-w-full items-center justify-between gap-2">
         {/* Left: local search + scope buttons + result count. Scope mixes the
           ownership lens (mine/all) with the archived lifecycle stage. Button
@@ -616,6 +634,9 @@ export function AgentListToolbar({
             </div>
           </PopoverContent>
         </Popover>
+        {actions ? (
+          <div className="flex shrink-0 items-center gap-2 pl-1">{actions}</div>
+        ) : null}
       </div>
       </div>
     </div>

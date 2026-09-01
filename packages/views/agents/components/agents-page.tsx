@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlertCircle,
   Bot,
@@ -71,6 +71,7 @@ import {
   CollectionPageHeaderAction,
   CollectionPageState,
 } from "../../layout/collection-page";
+import { PageHeader } from "../../layout/page-header";
 import { availabilityConfig } from "../presence";
 import { AgentRowActions } from "./agent-row-actions";
 import {
@@ -256,6 +257,8 @@ export interface AgentsPageProps {
   hasLocalMachine?: boolean;
   /** Parent chrome (the fused runtimes page) already rendered a header. */
   hideHeader?: boolean;
+  /** Parked on the list toolbar (and empty-state header) when hideHeader. */
+  headerActions?: ReactNode;
   /** Limit the list to agents bound to these runtimes (one machine). */
   machineRuntimeIds?: ReadonlySet<string> | null;
   /** Machine title used in the empty-filter copy. */
@@ -269,9 +272,11 @@ export interface AgentsPageProps {
 function PageHeaderBar({
   totalCount,
   onCreate,
+  toolbar,
 }: {
   totalCount: number;
   onCreate: () => void;
+  toolbar?: ReactNode;
 }) {
   const { t } = useT("agents");
   return (
@@ -284,6 +289,7 @@ function PageHeaderBar({
         href: "https://multica.ai/docs/agents",
         label: t(($) => $.page.learn_more),
       }}
+      toolbar={toolbar}
       actions={
         <CollectionPageHeaderAction
           icon={Plus}
@@ -788,6 +794,7 @@ function LoadingSkeleton() {
 
 export function AgentsPage({
   hideHeader = false,
+  headerActions,
   machineRuntimeIds = null,
   machineTitle = null,
 }: AgentsPageProps = {}) {
@@ -1075,10 +1082,43 @@ export function AgentsPage({
     // relative: positioning anchor for the batch toolbar (page-centered,
     // not viewport-centered).
     <div className="relative flex flex-1 min-h-0 flex-col">
-      {hideHeader ? null : (
+      {hideHeader ? (
+        isLoading || showEmpty ? (
+          headerActions ? (
+            <PageHeader>
+              <div className="min-w-0 flex-1" />
+              <div className="flex shrink-0 items-center gap-2">{headerActions}</div>
+            </PageHeader>
+          ) : null
+        ) : null
+      ) : (
         <PageHeaderBar
           totalCount={totalCount}
           onCreate={() => navigation.push(paths.newAgent())}
+          toolbar={
+            isLoading || showEmpty || !listReady ? undefined : (
+              <AgentListToolbar
+                embedded
+                scope={scope}
+                onScopeChange={setScope}
+                scopeCounts={scopeCounts}
+                search={search}
+                onSearchChange={setSearch}
+                filters={filters}
+                onToggleFilter={toggleFilter}
+                onClearFilters={clearFilters}
+                sortField={sortField}
+                sortDirection={sortDirection}
+                onSortFieldChange={handleSortFieldSelect}
+                onSortDirectionChange={setSortDirection}
+                hiddenColumns={hiddenColumns}
+                onToggleColumn={toggleColumn}
+                allRows={machineScopeRows}
+                members={members}
+                visibleCount={rows.length}
+              />
+            )
+          }
         />
       )}
 
@@ -1092,25 +1132,28 @@ export function AgentsPage({
         </div>
       ) : (
         <>
-          <AgentListToolbar
-            scope={scope}
-            onScopeChange={setScope}
-            scopeCounts={scopeCounts}
-            search={search}
-            onSearchChange={setSearch}
-            filters={filters}
-            onToggleFilter={toggleFilter}
-            onClearFilters={clearFilters}
-            sortField={sortField}
-            sortDirection={sortDirection}
-            onSortFieldChange={handleSortFieldSelect}
-            onSortDirectionChange={setSortDirection}
-            hiddenColumns={hiddenColumns}
-            onToggleColumn={toggleColumn}
-            allRows={machineScopeRows}
-            members={members}
-            visibleCount={rows.length}
-          />
+          {hideHeader ? (
+            <AgentListToolbar
+              scope={scope}
+              onScopeChange={setScope}
+              scopeCounts={scopeCounts}
+              search={search}
+              onSearchChange={setSearch}
+              filters={filters}
+              onToggleFilter={toggleFilter}
+              onClearFilters={clearFilters}
+              sortField={sortField}
+              sortDirection={sortDirection}
+              onSortFieldChange={handleSortFieldSelect}
+              onSortDirectionChange={setSortDirection}
+              hiddenColumns={hiddenColumns}
+              onToggleColumn={toggleColumn}
+              allRows={machineScopeRows}
+              members={members}
+              visibleCount={rows.length}
+              actions={headerActions}
+            />
+          ) : null}
           <div
             ref={listScrollRef}
             className="min-h-0 flex-1 overflow-auto @container"

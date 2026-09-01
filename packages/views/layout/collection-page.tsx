@@ -25,12 +25,16 @@ interface CollectionPageHeaderProps {
     label: ReactNode;
   };
   actions?: ReactNode;
+  /** Search, scope chips, filters — same row as the title and primary action. */
+  toolbar?: ReactNode;
   className?: string;
 }
 
 /**
- * Shared dashboard collection header: entity icon, title, optional count and
- * supporting copy on the left; page-level actions on the right.
+ * Shared dashboard collection header: title on the left (hidden when session
+ * tabs already name the page), optional list toolbar in the middle, primary
+ * actions on the right. List pages pass their search/filter cluster as
+ * `toolbar` so they do not grow a second chrome row underneath.
  */
 export function CollectionPageHeader({
   icon: Icon,
@@ -39,19 +43,23 @@ export function CollectionPageHeader({
   description,
   learnMore,
   actions,
+  toolbar,
   className,
 }: CollectionPageHeaderProps) {
   const sessionTabs = useSessionTabsEnabled();
-  // Session tabs already name the page. Keep this bar in the document for
-  // page actions (New …); drop the repeated title/icon when the strip is on.
-  if (sessionTabs && !actions) return null;
+  if (sessionTabs && !actions && !toolbar) return null;
 
   return (
     <PageHeader className={className}>
       {sessionTabs ? (
-        <div className="min-w-0 flex-1" />
+        toolbar ? null : <div className="min-w-0 flex-1" />
       ) : (
-      <div className="flex min-w-0 flex-1 items-center gap-2">
+      <div
+        className={cn(
+          "flex min-w-0 items-center gap-2",
+          toolbar ? "shrink-0" : "flex-1",
+        )}
+      >
           <Icon
             aria-hidden="true"
             className="size-4 shrink-0 text-muted-foreground"
@@ -82,6 +90,7 @@ export function CollectionPageHeader({
           ) : null}
       </div>
       )}
+      {toolbar}
       {actions ? (
         <div className="flex shrink-0 items-center justify-end gap-2">
           {actions}
