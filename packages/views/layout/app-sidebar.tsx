@@ -669,7 +669,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
               </DropdownMenu>
             </SidebarMenuItem>
           </SidebarMenu>
-          <SidebarMenu>
+          <SidebarMenu className="gap-0.5">
             {searchSlot && (
               <SidebarMenuItem>
                 {searchSlot}
