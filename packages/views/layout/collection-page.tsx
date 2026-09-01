@@ -13,6 +13,7 @@ import {
 } from "@multica/ui/components/ui/empty";
 import { cn } from "@multica/ui/lib/utils";
 import { PageHeader } from "./page-header";
+import { useSessionTabsEnabled } from "./session-tabs";
 
 interface CollectionPageHeaderProps {
   icon: LucideIcon;
@@ -40,38 +41,48 @@ export function CollectionPageHeader({
   actions,
   className,
 }: CollectionPageHeaderProps) {
+  const sessionTabs = useSessionTabsEnabled();
+  // Session tabs already name the page. Repeating icon + title under the
+  // strip is duplicate chrome; keep this bar only when it still carries
+  // actions, or when the strip is off (compact / no-tabs shells).
+  if (sessionTabs && !actions) return null;
+
   return (
     <PageHeader className={className}>
-      <div className="flex min-w-0 flex-1 items-center gap-2">
-        <Icon
-          aria-hidden="true"
-          className="size-4 shrink-0 text-muted-foreground"
-        />
-        <h1 className="truncate text-body font-medium">{title}</h1>
-        {typeof count === "number" && count > 0 ? (
-          <span className="shrink-0 font-mono text-caption tabular-nums text-muted-foreground">
-            {count}
-          </span>
-        ) : null}
-        {description ? (
-          <p className="ml-2 hidden min-w-0 truncate text-caption text-muted-foreground md:block">
-            {description}
-            {learnMore ? (
-              <>
-                {" "}
-                <a
-                  href={learnMore.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline decoration-muted-foreground/30 underline-offset-4 transition-colors hover:text-foreground"
-                >
-                  {learnMore.label}
-                </a>
-              </>
-            ) : null}
-          </p>
-        ) : null}
-      </div>
+      {sessionTabs ? (
+        <div className="min-w-0 flex-1" />
+      ) : (
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <Icon
+            aria-hidden="true"
+            className="size-4 shrink-0 text-muted-foreground"
+          />
+          <h1 className="truncate text-body font-medium">{title}</h1>
+          {typeof count === "number" && count > 0 ? (
+            <span className="shrink-0 font-mono text-caption tabular-nums text-muted-foreground">
+              {count}
+            </span>
+          ) : null}
+          {description ? (
+            <p className="ml-2 hidden min-w-0 truncate text-caption text-muted-foreground md:block">
+              {description}
+              {learnMore ? (
+                <>
+                  {" "}
+                  <a
+                    href={learnMore.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline decoration-muted-foreground/30 underline-offset-4 transition-colors hover:text-foreground"
+                  >
+                    {learnMore.label}
+                  </a>
+                </>
+              ) : null}
+            </p>
+          ) : null}
+        </div>
+      )}
       {actions ? (
         <div className="flex shrink-0 items-center justify-end gap-2">
           {actions}

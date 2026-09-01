@@ -10,6 +10,7 @@ import type {
 import { useIssuesScope } from "@multica/core/issues/stores/issues-scope-store";
 import { useViewStore } from "@multica/core/issues/stores/view-store-context";
 import { PageHeader } from "../../layout/page-header";
+import { useSessionTabsEnabled } from "../../layout/session-tabs";
 import { useT } from "../../i18n";
 import { IssueSurface } from "../surface/issue-surface";
 import { IssuesHeader } from "./issues-header";
@@ -49,13 +50,16 @@ function IssuesSurfaceHeader({
 export function IssuesPage() {
   const { t } = useT("issues");
   const scope = useIssuesScope("issues");
+  const sessionTabs = useSessionTabsEnabled();
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
-      <PageHeader>
-        <ListTodo className="h-4 w-4 text-muted-foreground" />
-        <h1 className="text-body font-medium">{t(($) => $.page.breadcrumb_title)}</h1>
-      </PageHeader>
+      {!sessionTabs && (
+        <PageHeader>
+          <ListTodo className="h-4 w-4 text-muted-foreground" />
+          <h1 className="text-body font-medium">{t(($) => $.page.breadcrumb_title)}</h1>
+        </PageHeader>
+      )}
 
       <IssueSurface
         scope={{ type: "workspace", actorKind: scope }}

@@ -20,6 +20,7 @@ import { useQuickActionsFailureToast } from "./components/use-quick-actions-fail
 import { useQuery } from "@tanstack/react-query";
 import type { Agent, ChatSession } from "@multica/core/types";
 import { PageHeader } from "../layout/page-header";
+import { useSessionTabsEnabled } from "../layout/session-tabs";
 import { useNavigation } from "../navigation";
 import { useT } from "../i18n";
 import { ChatMessageList, ChatMessageSkeleton } from "./components/chat-message-list";
@@ -60,6 +61,7 @@ export function ChatPage() {
   const { searchParams, replace } = useNavigation();
   const wsPaths = useWorkspacePaths();
   const isCompact = useIsCompact();
+  const sessionTabs = useSessionTabsEnabled();
 
   const c = useChatController({ isActive: true });
   const { data: quickActionsPending = null } = useQuery(
@@ -218,7 +220,10 @@ export function ChatPage() {
 
   const listHeader = (
     <PageHeader>
-      <h1 className="flex-1 text-body font-semibold">{t(($) => $.page.title)}</h1>
+      {!sessionTabs && (
+        <h1 className="flex-1 text-body font-semibold">{t(($) => $.page.title)}</h1>
+      )}
+      {sessionTabs ? <div className="flex-1" /> : null}
       {newChatButton}
     </PageHeader>
   );

@@ -8,5 +8,5 @@ import { Agentation } from "agentation";
  * by the NODE_ENV guard at the call site in `app/layout.tsx`.
  */
 export function AgentationDev() {
-  return <Agentation endpoint="http://localhost:4747" />;
+  return <Agentation endpoint="/__agentation" />;
 }

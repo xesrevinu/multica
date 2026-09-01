@@ -13,7 +13,6 @@ import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
 import { CloudRuntimeDialog } from "./cloud-runtime-dialog";
 import { ConnectRemoteDialog } from "./connect-remote-dialog";
-import { daemonRuntimesDocsHref } from "./runtime-docs";
 import {
   OrphanRuntimeProfiles,
   type RuntimesPageProps,
@@ -31,7 +30,7 @@ export function AgentsRuntimesPage({
   bootstrapping,
   cloudRuntimeEnabled = false,
 }: AgentsRuntimesPageProps = {}) {
-  const { t, i18n } = useT("runtimes");
+  const { t } = useT("runtimes");
   const { t: agentsT } = useT("agents");
   const navigation = useNavigation();
   const paths = useWorkspacePaths();
@@ -63,7 +62,6 @@ export function AgentsRuntimesPage({
         <CollectionPageHeader
           icon={Server}
           title={t(($) => $.page.title)}
-          description={t(($) => $.page.fused_tagline)}
         />
         <div className={PAGE_GUTTER + " flex h-12 items-center gap-2 border-b"}>
           <Skeleton className="h-8 w-24 rounded-md" />
@@ -83,11 +81,6 @@ export function AgentsRuntimesPage({
       <CollectionPageHeader
         icon={Server}
         title={t(($) => $.page.title)}
-        description={t(($) => $.page.fused_tagline)}
-        learnMore={{
-          href: daemonRuntimesDocsHref(i18n.language),
-          label: t(($) => $.page.learn_more),
-        }}
         actions={
           <>
             {cloudRuntimeEnabled && (

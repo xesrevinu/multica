@@ -69,34 +69,44 @@ const nextConfig: NextConfig = {
             },
           ]
         : [],
-      afterFiles: remoteApiUrl
-        ? [
-            {
-              source: "/v1/:path*",
-              destination: `${remoteApiUrl}/v1/:path*`,
-            },
-            {
-              source: "/api/:path*",
-              destination: `${remoteApiUrl}/api/:path*`,
-            },
-            {
-              source: "/ws",
-              destination: `${remoteApiUrl}/ws`,
-            },
-            {
-              source: "/health",
-              destination: `${remoteApiUrl}/health`,
-            },
-            {
-              source: "/auth/:path*",
-              destination: `${remoteApiUrl}/auth/:path*`,
-            },
-            {
-              source: "/uploads/:path*",
-              destination: `${remoteApiUrl}/uploads/:path*`,
-            },
-          ]
-        : [],
+      afterFiles: [
+        ...(isDev
+          ? [
+              {
+                source: "/__agentation/:path*",
+                destination: "http://127.0.0.1:4747/:path*",
+              },
+            ]
+          : []),
+        ...(remoteApiUrl
+          ? [
+              {
+                source: "/v1/:path*",
+                destination: `${remoteApiUrl}/v1/:path*`,
+              },
+              {
+                source: "/api/:path*",
+                destination: `${remoteApiUrl}/api/:path*`,
+              },
+              {
+                source: "/ws",
+                destination: `${remoteApiUrl}/ws`,
+              },
+              {
+                source: "/health",
+                destination: `${remoteApiUrl}/health`,
+              },
+              {
+                source: "/auth/:path*",
+                destination: `${remoteApiUrl}/auth/:path*`,
+              },
+              {
+                source: "/uploads/:path*",
+                destination: `${remoteApiUrl}/uploads/:path*`,
+              },
+            ]
+          : []),
+      ],
       fallback: [],
     };
   },
