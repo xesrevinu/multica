@@ -13,9 +13,8 @@ import { useT } from "../../i18n";
 // ---------------------------------------------------------------------------
 // Runtime machine filter — dropdown next to the search input. The trigger
 // shows the active machine's title (or "All runtimes"); the menu groups
-// machines by section (Local / Remote / Cloud) the same way the
-// Runtimes page sidebar does, so a user moving between the two pages
-// sees consistent labels and counts.
+// machines by section (Local / Remote / Cloud) the same way the fused
+// runtimes page rail does, so labels and counts stay consistent.
 // ---------------------------------------------------------------------------
 
 const RUNTIME_MACHINE_SECTIONS: RuntimeMachineSection[] = [

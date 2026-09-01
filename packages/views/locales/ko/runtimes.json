@@ -2,6 +2,7 @@
   "page": {
     "title": "런타임",
     "tagline": "에이전트의 CLI 세션을 실행하는 기기와 클라우드 워커입니다.",
+    "fused_tagline": "에이전트와 에이전트가 실행되는 기기입니다.",
     "learn_more": "자세히 보기 →",
     "connect_remote": "컴퓨터 추가",
     "search_placeholder": "런타임 검색...",
@@ -26,6 +27,10 @@
       "title": "로컬 런타임 시작 중...",
       "hint": "보통 몇 초 정도 걸립니다. 데몬이 워크스페이스에 등록되는 중입니다."
     }
+  },
+  "rail": {
+    "all": "모든 기기",
+    "open_machine": "{{machine}} 열기"
   },
   "mika_setup": {
     "title": "런타임이 준비되었습니다. Mika와 시작하세요.",

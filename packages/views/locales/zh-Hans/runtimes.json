@@ -2,6 +2,7 @@
   "page": {
     "title": "运行时",
     "tagline": "为智能体跑 CLI 会话的机器和云端 worker。",
+    "fused_tagline": "智能体，以及它们运行所在的机器。",
     "learn_more": "了解更多 →",
     "connect_remote": "添加电脑",
     "search_placeholder": "搜索运行时...",
@@ -26,6 +27,10 @@
       "title": "正在启动本地运行时...",
       "hint": "通常需要几秒钟。守护进程正在向工作区注册。"
     }
+  },
+  "rail": {
+    "all": "全部机器",
+    "open_machine": "打开 {{machine}}"
   },
   "mika_setup": {
     "title": "运行时已准备好，和 Mika 开始。",

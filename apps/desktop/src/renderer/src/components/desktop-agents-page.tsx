@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { AgentsPage } from "@multica/views/agents";
+import { AgentsRuntimesPage } from "@multica/views/runtimes";
 import type { DaemonStatus } from "../../../shared/daemon-types";
 
 /**
- * Desktop wrapper around the shared `AgentsPage`. Bridges the Electron
+ * Desktop wrapper around the fused agents/runtimes page. Bridges the Electron
  * `daemonAPI` (main-process daemon state) into the page so the runtime
  * machine filter can render the Local section the same way the Runtimes
  * page does — without these props the page falls back to grouping
@@ -41,7 +41,7 @@ export function DesktopAgentsPage() {
   }, []);
 
   return (
-    <AgentsPage
+    <AgentsRuntimesPage
       localDaemonId={status.daemonId ?? lastIdentity.daemonId}
       localMachineName={status.deviceName ?? lastIdentity.deviceName ?? hostName}
       // Desktop owns a local machine for the lifetime of the app, even

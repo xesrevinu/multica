@@ -2,6 +2,7 @@
   "page": {
     "title": "ランタイム",
     "tagline": "エージェントの CLI セッションを実行するマシンとクラウドワーカーです。",
+    "fused_tagline": "エージェントと、それらが動くマシンです。",
     "learn_more": "詳しく見る →",
     "connect_remote": "コンピュータを追加",
     "search_placeholder": "ランタイムを検索…",
@@ -26,6 +27,10 @@
       "title": "ローカルランタイムを起動中…",
       "hint": "通常は数秒かかります。デーモンがワークスペースに登録しています。"
     }
+  },
+  "rail": {
+    "all": "すべてのマシン",
+    "open_machine": "{{machine}} を開く"
   },
   "mika_setup": {
     "title": "ランタイムの準備ができました。Mika と始めましょう。",
