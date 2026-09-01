@@ -29,7 +29,7 @@ export function MachineRail({
   return (
     <div
       className={cn(
-        "flex shrink-0 items-center gap-2 overflow-x-auto border-b py-2",
+        "no-scrollbar flex h-12 shrink-0 items-center gap-2 overflow-x-auto overflow-y-hidden overscroll-x-contain border-b py-2",
         PAGE_GUTTER,
       )}
     >

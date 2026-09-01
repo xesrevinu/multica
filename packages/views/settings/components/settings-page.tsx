@@ -215,7 +215,7 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
         </div>
         {/* Only the tab strip scrolls sideways on compact widths. Putting
             overflow-x-auto on this whole column also dragged the nav trigger. */}
-        <div className="min-w-0 overflow-x-auto overscroll-x-contain md:overflow-visible">
+        <div className="no-scrollbar h-8 min-w-0 overflow-x-auto overflow-y-hidden overscroll-x-contain md:h-auto md:overflow-visible">
         <TabsList
           variant="line"
           className="flex w-max min-w-full flex-row items-center gap-1 p-0 md:w-full md:flex-col md:items-stretch"

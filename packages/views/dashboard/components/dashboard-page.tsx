@@ -497,7 +497,7 @@ export function DashboardPage() {
           switching on the left, page-scoped filters on the right. Both tabs
           share the range and project filter, which is why the filters live
           here and not inside a tab. */}
-      <div className={cn("h-12 shrink-0 overflow-x-auto border-b [-webkit-overflow-scrolling:touch]", PAGE_GUTTER)}>
+      <div className={cn("no-scrollbar h-12 shrink-0 overflow-x-auto overflow-y-hidden overscroll-x-contain border-b [-webkit-overflow-scrolling:touch]", PAGE_GUTTER)}>
         <div className="flex h-full w-max min-w-full items-center justify-between gap-2">
           <TabsList variant="line" className="gap-0 p-0 group-data-horizontal/tabs:h-full">
             <TabsTrigger

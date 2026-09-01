@@ -204,7 +204,7 @@ export function AgentListToolbar({
   );
 
   return (
-    <div className={cn("h-12 shrink-0 overflow-x-auto [-webkit-overflow-scrolling:touch]", PAGE_GUTTER)}>
+    <div className={cn("no-scrollbar h-12 shrink-0 overflow-x-auto overflow-y-hidden overscroll-x-contain [-webkit-overflow-scrolling:touch]", PAGE_GUTTER)}>
       <div className="flex h-full w-max min-w-full items-center justify-between gap-2">
         {/* Left: local search + scope buttons + result count. Scope mixes the
           ownership lens (mine/all) with the archived lifecycle stage. Button

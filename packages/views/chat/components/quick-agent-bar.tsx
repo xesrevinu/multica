@@ -59,7 +59,7 @@ export function QuickAgentBar({
   if (pinnedAgents.length === 0 && !canAdd) return null;
 
   return (
-    <div className="flex items-center gap-1.5 overflow-x-auto border-b px-2 py-1.5">
+    <div className="no-scrollbar flex items-center gap-1.5 overflow-x-auto overflow-y-hidden overscroll-x-contain border-b px-2 py-1.5">
       {pinnedAgents.map((agent) => (
         <ContextMenu key={agent.id}>
           <ContextMenuTrigger
