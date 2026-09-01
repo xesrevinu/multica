@@ -97,6 +97,9 @@ function isNavActive(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(href + "/");
 }
 
+const SIDEBAR_ITEM_CLASS =
+  "text-muted-foreground transition-colors duration-75 hover:not-data-active:bg-sidebar-accent/70 active:not-data-active:bg-sidebar-accent data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground";
+
 // Stable empty arrays for query defaults. Using an inline `= []` default on
 // `useQuery` creates a new array reference on every render when `data` is
 // undefined (e.g. query disabled or loading) — which in turn breaks any
@@ -172,10 +175,7 @@ function SortablePinItem({
           }
           onNavigate?.();
         }}
-        className={cn(
-          "text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground",
-          isDragging && "pointer-events-none",
-        )}
+        className={cn(SIDEBAR_ITEM_CLASS, isDragging && "pointer-events-none")}
       >
         {iconNode}
         <span
@@ -708,7 +708,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                       <SidebarMenuButton
                         isActive={isActive}
                         render={<AppLink href={href} />}
-                        className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
+                        className={SIDEBAR_ITEM_CLASS}
                       >
                         <Icon />
                         <span>{t(($) => $.nav[item.labelKey])}</span>
@@ -782,7 +782,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                       <SidebarMenuButton
                         isActive={isActive}
                         render={<AppLink href={href} />}
-                        className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
+                        className={SIDEBAR_ITEM_CLASS}
                       >
                         <Icon />
                         <span>{t(($) => $.nav[item.labelKey])}</span>
@@ -813,7 +813,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                       <SidebarMenuButton
                         isActive={isActive}
                         render={<AppLink href={href} />}
-                        className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
+                        className={SIDEBAR_ITEM_CLASS}
                       >
                         <Icon />
                         <span>{t(($) => $.nav[item.labelKey])}</span>

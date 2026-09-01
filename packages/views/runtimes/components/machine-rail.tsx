@@ -115,7 +115,7 @@ function RailChip({
         "inline-flex h-8 shrink-0 items-center rounded-md border text-caption transition-colors",
         pressed
           ? "border-border bg-accent text-accent-foreground"
-          : "border-transparent bg-muted/50 text-muted-foreground hover:bg-accent/70 hover:text-foreground",
+          : "border-transparent bg-muted/50 text-muted-foreground transition-colors duration-75 hover:bg-surface-hover hover:text-foreground active:bg-surface-selected",
       )}
     >
       <button
