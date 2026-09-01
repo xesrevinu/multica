@@ -530,8 +530,10 @@ export function ThreadNavPanel({
           shut while the panel is open, so the tip never sits on top of it. */}
       <Tooltip open={tooltipOpen && !open} onOpenChange={setTooltipOpen}>
         <TooltipTrigger
+          nativeButton={false}
           render={
             <PopoverTrigger
+              nativeButton={false}
               openOnHover
               delay={HOVER_OPEN_DELAY_MS}
               closeDelay={HOVER_CLOSE_DELAY_MS}

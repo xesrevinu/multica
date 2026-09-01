@@ -183,6 +183,13 @@ export function PropertyPicker({
   const popoverTrigger = (
     <PopoverTrigger
       className={triggerRender ? undefined : PICKER_TRIGGER_CLASS}
+      nativeButton={
+        !triggerRender
+          ? true
+          : typeof triggerRender.type === "string"
+            ? triggerRender.type === "button"
+            : false
+      }
       render={triggerRender}
     >
       {trigger}
@@ -193,7 +200,7 @@ export function PropertyPicker({
     <Popover open={open} onOpenChange={onOpenChange}>
       {tooltip ? (
         <Tooltip open={tooltipOpen} onOpenChange={setTooltipHover}>
-          <TooltipTrigger render={popoverTrigger} />
+          <TooltipTrigger nativeButton={false} render={popoverTrigger} />
           <TooltipContent side="top">{tooltip}</TooltipContent>
         </Tooltip>
       ) : (

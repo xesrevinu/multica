@@ -645,6 +645,7 @@ function ActivityBlock({
                 )}
               <Tooltip>
                 <TooltipTrigger
+                  nativeButton={false}
                   render={
                     <span className="ml-auto shrink-0 cursor-default">
                       {timeAgo(entry.created_at)}
@@ -909,6 +910,7 @@ function SubIssueDisplayPopover({
     <Popover>
       <Tooltip>
         <PopoverTrigger
+          nativeButton={false}
           render={
             <TooltipTrigger
               render={
@@ -2789,6 +2791,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             {onDone && !issueBehavesAsAny(issue, ["done", "cancelled"]) && (
               <Tooltip>
                 <TooltipTrigger
+                  nativeButton={false}
                   render={
                     <Button
                       variant="ghost"
@@ -2806,6 +2809,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             {onDone && issueBehavesAs(issue, "done") && (
               <Tooltip>
                 <TooltipTrigger
+                  nativeButton={false}
                   render={
                     <Button
                       variant="ghost"
@@ -2822,6 +2826,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             )}
             <Tooltip>
               <TooltipTrigger
+                nativeButton={false}
                 render={
                   <Button
                     variant="ghost"
@@ -2850,6 +2855,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             />
             <Tooltip>
               <TooltipTrigger
+                nativeButton={false}
                 render={
                   <Button
                     variant={sidebarOpen ? "secondary" : "ghost"}
