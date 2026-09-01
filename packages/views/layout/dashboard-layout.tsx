@@ -75,12 +75,7 @@ function SessionTabChrome({
 
   return (
     <>
-      <AppSidebar
-        searchSlot={searchSlot}
-        topSlot={
-          <div aria-hidden className="h-10 shrink-0" style={drag} />
-        }
-      />
+      <AppSidebar searchSlot={searchSlot} />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div
           className="relative z-10 flex h-10 shrink-0 items-center transition-[padding] duration-200 ease-out"
