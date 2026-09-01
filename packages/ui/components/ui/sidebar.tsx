@@ -781,6 +781,10 @@ function SidebarMenuButton({
     props: mergeProps<"button">(
       {
         className: cn(sidebarMenuButtonVariants({ variant, size }), className),
+        // AppLink hosts are not native <button>s. nativeButton true drops
+        // flex/height/padding on those rows — Inbox/Chat in the header sat
+        // tighter than Search / New issue above them.
+        ...(render ? { nativeButton: false } : {}),
       },
       props
     ),
