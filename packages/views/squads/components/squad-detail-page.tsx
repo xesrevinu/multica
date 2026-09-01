@@ -1001,7 +1001,7 @@ function SquadOverviewPane({
 
   return (
     <div className="flex min-h-[60vh] flex-col overflow-hidden rounded-lg border bg-background md:h-full md:min-h-0">
-      <div className="flex shrink-0 items-center gap-0 overflow-x-auto border-b px-2 md:px-4">
+      <div className="no-scrollbar flex h-11 shrink-0 items-center gap-0 overflow-x-auto overflow-y-hidden overscroll-x-contain border-b px-2 md:px-4">
         {squadDetailTabs.map((tab) => (
           <button
             key={tab.id}

@@ -25,6 +25,12 @@ export const PAGE_TOOLBAR = cn(
   PAGE_GUTTER,
 );
 
+/** Search/filter cluster when it shares a `CollectionPageHeader` row with
+ *  the title and primary action. Standalone filter rows still use
+ *  `PAGE_TOOLBAR`. */
+export const PAGE_TOOLBAR_INLINE =
+  "flex min-w-0 flex-1 items-center justify-between gap-2";
+
 /**
  * The way back to the nav wherever it is not a permanent column: a sheet below
  * the compact breakpoint, auto-collapsed from there up to `xl`.
@@ -37,9 +43,9 @@ export const PAGE_TOOLBAR = cn(
  * Renders nothing in the two cases where it would not be the way back:
  * outside a `SidebarProvider` (a page that stands alone, with no nav to
  * reopen), and under a shell that declares `hasExternalTrigger` — the desktop
- * window toolbar's trigger never scrolls away or hides, so a second copy in
- * every page header stacked two identical icons 50px apart, and a third
- * whenever a detail pane brought its own header along (MUL-6218).
+ * window toolbar and the web session-tab strip keep their own trigger, so a
+ * second copy in every page header stacked two identical icons 50px apart
+ * (MUL-6218).
  */
 export function CollapsedNavTrigger() {
   const sidebar = useSidebarSafe();

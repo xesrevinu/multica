@@ -13,6 +13,7 @@ import {
 } from "@multica/ui/components/ui/empty";
 import { cn } from "@multica/ui/lib/utils";
 import { PageHeader } from "./page-header";
+import { useSessionTabsEnabled } from "./session-tabs";
 
 interface CollectionPageHeaderProps {
   icon: LucideIcon;
@@ -24,12 +25,16 @@ interface CollectionPageHeaderProps {
     label: ReactNode;
   };
   actions?: ReactNode;
+  /** Search, scope chips, filters — same row as the title and primary action. */
+  toolbar?: ReactNode;
   className?: string;
 }
 
 /**
- * Shared dashboard collection header: entity icon, title, optional count and
- * supporting copy on the left; page-level actions on the right.
+ * Shared dashboard collection header: title on the left (hidden when session
+ * tabs already name the page), optional list toolbar in the middle, primary
+ * actions on the right. List pages pass their search/filter cluster as
+ * `toolbar` so they do not grow a second chrome row underneath.
  */
 export function CollectionPageHeader({
   icon: Icon,
@@ -38,40 +43,54 @@ export function CollectionPageHeader({
   description,
   learnMore,
   actions,
+  toolbar,
   className,
 }: CollectionPageHeaderProps) {
+  const sessionTabs = useSessionTabsEnabled();
+  if (sessionTabs && !actions && !toolbar) return null;
+
   return (
     <PageHeader className={className}>
-      <div className="flex min-w-0 flex-1 items-center gap-2">
-        <Icon
-          aria-hidden="true"
-          className="size-4 shrink-0 text-muted-foreground"
-        />
-        <h1 className="truncate text-body font-medium">{title}</h1>
-        {typeof count === "number" && count > 0 ? (
-          <span className="shrink-0 font-mono text-caption tabular-nums text-muted-foreground">
-            {count}
-          </span>
-        ) : null}
-        {description ? (
-          <p className="ml-2 hidden min-w-0 truncate text-caption text-muted-foreground md:block">
-            {description}
-            {learnMore ? (
-              <>
-                {" "}
-                <a
-                  href={learnMore.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="underline decoration-muted-foreground/30 underline-offset-4 transition-colors hover:text-foreground"
-                >
-                  {learnMore.label}
-                </a>
-              </>
-            ) : null}
-          </p>
-        ) : null}
+      {sessionTabs ? (
+        toolbar ? null : <div className="min-w-0 flex-1" />
+      ) : (
+      <div
+        className={cn(
+          "flex min-w-0 items-center gap-2",
+          toolbar ? "shrink-0" : "flex-1",
+        )}
+      >
+          <Icon
+            aria-hidden="true"
+            className="size-4 shrink-0 text-muted-foreground"
+          />
+          <h1 className="truncate text-body font-medium">{title}</h1>
+          {typeof count === "number" && count > 0 ? (
+            <span className="shrink-0 font-mono text-caption tabular-nums text-muted-foreground">
+              {count}
+            </span>
+          ) : null}
+          {description ? (
+            <p className="ml-2 hidden min-w-0 truncate text-caption text-muted-foreground md:block">
+              {description}
+              {learnMore ? (
+                <>
+                  {" "}
+                  <a
+                    href={learnMore.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline decoration-muted-foreground/30 underline-offset-4 transition-colors hover:text-foreground"
+                  >
+                    {learnMore.label}
+                  </a>
+                </>
+              ) : null}
+            </p>
+          ) : null}
       </div>
+      )}
+      {toolbar}
       {actions ? (
         <div className="flex shrink-0 items-center justify-end gap-2">
           {actions}

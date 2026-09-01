@@ -5,7 +5,6 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@multica/ui/lib/utils";
 import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
 import { AppLink, useNavigation } from "../navigation";
-import { HelpLauncher } from "./help-launcher";
 import { JoinDiscordCard } from "./join-discord-card";
 import {
   DndContext,
@@ -97,6 +96,9 @@ function isNavActive(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(href + "/");
 }
 
+const SIDEBAR_ITEM_CLASS =
+  "text-muted-foreground transition-colors duration-75 hover:not-data-active:bg-sidebar-accent/70 active:not-data-active:bg-sidebar-accent data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground";
+
 // Stable empty arrays for query defaults. Using an inline `= []` default on
 // `useQuery` creates a new array reference on every render when `data` is
 // undefined (e.g. query disabled or loading) — which in turn breaks any
@@ -172,10 +174,7 @@ function SortablePinItem({
           }
           onNavigate?.();
         }}
-        className={cn(
-          "text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground",
-          isDragging && "pointer-events-none",
-        )}
+        className={cn(SIDEBAR_ITEM_CLASS, isDragging && "pointer-events-none")}
       >
         {iconNode}
         <span
@@ -539,7 +538,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
       <Sidebar variant="inset">
         {topSlot}
         {/* Workspace Switcher */}
-        <SidebarHeader className={cn("py-3", headerClassName)} style={headerStyle}>
+        <SidebarHeader className={cn("pb-3 pt-0.5", headerClassName)} style={headerStyle}>
           <SidebarMenu>
             <SidebarMenuItem>
               <DropdownMenu>
@@ -670,7 +669,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
               </DropdownMenu>
             </SidebarMenuItem>
           </SidebarMenu>
-          <SidebarMenu>
+          <SidebarMenu className="gap-0.5">
             {searchSlot && (
               <SidebarMenuItem>
                 {searchSlot}
@@ -691,49 +690,42 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                 ) : null}
               </SidebarMenuButton>
             </SidebarMenuItem>
+            {personalNav.map((item) => {
+              const href = p[item.key]();
+              const Icon = routeIconForPath(href);
+              const isActive = isNavActive(pathname, href);
+              return (
+                <SidebarMenuItem key={item.key}>
+                  <SidebarMenuButton
+                    isActive={isActive}
+                    render={<AppLink href={href} />}
+                    className={SIDEBAR_ITEM_CLASS}
+                  >
+                    <Icon />
+                    <span>{t(($) => $.nav[item.labelKey])}</span>
+                    {item.key === "inbox" && unreadCount > 0 && (
+                      <CappedNumberFlow
+                        value={unreadCount}
+                        animated={false}
+                        className="ml-auto text-caption"
+                      />
+                    )}
+                    {item.key === "chat" && chatUnreadCount > 0 && (
+                      <CappedNumberFlow
+                        value={chatUnreadCount}
+                        animated={false}
+                        className="ml-auto text-caption"
+                      />
+                    )}
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              );
+            })}
           </SidebarMenu>
         </SidebarHeader>
 
         {/* Navigation */}
         <SidebarContent ref={sidebarScrollRef} style={sidebarFadeStyle}>
-          <SidebarGroup>
-            <SidebarGroupContent>
-              <SidebarMenu className="gap-0.5">
-                {personalNav.map((item) => {
-                  const href = p[item.key]();
-                  const Icon = routeIconForPath(href);
-                  const isActive = isNavActive(pathname, href);
-                  return (
-                    <SidebarMenuItem key={item.key}>
-                      <SidebarMenuButton
-                        isActive={isActive}
-                        render={<AppLink href={href} />}
-                        className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
-                      >
-                        <Icon />
-                        <span>{t(($) => $.nav[item.labelKey])}</span>
-                        {item.key === "inbox" && unreadCount > 0 && (
-                          <CappedNumberFlow
-                            value={unreadCount}
-                            animated={false}
-                            className="ml-auto text-caption"
-                          />
-                        )}
-                        {item.key === "chat" && chatUnreadCount > 0 && (
-                          <CappedNumberFlow
-                            value={chatUnreadCount}
-                            animated={false}
-                            className="ml-auto text-caption"
-                          />
-                        )}
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  );
-                })}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-
           {visiblePinned.length > 0 && (
             <Collapsible defaultOpen>
               <SidebarGroup className="group/pinned">
@@ -782,7 +774,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                       <SidebarMenuButton
                         isActive={isActive}
                         render={<AppLink href={href} />}
-                        className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
+                        className={SIDEBAR_ITEM_CLASS}
                       >
                         <Icon />
                         <span>{t(($) => $.nav[item.labelKey])}</span>
@@ -813,7 +805,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                       <SidebarMenuButton
                         isActive={isActive}
                         render={<AppLink href={href} />}
-                        className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
+                        className={SIDEBAR_ITEM_CLASS}
                       >
                         <Icon />
                         <span>{t(($) => $.nav[item.labelKey])}</span>
@@ -827,12 +819,8 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
         </SidebarContent>
 
         <SidebarFooter className="p-2">
-          {/* One utility strip: the Discord link takes the leading space the
-              help trigger was leaving empty. `justify-end` keeps the trigger
-              right-aligned once the Discord link is dismissed. */}
           <div className="flex items-center justify-end gap-1">
             <JoinDiscordCard />
-            <HelpLauncher />
           </div>
         </SidebarFooter>
         <SidebarRail />

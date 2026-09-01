@@ -1,6 +1,11 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../../layout/session-tabs", () => ({
+  useSessionTabsEnabled: () => false,
+}));
+
 import enAgents from "../../locales/en/agents.json";
 import enRuntimes from "../../locales/en/runtimes.json";
 import type { RuntimeMachine } from "./runtime-machines";
@@ -78,14 +83,17 @@ vi.mock("../../agents/components/agents-page", () => ({
   AgentsPage: ({
     hideHeader,
     machineTitle,
+    headerActions,
   }: {
     hideHeader?: boolean;
     machineTitle?: string | null;
+    headerActions?: React.ReactNode;
   }) => (
     <div>
       agents-panel
       {hideHeader ? " hide-header" : " show-header"}
       {machineTitle ? ` machine:${machineTitle}` : " machine:all"}
+      {headerActions}
     </div>
   ),
 }));
@@ -137,9 +145,6 @@ describe("AgentsRuntimesPage", () => {
   it("renders one fused chrome with machines and agents together", () => {
     render(<AgentsRuntimesPage />);
     expect(screen.getByRole("heading", { name: "Runtimes" })).toBeInTheDocument();
-    expect(
-      screen.getByText("Agents and the machines they run on."),
-    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /All machines/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /dev.local/ })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Add a computer" })).toHaveLength(1);

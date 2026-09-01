@@ -4,6 +4,7 @@ import { Suspense, lazy, type ReactNode } from "react";
 import {
   SidebarProvider,
   SidebarInset,
+  SidebarTrigger,
   useSidebar,
 } from "@multica/ui/components/ui/sidebar";
 import { cn } from "@multica/ui/lib/utils";
@@ -80,6 +81,7 @@ export function DashboardLayout({
       }
     >
       <SidebarProvider
+        hasExternalTrigger={sessionTabs}
         className={cn(
           "h-svh bg-app-shell",
           sessionTabs && "[--sidebar-wrapper-fill:var(--app-shell)]",
@@ -90,8 +92,11 @@ export function DashboardLayout({
         <AppSidebar searchSlot={searchSlot} />
         {sessionTabs ? (
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <div className="relative z-10 flex h-12 shrink-0 items-center">
-              <SessionHistoryControls />
+            <div className="relative z-10 flex h-10 shrink-0 items-center">
+              <div className="flex h-full shrink-0 items-center gap-0.5 pl-2 pr-1">
+                <SidebarTrigger className="xl:hidden size-7 text-faint-foreground hover:bg-muted/50 hover:text-muted-foreground" />
+                <SessionHistoryControls />
+              </div>
               <div className="min-h-0 min-w-0 flex-1 self-stretch">
                 <Suspense fallback={null}>
                   <TabBar />

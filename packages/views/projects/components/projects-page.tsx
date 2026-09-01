@@ -109,7 +109,7 @@ import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { useFormatRelativeDate } from "./labels";
 import { ProjectStatusBadge, ProjectPriorityBadge } from "./project-badge";
 import { ProjectLeadPicker } from "./project-lead-picker";
-import { PAGE_GUTTER, PAGE_TOOLBAR } from "../../layout/page-header";
+import { PAGE_GUTTER, PAGE_TOOLBAR_INLINE } from "../../layout/page-header";
 import { hoverRevealRowOpacity, hoverRevealHeaderOpacity } from "@multica/ui/lib/pointer-affordances";
 import { cn } from "@multica/ui/lib/utils";
 
@@ -944,29 +944,9 @@ export function ProjectsPage() {
         icon={FolderKanban}
         title={t(($) => $.page.title)}
         count={projects.length}
-        actions={
-          <CollectionPageHeaderAction
-            icon={Plus}
-            label={t(($) => $.page.new_project)}
-            onClick={openCreateProject}
-          />
-        }
-      />
-
-      {showEmpty ? (
-        <CollectionPageState
-          icon={FolderKanban}
-          title={t(($) => $.page.empty)}
-          actions={
-            <Button size="sm" variant="outline" onClick={openCreateProject}>
-              {t(($) => $.page.create_first)}
-            </Button>
-          }
-        />
-      ) : (
-        <>
-          {/* Toolbar */}
-          <div className={PAGE_TOOLBAR}>
+        toolbar={
+          showEmpty ? undefined : (
+          <div className={PAGE_TOOLBAR_INLINE}>
             <div className="flex min-w-0 items-center gap-2">
               <div className="relative hidden md:block">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -1224,8 +1204,29 @@ export function ProjectsPage() {
               </DropdownMenu>
             </div>
           </div>
+          )
+        }
+        actions={
+          <CollectionPageHeaderAction
+            icon={Plus}
+            label={t(($) => $.page.new_project)}
+            onClick={openCreateProject}
+          />
+        }
+      />
 
-          {/* Body */}
+      {showEmpty ? (
+        <CollectionPageState
+          icon={FolderKanban}
+          title={t(($) => $.page.empty)}
+          actions={
+            <Button size="sm" variant="outline" onClick={openCreateProject}>
+              {t(($) => $.page.create_first)}
+            </Button>
+          }
+        />
+      ) : (
+        <>
           {isLoading ? (
             <LoadingState isCompact={isCompact} />
           ) : visible.length === 0 ? (

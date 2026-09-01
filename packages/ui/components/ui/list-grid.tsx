@@ -185,7 +185,7 @@ function ListGridRow({ className, children, ...props }: ListGridRowProps) {
     <div
       role="row"
       className={cn(
-        "group/row col-span-full grid h-12 grid-cols-subgrid items-center transition-colors hover:bg-accent/40",
+        "group/row col-span-full grid h-12 grid-cols-subgrid items-center cursor-pointer transition-colors duration-75 hover:bg-surface-hover active:bg-surface-selected",
         className,
       )}
       {...props}

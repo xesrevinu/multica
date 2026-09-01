@@ -15,6 +15,7 @@ import {
   resolveBrowserWsUrl,
 } from "@/config/runtime-urls";
 import { FIND_HIGHLIGHT_CSS } from "@multica/ui/styles/find-highlight";
+import { AgentationDev } from "@/components/agentation-dev";
 import "./globals.css";
 
 // Inter is the Latin UI face. next/font produces a hashed family (`__Inter_xxx`)
@@ -183,6 +184,7 @@ export default async function RootLayout({
           <Toaster />
         </ThemeProvider>
         <StaticAssetSW />
+        {process.env.NODE_ENV === "development" ? <AgentationDev /> : null}
       </body>
     </html>
   );

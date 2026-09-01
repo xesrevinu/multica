@@ -645,6 +645,7 @@ function ActivityBlock({
                 )}
               <Tooltip>
                 <TooltipTrigger
+                  nativeButton={false}
                   render={
                     <span className="ml-auto shrink-0 cursor-default">
                       {timeAgo(entry.created_at)}
