@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, lazy, type ReactNode } from "react";
+import { Suspense, lazy, type CSSProperties, type ReactNode } from "react";
 import {
   SidebarProvider,
   SidebarInset,
@@ -56,6 +56,58 @@ function SessionCanvas({ children }: { children: ReactNode }) {
   );
 }
 
+/** Overlay window-control cluster (macOS traffic lights in a wrapped
+ *  Chromium shell). The tab strip's own trigger / back / forward sit after
+ *  this inset; when the sidebar is open they already start past it. */
+const WINDOW_CONTROLS_INSET = 70;
+
+function SessionTabChrome({
+  canvas,
+  searchSlot,
+}: {
+  canvas: ReactNode;
+  searchSlot?: ReactNode;
+}) {
+  const { state } = useSidebar();
+  const collapsed = state === "collapsed";
+  const drag = { WebkitAppRegion: "drag" } as CSSProperties;
+  const noDrag = { WebkitAppRegion: "no-drag" } as CSSProperties;
+
+  return (
+    <>
+      <AppSidebar
+        searchSlot={searchSlot}
+        topSlot={
+          <div aria-hidden className="h-10 shrink-0" style={drag} />
+        }
+      />
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div
+          className="relative z-10 flex h-10 shrink-0 items-center transition-[padding] duration-200 ease-out"
+          style={{
+            ...drag,
+            paddingLeft: collapsed ? WINDOW_CONTROLS_INSET : undefined,
+          }}
+        >
+          <div
+            className="flex h-full shrink-0 items-center gap-0.5 pl-2 pr-1"
+            style={noDrag}
+          >
+            <SidebarTrigger className="size-7 text-faint-foreground hover:bg-muted/50 hover:text-muted-foreground" />
+            <SessionHistoryControls />
+          </div>
+          <div className="min-h-0 min-w-0 flex-1 self-stretch" style={noDrag}>
+            <Suspense fallback={null}>
+              <TabBar />
+            </Suspense>
+          </div>
+        </div>
+        <SessionCanvas>{canvas}</SessionCanvas>
+      </div>
+    </>
+  );
+}
+
 export function DashboardLayout({
   children,
   extra,
@@ -89,24 +141,13 @@ export function DashboardLayout({
       >
         <GlobalShortcuts />
         <WorkspacePresencePrefetch />
-        <AppSidebar searchSlot={searchSlot} />
         {sessionTabs ? (
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <div className="relative z-10 flex h-10 shrink-0 items-center">
-              <div className="flex h-full shrink-0 items-center gap-0.5 pl-2 pr-1">
-                <SidebarTrigger className="size-7 text-faint-foreground hover:bg-muted/50 hover:text-muted-foreground" />
-                <SessionHistoryControls />
-              </div>
-              <div className="min-h-0 min-w-0 flex-1 self-stretch">
-                <Suspense fallback={null}>
-                  <TabBar />
-                </Suspense>
-              </div>
-            </div>
-            <SessionCanvas>{canvas}</SessionCanvas>
-          </div>
+          <SessionTabChrome canvas={canvas} searchSlot={searchSlot} />
         ) : (
-          <SidebarInset className="relative overflow-hidden">{canvas}</SidebarInset>
+          <>
+            <AppSidebar searchSlot={searchSlot} />
+            <SidebarInset className="relative overflow-hidden">{canvas}</SidebarInset>
+          </>
         )}
       </SidebarProvider>
     </DashboardGuard>
