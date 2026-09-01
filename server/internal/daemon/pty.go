@@ -23,6 +23,7 @@ const (
 	ptyPingPeriod = 54 * time.Second
 	ptyReadLimit  = 1 << 20
 	ptyMaxBackoff = 30 * time.Second
+	ptyReplayCap  = 128 * 1024
 )
 
 var errPTYUnsupported = errors.New("pty is not supported on this platform")
@@ -37,6 +38,7 @@ type ptySession struct {
 	file   io.ReadWriteCloser
 	resize func(cols, rows uint16) error
 	kill   func()
+	replay []byte
 }
 
 func (s *ptySession) write(p []byte) error {
@@ -58,6 +60,23 @@ func (s *ptySession) setSize(cols, rows uint16) error {
 		return nil
 	}
 	return resize(cols, rows)
+}
+
+func (s *ptySession) appendReplay(p []byte) {
+	s.mu.Lock()
+	s.replay = append(s.replay, p...)
+	if len(s.replay) > ptyReplayCap {
+		s.replay = append([]byte(nil), s.replay[len(s.replay)-ptyReplayCap:]...)
+	}
+	s.mu.Unlock()
+}
+
+func (s *ptySession) snapshotReplay() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]byte, len(s.replay))
+	copy(out, s.replay)
+	return out
 }
 
 func (s *ptySession) close() {
@@ -109,6 +128,15 @@ func (d *Daemon) runPTYConnection(ctx context.Context) (time.Duration, error) {
 	wsURL, err := ptyWebSocketURL(d.cfg.ServerBaseURL)
 	if err != nil {
 		return 0, err
+	}
+	if d.cfg.DaemonID != "" {
+		u, parseErr := url.Parse(wsURL)
+		if parseErr == nil {
+			q := u.Query()
+			q.Set("daemon_id", d.cfg.DaemonID)
+			u.RawQuery = q.Encode()
+			wsURL = u.String()
+		}
 	}
 
 	headers := http.Header{}
@@ -165,18 +193,32 @@ func ptyWebSocketURL(baseURL string) (string, error) {
 func (d *Daemon) servePTY(ctx context.Context, conn *websocket.Conn) {
 	writes := make(chan ptyOutbound, 64)
 	var sessionMu sync.Mutex
-	var session *ptySession
+	sessions := make(map[string]*ptySession)
 
-	closeSession := func() {
+	closeOne := func(id string) {
 		sessionMu.Lock()
-		s := session
-		session = nil
+		s := sessions[id]
+		delete(sessions, id)
 		sessionMu.Unlock()
 		if s != nil {
 			s.close()
 		}
 	}
-	defer closeSession()
+	closeAll := func() {
+		sessionMu.Lock()
+		open := sessions
+		sessions = make(map[string]*ptySession)
+		sessionMu.Unlock()
+		for _, s := range open {
+			s.close()
+		}
+	}
+	lookup := func(id string) *ptySession {
+		sessionMu.Lock()
+		defer sessionMu.Unlock()
+		return sessions[id]
+	}
+	defer closeAll()
 
 	writerDone := make(chan struct{})
 	go func() {
@@ -259,13 +301,25 @@ func (d *Daemon) servePTY(ctx context.Context, conn *websocket.Conn) {
 
 		switch messageType {
 		case websocket.BinaryMessage:
-			sessionMu.Lock()
-			s := session
-			sessionMu.Unlock()
+			uid, payload, ok := protocol.DecodePTYFrame(data)
+			if !ok {
+				continue
+			}
+			s := lookup(uid.String())
+			if s == nil {
+				sessionMu.Lock()
+				for key, candidate := range sessions {
+					if protocol.ParsePTYID(key) == uid {
+						s = candidate
+						break
+					}
+				}
+				sessionMu.Unlock()
+			}
 			if s == nil {
 				continue
 			}
-			if err := s.write(data); err != nil {
+			if err := s.write(payload); err != nil {
 				d.logger.Debug("pty stdin write failed", "error", err)
 			}
 		case websocket.TextMessage:
@@ -273,23 +327,37 @@ func (d *Daemon) servePTY(ctx context.Context, conn *websocket.Conn) {
 			if err := json.Unmarshal(data, &msg); err != nil {
 				continue
 			}
+			id := msg.ID
+			if id == "" {
+				id = "default"
+			}
 			switch msg.Type {
 			case protocol.PTYTypeOpen:
-				closeSession()
+				if existing := lookup(id); existing != nil {
+					if msg.Cols > 0 && msg.Rows > 0 {
+						_ = existing.setSize(msg.Cols, msg.Rows)
+					}
+					sendJSON(protocol.PTYControl{Type: protocol.PTYTypeOpened, ID: id})
+					if snap := existing.snapshotReplay(); len(snap) > 0 {
+						send(ptyOutbound{
+							messageType: websocket.BinaryMessage,
+							data:        protocol.EncodePTYFrame(protocol.ParsePTYID(id), snap),
+						})
+					}
+					continue
+				}
 				opened, err := startPTY(msg)
 				if err != nil {
-					sendJSON(protocol.PTYControl{Type: protocol.PTYTypeError, Error: err.Error()})
+					sendJSON(protocol.PTYControl{Type: protocol.PTYTypeError, ID: id, Error: err.Error()})
 					continue
 				}
 				sessionMu.Lock()
-				session = opened
+				sessions[id] = opened
 				sessionMu.Unlock()
-				sendJSON(protocol.PTYControl{Type: protocol.PTYTypeOpened})
-				go d.copyPTYOutput(opened, send, sendJSON)
+				sendJSON(protocol.PTYControl{Type: protocol.PTYTypeOpened, ID: id})
+				go d.copyPTYOutput(id, opened, send, sendJSON)
 			case protocol.PTYTypeResize:
-				sessionMu.Lock()
-				s := session
-				sessionMu.Unlock()
+				s := lookup(id)
 				if s == nil {
 					continue
 				}
@@ -297,13 +365,14 @@ func (d *Daemon) servePTY(ctx context.Context, conn *websocket.Conn) {
 					d.logger.Debug("pty resize failed", "error", err)
 				}
 			case protocol.PTYTypeClose:
-				closeSession()
+				closeOne(id)
 			}
 		}
 	}
 }
 
-func (d *Daemon) copyPTYOutput(session *ptySession, send func(ptyOutbound), sendJSON func(protocol.PTYControl)) {
+func (d *Daemon) copyPTYOutput(id string, session *ptySession, send func(ptyOutbound), sendJSON func(protocol.PTYControl)) {
+	uid := protocol.ParsePTYID(id)
 	buf := make([]byte, 32*1024)
 	for {
 		session.mu.Lock()
@@ -316,11 +385,12 @@ func (d *Daemon) copyPTYOutput(session *ptySession, send func(ptyOutbound), send
 		if n > 0 {
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
-			send(ptyOutbound{messageType: websocket.BinaryMessage, data: chunk})
+			session.appendReplay(chunk)
+			send(ptyOutbound{messageType: websocket.BinaryMessage, data: protocol.EncodePTYFrame(uid, chunk)})
 		}
 		if err != nil {
 			code := 0
-			sendJSON(protocol.PTYControl{Type: protocol.PTYTypeExit, Code: &code})
+			sendJSON(protocol.PTYControl{Type: protocol.PTYTypeExit, ID: id, Code: &code})
 			session.close()
 			return
 		}

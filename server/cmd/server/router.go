@@ -2042,6 +2042,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Saved issue views (MUL-4796).
 			r.Get("/api/issue-view-preferences", h.GetIssueViewPreference)
 			r.Put("/api/issue-view-preferences", h.PutIssueViewPreference)
+			r.Get("/api/terminal-workspace-state", h.GetTerminalWorkspaceState)
+			r.Put("/api/terminal-workspace-state", h.PutTerminalWorkspaceState)
 			r.Route("/api/issue-views", func(r chi.Router) {
 				r.Get("/", h.ListIssueViews)
 				r.Post("/", h.CreateIssueView)

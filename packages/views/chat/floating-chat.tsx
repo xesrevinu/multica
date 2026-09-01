@@ -25,7 +25,7 @@ export function FloatingChat() {
 
   if (!enabled) return null;
   // Suppress on the Chat tab — it renders the same conversation full-page.
-  if (isFloatingChatRouteSuppressed(pathname, wsPaths.chat())) return null;
+  if (isFloatingChatRouteSuppressed(pathname, wsPaths.chat(), [wsPaths.terminal()])) return null;
 
   return (
     <>

@@ -97,12 +97,17 @@ func (h *Handler) BrowserPTYWebSocket(w http.ResponseWriter, r *http.Request, mc
 		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"auth_ack"}`))
 	}
 
+	ptyID := strings.TrimSpace(r.URL.Query().Get("pty_id"))
+	if ptyID == "" {
+		ptyID = "default"
+	}
 	slog.Info("pty browser websocket connected",
 		"user_id", userID,
 		"workspace_id", workspaceID,
 		"daemon_id", daemonID,
+		"pty_id", ptyID,
 	)
-	h.PTYHub.ServeBrowser(daemonID, conn)
+	h.PTYHub.ServeBrowser(daemonID, ptyID, conn)
 }
 
 func ptyAuthenticateToken(tokenStr string, pr realtime.PATResolver, ctx context.Context) (string, string) {

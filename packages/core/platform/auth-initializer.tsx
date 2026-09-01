@@ -282,7 +282,12 @@ export function AuthInitializer({
         warmWorkspaces();
       } catch (err) {
         if (cancelled) return;
-        if (err instanceof ApiError && err.status === 401) {
+        if (
+          err instanceof ApiError &&
+          (err.status === 401 || err.status === 404)
+        ) {
+          // 404 is GetMe's "JWT valid, user missing" — typical when a localhost
+          // cookie from another checkout hits a fresh database.
           rejectSession();
           return;
         }

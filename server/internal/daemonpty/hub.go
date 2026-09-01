@@ -24,34 +24,39 @@ type frame struct {
 	data        []byte
 }
 
-// Hub pairs one browser WebSocket with one daemon PTY WebSocket per daemon_id.
-// Control frames (Text JSON) and PTY bytes (Binary) are relayed as-is.
+// Hub multiplexes many browser PTY sockets onto one daemon PTY socket.
+// Browser frames stay raw; daemon-facing binary frames are prefixed with a
+// 16-byte PTY id so sessions never share stdin/stdout.
 type Hub struct {
 	upgrader websocket.Upgrader
 
 	mu      sync.Mutex
-	daemons map[string]*endpoint
+	daemons map[string]*daemonSlot
+}
+
+type daemonSlot struct {
+	mu       sync.Mutex
+	daemon   *endpoint
+	browsers map[string][]*endpoint
 }
 
 type endpoint struct {
-	id   string
-	role string
-	conn *websocket.Conn
-	send chan frame
+	daemonID string
+	ptyID    string
+	role     string
+	conn     *websocket.Conn
+	send     chan frame
 
 	mu      sync.Mutex
-	peer    *endpoint
 	closing bool
 }
 
 func NewHub() *Hub {
 	return &Hub{
 		upgrader: websocket.Upgrader{
-			// Intranet POC: browsers and daemons both connect with credentials
-			// on the handshake or first frame. Origin is not a security boundary here.
 			CheckOrigin: func(*http.Request) bool { return true },
 		},
-		daemons: make(map[string]*endpoint),
+		daemons: make(map[string]*daemonSlot),
 	}
 }
 
@@ -59,8 +64,6 @@ func (h *Hub) Upgrade(w http.ResponseWriter, r *http.Request) (*websocket.Conn, 
 	return h.upgrader.Upgrade(w, r, nil)
 }
 
-// ServeDaemon registers the daemon's PTY socket under daemonID and relays
-// until either side disconnects. A reconnect replaces the previous socket.
 func (h *Hub) ServeDaemon(daemonID string, conn *websocket.Conn) {
 	if daemonID == "" {
 		_ = conn.WriteMessage(websocket.TextMessage, mustControl(protocol.PTYControl{
@@ -70,14 +73,12 @@ func (h *Hub) ServeDaemon(daemonID string, conn *websocket.Conn) {
 		conn.Close()
 		return
 	}
-	ep := h.attachDaemon(daemonID, conn)
-	h.run(ep)
+	ep := newEndpoint(daemonID, "", "daemon", conn)
+	slot := h.replaceDaemon(daemonID, ep)
+	h.run(slot, ep)
 }
 
-// ServeBrowser attaches a browser socket to the daemon's PTY socket. If the
-// daemon is not connected, the browser is told so and the socket is closed.
-// A second browser steals the session from the first.
-func (h *Hub) ServeBrowser(daemonID string, conn *websocket.Conn) {
+func (h *Hub) ServeBrowser(daemonID, ptyID string, conn *websocket.Conn) {
 	if daemonID == "" {
 		_ = conn.WriteMessage(websocket.TextMessage, mustControl(protocol.PTYControl{
 			Type:  protocol.PTYTypeError,
@@ -86,7 +87,11 @@ func (h *Hub) ServeBrowser(daemonID string, conn *websocket.Conn) {
 		conn.Close()
 		return
 	}
-	ep, ok := h.attachBrowser(daemonID, conn)
+	if ptyID == "" {
+		ptyID = "default"
+	}
+	ep := newEndpoint(daemonID, ptyID, "browser", conn)
+	slot, ok := h.attachBrowser(daemonID, ptyID, ep)
 	if !ok {
 		_ = conn.WriteMessage(websocket.TextMessage, mustControl(protocol.PTYControl{
 			Type:  protocol.PTYTypeError,
@@ -95,78 +100,90 @@ func (h *Hub) ServeBrowser(daemonID string, conn *websocket.Conn) {
 		conn.Close()
 		return
 	}
-	h.run(ep)
+	h.run(slot, ep)
 }
 
-func (h *Hub) attachDaemon(daemonID string, conn *websocket.Conn) *endpoint {
-	ep := newEndpoint(daemonID, "daemon", conn)
+func (h *Hub) replaceDaemon(daemonID string, ep *endpoint) *daemonSlot {
 	h.mu.Lock()
-	prev := h.daemons[daemonID]
-	h.daemons[daemonID] = ep
+	slot := h.daemons[daemonID]
+	if slot == nil {
+		slot = &daemonSlot{browsers: make(map[string][]*endpoint)}
+		h.daemons[daemonID] = slot
+	}
 	h.mu.Unlock()
+
+	slot.mu.Lock()
+	prev := slot.daemon
+	slot.daemon = ep
+	slot.mu.Unlock()
 	if prev != nil {
 		prev.closeWithError("daemon replaced")
 	}
-	return ep
+	return slot
 }
 
-func (h *Hub) attachBrowser(daemonID string, conn *websocket.Conn) (*endpoint, bool) {
-	browser := newEndpoint(daemonID, "browser", conn)
+func (h *Hub) attachBrowser(daemonID, ptyID string, ep *endpoint) (*daemonSlot, bool) {
 	h.mu.Lock()
-	daemon := h.daemons[daemonID]
+	slot := h.daemons[daemonID]
 	h.mu.Unlock()
-	if daemon == nil {
+	if slot == nil {
 		return nil, false
 	}
-	if !daemon.pair(browser) {
+	slot.mu.Lock()
+	if slot.daemon == nil || slot.daemon.closing {
+		slot.mu.Unlock()
 		return nil, false
 	}
-	return browser, true
+	slot.browsers[ptyID] = append(slot.browsers[ptyID], ep)
+	slot.mu.Unlock()
+	return slot, true
 }
 
-func (h *Hub) dropDaemon(ep *endpoint) {
+func (h *Hub) drop(ep *endpoint) {
 	h.mu.Lock()
-	if current := h.daemons[ep.id]; current == ep {
-		delete(h.daemons, ep.id)
-	}
+	slot := h.daemons[ep.daemonID]
 	h.mu.Unlock()
+	if slot == nil {
+		return
+	}
+	slot.mu.Lock()
+	if ep.role == "daemon" {
+		if slot.daemon == ep {
+			slot.daemon = nil
+		}
+	} else {
+		list := slot.browsers[ep.ptyID]
+		kept := list[:0]
+		for _, browser := range list {
+			if browser != ep {
+				kept = append(kept, browser)
+			}
+		}
+		if len(kept) == 0 {
+			delete(slot.browsers, ep.ptyID)
+		} else {
+			slot.browsers[ep.ptyID] = kept
+		}
+	}
+	empty := slot.daemon == nil && len(slot.browsers) == 0
+	slot.mu.Unlock()
+	if empty {
+		h.mu.Lock()
+		if current := h.daemons[ep.daemonID]; current == slot {
+			delete(h.daemons, ep.daemonID)
+		}
+		h.mu.Unlock()
+	}
 }
 
-func newEndpoint(id, role string, conn *websocket.Conn) *endpoint {
+func newEndpoint(daemonID, ptyID, role string, conn *websocket.Conn) *endpoint {
 	return &endpoint{
-		id:   id,
-		role: role,
-		conn: conn,
-		send: make(chan frame, sendBuf),
+		daemonID: daemonID,
+		ptyID:    ptyID,
+		role:     role,
+		conn:     conn,
+		send:     make(chan frame, sendBuf),
 	}
-}
-
-func (ep *endpoint) pair(browser *endpoint) bool {
-	ep.mu.Lock()
-	if ep.closing {
-		ep.mu.Unlock()
-		return false
-	}
-	prev := ep.peer
-	ep.peer = browser
-	browser.mu.Lock()
-	browser.peer = ep
-	browser.mu.Unlock()
-	ep.mu.Unlock()
-	if prev != nil {
-		prev.closeWithError("session taken over")
-	}
-	return true
-}
-
-func (ep *endpoint) peerSend(f frame) bool {
-	ep.mu.Lock()
-	peer := ep.peer
-	ep.mu.Unlock()
-	if peer == nil {
-		return false
-	}
-	return peer.trySend(f)
 }
 
 func (ep *endpoint) trySend(f frame) bool {
@@ -190,6 +207,7 @@ func (ep *endpoint) closeWithError(msg string) {
 		messageType: websocket.TextMessage,
 		data: mustControl(protocol.PTYControl{
 			Type:  protocol.PTYTypeError,
+			ID:    ep.ptyID,
 			Error: msg,
 		}),
 	})
@@ -203,41 +221,25 @@ func (ep *endpoint) close() {
 		return
 	}
 	ep.closing = true
-	peer := ep.peer
-	ep.peer = nil
 	ch := ep.send
-	role := ep.role
 	ep.mu.Unlock()
 	close(ch)
-	if peer == nil {
-		return
-	}
-	peer.detach(ep)
-	// A browser leaving must not tear down the daemon socket — the next
-	// browser should be able to open a new PTY on the same machine.
-	if role == "daemon" {
-		peer.close()
-	}
 }
 
-func (ep *endpoint) detach(from *endpoint) {
-	ep.mu.Lock()
-	if ep.peer == from {
-		ep.peer = nil
-	}
-	ep.mu.Unlock()
-}
-
-func (h *Hub) run(ep *endpoint) {
+func (h *Hub) run(slot *daemonSlot, ep *endpoint) {
 	defer func() {
-		if ep.role == "daemon" {
-			h.dropDaemon(ep)
-		} else {
-			ep.peerSend(frame{
-				messageType: websocket.TextMessage,
-				data:        mustControl(protocol.PTYControl{Type: protocol.PTYTypeClose}),
-			})
+		if ep.role != "browser" {
+			slot.mu.Lock()
+			browsers := make([]*endpoint, 0)
+			for _, group := range slot.browsers {
+				browsers = append(browsers, group...)
+			}
+			slot.mu.Unlock()
+			for _, browser := range browsers {
+				browser.closeWithError("daemon disconnected")
+			}
 		}
+		h.drop(ep)
 		ep.close()
 		ep.conn.Close()
 	}()
@@ -247,11 +249,84 @@ func (h *Hub) run(ep *endpoint) {
 		ep.writePump()
 		close(done)
 	}()
-	ep.readPump()
+	if ep.role == "daemon" {
+		h.readDaemon(slot, ep)
+	} else {
+		h.readBrowser(slot, ep)
+	}
 	<-done
 }
 
-func (ep *endpoint) readPump() {
+func (h *Hub) readBrowser(slot *daemonSlot, ep *endpoint) {
+	if !readLoop(ep, func(f frame) {
+		if f.messageType == websocket.BinaryMessage {
+			uid := protocol.ParsePTYID(ep.ptyID)
+			f.data = protocol.EncodePTYFrame(uid, f.data)
+		} else {
+			f.data = stampControl(f.data, ep.ptyID)
+		}
+		h.forwardToDaemon(slot, f.data, f.messageType)
+	}) {
+		return
+	}
+}
+
+func (h *Hub) readDaemon(slot *daemonSlot, ep *endpoint) {
+	readLoop(ep, func(f frame) {
+		h.routeFromDaemon(slot, f)
+	})
+}
+
+func (h *Hub) forwardToDaemon(slot *daemonSlot, data []byte, messageType int) {
+	slot.mu.Lock()
+	daemon := slot.daemon
+	slot.mu.Unlock()
+	if daemon == nil {
+		return
+	}
+	if !daemon.trySend(frame{messageType: messageType, data: data}) {
+		slog.Debug("pty websocket daemon send dropped", "daemon_id", daemon.daemonID)
+	}
+}
+
+func (h *Hub) routeFromDaemon(slot *daemonSlot, f frame) {
+	ptyID := ""
+	payload := f.data
+	if f.messageType == websocket.BinaryMessage {
+		id, rest, ok := protocol.DecodePTYFrame(f.data)
+		if !ok {
+			return
+		}
+		ptyID = id.String()
+		payload = rest
+	} else {
+		var msg protocol.PTYControl
+		if json.Unmarshal(f.data, &msg) == nil {
+			ptyID = msg.ID
+		}
+		if ptyID == "" {
+			ptyID = "default"
+		}
+	}
+	slot.mu.Lock()
+	list := slot.browsers[ptyID]
+	if len(list) == 0 {
+		for key, candidate := range slot.browsers {
+			if protocol.ParsePTYID(key) == protocol.ParsePTYID(ptyID) {
+				list = candidate
+				break
+			}
+		}
+	}
+	slot.mu.Unlock()
+	for _, browser := range list {
+		if !browser.trySend(frame{messageType: f.messageType, data: payload}) {
+			slog.Debug("pty websocket browser send dropped", "pty_id", ptyID)
+		}
+	}
+}
+
+func readLoop(ep *endpoint, handle func(frame)) bool {
 	ep.conn.SetReadLimit(readLimit)
 	ep.conn.SetReadDeadline(time.Now().Add(pongWait))
 	ep.conn.SetPongHandler(func(string) error {
@@ -262,21 +337,18 @@ func (ep *endpoint) readPump() {
 		ep.conn.SetReadDeadline(time.Now().Add(pongWait))
 		return ep.conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(writeWait))
 	})
-
 	for {
 		messageType, data, err := ep.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-				slog.Debug("pty websocket read error", "error", err, "daemon_id", ep.id)
+				slog.Debug("pty websocket read error", "error", err, "daemon_id", ep.daemonID)
 			}
-			return
+			return false
 		}
 		if messageType != websocket.TextMessage && messageType != websocket.BinaryMessage {
 			continue
 		}
-		if !ep.peerSend(frame{messageType: messageType, data: data}) {
-			slog.Debug("pty websocket peer send dropped", "daemon_id", ep.id)
-		}
+		handle(frame{messageType: messageType, data: data})
 	}
 }
 
@@ -302,6 +374,21 @@ func (ep *endpoint) writePump() {
 			}
 		}
 	}
+}
+
+func stampControl(data []byte, id string) []byte {
+	var msg protocol.PTYControl
+	if err := json.Unmarshal(data, &msg); err != nil {
+		return data
+	}
+	if msg.ID == "" {
+		msg.ID = id
+	}
+	out, err := json.Marshal(msg)
+	if err != nil {
+		return data
+	}
+	return out
 }
 
 func mustControl(msg protocol.PTYControl) []byte {

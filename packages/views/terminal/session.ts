@@ -61,7 +61,44 @@ export function isBoundOnlineAgent(
   return runtimeById.get(agent.runtime_id)?.status === "online";
 }
 
-export function ptyWebSocketUrl(daemonId: string, workspaceSlug: string): string {
+export function machineIdForDaemon(
+  machines: Array<{ id: string; daemonId: string | null }>,
+  daemonId: string | null | undefined,
+): string | null {
+  if (!daemonId) return null;
+  return machines.find((machine) => machine.daemonId === daemonId)?.id ?? null;
+}
+
+export function firstLocalDirectoryDaemonId(
+  resources: ProjectResource[] | undefined,
+): string | null {
+  if (!resources) return null;
+  for (const resource of resources) {
+    if (resource.resource_type !== "local_directory") continue;
+    if (!isLocalDirectoryRef(resource.resource_ref)) continue;
+    const daemonId = resource.resource_ref.daemon_id.trim();
+    if (daemonId) return daemonId;
+  }
+  return null;
+}
+
+export function onlineAgentsForDaemon(
+  agents: Agent[],
+  runtimeById: Map<string, AgentRuntime>,
+  daemonId: string | null | undefined,
+): Agent[] {
+  if (!daemonId) return [];
+  return agents.filter((agent) => {
+    if (!isBoundOnlineAgent(agent, runtimeById)) return false;
+    return runtimeById.get(agent.runtime_id)?.daemon_id === daemonId;
+  });
+}
+
+export function ptyWebSocketUrl(
+  daemonId: string,
+  workspaceSlug: string,
+  ptyId: string,
+): string {
   const base = api.getBaseUrl?.() ?? "";
   let url: URL;
   if (base) {
@@ -79,5 +116,6 @@ export function ptyWebSocketUrl(daemonId: string, workspaceSlug: string): string
   url.hash = "";
   url.searchParams.set("daemon_id", daemonId);
   url.searchParams.set("workspace_slug", workspaceSlug || getCurrentSlug() || "");
+  url.searchParams.set("pty_id", ptyId);
   return url.toString();
 }

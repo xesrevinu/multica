@@ -24,7 +24,7 @@ func TestHubRelaysTextAndBinary(t *testing.T) {
 		case "/daemon":
 			hub.ServeDaemon(r.URL.Query().Get("id"), conn)
 		case "/browser":
-			hub.ServeBrowser(r.URL.Query().Get("id"), conn)
+			hub.ServeBrowser(r.URL.Query().Get("id"), r.URL.Query().Get("pty"), conn)
 		default:
 			conn.Close()
 		}
@@ -41,7 +41,7 @@ func TestHubRelaysTextAndBinary(t *testing.T) {
 	// Give the hub a moment to register the daemon before the browser attaches.
 	time.Sleep(20 * time.Millisecond)
 
-	browser, _, err := websocket.DefaultDialer.Dial(wsBase+"/browser?id=d1", nil)
+	browser, _, err := websocket.DefaultDialer.Dial(wsBase+"/browser?id=d1&pty=p1", nil)
 	if err != nil {
 		t.Fatalf("dial browser: %v", err)
 	}
@@ -68,11 +68,12 @@ func TestHubRelaysTextAndBinary(t *testing.T) {
 	if err := json.Unmarshal(payload, &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got.Type != protocol.PTYTypeOpen || got.Cols != 80 || got.Rows != 24 {
+	if got.Type != protocol.PTYTypeOpen || got.Cols != 80 || got.Rows != 24 || got.ID != "p1" {
 		t.Fatalf("got %+v", got)
 	}
 
-	if err := daemon.WriteMessage(websocket.BinaryMessage, []byte("hello-pty")); err != nil {
+	frame := protocol.EncodePTYFrame(protocol.ParsePTYID("p1"), []byte("hello-pty"))
+	if err := daemon.WriteMessage(websocket.BinaryMessage, frame); err != nil {
 		t.Fatalf("daemon write bytes: %v", err)
 	}
 	browser.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -88,6 +89,77 @@ func TestHubRelaysTextAndBinary(t *testing.T) {
 	}
 }
 
+func TestHubIsolatesTwoBrowsers(t *testing.T) {
+	hub := NewHub()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := hub.Upgrade(w, r)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		switch r.URL.Path {
+		case "/daemon":
+			hub.ServeDaemon(r.URL.Query().Get("id"), conn)
+		case "/browser":
+			hub.ServeBrowser(r.URL.Query().Get("id"), r.URL.Query().Get("pty"), conn)
+		default:
+			conn.Close()
+		}
+	}))
+	defer srv.Close()
+
+	wsBase := "ws" + strings.TrimPrefix(srv.URL, "http")
+	daemon, _, err := websocket.DefaultDialer.Dial(wsBase+"/daemon?id=d1", nil)
+	if err != nil {
+		t.Fatalf("dial daemon: %v", err)
+	}
+	defer daemon.Close()
+	time.Sleep(20 * time.Millisecond)
+
+	a, _, err := websocket.DefaultDialer.Dial(wsBase+"/browser?id=d1&pty=pane-a", nil)
+	if err != nil {
+		t.Fatalf("dial a: %v", err)
+	}
+	defer a.Close()
+	b, _, err := websocket.DefaultDialer.Dial(wsBase+"/browser?id=d1&pty=pane-b", nil)
+	if err != nil {
+		t.Fatalf("dial b: %v", err)
+	}
+	defer b.Close()
+
+	if err := a.WriteMessage(websocket.BinaryMessage, []byte("from-a")); err != nil {
+		t.Fatalf("a write: %v", err)
+	}
+	daemon.SetReadDeadline(time.Now().Add(2 * time.Second))
+	msgType, payload, err := daemon.ReadMessage()
+	if err != nil {
+		t.Fatalf("daemon read a: %v", err)
+	}
+	if msgType != websocket.BinaryMessage {
+		t.Fatalf("want binary, got %d", msgType)
+	}
+	id, rest, ok := protocol.DecodePTYFrame(payload)
+	if !ok || id != protocol.ParsePTYID("pane-a") || string(rest) != "from-a" {
+		t.Fatalf("daemon got id=%s payload=%q", id, rest)
+	}
+
+	if err := daemon.WriteMessage(websocket.BinaryMessage, protocol.EncodePTYFrame(protocol.ParsePTYID("pane-b"), []byte("only-b"))); err != nil {
+		t.Fatalf("daemon write b: %v", err)
+	}
+	b.SetReadDeadline(time.Now().Add(2 * time.Second))
+	msgType, payload, err = b.ReadMessage()
+	if err != nil {
+		t.Fatalf("b read: %v", err)
+	}
+	if msgType != websocket.BinaryMessage || string(payload) != "only-b" {
+		t.Fatalf("b got type=%d payload=%q", msgType, payload)
+	}
+	a.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
+	if _, extra, err := a.ReadMessage(); err == nil {
+		t.Fatalf("pane a received leaked bytes %q", extra)
+	}
+}
+
 func TestHubBrowserWithoutDaemon(t *testing.T) {
 	hub := NewHub()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +167,7 @@ func TestHubBrowserWithoutDaemon(t *testing.T) {
 		if err != nil {
 			return
 		}
-		hub.ServeBrowser("missing", conn)
+		hub.ServeBrowser("missing", "p1", conn)
 	}))
 	defer srv.Close()
 

@@ -3987,6 +3987,17 @@ export class ApiClient {
     });
   }
 
+  async getTerminalWorkspaceState(): Promise<{ state: unknown; updated_at?: string }> {
+    return this.fetch("/api/terminal-workspace-state");
+  }
+
+  async putTerminalWorkspaceState(state: unknown): Promise<{ state: unknown; updated_at?: string }> {
+    return this.fetch("/api/terminal-workspace-state", {
+      method: "PUT",
+      body: JSON.stringify({ state }),
+    });
+  }
+
   async putIssueViewPreference(data: {
     scope_type: string;
     scope_id?: string | null;

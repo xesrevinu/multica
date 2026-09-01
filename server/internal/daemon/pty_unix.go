@@ -26,7 +26,9 @@ func startPTY(msg protocol.PTYControl) (*ptySession, error) {
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = cwd
 	cmd.Env = ptyEnv(os.Environ())
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// creack/pty already sets Setsid+Setctty. Setpgid together with Setsid is
+	// EPERM on Darwin (`fork/exec /bin/zsh: operation not permitted`). After
+	// Setsid the child is its own process group, so kill(-pid) still works.
 
 	cols, rows := msg.Cols, msg.Rows
 	if cols == 0 {

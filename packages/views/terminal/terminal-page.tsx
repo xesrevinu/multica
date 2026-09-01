@@ -1,56 +1,75 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Terminal } from "lucide-react";
-import { api } from "@multica/core/api";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft } from "lucide-react";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useRequiredWorkspaceSlug } from "@multica/core/paths";
 import { projectListOptions, projectResourcesOptions } from "@multica/core/projects";
 import { runtimeListOptions, runtimeProfileListOptions } from "@multica/core/runtimes";
+import {
+  adjacentLeaf,
+  collectLeafIds,
+  selectWorkspaceTerminal,
+  terminalWorkspaceStateOptions,
+  usePersistTerminalWorkspaceState,
+  useTerminalSessionStore,
+} from "@multica/core/terminal";
 import { agentListOptions } from "@multica/core/workspace/queries";
-import type { AgentRuntime } from "@multica/core/types";
+import type { AgentRuntime, ProjectResource } from "@multica/core/types";
+import { getShortcutPlatform, isEditableShortcutTarget } from "@multica/core/shortcuts";
+import { isImeComposing } from "@multica/core/utils";
 import { Button } from "@multica/ui/components/ui/button";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@multica/ui/components/ui/select";
-import { CollectionPageHeader } from "../layout/collection-page";
-import { PAGE_GUTTER } from "../layout/page-header";
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@multica/ui/components/ui/resizable";
+import { useIsCompact } from "@multica/ui/hooks/use-mobile";
 import { useT } from "../i18n";
 import { buildRuntimeMachines } from "../runtimes/components/runtime-machines";
-import { GhosttyHost, type GhosttyHostHandle } from "./ghostty-host";
+import { TerminalLauncher, type TerminalLauncherRow } from "./terminal-launcher";
+import { TerminalNewMenu } from "./terminal-commands";
+import { TerminalSessionRail } from "./session-rail";
+import { TerminalSplitLayout } from "./split-layout";
 import {
   cliArgvForRuntime,
-  isBoundOnlineAgent,
   localPathForDaemon,
-  ptyWebSocketUrl,
+  onlineAgentsForDaemon,
 } from "./session";
-
-type ConnectionState = "idle" | "connecting" | "connected" | "error";
+import { closePtyProcess, closePtyProcesses } from "./pty-lifetime";
 
 export function TerminalPage() {
   const { t } = useT("layout");
   const wsId = useWorkspaceId();
   const slug = useRequiredWorkspaceSlug();
-  const [projectId, setProjectId] = useState<string | null>(null);
-  const [machineId, setMachineId] = useState<string | null>(null);
-  const [agentId, setAgentId] = useState<string | null>(null);
-  const [status, setStatus] = useState<ConnectionState>("idle");
-  const [statusMessage, setStatusMessage] = useState("");
+  const queryClient = useQueryClient();
+  const isCompact = useIsCompact();
 
-  const termRef = useRef<GhosttyHostHandle | null>(null);
-  const socketRef = useRef<WebSocket | null>(null);
-  const pendingOpenRef = useRef<{ cwd: string; argv: string[] } | null>(null);
+  const terminalState = useTerminalSessionStore((state) => selectWorkspaceTerminal(state, wsId));
+  const createSession = useTerminalSessionStore((state) => state.createSession);
+  const closeSession = useTerminalSessionStore((state) => state.closeSession);
+  const setActiveSession = useTerminalSessionStore((state) => state.setActiveSession);
+  const setSidebarCollapsed = useTerminalSessionStore((state) => state.setSidebarCollapsed);
+  const splitPane = useTerminalSessionStore((state) => state.splitPane);
+  const closePane = useTerminalSessionStore((state) => state.closePane);
+  const updatePane = useTerminalSessionStore((state) => state.updatePane);
+  const setActiveLeaf = useTerminalSessionStore((state) => state.setActiveLeaf);
+  const setExpandedLeaf = useTerminalSessionStore((state) => state.setExpandedLeaf);
+  const renameSession = useTerminalSessionStore((state) => state.renameSession);
+  const setSplitRatio = useTerminalSessionStore((state) => state.setSplitRatio);
+  const equalizePane = useTerminalSessionStore((state) => state.equalizePane);
+  const duplicateSession = useTerminalSessionStore((state) => state.duplicateSession);
+  const hydrateWorkspace = useTerminalSessionStore((state) => state.hydrateWorkspace);
+
+  const { sessions, activeSessionId, sidebarCollapsed } = terminalState;
+  const { data: savedState, isSuccess: stateReady } = useQuery(terminalWorkspaceStateOptions(wsId));
+  const persistState = usePersistTerminalWorkspaceState(wsId);
+  const persistMutate = persistState.mutate;
+  const skipPersist = useRef(true);
+  const activeSession = sessions.find((session) => session.id === activeSessionId) ?? null;
 
   const { data: projects = [] } = useQuery(projectListOptions(wsId));
-  const { data: resources } = useQuery({
-    ...projectResourcesOptions(wsId, projectId ?? ""),
-    enabled: !!projectId,
-  });
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
   const { data: profiles = [] } = useQuery(runtimeProfileListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
@@ -67,287 +86,369 @@ export function TerminalPage() {
     for (const runtime of runtimes) map.set(runtime.id, runtime);
     return map;
   }, [runtimes]);
-  const onlineAgents = useMemo(
-    () => agents.filter((agent) => isBoundOnlineAgent(agent, runtimeById)),
-    [agents, runtimeById],
-  );
 
-  const selectedMachine = machines.find((machine) => machine.id === machineId) ?? null;
-  const selectedAgent = onlineAgents.find((agent) => agent.id === agentId) ?? null;
-  const selectedRuntime = selectedAgent ? runtimeById.get(selectedAgent.runtime_id) : undefined;
-  const cwd = localPathForDaemon(resources, selectedMachine?.daemonId ?? selectedRuntime?.daemon_id);
+  const defaultDaemonId = machines[0]?.daemonId ?? null;
+  const didBoot = useRef(false);
+  const wasCompact = useRef(isCompact);
 
-  const projectItems = useMemo(
-    () => [
-      { value: "none", label: t(($) => $.terminal.none) },
-      ...projects.map((project) => ({ value: project.id, label: project.title })),
-    ],
-    [projects, t],
-  );
-  const machineItems = useMemo(
-    () => machines.map((machine) => ({ value: machine.id, label: machine.title })),
-    [machines],
-  );
-  const agentItems = useMemo(
-    () => onlineAgents.map((agent) => ({ value: agent.id, label: agent.name })),
-    [onlineAgents],
-  );
-
-  const disconnect = useCallback(() => {
-    pendingOpenRef.current = null;
-    const socket = socketRef.current;
-    socketRef.current = null;
-    if (socket && socket.readyState < WebSocket.CLOSING) {
-      try {
-        socket.send(JSON.stringify({ type: "pty.close" }));
-      } catch {
-        // ignore
-      }
-      socket.close();
+  useEffect(() => {
+    if (isCompact && !wasCompact.current && activeSessionId) {
+      setSidebarCollapsed(wsId, true);
     }
-    setStatus("idle");
-    setStatusMessage("");
-  }, []);
+    wasCompact.current = isCompact;
+  }, [activeSessionId, isCompact, setSidebarCollapsed, wsId]);
 
-  const connect = useCallback(
-    (daemonId: string, argv: string[], cwdPath: string) => {
-      disconnect();
-      pendingOpenRef.current = { cwd: cwdPath, argv };
-      setStatus("connecting");
-      setStatusMessage(t(($) => $.terminal.connecting));
+  useEffect(() => {
+    if (!stateReady || !savedState) return;
+    hydrateWorkspace(wsId, savedState);
+    skipPersist.current = false;
+  }, [hydrateWorkspace, savedState, stateReady, wsId]);
 
-      const socket = new WebSocket(ptyWebSocketUrl(daemonId, slug));
-      socket.binaryType = "arraybuffer";
-      socketRef.current = socket;
+  useEffect(() => {
+    let timer: number | null = null;
+    const unsub = useTerminalSessionStore.subscribe((next, prev) => {
+      if (skipPersist.current) return;
+      if (next.byWorkspace[wsId] === prev.byWorkspace[wsId]) return;
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        persistMutate(selectWorkspaceTerminal(useTerminalSessionStore.getState(), wsId));
+      }, 400);
+    });
+    return () => {
+      unsub();
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [persistMutate, wsId]);
 
-      const sendOpen = () => {
-        const pending = pendingOpenRef.current;
-        if (!pending) return;
-        const cols = termRef.current?.cols ?? 80;
-        const rows = termRef.current?.rows ?? 24;
-        socket.send(
-          JSON.stringify({
-            type: "pty.open",
-            cols,
-            rows,
-            cwd: pending.cwd,
-            argv: pending.argv,
-          }),
-        );
-      };
+  useEffect(() => {
+    if (!stateReady) return;
+    if (didBoot.current) return;
+    didBoot.current = true;
+    if ((savedState?.sessions.length ?? 0) > 0) return;
+    if (!defaultDaemonId) return;
+    createSession(wsId, t(($) => $.terminal.home), {
+      kind: "shell",
+      daemonId: defaultDaemonId,
+      argv: [],
+    });
+  }, [createSession, defaultDaemonId, savedState, stateReady, t, wsId]);
+  const machineAgents = useMemo(
+    () => onlineAgentsForDaemon(agents, runtimeById, defaultDaemonId),
+    [agents, runtimeById, defaultDaemonId],
+  );
 
-      socket.onopen = () => {
-        const token = api.getToken?.() ?? null;
-        if (token) {
-          socket.send(JSON.stringify({ type: "auth", payload: { token } }));
-          return;
-        }
-        sendOpen();
-      };
-
-      socket.onmessage = (event) => {
-        if (typeof event.data === "string") {
-          let msg: { type?: string; error?: string } = {};
-          try {
-            msg = JSON.parse(event.data) as { type?: string; error?: string };
-          } catch {
-            return;
-          }
-          if (msg.type === "auth_ack") {
-            sendOpen();
-            return;
-          }
-          if (msg.type === "pty.opened") {
-            setStatus("connected");
-            setStatusMessage(t(($) => $.terminal.connected));
-            const cols = termRef.current?.cols ?? 80;
-            const rows = termRef.current?.rows ?? 24;
-            socket.send(JSON.stringify({ type: "pty.resize", cols, rows }));
-            return;
-          }
-          if (msg.type === "pty.exit") {
-            setStatus("idle");
-            setStatusMessage(t(($) => $.terminal.disconnected));
-            return;
-          }
-          if (msg.type === "pty.error" || msg.type === "error" || msg.error) {
-            setStatus("error");
-            setStatusMessage(
-              t(($) => $.terminal.error, { message: msg.error || t(($) => $.terminal.daemon_offline) }),
-            );
-          }
-          return;
-        }
-        const bytes =
-          event.data instanceof ArrayBuffer
-            ? new Uint8Array(event.data)
-            : event.data instanceof Blob
-              ? null
-              : new Uint8Array(event.data as ArrayBuffer);
-        if (bytes) termRef.current?.write(bytes);
-        else if (event.data instanceof Blob) {
-          void event.data.arrayBuffer().then((buf) => termRef.current?.write(new Uint8Array(buf)));
-        }
-      };
-
-      socket.onerror = () => {
-        setStatus("error");
-        setStatusMessage(t(($) => $.terminal.daemon_offline));
-      };
-      socket.onclose = () => {
-        if (socketRef.current === socket) {
-          socketRef.current = null;
-          setStatus((current) => (current === "connecting" ? "error" : "idle"));
-          setStatusMessage((current) => current || t(($) => $.terminal.disconnected));
-        }
-      };
+  const resourcesForProject = useCallback(
+    async (id: string | null): Promise<ProjectResource[] | undefined> => {
+      if (!id) return undefined;
+      return queryClient.fetchQuery(projectResourcesOptions(wsId, id));
     },
-    [disconnect, slug, t],
+    [queryClient, wsId],
   );
 
-  const openShell = () => {
-    const daemonId = selectedMachine?.daemonId;
-    if (!daemonId) {
-      setStatus("error");
-      setStatusMessage(t(($) => $.terminal.select_machine));
-      return;
-    }
-    connect(daemonId, [], cwd);
-  };
-
-  const startAgent = () => {
-    if (!selectedAgent || !selectedRuntime?.daemon_id) {
-      setStatus("error");
-      setStatusMessage(t(($) => $.terminal.select_agent));
-      return;
-    }
-    const argv = cliArgvForRuntime(selectedRuntime, profiles);
-    if (argv.length === 0) {
-      setStatus("error");
-      setStatusMessage(t(($) => $.terminal.select_agent));
-      return;
-    }
-    if (selectedRuntime.daemon_id && selectedMachine?.daemonId !== selectedRuntime.daemon_id) {
-      const machine = machines.find((item) => item.daemonId === selectedRuntime.daemon_id);
-      if (machine) setMachineId(machine.id);
-    }
-    connect(selectedRuntime.daemon_id, argv, localPathForDaemon(resources, selectedRuntime.daemon_id));
-  };
-
-  const handleTermData = (data: string) => {
-    const socket = socketRef.current;
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    socket.send(new TextEncoder().encode(data));
-  };
-
-  const handleTermResize = (size: { cols: number; rows: number }) => {
-    const socket = socketRef.current;
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    socket.send(JSON.stringify({ type: "pty.resize", cols: size.cols, rows: size.rows }));
-  };
-
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <CollectionPageHeader
-        icon={Terminal}
-        title={t(($) => $.nav.terminal)}
-        description={
-          cwd
-            ? t(($) => $.terminal.cwd_project, { path: cwd })
-            : t(($) => $.terminal.cwd_home)
-        }
-      />
-      <div className={`flex flex-wrap items-end gap-2 border-b py-2 ${PAGE_GUTTER}`}>
-        <Field label={t(($) => $.terminal.project)}>
-          <Select
-            items={projectItems}
-            value={projectId ?? "none"}
-            onValueChange={(next) => setProjectId(!next || next === "none" ? null : next)}
-          >
-            <SelectTrigger size="sm" className="w-48" aria-label={t(($) => $.terminal.project)}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {projectItems.map((item) => (
-                <SelectItem key={item.value} value={item.value}>
-                  {item.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
-        <Field label={t(($) => $.terminal.machine)}>
-          <Select
-            items={machineItems}
-            value={machineId ?? ""}
-            onValueChange={(next) => setMachineId(next || null)}
-          >
-            <SelectTrigger size="sm" className="w-48" aria-label={t(($) => $.terminal.machine)}>
-              <SelectValue placeholder={t(($) => $.terminal.no_online_machines)} />
-            </SelectTrigger>
-            <SelectContent>
-              {machineItems.map((item) => (
-                <SelectItem key={item.value} value={item.value}>
-                  {item.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
-        <Field label={t(($) => $.terminal.agent)}>
-          <Select
-            items={agentItems}
-            value={agentId ?? ""}
-            onValueChange={(next) => setAgentId(next || null)}
-          >
-            <SelectTrigger size="sm" className="w-48" aria-label={t(($) => $.terminal.agent)}>
-              <SelectValue placeholder={t(($) => $.terminal.no_online_agents)} />
-            </SelectTrigger>
-            <SelectContent>
-              {agentItems.map((item) => (
-                <SelectItem key={item.value} value={item.value}>
-                  {item.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
-        <Button size="sm" onClick={openShell} disabled={!selectedMachine}>
-          {t(($) => $.terminal.open_shell)}
-        </Button>
-        <Button size="sm" variant="outline" onClick={startAgent} disabled={!selectedAgent}>
-          {t(($) => $.terminal.start_agent)}
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={disconnect}
-          disabled={status === "idle"}
-        >
-          {t(($) => $.terminal.disconnect)}
-        </Button>
-        {statusMessage ? (
-          <span className="pb-1 text-caption text-muted-foreground">{statusMessage}</span>
-        ) : null}
-      </div>
-      <div className="min-h-0 flex-1">
-        <GhosttyHost
-          onReady={(handle) => {
-            termRef.current = handle;
-          }}
-          onData={handleTermData}
-          onResize={handleTermResize}
-        />
-      </div>
-    </div>
+  const assignPaneTarget = useCallback(
+    async (
+      sessionId: string,
+      leafId: string,
+      next: {
+        kind: "shell" | "agent";
+        projectId: string | null;
+        daemonId: string;
+        argv: string[];
+        title: string;
+      },
+    ) => {
+      const resources = await resourcesForProject(next.projectId);
+      updatePane(wsId, sessionId, leafId, {
+        kind: next.kind,
+        title: next.title,
+        projectId: next.projectId,
+        daemonId: next.daemonId,
+        argv: next.argv,
+        cwd: localPathForDaemon(resources, next.daemonId),
+      });
+    },
+    [resourcesForProject, updatePane, wsId],
   );
-}
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+  const openShellInPane = useCallback(
+    async (sessionId: string, leafId: string, projectId: string | null) => {
+      if (!defaultDaemonId) return;
+      const project = projects.find((item) => item.id === projectId);
+      const title = project?.title ?? t(($) => $.terminal.home);
+      await assignPaneTarget(sessionId, leafId, {
+        kind: "shell",
+        projectId,
+        daemonId: defaultDaemonId,
+        argv: [],
+        title,
+      });
+    },
+    [assignPaneTarget, defaultDaemonId, projects, t],
+  );
+
+  const startAgentInPane = useCallback(
+    async (sessionId: string, leafId: string, projectId: string | null, agentId: string) => {
+      const agent = agents.find((item) => item.id === agentId);
+      const runtime = agent ? runtimeById.get(agent.runtime_id) : undefined;
+      if (!agent || !runtime?.daemon_id) return;
+      const argv = cliArgvForRuntime(runtime, profiles);
+      if (argv.length === 0) return;
+      const project = projects.find((item) => item.id === projectId);
+      await assignPaneTarget(sessionId, leafId, {
+        kind: "agent",
+        projectId,
+        daemonId: runtime.daemon_id,
+        argv,
+        title: project ? `${agent.name} · ${project.title}` : agent.name,
+      });
+      updatePane(wsId, sessionId, leafId, { agentId });
+    },
+    [agents, assignPaneTarget, profiles, projects, runtimeById, updatePane, wsId],
+  );
+
+  const handleLauncherShell = useCallback(
+    async (projectId: string | null) => {
+      if (activeSession) {
+        await openShellInPane(activeSession.id, activeSession.activeLeafId, projectId);
+        return;
+      }
+      const project = projects.find((item) => item.id === projectId);
+      const title = project?.title ?? t(($) => $.terminal.home);
+      const sessionId = createSession(wsId, title);
+      const created = useTerminalSessionStore.getState().byWorkspace[wsId]?.sessions[0];
+      const leafId = created?.activeLeafId;
+      if (leafId) await openShellInPane(sessionId, leafId, projectId);
+    },
+    [activeSession, createSession, openShellInPane, projects, t, wsId],
+  );
+
+  const handleLauncherAgent = useCallback(
+    async (projectId: string | null, agentId: string) => {
+      if (activeSession) {
+        await startAgentInPane(activeSession.id, activeSession.activeLeafId, projectId, agentId);
+        return;
+      }
+      const agent = agents.find((item) => item.id === agentId);
+      const sessionId = createSession(wsId, agent?.name ?? t(($) => $.terminal.agent));
+      const created = useTerminalSessionStore.getState().byWorkspace[wsId]?.sessions[0];
+      const leafId = created?.activeLeafId;
+      if (leafId) await startAgentInPane(sessionId, leafId, projectId, agentId);
+    },
+    [activeSession, agents, createSession, startAgentInPane, t, wsId],
+  );
+
+  const spawnHomeShell = () => {
+    createSession(
+      wsId,
+      t(($) => $.terminal.home),
+      defaultDaemonId ? { kind: "shell", daemonId: defaultDaemonId, argv: [] } : undefined,
+    );
+    if (isCompact) setSidebarCollapsed(wsId, true);
+  };
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || isImeComposing(event)) return;
+      const mac = getShortcutPlatform() === "macos";
+      const primary = mac ? event.metaKey : event.ctrlKey;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        isEditableShortcutTarget(target) &&
+        !target.closest('[aria-label="Terminal input"]')
+      ) {
+        return;
+      }
+      if (event.altKey && activeSession && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+        event.preventDefault();
+        setActiveLeaf(
+          wsId,
+          activeSession.id,
+          adjacentLeaf(
+            activeSession.layout,
+            activeSession.activeLeafId,
+            event.key === "ArrowRight" ? 1 : -1,
+          ),
+        );
+        return;
+      }
+      if (!primary) return;
+      if ((event.key === "n" || event.key === "N") && event.shiftKey) {
+        event.preventDefault();
+        spawnHomeShell();
+        return;
+      }
+      if (!activeSession) return;
+      if (event.key === "\\") {
+        event.preventDefault();
+        splitPane(
+          wsId,
+          activeSession.id,
+          activeSession.activeLeafId,
+          event.shiftKey ? "horizontal" : "vertical",
+        );
+        return;
+      }
+      if ((event.key === "w" || event.key === "W") && event.shiftKey) {
+        event.preventDefault();
+        closePtyProcess(activeSession.activeLeafId);
+        closePane(wsId, activeSession.id, activeSession.activeLeafId);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [activeSession, closePane, createSession, defaultDaemonId, isCompact, setActiveLeaf, setSidebarCollapsed, splitPane, t, wsId]);
+
+  const launcherRows = useMemo<TerminalLauncherRow[]>(() => {
+    const home: TerminalLauncherRow = {
+      id: "home",
+      project: null,
+      title: t(($) => $.terminal.home),
+      path: t(($) => $.terminal.cwd_home),
+      agents: machineAgents,
+    };
+    return [
+      home,
+      ...projects.map((project) => ({
+        id: project.id,
+        project,
+        title: project.title,
+        path: t(($) => $.terminal.cwd_project_unknown),
+        agents: machineAgents,
+      })),
+    ];
+  }, [machineAgents, projects, t]);
+
+  const newAction = (
+    <TerminalNewMenu
+      projects={projects}
+      agents={machineAgents}
+      onNewShell={spawnHomeShell}
+      onOpenProject={(projectId) => {
+        const project = projects.find((item) => item.id === projectId);
+        const sessionId = createSession(wsId, project?.title ?? t(($) => $.terminal.home));
+        const leafId = useTerminalSessionStore.getState().byWorkspace[wsId]?.sessions[0]?.activeLeafId;
+        if (leafId) void openShellInPane(sessionId, leafId, projectId);
+        if (isCompact) setSidebarCollapsed(wsId, true);
+      }}
+      onStartAgent={(agentId) => {
+        void handleLauncherAgent(null, agentId);
+        if (isCompact) setSidebarCollapsed(wsId, true);
+      }}
+    />
+  );
+
+  const rail = (
+    <TerminalSessionRail
+      sessions={sessions}
+      activeSessionId={activeSessionId}
+      collapsed={!isCompact && sidebarCollapsed}
+      className={isCompact ? "w-full" : undefined}
+      showCollapse={!isCompact}
+      newAction={newAction}
+      onSelect={(sessionId) => {
+        setActiveSession(wsId, sessionId);
+        if (isCompact) setSidebarCollapsed(wsId, true);
+      }}
+      onClose={(sessionId) => {
+        const session = sessions.find((item) => item.id === sessionId);
+        if (session) closePtyProcesses(collectLeafIds(session.layout));
+        closeSession(wsId, sessionId);
+      }}
+      onRename={(sessionId, title) => renameSession(wsId, sessionId, title)}
+      onDuplicate={(sessionId) => duplicateSession(wsId, sessionId)}
+      onToggleCollapsed={() => setSidebarCollapsed(wsId, !sidebarCollapsed)}
+    />
+  );
+
+  const workspace = activeSession ? (
+    <TerminalSplitLayout
+      node={activeSession.layout}
+      panes={activeSession.panes}
+      activeLeafId={activeSession.activeLeafId}
+      expandedLeafId={activeSession.expandedLeafId ?? null}
+      slug={slug}
+      launcherRows={launcherRows}
+      hasMachine={!!defaultDaemonId}
+      onFocus={(leafId) => setActiveLeaf(wsId, activeSession.id, leafId)}
+      onSplitRight={(leafId) => splitPane(wsId, activeSession.id, leafId, "vertical")}
+      onSplitDown={(leafId) => splitPane(wsId, activeSession.id, leafId, "horizontal")}
+      onClose={(leafId) => {
+        closePtyProcess(leafId);
+        closePane(wsId, activeSession.id, leafId);
+      }}
+      onToggleExpand={(leafId) =>
+        setExpandedLeaf(
+          wsId,
+          activeSession.id,
+          activeSession.expandedLeafId === leafId ? null : leafId,
+        )
+      }
+      onEqualize={(leafId) => equalizePane(wsId, activeSession.id, leafId)}
+      onSplitRatio={(splitId, ratio) => setSplitRatio(wsId, activeSession.id, splitId, ratio)}
+      onRename={(leafId, title) => updatePane(wsId, activeSession.id, leafId, { title })}
+      onOpenShell={(leafId, projectId) => void openShellInPane(activeSession.id, leafId, projectId)}
+      onStartAgent={(leafId, projectId, agentId) =>
+        void startAgentInPane(activeSession.id, leafId, projectId, agentId)
+      }
+    />
+  ) : (
+    <TerminalLauncher
+      hasMachine={!!defaultDaemonId}
+      rows={launcherRows}
+      onOpenShell={(projectId) => void handleLauncherShell(projectId)}
+      onStartAgent={(projectId, agentId) => void handleLauncherAgent(projectId, agentId)}
+    />
+  );
+
+  if (isCompact) {
+    const showList = !sidebarCollapsed || !activeSession;
+    if (showList) {
+      return <div className="flex h-full min-h-0">{rail}</div>;
+    }
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="flex h-10 shrink-0 items-center border-b px-2">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="gap-1.5 text-muted-foreground"
+            onClick={() => setSidebarCollapsed(wsId, false)}
+          >
+            <ArrowLeft className="size-4" />
+            {t(($) => $.terminal.sessions)}
+          </Button>
+        </div>
+        <div className="min-h-0 flex-1">{workspace}</div>
+      </div>
+    );
+  }
+
+  if (sidebarCollapsed) {
+    return (
+      <div className="flex h-full min-h-0">
+        {rail}
+        <div className="min-h-0 min-w-0 flex-1">{workspace}</div>
+      </div>
+    );
+  }
+
   return (
-    <label className="flex flex-col gap-1 text-caption text-muted-foreground">
-      {label}
-      {children}
-    </label>
+    <ResizablePanelGroup orientation="horizontal" className="h-full min-h-0">
+      <ResizablePanel
+        id="terminal-sessions"
+        defaultSize={224}
+        minSize={180}
+        maxSize={360}
+        groupResizeBehavior="preserve-pixel-size"
+      >
+        {rail}
+      </ResizablePanel>
+      <ResizableHandle />
+      <ResizablePanel id="terminal-workspace" minSize="40%">
+        {workspace}
+      </ResizablePanel>
+    </ResizablePanelGroup>
   );
 }
