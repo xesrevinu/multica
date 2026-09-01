@@ -84,7 +84,6 @@ import {
 import { useIsCompact } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { PAGE_GUTTER, PageHeader } from "../../layout/page-header";
-import { TabChromeActions } from "../../layout/tab-chrome-actions";
 import { useSessionTabsEnabled } from "../../layout/session-tabs";
 import { useTimeAgo } from "./inbox-list-item";
 import { InboxList } from "./inbox-list";
@@ -570,12 +569,12 @@ export function InboxPage() {
       )}
     </>
   );
-  const listHeader = sessionTabs ? (
-    <TabChromeActions>{inboxHeaderActions}</TabChromeActions>
-  ) : (
+  const listHeader = (
     <PageHeader>
       <div className="flex flex-1 items-center gap-2">
-        <h1 className="text-body font-semibold">{t(($) => $.page.title)}</h1>
+        {!sessionTabs && (
+          <h1 className="text-body font-semibold">{t(($) => $.page.title)}</h1>
+        )}
       </div>
       {inboxHeaderActions}
     </PageHeader>

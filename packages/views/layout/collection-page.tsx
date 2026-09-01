@@ -13,7 +13,6 @@ import {
 } from "@multica/ui/components/ui/empty";
 import { cn } from "@multica/ui/lib/utils";
 import { PageHeader } from "./page-header";
-import { TabChromeActions } from "./tab-chrome-actions";
 import { useSessionTabsEnabled } from "./session-tabs";
 
 interface CollectionPageHeaderProps {
@@ -43,14 +42,15 @@ export function CollectionPageHeader({
   className,
 }: CollectionPageHeaderProps) {
   const sessionTabs = useSessionTabsEnabled();
-  // Session tabs already name the page. Park actions on the tab strip so
-  // the card does not grow a second header underneath.
-  if (sessionTabs) {
-    return actions ? <TabChromeActions>{actions}</TabChromeActions> : null;
-  }
+  // Session tabs already name the page. Keep this bar in the document for
+  // page actions (New …); drop the repeated title/icon when the strip is on.
+  if (sessionTabs && !actions) return null;
 
   return (
     <PageHeader className={className}>
+      {sessionTabs ? (
+        <div className="min-w-0 flex-1" />
+      ) : (
       <div className="flex min-w-0 flex-1 items-center gap-2">
           <Icon
             aria-hidden="true"
@@ -81,6 +81,7 @@ export function CollectionPageHeader({
             </p>
           ) : null}
       </div>
+      )}
       {actions ? (
         <div className="flex shrink-0 items-center justify-end gap-2">
           {actions}

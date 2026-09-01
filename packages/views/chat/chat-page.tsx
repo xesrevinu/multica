@@ -20,7 +20,6 @@ import { useQuickActionsFailureToast } from "./components/use-quick-actions-fail
 import { useQuery } from "@tanstack/react-query";
 import type { Agent, ChatSession } from "@multica/core/types";
 import { PageHeader } from "../layout/page-header";
-import { TabChromeActions } from "../layout/tab-chrome-actions";
 import { useSessionTabsEnabled } from "../layout/session-tabs";
 import { useNavigation } from "../navigation";
 import { useT } from "../i18n";
@@ -219,11 +218,12 @@ export function ChatPage() {
     />
   );
 
-  const listHeader = sessionTabs ? (
-    <TabChromeActions>{newChatButton}</TabChromeActions>
-  ) : (
+  const listHeader = (
     <PageHeader>
-      <h1 className="flex-1 text-body font-semibold">{t(($) => $.page.title)}</h1>
+      {!sessionTabs && (
+        <h1 className="flex-1 text-body font-semibold">{t(($) => $.page.title)}</h1>
+      )}
+      {sessionTabs ? <div className="flex-1" /> : null}
       {newChatButton}
     </PageHeader>
   );
