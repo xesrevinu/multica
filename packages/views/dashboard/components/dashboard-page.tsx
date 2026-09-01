@@ -26,7 +26,7 @@ import {
 } from "@multica/core/dashboard";
 import { useCustomPricingStore } from "@multica/core/runtimes/custom-pricing-store";
 import { useViewingTimezone } from "../../common/use-viewing-timezone";
-import { PAGE_GUTTER } from "../../layout/page-header";
+import { PAGE_TOOLBAR_INLINE } from "../../layout/page-header";
 import { CollectionPageHeader } from "../../layout/collection-page";
 import { KpiCard } from "../../runtimes/components/shared";
 import { useNavigation } from "../../navigation";
@@ -67,7 +67,6 @@ import { ProjectFilter, TimeRangeFilter } from "./dashboard-filters";
 import { UsageTrendCard } from "./usage-trend-card";
 import { Leaderboard } from "./leaderboard";
 import { ErrorsTab } from "./errors-tab";
-import { cn } from "@multica/ui/lib/utils";
 
 // Stable references — `data ?? []` would create a new empty array on
 // every render while the query is loading, which breaks useMemo's
@@ -137,8 +136,8 @@ function useDataFreshness(
  * where the failure breakdown sat below a leaderboard that could itself run to
  * thirty rows, and the only way to chart failures was to hide spend.
  *
- * Scope is expressed by where a control lives: the toolbar under the header
- * carries the tabs and the two page-scoped filters (time range, project),
+ * Scope is expressed by where a control lives: the page header carries the
+ * Usage/Errors tabs and the two page-scoped filters (time range, project);
  * every card carries its own view switches. All six rollups are fetched for
  * both tabs — they are small, and prefetching is what makes switching tabs
  * instant — but the loading and empty states are per tab, so Usage does not
@@ -465,6 +464,36 @@ export function DashboardPage() {
       <CollectionPageHeader
         icon={BarChart3}
         title={t(($) => $.title)}
+        toolbar={
+          /* Usage/Errors plus shared range/project filters — same row as the
+             title and refresh, not a second chrome bar underneath. */
+          <div className="no-scrollbar min-w-0 flex-1 overflow-x-auto overflow-y-hidden overscroll-x-contain [-webkit-overflow-scrolling:touch]">
+            <div className={`${PAGE_TOOLBAR_INLINE} h-full w-max min-w-full`}>
+              <TabsList variant="line" className="gap-0 p-0 group-data-horizontal/tabs:h-full">
+                <TabsTrigger
+                  value="usage"
+                  className="h-full rounded-none px-2.5 text-label group-data-horizontal/tabs:after:bottom-0"
+                >
+                  {t(($) => $.tab_usage)}
+                </TabsTrigger>
+                <TabsTrigger
+                  value="errors"
+                  className="h-full rounded-none px-2.5 text-label group-data-horizontal/tabs:after:bottom-0"
+                >
+                  {t(($) => $.errors.title)}
+                </TabsTrigger>
+              </TabsList>
+              <div className="flex shrink-0 items-center gap-2">
+                <TimeRangeFilter days={days} onChange={setDays} />
+                <ProjectFilter
+                  projects={projects}
+                  projectValue={projectValue}
+                  onProjectChange={setProjectValue}
+                />
+              </div>
+            </div>
+          </div>
+        }
         actions={
           /* Data freshness cluster: the timestamp and the action that advances
              it stay together. Refresh re-pulls the same scope, so it lives here
@@ -492,37 +521,6 @@ export function DashboardPage() {
           </div>
         }
       />
-
-      {/* View toolbar, same grammar as the issues surface header: view
-          switching on the left, page-scoped filters on the right. Both tabs
-          share the range and project filter, which is why the filters live
-          here and not inside a tab. */}
-      <div className={cn("no-scrollbar h-12 shrink-0 overflow-x-auto overflow-y-hidden overscroll-x-contain border-b [-webkit-overflow-scrolling:touch]", PAGE_GUTTER)}>
-        <div className="flex h-full w-max min-w-full items-center justify-between gap-2">
-          <TabsList variant="line" className="gap-0 p-0 group-data-horizontal/tabs:h-full">
-            <TabsTrigger
-              value="usage"
-              className="h-full rounded-none px-2.5 text-label group-data-horizontal/tabs:after:bottom-0"
-            >
-              {t(($) => $.tab_usage)}
-            </TabsTrigger>
-            <TabsTrigger
-              value="errors"
-              className="h-full rounded-none px-2.5 text-label group-data-horizontal/tabs:after:bottom-0"
-            >
-              {t(($) => $.errors.title)}
-            </TabsTrigger>
-          </TabsList>
-          <div className="flex shrink-0 items-center gap-2">
-            <TimeRangeFilter days={days} onChange={setDays} />
-            <ProjectFilter
-              projects={projects}
-              projectValue={projectValue}
-              onProjectChange={setProjectValue}
-            />
-          </div>
-        </div>
-      </div>
 
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-6xl p-6">
