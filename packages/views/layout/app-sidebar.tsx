@@ -539,7 +539,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
       <Sidebar variant="inset">
         {topSlot}
         {/* Workspace Switcher */}
-        <SidebarHeader className={cn("py-3", headerClassName)} style={headerStyle}>
+        <SidebarHeader className={cn("pb-3 pt-0.5", headerClassName)} style={headerStyle}>
           <SidebarMenu>
             <SidebarMenuItem>
               <DropdownMenu>
@@ -691,49 +691,42 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                 ) : null}
               </SidebarMenuButton>
             </SidebarMenuItem>
+            {personalNav.map((item) => {
+              const href = p[item.key]();
+              const Icon = routeIconForPath(href);
+              const isActive = isNavActive(pathname, href);
+              return (
+                <SidebarMenuItem key={item.key}>
+                  <SidebarMenuButton
+                    isActive={isActive}
+                    render={<AppLink href={href} />}
+                    className={SIDEBAR_ITEM_CLASS}
+                  >
+                    <Icon />
+                    <span>{t(($) => $.nav[item.labelKey])}</span>
+                    {item.key === "inbox" && unreadCount > 0 && (
+                      <CappedNumberFlow
+                        value={unreadCount}
+                        animated={false}
+                        className="ml-auto text-caption"
+                      />
+                    )}
+                    {item.key === "chat" && chatUnreadCount > 0 && (
+                      <CappedNumberFlow
+                        value={chatUnreadCount}
+                        animated={false}
+                        className="ml-auto text-caption"
+                      />
+                    )}
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              );
+            })}
           </SidebarMenu>
         </SidebarHeader>
 
         {/* Navigation */}
         <SidebarContent ref={sidebarScrollRef} style={sidebarFadeStyle}>
-          <SidebarGroup>
-            <SidebarGroupContent>
-              <SidebarMenu className="gap-0.5">
-                {personalNav.map((item) => {
-                  const href = p[item.key]();
-                  const Icon = routeIconForPath(href);
-                  const isActive = isNavActive(pathname, href);
-                  return (
-                    <SidebarMenuItem key={item.key}>
-                      <SidebarMenuButton
-                        isActive={isActive}
-                        render={<AppLink href={href} />}
-                        className={SIDEBAR_ITEM_CLASS}
-                      >
-                        <Icon />
-                        <span>{t(($) => $.nav[item.labelKey])}</span>
-                        {item.key === "inbox" && unreadCount > 0 && (
-                          <CappedNumberFlow
-                            value={unreadCount}
-                            animated={false}
-                            className="ml-auto text-caption"
-                          />
-                        )}
-                        {item.key === "chat" && chatUnreadCount > 0 && (
-                          <CappedNumberFlow
-                            value={chatUnreadCount}
-                            animated={false}
-                            className="ml-auto text-caption"
-                          />
-                        )}
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  );
-                })}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-
           {visiblePinned.length > 0 && (
             <Collapsible defaultOpen>
               <SidebarGroup className="group/pinned">

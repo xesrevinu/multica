@@ -20,10 +20,12 @@ describe("sidebar nav groups", () => {
     ]);
   });
 
-  it("does not give agents its own sidebar row", () => {
+  it("does not give agents or my-issues their own sidebar row", () => {
     const keys = [...personalNav, ...workspaceNav, ...configureNav].map(
       (item) => item.key,
     );
     expect(keys).not.toContain("agents");
+    expect(keys).not.toContain("myIssues");
+    expect(personalNav.map((item) => item.key)).toEqual(["inbox", "chat"]);
   });
 });
