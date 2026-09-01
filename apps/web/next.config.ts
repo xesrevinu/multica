@@ -40,7 +40,7 @@ const allowedDevOrigins = process.env.CORS_ALLOWED_ORIGINS
 
 const nextConfig: NextConfig = {
   ...(process.env.STANDALONE === "true" ? { output: "standalone" as const } : {}),
-  transpilePackages: ["@multica/core", "@multica/ui", "@multica/views"],
+  transpilePackages: ["@multica/core", "@multica/ui", "@multica/views", "agentation"],
   experimental: {
     // lucide-react / date-fns are already on Next's default list. Base UI is
     // not, and the landing page used to pull it in via views barrels.
