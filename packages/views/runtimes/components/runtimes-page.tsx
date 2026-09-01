@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 import {
   ChevronRight,
   Cloud,
@@ -9,19 +9,10 @@ import {
   Plus,
   Server,
 } from "lucide-react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { useAuthStore } from "@multica/core/auth";
-import { useWorkspaceId } from "@multica/core/hooks";
 import { memberNeedsMikaSetup, useBootstrapMika } from "@multica/core/onboarding";
 import { MIKA_PLACEHOLDER_EMOJI } from "../../onboarding/components/mika-intro";
 import { useRequiredWorkspaceSlug, useWorkspacePaths } from "@multica/core/paths";
-import { agentTaskSnapshotOptions } from "@multica/core/agents";
-import { chatSessionsOptions } from "@multica/core/chat/queries";
-import { runtimeProfileListOptions } from "@multica/core/runtimes";
-import { runtimeListOptions, runtimeKeys } from "@multica/core/runtimes/queries";
-import { useWSEvent } from "@multica/core/realtime";
-import { agentListOptions } from "@multica/core/workspace/queries";
 import type { AgentRuntime } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
@@ -51,9 +42,10 @@ import {
 import { ConnectRemoteDialog } from "./connect-remote-dialog";
 import { CloudRuntimeDialog } from "./cloud-runtime-dialog";
 import { ProviderLogo } from "./provider-logo";
-import { buildWorkloadIndex, RuntimeList } from "./runtime-list";
+import { RuntimeList } from "./runtime-list";
 import { pendingRuntimeFromProfile } from "./pending-runtime";
-import { buildRuntimeMachines, type RuntimeMachine } from "./runtime-machines";
+import type { RuntimeMachine } from "./runtime-machines";
+import { useWorkspaceRuntimeCollection } from "./use-workspace-runtime-collection";
 import { HealthDot, HealthIcon, useHealthLabel } from "./shared";
 import { useT, useTimeAgo } from "../../i18n";
 import { daemonRuntimesDocsHref } from "./runtime-docs";
@@ -71,15 +63,6 @@ export interface RuntimesPageProps {
   cloudRuntimeEnabled?: boolean;
 }
 
-function useNowTick(intervalMs = 30_000): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), intervalMs);
-    return () => clearInterval(id);
-  }, [intervalMs]);
-  return now;
-}
-
 export function RuntimesPage({
   localDaemonId,
   localMachineName,
@@ -87,73 +70,29 @@ export function RuntimesPage({
   bootstrapping,
   cloudRuntimeEnabled = false,
 }: RuntimesPageProps = {}) {
-  const isAuthLoading = useAuthStore((state) => state.isLoading);
-  const currentUserId = useAuthStore((state) => state.user?.id);
-  const wsId = useWorkspaceId();
-  const qc = useQueryClient();
   const [showConnectDialog, setShowConnectDialog] = useState(false);
   const [showCloudRuntimeDialog, setShowCloudRuntimeDialog] = useState(false);
+  const collection = useWorkspaceRuntimeCollection({
+    localDaemonId,
+    localMachineName,
+    hasLocalMachine,
+  });
+  const {
+    loading,
+    wsId,
+    currentUserId,
+    runtimes,
+    runtimesLoading,
+    agents,
+    agentsLoading,
+    chatSessions,
+    chatSessionsLoading,
+    machines,
+    orphanProfileRuntimes,
+    now,
+  } = collection;
 
-  const { data: runtimes = [], isLoading: runtimesLoading } = useQuery(
-    runtimeListOptions(wsId),
-  );
-  const { data: runtimeProfiles = [], isLoading: profilesLoading } = useQuery(
-    runtimeProfileListOptions(wsId),
-  );
-  const { data: agents = [], isLoading: agentsLoading } = useQuery(
-    agentListOptions(wsId),
-  );
-  const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
-  // The Mika entrypoint is per member, not per workspace: the agent alone does
-  // not say whether *this* member's conversation was ever opened and kicked
-  // off. See memberNeedsMikaSetup.
-  const { data: chatSessions = [], isLoading: chatSessionsLoading } = useQuery(
-    chatSessionsOptions(wsId),
-  );
-
-  const handleDaemonEvent = useCallback(() => {
-    qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
-  }, [qc, wsId]);
-  useWSEvent("daemon:register", handleDaemonEvent);
-
-  const workloadIndex = useMemo(
-    () => buildWorkloadIndex(agents, snapshot),
-    [agents, snapshot],
-  );
-  const now = useNowTick();
-  const machines = useMemo(
-    () =>
-      buildRuntimeMachines(runtimes, {
-        now,
-        localDaemonId,
-        localMachineName,
-        currentUserId,
-        workloadByRuntimeId: workloadIndex,
-        ensureLocalMachine: hasLocalMachine,
-      }),
-    [
-      runtimes,
-      now,
-      localDaemonId,
-      localMachineName,
-      currentUserId,
-      workloadIndex,
-      hasLocalMachine,
-    ],
-  );
-  const orphanProfileRuntimes = useMemo(() => {
-    if (machines.some((machine) => machine.mode === "local")) return [];
-    return runtimeProfiles.map((profile) => {
-      const createdAt = Date.parse(profile.created_at);
-      return pendingRuntimeFromProfile({
-        profile,
-        createdAt: Number.isFinite(createdAt) ? createdAt : 0,
-        fallbackMachineName: "Unassigned",
-      });
-    });
-  }, [machines, runtimeProfiles]);
-
-  if (isAuthLoading || runtimesLoading || profilesLoading) {
+  if (loading) {
     return <RuntimesPageSkeleton />;
   }
 
@@ -229,7 +168,7 @@ export function RuntimesPage({
  * decision reached from a different entry point, so it asks the same way and
  * reuses the same two controls.
  */
-function MikaSetupCard({
+export function MikaSetupCard({
   workspaceId,
   runtimes,
   runtimesLoading,
@@ -345,7 +284,7 @@ function MikaSetupCard({
   );
 }
 
-function OrphanRuntimeProfiles({
+export function OrphanRuntimeProfiles({
   runtimes,
   now,
   hasMachines,

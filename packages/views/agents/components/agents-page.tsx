@@ -229,6 +229,14 @@ export function rowMatchesFilters(
   return true;
 }
 
+export function rowMatchesMachine(
+  row: AgentListRow,
+  machineRuntimeIds: ReadonlySet<string> | null | undefined,
+): boolean {
+  if (!machineRuntimeIds) return true;
+  return !!row.runtime && machineRuntimeIds.has(row.runtime.id);
+}
+
 /**
  * Bulk-access dialog confirm-button enablement is centralized in
  * `@multica/core/agents` as `isAccessChangeReady` (MUL-3963). The dialog
@@ -246,6 +254,12 @@ export interface AgentsPageProps {
   localDaemonId?: string | null;
   localMachineName?: string | null;
   hasLocalMachine?: boolean;
+  /** Parent chrome (the fused runtimes page) already rendered a header. */
+  hideHeader?: boolean;
+  /** Limit the list to agents bound to these runtimes (one machine). */
+  machineRuntimeIds?: ReadonlySet<string> | null;
+  /** Machine title used in the empty-filter copy. */
+  machineTitle?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -285,15 +299,17 @@ function ListError({
   onCreate,
   listError,
   onRetry,
+  hideHeader,
 }: {
   onCreate: () => void;
   listError: unknown;
   onRetry: () => void;
+  hideHeader?: boolean;
 }) {
   const { t } = useT("agents");
   return (
     <div className="flex flex-1 min-h-0 flex-col">
-      <PageHeaderBar totalCount={0} onCreate={onCreate} />
+      {hideHeader ? null : <PageHeaderBar totalCount={0} onCreate={onCreate} />}
       <CollectionPageState
         role="alert"
         tone="destructive"
@@ -770,7 +786,11 @@ function LoadingSkeleton() {
 // Page
 // ---------------------------------------------------------------------------
 
-export function AgentsPage(_props: AgentsPageProps = {}) {
+export function AgentsPage({
+  hideHeader = false,
+  machineRuntimeIds = null,
+  machineTitle = null,
+}: AgentsPageProps = {}) {
   const { t } = useT("agents");
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
@@ -906,9 +926,17 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
     isWorkspaceAdmin,
   ]);
 
+  const machineScopeRows = useMemo(
+    () =>
+      scopeRows.filter((row) => rowMatchesMachine(row, machineRuntimeIds)),
+    [scopeRows, machineRuntimeIds],
+  );
+
   // Visible rows: local search + filters, then sort.
   const rows = useMemo<AgentListRow[]>(() => {
-    const filtered = scopeRows.filter((row) => rowMatchesFilters(row, filters, search));
+    const filtered = machineScopeRows.filter((row) =>
+      rowMatchesFilters(row, filters, search),
+    );
 
     const dir = sortDirection === "asc" ? 1 : -1;
     filtered.sort((a, b) => {
@@ -937,10 +965,18 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
       );
     });
     return filtered;
-  }, [scopeRows, search, filters, sortField, sortDirection]);
+  }, [machineScopeRows, search, filters, sortField, sortDirection]);
 
   const noMatchText = useMemo(() => {
     const query = search.trim();
+    if (machineTitle) {
+      return query
+        ? t(($) => $.no_matches.search_runtime_filtered, {
+            query,
+            machine: machineTitle,
+          })
+        : t(($) => $.no_matches.runtime_filtered, { machine: machineTitle });
+    }
     if (query) {
       if (scope === "archived") {
         return t(($) => $.no_matches.search_archived, { query });
@@ -955,7 +991,7 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
       return t(($) => $.no_matches.no_filter_match);
     }
     return t(($) => $.no_matches.title);
-  }, [filters, scope, search, t]);
+  }, [filters, machineTitle, scope, search, t]);
 
   // Row virtualization — headless math, offsets as padding on the rows
   // wrapper, fixed-height rows. The scroll element is the SINGLE outer
@@ -1006,6 +1042,7 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
         onCreate={() => navigation.push(paths.newAgent())}
         listError={listError}
         onRetry={() => refetchList()}
+        hideHeader={hideHeader}
       />
     );
   }
@@ -1038,10 +1075,12 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
     // relative: positioning anchor for the batch toolbar (page-centered,
     // not viewport-centered).
     <div className="relative flex flex-1 min-h-0 flex-col">
-      <PageHeaderBar
-        totalCount={totalCount}
-        onCreate={() => navigation.push(paths.newAgent())}
-      />
+      {hideHeader ? null : (
+        <PageHeaderBar
+          totalCount={totalCount}
+          onCreate={() => navigation.push(paths.newAgent())}
+        />
+      )}
 
       {isLoading || (!showEmpty && !listReady) ? (
         <div className="flex-1 overflow-y-auto @container">
@@ -1068,7 +1107,7 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
             onSortDirectionChange={setSortDirection}
             hiddenColumns={hiddenColumns}
             onToggleColumn={toggleColumn}
-            allRows={scopeRows}
+            allRows={machineScopeRows}
             members={members}
             visibleCount={rows.length}
           />
