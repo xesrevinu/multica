@@ -42,7 +42,6 @@ export type SidebarNavItem = {
 export const personalNav: SidebarNavItem[] = [
   { key: "inbox", labelKey: "inbox" },
   { key: "chat", labelKey: "chat" },
-  { key: "myIssues", labelKey: "my_issues" },
 ];
 
 export const workspaceNav: SidebarNavItem[] = [

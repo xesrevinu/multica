@@ -1,6 +1,10 @@
 import { ListTodo, Plus, Zap } from "lucide-react";
 import { within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("./session-tabs", () => ({
+  useSessionTabsEnabled: () => false,
+}));
 
 import { SidebarProvider } from "@multica/ui/components/ui/sidebar";
 import { renderWithI18n } from "../test/i18n";

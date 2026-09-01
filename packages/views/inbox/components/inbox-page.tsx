@@ -84,6 +84,7 @@ import {
 import { useIsCompact } from "@multica/ui/hooks/use-mobile";
 import { cn } from "@multica/ui/lib/utils";
 import { PAGE_GUTTER, PageHeader } from "../../layout/page-header";
+import { useSessionTabsEnabled } from "../../layout/session-tabs";
 import { useTimeAgo } from "./inbox-list-item";
 import { InboxList } from "./inbox-list";
 import { InboxFilterMenu } from "./inbox-filter-menu";
@@ -517,20 +518,18 @@ export function InboxPage() {
 
   // -- Shared sub-components --------------------------------------------------
 
-  const listHeader = (
-    <PageHeader>
-      <div className="flex flex-1 items-center gap-2">
-        <h1 className="text-body font-semibold">{t(($) => $.page.title)}</h1>
-        {unreadCount > 0 && (
-          <NumberFlow
-            value={unreadCount}
-            animated={false}
-            format={{ maximumFractionDigits: 0 }}
-            aria-label={String(unreadCount)}
-            className="text-caption text-muted-foreground"
-          />
-        )}
-      </div>
+  const sessionTabs = useSessionTabsEnabled();
+  const inboxHeaderActions = (
+    <>
+      {unreadCount > 0 && (
+        <NumberFlow
+          value={unreadCount}
+          animated={false}
+          format={{ maximumFractionDigits: 0 }}
+          aria-label={String(unreadCount)}
+          className="text-caption text-muted-foreground"
+        />
+      )}
       <InboxFilterMenu
         wsId={wsId}
         items={viewItems}
@@ -573,6 +572,16 @@ export function InboxPage() {
         </DropdownMenuContent>
       </DropdownMenu>
       )}
+    </>
+  );
+  const listHeader = (
+    <PageHeader>
+      <div className="flex flex-1 items-center gap-2">
+        {!sessionTabs && (
+          <h1 className="text-body font-semibold">{t(($) => $.page.title)}</h1>
+        )}
+      </div>
+      {inboxHeaderActions}
     </PageHeader>
   );
 
@@ -583,7 +592,7 @@ export function InboxPage() {
     <button
       type="button"
       onClick={() => setView("inbox")}
-      className="flex w-full shrink-0 items-center gap-1.5 border-b px-3 py-2 text-left text-caption font-medium text-muted-foreground outline-none transition-colors hover:bg-accent/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+      className={`flex w-full shrink-0 items-center gap-1.5 border-b py-2 text-left text-caption font-medium text-muted-foreground outline-none transition-colors hover:bg-accent/50 hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring ${PAGE_GUTTER}`}
     >
       <ChevronLeft className="size-4 shrink-0" />
       <span className="truncate">{t(($) => $.list.archived_title)}</span>

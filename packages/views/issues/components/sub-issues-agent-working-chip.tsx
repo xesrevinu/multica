@@ -53,6 +53,7 @@ export const SubIssuesAgentWorkingChip = memo(
     return (
       <HoverCard>
         <HoverCardTrigger
+          nativeButton={false}
           render={
             <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-muted/60 px-2 py-0.5" />
           }

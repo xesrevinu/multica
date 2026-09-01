@@ -19,7 +19,8 @@ import { useQuickActionsPendingTimeout } from "@multica/core/chat/use-quick-acti
 import { useQuickActionsFailureToast } from "./components/use-quick-actions-failure-toast";
 import { useQuery } from "@tanstack/react-query";
 import type { Agent, ChatSession } from "@multica/core/types";
-import { PageHeader } from "../layout/page-header";
+import { PAGE_GUTTER, PageHeader } from "../layout/page-header";
+import { useSessionTabsEnabled } from "../layout/session-tabs";
 import { useNavigation } from "../navigation";
 import { useT } from "../i18n";
 import { ChatMessageList, ChatMessageSkeleton } from "./components/chat-message-list";
@@ -60,6 +61,7 @@ export function ChatPage() {
   const { searchParams, replace } = useNavigation();
   const wsPaths = useWorkspacePaths();
   const isCompact = useIsCompact();
+  const sessionTabs = useSessionTabsEnabled();
 
   const c = useChatController({ isActive: true });
   const { data: quickActionsPending = null } = useQuery(
@@ -218,13 +220,16 @@ export function ChatPage() {
 
   const listHeader = (
     <PageHeader>
-      <h1 className="flex-1 text-body font-semibold">{t(($) => $.page.title)}</h1>
+      {!sessionTabs && (
+        <h1 className="flex-1 text-body font-semibold">{t(($) => $.page.title)}</h1>
+      )}
+      {sessionTabs ? <div className="flex-1" /> : null}
       {newChatButton}
     </PageHeader>
   );
 
   const listBody = (
-    <div className="px-2 py-1">
+    <div className={`${PAGE_GUTTER} py-1`}>
       <ChatThreadList
         sessions={c.sessions}
         agents={c.agents}
@@ -352,7 +357,7 @@ export function ChatPage() {
     if (c.activeSessionId || composingNew) {
       return (
         <div className="flex flex-1 flex-col min-h-0">
-          <div className="flex h-12 shrink-0 items-center border-b px-2">
+          <div className={`flex h-12 shrink-0 items-center border-b ${PAGE_GUTTER}`}>
             <Button
               variant="ghost"
               size="sm"

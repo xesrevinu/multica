@@ -1246,7 +1246,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
       />
 
       <div
-        className="shrink-0 overflow-x-auto border-b px-4 sm:px-6"
+        className="no-scrollbar shrink-0 overflow-x-auto overflow-y-hidden overscroll-x-contain border-b px-4 sm:px-6"
         role="tablist"
         aria-label={t(($) => $.detail.tabs.aria)}
       >

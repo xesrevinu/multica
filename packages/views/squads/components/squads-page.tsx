@@ -91,7 +91,7 @@ import {
   CollectionPageState,
 } from "../../layout/collection-page";
 import { useLocale, useT } from "../../i18n";
-import { PAGE_TOOLBAR } from "../../layout/page-header";
+import { PAGE_TOOLBAR_INLINE } from "../../layout/page-header";
 
 // Column template — the simplest member of the ListGrid family (squads are
 // the fewest entity, 1-5 rows): subgrid template + var tracks + two-zone
@@ -501,7 +501,7 @@ function SquadListToolbar({
   const sortLabel = SORT_LABELS[sortField];
 
   return (
-    <div className={PAGE_TOOLBAR}>
+    <div className={PAGE_TOOLBAR_INLINE}>
       <div className="flex min-w-0 items-center gap-2">
         <div className="hidden shrink-0 items-center gap-1 md:flex">
           {SQUAD_SCOPES.map((s) => (
@@ -916,6 +916,28 @@ export function SquadsPage() {
         icon={Users}
         title={t(($) => $.page.title)}
         count={squads.length}
+        toolbar={
+          isLoading || squads.length === 0 ? undefined : (
+            <SquadListToolbar
+              scope={scope}
+              onScopeChange={setScope}
+              scopeCounts={scopeCounts}
+              filters={filters}
+              onToggleFilter={toggleFilter}
+              onClearFilters={clearFilters}
+              leaderOptions={leaderOptions}
+              creatorOptions={creatorOptions}
+              visibleCount={rows.length}
+              totalCount={scopeRows.length}
+              sortField={sortField}
+              sortDirection={sortDirection}
+              onSortFieldChange={handleSortFieldSelect}
+              onSortDirectionChange={setSortDirection}
+              hiddenColumns={hiddenColumns}
+              onToggleColumn={toggleColumn}
+            />
+          )
+        }
         actions={
           <CollectionPageHeaderAction
             icon={Plus}
@@ -943,24 +965,6 @@ export function SquadsPage() {
         />
       ) : (
         <>
-          <SquadListToolbar
-            scope={scope}
-            onScopeChange={setScope}
-            scopeCounts={scopeCounts}
-            filters={filters}
-            onToggleFilter={toggleFilter}
-            onClearFilters={clearFilters}
-            leaderOptions={leaderOptions}
-            creatorOptions={creatorOptions}
-            visibleCount={rows.length}
-            totalCount={scopeRows.length}
-            sortField={sortField}
-            sortDirection={sortDirection}
-            onSortFieldChange={handleSortFieldSelect}
-            onSortDirectionChange={setSortDirection}
-            hiddenColumns={hiddenColumns}
-            onToggleColumn={toggleColumn}
-          />
           <div className="min-h-0 flex-1 overflow-auto @container">
             <ListGrid
               className={`${GRID_COLS} @2xl:min-w-[var(--sqc-minw)]`}

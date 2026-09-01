@@ -773,6 +773,26 @@ export function AutopilotsPage() {
         icon={Zap}
         title={t(($) => $.page.title)}
         count={totalCount}
+        toolbar={
+          listError || isLoading || showEmpty ? undefined : (
+            <AutopilotListToolbar
+              scope={scope}
+              onScopeChange={setScope}
+              scopeCounts={scopeCounts}
+              filters={filters}
+              onToggleFilter={toggleFilter}
+              onClearFilters={clearFilters}
+              sortField={sortField}
+              sortDirection={sortDirection}
+              onSortFieldChange={handleSortFieldSelect}
+              onSortDirectionChange={setSortDirection}
+              hiddenColumns={hiddenColumns}
+              onToggleColumn={toggleColumn}
+              allRows={scopeRows}
+              visibleCount={rows.length}
+            />
+          )
+        }
         actions={
           <CollectionPageHeaderAction
             icon={Plus}
@@ -849,22 +869,6 @@ export function AutopilotsPage() {
         </div>
       ) : (
         <>
-          <AutopilotListToolbar
-            scope={scope}
-            onScopeChange={setScope}
-            scopeCounts={scopeCounts}
-            filters={filters}
-            onToggleFilter={toggleFilter}
-            onClearFilters={clearFilters}
-            sortField={sortField}
-            sortDirection={sortDirection}
-            onSortFieldChange={handleSortFieldSelect}
-            onSortDirectionChange={setSortDirection}
-            hiddenColumns={hiddenColumns}
-            onToggleColumn={toggleColumn}
-            allRows={scopeRows}
-            visibleCount={rows.length}
-          />
           <div
             ref={listScrollRef}
             className="min-h-0 flex-1 overflow-auto @container"
