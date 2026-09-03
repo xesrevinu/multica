@@ -32,19 +32,22 @@ git rev-list --left-right --count upstream/main...HEAD
 
 | Commit | 说明 | 去留 |
 | --- | --- | --- |
-| `bc1466288` | 发版 CI：CLI / 镜像 / Helm 发到本仓库，fork 跳过 Homebrew tap | 保留 |
-| `a2b06781a` / `f62440b10` | 早期 FORK.md（42.x 纪元 + 「只记源码与发版」） | 已被本文取代，下次 rebase 可 squash 进文档 commit |
-| `7a6d388be` | nix flake + direnv 钉 Node 22 / pnpm 10 / Go 1.26 | 保留 |
-| `787c56530` | Web 宽屏 session tab（与 Electron 同一套 store / TabBar） | 保留。rebase 时叠了上游 MUL-6784 `hash` / 可分享 URL |
-| `d6067031e` | `make db-from-k8s` / `make dev-from-k8s`：家里 K8s Postgres 快照进本地 Docker | 保留。与上游 `make up` / `down` / `status` 并存 |
-| `d4efb6249` | Next 16.3.3 走 Turbopack；token 从 Linear seed 推导 | 保留 |
-| `e71aa7ce2` | Cursor Fast / thinking-suffix 定价 | 保留。rebase 时叠了上游 `[1m]` context tag strip |
-| `d2ded68b7` / `a2f05c1ba` | typecheck 走 TypeScript 7 native，并行并保留 incremental info | 保留 |
-| `6f935d570` | landing / dashboard shell 离开胖 view barrel | 保留 |
-| `648085d7e` | 手机 PWA 的 static-first service worker | 保留 |
-| `1c15030ec` | iPad 上 tab pin / close 可点 | 保留 |
-| `c1bfc6af4` | hover 用 `pointer:fine` 门控，iPad 可点 | 保留。上游原生 iPad（`apps/mobile` Expo）不覆盖这层 |
-| `13d1d9596` | Web session tab 前进 / 后退 | 保留 |
+| `932e0153f` | 发版 CI：CLI / 镜像 / Helm 发到本仓库，fork 跳过 Homebrew tap | 保留 |
+| `a9a040b0f` / `4b768e06e` | 早期 FORK.md（42.x 纪元 + 「只记源码与发版」） | 已被本文取代，下次 rebase 可 squash 进文档 commit |
+| `66a0d7c2d` | nix flake + direnv 钉 Node 22 / pnpm 10 / Go 1.26 | 保留 |
+| `78b982dbb` | Web 宽屏 session tab（与 Electron 同一套 store / TabBar） | 保留 |
+| `5aed26b1d` | `make db-from-k8s` / `make dev-from-k8s`：家里 K8s Postgres 快照进本地 Docker | 保留。与上游 `make up` / `down` / `status` 并存 |
+| `3d1127ee0` | Next 16.3.3 走 Turbopack；token 从 Linear seed 推导 | 保留 |
+| `c65396b23` | Cursor Fast / thinking-suffix 定价 | 保留。本次 rebase 接上游 Fable 5.1（`claudeVersionEnd`），并保留 `claude-opus-5-fast` 规则在 `claude-opus-5` 之前 |
+| `0dd7ac476` / `723bcc38c` | typecheck 走 TypeScript 7 native，并行并保留 incremental info | 保留 |
+| `b47bc9dce` | landing / dashboard shell 离开胖 view barrel | 保留 |
+| `a18ef1dbc` | 手机 PWA 的 static-first service worker | 保留 |
+| `c585cd572` | iPad 上 tab pin / close 可点 | 保留 |
+| `b117cfe75` | hover 用 `pointer:fine` 门控，iPad 可点 | 保留。上游原生 iPad（`apps/mobile` Expo）不覆盖这层 |
+| `77f994920` | Web session tab 前进 / 后退 | 保留 |
+| `f8b27b995` | i18n eslint guard 先 load TS 6 parser API | 保留 |
+| `4f0877b67` | FX-141：agents 并进 runtimes，配置项移进导航 | 保留 |
+| `96e8e5020` / `0933e140f` / `4a65f1696` / `86899f937` / `39b278ba7` | FX-147：Web UI 质感、header 整合、侧栏与 traffic lights | 保留。rebase 时 `squads-page.tsx` 保留 `PAGE_TOOLBAR_INLINE` 并接上游 `useLocale` |
 
 「mobile」在这里指 compact（小于 1024px），不是 Expo。见 `docs/adr/0001-web-session-tabs.md`。
 
@@ -65,14 +68,15 @@ git rev-list --left-right --count upstream/main...HEAD
 | 2026-08-27 | rebase `upstream/main` | `0716081bb`（v0.4.32 之后的 main）+ 4 个 fork commit | `v0.4.35` / `09a2410e8` | 72 个上游 commit；fork patch 无冲突重放。含 v0.4.33 / v0.4.34 / v0.4.35 |
 | 2026-08-31 | rebase `upstream/main` | `v0.4.35` / `09a2410e8` + 13 个 fork commit | `15280617b`（v0.4.36 + 5 个 main 提交） | 32 个上游 commit。唯一冲突：session tabs × MUL-6784 hash，保留 session tabs 并接上 `adapter.hash`。pricing / package.json / quick-create 自动合并后核对两边都在 |
 | 2026-09-01 | rebase `upstream/main` | `15280617b` + 19 个 fork commit | `11861145a`（v0.4.37 + 2 个 tip） | 27 个上游 commit。冲突按意图：`apps/web/package.json` 保留 Turbopack / Next 16.3.3 并接上游 `mdx`；`turbo.json` `typecheck` 用 `^cache-inputs` + `mdx` 并保留 `tsbuildinfo`；`issue-detail.tsx` i18n aria + `pointer:fine`。README / views package.json+tsconfig 两边都留。lockfile rebase 后重生成。上游原生 iPad 未覆盖 web hover 门控。上游 `eslint-i18n-guard.test.ts` 直接 load `@typescript-eslint/parser`，在 TS 7 下摔 `Cjs`；测试先 `import @multica/eslint-config/register-ts6` |
+| 2026-09-03 | rebase `upstream/main` | `11861145a` + 27 个 fork commit | `d4a712abf`（v0.4.38 + 3 个 tip） | 28 个上游 commit。冲突按意图：`pricing.go` 保留 Cursor Fast / thinking-suffix 并接上游 Fable 5.1；`squads-page.tsx` 保留 FX-147 `PAGE_TOOLBAR_INLINE` 并接 `useLocale`。其余 fork commit 无冲突重放。`apps/web/package.json` 仍是 Turbopack / Next 16.3.3，version 跟上游 `0.4.38`。 |
 
 这一次带上来的上游发行（细节以上游 changelog 为准）：
 
-- **v0.4.37**（2026-08-31）：Huawei CodeArts；Expo 原生 iPad；WeCom 多副本；issue 列表 / Skill 加载；i18n；路径 redact；少打 DB；HTTP 超时；chat 贴底；Codex handshake；本地 Skill 唤醒 daemon；desktop 拉回 daemon；手机 issue header；VCS link migration；Pi 换 workdir 保 session
-- tip 上还没进发行的 2 个提交：MUL-6880 workdir 释放；MUL-6758 `truncateWithEllipsis`
+- **v0.4.38**（2026-09-02）：Claude Code 模型目录发现；Fable 5.1 定价；property filter 操作符；`issue runs` 看跨 issue 跑次；custom status 颜色；autopilot 配额通知；委托恢复扫描；description 编辑停止误拒 stale baseline；daemon 任务归属 / worktree 分支 / Co-authored-by；Kimi / Pi Windows / Codex Standard speed；手机 markdown；贴图 flicker
+- tip 上还没进发行的 3 个提交：MUL-6975 departed member identity；MUL-6951 scheduled run 作者授权；MUL-6771 CLI 按 custom property 过滤排序
 
-rebase 前备份分支：`main-prerebase-backup`（`13d1d9596`）。`origin/main`
-更新并确认无误后可删。旧备份 `0f59993fa` 已过期。
+rebase 前备份分支：`main-prerebase-backup`（`3044ff6c2`）。`origin/main`
+更新并确认无误后可删。旧备份 `13d1d9596` 已过期。
 
 ## 拉取上游并 rebase
 
@@ -144,7 +148,7 @@ git -c commit.gpgsign=false rebase --empty=drop v0.4.36
 | 42.0.0 | v0.4.32 | ad64e0f800 | fork 发版 CI（CLI / Helm 发到本仓库） |
 
 发一版加一行。Release body 第一行写 `Based on upstream v0.4.37`（按实际基线改）。
-当前 `main` 已 rebase 到 v0.4.37 之后的 `upstream/main` 尖（`11861145a`），下一发应升 **42.1.0**。若发行要钉在 tag 而不是 tip，从 `v0.4.37` cherry-pick fork commit。
+当前 `main` 已 rebase 到 v0.4.38 之后的 `upstream/main` 尖（`d4a712abf`），下一发应升 **42.1.0**。若发行要钉在 tag 而不是 tip，从 `v0.4.38` cherry-pick fork commit。Release body 第一行写 `Based on upstream v0.4.38`。
 
 ## 产物
 
