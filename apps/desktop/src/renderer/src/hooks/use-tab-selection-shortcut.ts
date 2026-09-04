@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import type { TabSelectionShortcutKey } from "../../../shared/main-renderer-messages";
-import { useTabStore } from "@/stores/tab-store";
+import { useTabStore } from "@multica/core/tabs";
 import { useWindowOverlayStore } from "@/stores/window-overlay-store";
 
 /**
