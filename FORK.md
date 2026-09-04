@@ -32,22 +32,22 @@ git rev-list --left-right --count upstream/main...HEAD
 
 | Commit | 说明 | 去留 |
 | --- | --- | --- |
-| `221254bab` | 发版 CI：CLI / 镜像 / Helm 发到本仓库，fork 跳过 Homebrew tap | 保留 |
-| `14c64354c` / `a8fec5044` | 早期 FORK.md（42.x 纪元 + 「只记源码与发版」） | 已被本文取代，下次 rebase 可 squash 进文档 commit |
-| `24db37667` | nix flake + direnv 钉 Node 22 / pnpm 10 / Go 1.26 | 保留 |
-| `5ba1c3d5d` | Web 宽屏 session tab（与 Electron 同一套 store / TabBar） | 保留 |
-| `bb8a1b059` | `make db-from-k8s` / `make dev-from-k8s`：家里 K8s Postgres 快照进本地 Docker | 保留。与上游 `make up` / `down` / `status` 并存 |
-| `e8e6b281a` | Next 16.3.3 走 Turbopack；token 从 Linear seed 推导 | 保留 |
-| `d248465a0` | Cursor Fast / thinking-suffix 定价 | 保留。rebase 接上游 Fable 5.1（`claudeVersionEnd`），并保留 `claude-opus-5-fast` 规则在 `claude-opus-5` 之前 |
-| `4f136a593` / `ac2122dec` | typecheck 走 TypeScript 7 native，并行并保留 incremental info | 保留 |
-| `9e3758464` | landing / dashboard shell 离开胖 view barrel | 保留 |
-| `650b3e4ee` | 手机 PWA 的 static-first service worker | 保留 |
-| `8707e0525` | iPad 上 tab pin / close 可点 | 保留 |
-| `02d949041` | hover 用 `pointer:fine` 门控，iPad 可点 | 保留。上游原生 iPad（`apps/mobile` Expo）不覆盖这层 |
-| `1a994f869` | Web session tab 前进 / 后退 | 保留 |
-| `5b27eb634` | i18n eslint guard 先 load TS 6 parser API | 保留 |
-| `a58a540eb` | FX-141：agents 并进 runtimes，配置项移进导航 | 保留 |
-| `1507c3026` / `c043d4bc1` / `de5f3f67f` / `4e4b0dabe` / `fca71bd18` | FX-147：Web UI 质感、header 整合、侧栏与 traffic lights | 保留。rebase 时 `squads-page.tsx` 保留 `PAGE_TOOLBAR_INLINE` 并接上游 `useLocale` |
+| `059a814f5` | 发版 CI：CLI / 镜像 / Helm 发到本仓库，fork 跳过 Homebrew tap | 保留 |
+| `cf132f983` / `d2a6a3e43` | 早期 FORK.md（42.x 纪元 + 「只记源码与发版」） | 已被本文取代，下次 rebase 可 squash 进文档 commit |
+| `0be3822c3` | nix flake + direnv 钉 Node 22 / pnpm 10 / Go 1.26 | 保留 |
+| `b76e9d4c5` | Web 宽屏 session tab（与 Electron 同一套 store / TabBar） | 保留 |
+| `0af0151dc` | `make db-from-k8s` / `make dev-from-k8s`：家里 K8s Postgres 快照进本地 Docker | 保留。与上游 `make up` / `down` / `status` 并存 |
+| `2ef31f105` | Next 16.3.3 走 Turbopack；token 从 Linear seed 推导 | 保留 |
+| `0202a0f7d` | Cursor Fast / thinking-suffix 定价 | 保留。rebase 接上游 Fable 5.1（`claudeVersionEnd`），并保留 `claude-opus-5-fast` 规则在 `claude-opus-5` 之前 |
+| `b30ce394f` / `3fd633f42` | typecheck 走 TypeScript 7 native，并行并保留 incremental info | 保留 |
+| `13e1a5e09` | landing / dashboard shell 离开胖 view barrel | 保留 |
+| `e7d658b2c` | 手机 PWA 的 static-first service worker | 保留 |
+| `4a8d54c5b` | iPad 上 tab pin / close 可点 | 保留 |
+| `b22cca7d1` | hover 用 `pointer:fine` 门控，iPad 可点 | 保留。上游原生 iPad（`apps/mobile` Expo）不覆盖这层 |
+| `4cd186680` | Web session tab 前进 / 后退 | 保留 |
+| `9ec8392d6` | i18n eslint guard 先 load TS 6 parser API | 保留 |
+| `106c6fd33` | FX-141：agents 并进 runtimes，配置项移进导航 | 保留。2026-09-04 rebase 接受上游删掉 `desktop-runtimes-page.test.tsx`（MUL-6977 implementation-only） |
+| `5de75a598` / `e7079c585` / `0fe2f1c74` / `ed224e51d` / `23478b57c` | FX-147：Web UI 质感、header 整合、侧栏与 traffic lights | 保留。rebase 时 `squads-page.tsx` 保留 `PAGE_TOOLBAR_INLINE` 并接上游 `useLocale` |
 
 「mobile」在这里指 compact（小于 1024px），不是 Expo。见 `docs/adr/0001-web-session-tabs.md`。
 
@@ -69,14 +69,15 @@ git rev-list --left-right --count upstream/main...HEAD
 | 2026-08-31 | rebase `upstream/main` | `v0.4.35` / `09a2410e8` + 13 个 fork commit | `15280617b`（v0.4.36 + 5 个 main 提交） | 32 个上游 commit。唯一冲突：session tabs × MUL-6784 hash，保留 session tabs 并接上 `adapter.hash`。pricing / package.json / quick-create 自动合并后核对两边都在 |
 | 2026-09-01 | rebase `upstream/main` | `15280617b` + 19 个 fork commit | `11861145a`（v0.4.37 + 2 个 tip） | 27 个上游 commit。冲突按意图：`apps/web/package.json` 保留 Turbopack / Next 16.3.3 并接上游 `mdx`；`turbo.json` `typecheck` 用 `^cache-inputs` + `mdx` 并保留 `tsbuildinfo`；`issue-detail.tsx` i18n aria + `pointer:fine`。README / views package.json+tsconfig 两边都留。lockfile rebase 后重生成。上游原生 iPad 未覆盖 web hover 门控。上游 `eslint-i18n-guard.test.ts` 直接 load `@typescript-eslint/parser`，在 TS 7 下摔 `Cjs`；测试先 `import @multica/eslint-config/register-ts6` |
 | 2026-09-03 | rebase `upstream/main` | `11861145a` + 27 个 fork commit | `4dfa08917`（v0.4.38 + 4 个 tip） | 29 个上游 commit。冲突按意图：`pricing.go` 保留 Cursor Fast / thinking-suffix 并接上游 Fable 5.1；`squads-page.tsx` 保留 FX-147 `PAGE_TOOLBAR_INLINE` 并接 `useLocale`。其余 fork commit 无冲突重放（含随后叠上的 MUL-6684 OpenClaw MCP isolate）。`apps/web/package.json` 仍是 Turbopack / Next 16.3.3，version 跟上游 `0.4.38`。 |
+| 2026-09-04 | rebase `upstream/main` | `4dfa08917` + 29 个 fork commit | `54e641aaa`（v0.4.39 + 17 个 tip） | 22 个上游 commit。冲突按意图：`row-actions-menu.test.tsx` / `execution-log-section.test.tsx` 保留 `pointer:fine` hover 断言；`desktop-runtimes-page.test.tsx` 以上游 MUL-6977 为准删除（implementation-only）。其余 fork commit 无冲突重放。`apps/web/package.json` 仍是 Turbopack / Next 16.3.3，version 跟上游 `0.4.39`。工作区另有未提交 WIP（`in_review` 算 stage terminal + daemon `PSTACK_ROLE=worker`），未推进 origin。 |
 
 这一次带上来的上游发行（细节以上游 changelog 为准）：
 
-- **v0.4.38**（2026-09-02）：Claude Code 模型目录发现；Fable 5.1 定价；property filter 操作符；`issue runs` 看跨 issue 跑次；custom status 颜色；autopilot 配额通知；委托恢复扫描；description 编辑停止误拒 stale baseline；daemon 任务归属 / worktree 分支 / Co-authored-by；Kimi / Pi Windows / Codex Standard speed；手机 markdown；贴图 flicker
-- tip 上还没进发行的 4 个提交：MUL-6975 departed member identity；MUL-6951 scheduled run 作者授权；MUL-6771 CLI 按 custom property 过滤排序；MUL-6684 / MUL-6857 isolate managed OpenClaw MCP
+- **v0.4.39**（2026-09-03）：桌面 tab 数字快捷键；自己刷新模型目录；WeCom 失败 run 回原聊天；CLI 按 custom property 过滤 / 排序 / `__none__`；指派少一步仍可 `--no-start`；runtime 心跳少读库、删除立刻失效；squad leader 回复保持 leader 路由；长 identifier 不再盖住标题；auth / error 页跟语言；Hermes 保住 provider 前缀；scheduled Autopilot 用创建者权限
+- tip 上还没进发行的提交：MUL-6665 agent task records 改名 runs；MUL-7029 daemon 不再拒旧 parent 的 preparation fields；MUL-6984 prompt 去重；MUL-7016 read replica；legacy handoff notes；MUL-7018 删 tautological tests；MUL-7006 leader comment 回复路由；MUL-6743 去掉 assignment handoff note
 
-rebase 前备份分支：`main-prerebase-backup`（`3044ff6c2`）。`origin/main`
-更新并确认无误后可删。旧备份 `13d1d9596` 已过期。
+rebase 前备份分支：`main-prerebase-backup`（`000873bd9`）。`origin/main`
+更新并确认无误后可删。旧备份 `3044ff6c2` 已过期。
 
 ## 拉取上游并 rebase
 
