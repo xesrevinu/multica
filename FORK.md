@@ -35,7 +35,7 @@ git rev-list --left-right --count upstream/main...HEAD
 | `059a814f5` | 发版 CI：CLI / 镜像 / Helm 发到本仓库，fork 跳过 Homebrew tap | 保留 |
 | `cf132f983` / `d2a6a3e43` | 早期 FORK.md（42.x 纪元 + 「只记源码与发版」） | 已被本文取代，下次 rebase 可 squash 进文档 commit |
 | `0be3822c3` | nix flake + direnv 钉 Node 22 / pnpm 10 / Go 1.26 | 保留 |
-| `b76e9d4c5` | Web 宽屏 session tab（与 Electron 同一套 store / TabBar） | 保留 |
+| `b76e9d4c5` | Web 宽屏 session tab（与 Electron 同一套 store / TabBar） | 保留。2026-09-04 另叠 `use-tab-selection-shortcut` 改从 `@multica/core/tabs` 读 store（上游 MUL-6923 仍写桌面本地路径） |
 | `0af0151dc` | `make db-from-k8s` / `make dev-from-k8s`：家里 K8s Postgres 快照进本地 Docker | 保留。与上游 `make up` / `down` / `status` 并存 |
 | `2ef31f105` | Next 16.3.3 走 Turbopack；token 从 Linear seed 推导 | 保留 |
 | `0202a0f7d` | Cursor Fast / thinking-suffix 定价 | 保留。rebase 接上游 Fable 5.1（`claudeVersionEnd`），并保留 `claude-opus-5-fast` 规则在 `claude-opus-5` 之前 |
@@ -69,7 +69,7 @@ git rev-list --left-right --count upstream/main...HEAD
 | 2026-08-31 | rebase `upstream/main` | `v0.4.35` / `09a2410e8` + 13 个 fork commit | `15280617b`（v0.4.36 + 5 个 main 提交） | 32 个上游 commit。唯一冲突：session tabs × MUL-6784 hash，保留 session tabs 并接上 `adapter.hash`。pricing / package.json / quick-create 自动合并后核对两边都在 |
 | 2026-09-01 | rebase `upstream/main` | `15280617b` + 19 个 fork commit | `11861145a`（v0.4.37 + 2 个 tip） | 27 个上游 commit。冲突按意图：`apps/web/package.json` 保留 Turbopack / Next 16.3.3 并接上游 `mdx`；`turbo.json` `typecheck` 用 `^cache-inputs` + `mdx` 并保留 `tsbuildinfo`；`issue-detail.tsx` i18n aria + `pointer:fine`。README / views package.json+tsconfig 两边都留。lockfile rebase 后重生成。上游原生 iPad 未覆盖 web hover 门控。上游 `eslint-i18n-guard.test.ts` 直接 load `@typescript-eslint/parser`，在 TS 7 下摔 `Cjs`；测试先 `import @multica/eslint-config/register-ts6` |
 | 2026-09-03 | rebase `upstream/main` | `11861145a` + 27 个 fork commit | `4dfa08917`（v0.4.38 + 4 个 tip） | 29 个上游 commit。冲突按意图：`pricing.go` 保留 Cursor Fast / thinking-suffix 并接上游 Fable 5.1；`squads-page.tsx` 保留 FX-147 `PAGE_TOOLBAR_INLINE` 并接 `useLocale`。其余 fork commit 无冲突重放（含随后叠上的 MUL-6684 OpenClaw MCP isolate）。`apps/web/package.json` 仍是 Turbopack / Next 16.3.3，version 跟上游 `0.4.38`。 |
-| 2026-09-04 | rebase `upstream/main` | `4dfa08917` + 29 个 fork commit | `54e641aaa`（v0.4.39 + 17 个 tip） | 22 个上游 commit。冲突按意图：`row-actions-menu.test.tsx` / `execution-log-section.test.tsx` 保留 `pointer:fine` hover 断言；`desktop-runtimes-page.test.tsx` 以上游 MUL-6977 为准删除（implementation-only）。其余 fork commit 无冲突重放。`apps/web/package.json` 仍是 Turbopack / Next 16.3.3，version 跟上游 `0.4.39`。工作区另有未提交 WIP（`in_review` 算 stage terminal + daemon `PSTACK_ROLE=worker`），未推进 origin。 |
+| 2026-09-04 | rebase `upstream/main` | `4dfa08917` + 29 个 fork commit | `54e641aaa`（v0.4.39 + 17 个 tip） | 22 个上游 commit。冲突按意图：`row-actions-menu.test.tsx` / `execution-log-section.test.tsx` 保留 `pointer:fine` hover 断言；`desktop-runtimes-page.test.tsx` 以上游 MUL-6977 为准删除（implementation-only）。其余 fork commit 无冲突重放。rebase 后补 `use-tab-selection-shortcut` 改从 `@multica/core/tabs` 读 store。`apps/web/package.json` 仍是 Turbopack / Next 16.3.3，version 跟上游 `0.4.39`。工作区另有未提交 WIP（`in_review` 算 stage terminal + daemon `PSTACK_ROLE=worker`），未推进 origin。 |
 
 这一次带上来的上游发行（细节以上游 changelog 为准）：
 
