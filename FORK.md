@@ -70,14 +70,15 @@ git rev-list --left-right --count upstream/main...HEAD
 | 2026-09-01 | rebase `upstream/main` | `15280617b` + 19 个 fork commit | `11861145a`（v0.4.37 + 2 个 tip） | 27 个上游 commit。冲突按意图：`apps/web/package.json` 保留 Turbopack / Next 16.3.3 并接上游 `mdx`；`turbo.json` `typecheck` 用 `^cache-inputs` + `mdx` 并保留 `tsbuildinfo`；`issue-detail.tsx` i18n aria + `pointer:fine`。README / views package.json+tsconfig 两边都留。lockfile rebase 后重生成。上游原生 iPad 未覆盖 web hover 门控。上游 `eslint-i18n-guard.test.ts` 直接 load `@typescript-eslint/parser`，在 TS 7 下摔 `Cjs`；测试先 `import @multica/eslint-config/register-ts6` |
 | 2026-09-03 | rebase `upstream/main` | `11861145a` + 27 个 fork commit | `4dfa08917`（v0.4.38 + 4 个 tip） | 29 个上游 commit。冲突按意图：`pricing.go` 保留 Cursor Fast / thinking-suffix 并接上游 Fable 5.1；`squads-page.tsx` 保留 FX-147 `PAGE_TOOLBAR_INLINE` 并接 `useLocale`。其余 fork commit 无冲突重放（含随后叠上的 MUL-6684 OpenClaw MCP isolate）。`apps/web/package.json` 仍是 Turbopack / Next 16.3.3，version 跟上游 `0.4.38`。 |
 | 2026-09-04 | rebase `upstream/main` | `4dfa08917` + 29 个 fork commit | `54e641aaa`（v0.4.39 + 17 个 tip） | 22 个上游 commit。冲突按意图：`row-actions-menu.test.tsx` / `execution-log-section.test.tsx` 保留 `pointer:fine` hover 断言；`desktop-runtimes-page.test.tsx` 以上游 MUL-6977 为准删除（implementation-only）。其余 fork commit 无冲突重放。rebase 后补 `use-tab-selection-shortcut` 改从 `@multica/core/tabs` 读 store。`apps/web/package.json` 仍是 Turbopack / Next 16.3.3，version 跟上游 `0.4.39`。工作区另有未提交 WIP（`in_review` 算 stage terminal + daemon `PSTACK_ROLE=worker`），未推进 origin。 |
+| 2026-09-05 | rebase `upstream/main` | `54e641aaa` + 32 个 fork commit | `ca47495fc`（v0.4.40 + 1 个 tip） | 14 个上游 commit。重叠文件 `App.tsx` / `apps/web/package.json` / `CLAUDE.md` / `agent-profile-card.tsx` 均无冲突重放。`apps/web/package.json` 仍是 Turbopack / Next 16.3.3，version 跟上游 `0.4.40`。 |
 
 这一次带上来的上游发行（细节以上游 changelog 为准）：
 
-- **v0.4.39**（2026-09-03）：桌面 tab 数字快捷键；自己刷新模型目录；WeCom 失败 run 回原聊天；CLI 按 custom property 过滤 / 排序 / `__none__`；指派少一步仍可 `--no-start`；runtime 心跳少读库、删除立刻失效；squad leader 回复保持 leader 路由；长 identifier 不再盖住标题；auth / error 页跟语言；Hermes 保住 provider 前缀；scheduled Autopilot 用创建者权限
-- tip 上还没进发行的提交：MUL-6665 agent task records 改名 runs；MUL-7029 daemon 不再拒旧 parent 的 preparation fields；MUL-6984 prompt 去重；MUL-7016 read replica；legacy handoff notes；MUL-7018 删 tautological tests；MUL-7006 leader comment 回复路由；MUL-6743 去掉 assignment handoff note
+- **v0.4.40**（2026-09-04）：MCP 改名不丢连接；换连接改成单独一步；保存 MCP 直指出错字段；execution 统一叫 run；搜索更快；升级期间任务仍能起；过期 session 回登录并清旧数据；离线不再登出；别人 runtime 上的共享 agent 显示 available；复用过的仓库 checkout 不再失败
+- tip 上还没进发行的提交：MUL-7053 Codex retired-compaction 404 说明
 
-rebase 前备份分支：`main-prerebase-backup`（`000873bd9`）。`origin/main`
-更新并确认无误后可删。旧备份 `3044ff6c2` 已过期。
+rebase 前备份分支：`main-prerebase-backup`（`241113ce1`）。`origin/main`
+更新并确认无误后可删。旧备份 `000873bd9` 已过期。
 
 ## 拉取上游并 rebase
 
@@ -149,7 +150,7 @@ git -c commit.gpgsign=false rebase --empty=drop v0.4.36
 | 42.0.0 | v0.4.32 | ad64e0f800 | fork 发版 CI（CLI / Helm 发到本仓库） |
 
 发一版加一行。Release body 第一行写 `Based on upstream v0.4.37`（按实际基线改）。
-当前 `main` 已 rebase 到 v0.4.38 之后的 `upstream/main` 尖（`4dfa08917`），下一发应升 **42.1.0**。若发行要钉在 tag 而不是 tip，从 `v0.4.38` cherry-pick fork commit。Release body 第一行写 `Based on upstream v0.4.38`。
+当前 `main` 已 rebase 到 v0.4.40 之后的 `upstream/main` 尖（`ca47495fc`），下一发应升 **42.1.0**。若发行要钉在 tag 而不是 tip，从 `v0.4.40` cherry-pick fork commit。Release body 第一行写 `Based on upstream v0.4.40`。
 
 ## 产物
 
