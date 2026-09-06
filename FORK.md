@@ -71,14 +71,15 @@ git rev-list --left-right --count upstream/main...HEAD
 | 2026-09-03 | rebase `upstream/main` | `11861145a` + 27 个 fork commit | `4dfa08917`（v0.4.38 + 4 个 tip） | 29 个上游 commit。冲突按意图：`pricing.go` 保留 Cursor Fast / thinking-suffix 并接上游 Fable 5.1；`squads-page.tsx` 保留 FX-147 `PAGE_TOOLBAR_INLINE` 并接 `useLocale`。其余 fork commit 无冲突重放（含随后叠上的 MUL-6684 OpenClaw MCP isolate）。`apps/web/package.json` 仍是 Turbopack / Next 16.3.3，version 跟上游 `0.4.38`。 |
 | 2026-09-04 | rebase `upstream/main` | `4dfa08917` + 29 个 fork commit | `54e641aaa`（v0.4.39 + 17 个 tip） | 22 个上游 commit。冲突按意图：`row-actions-menu.test.tsx` / `execution-log-section.test.tsx` 保留 `pointer:fine` hover 断言；`desktop-runtimes-page.test.tsx` 以上游 MUL-6977 为准删除（implementation-only）。其余 fork commit 无冲突重放。rebase 后补 `use-tab-selection-shortcut` 改从 `@multica/core/tabs` 读 store。`apps/web/package.json` 仍是 Turbopack / Next 16.3.3，version 跟上游 `0.4.39`。工作区另有未提交 WIP（`in_review` 算 stage terminal + daemon `PSTACK_ROLE=worker`），未推进 origin。 |
 | 2026-09-05 | rebase `upstream/main` | `54e641aaa` + 32 个 fork commit | `ca47495fc`（v0.4.40 + 1 个 tip） | 14 个上游 commit。重叠文件 `App.tsx` / `apps/web/package.json` / `CLAUDE.md` / `agent-profile-card.tsx` 均无冲突重放。`apps/web/package.json` 仍是 Turbopack / Next 16.3.3，version 跟上游 `0.4.40`。 |
+| 2026-09-06 | rebase `upstream/main` | `ca47495fc` + 33 个 fork commit | `7a438bd5b`（v0.4.40 + 2 个 tip） | 1 个上游 commit：`fix(inbox): narrow default list width to 280px`。重叠 `inbox-page.tsx` 无冲突重放：保留 FX-147 session-tab header，并接上上游 `defaultSize={280}`。OpenCode V2 WIP 仍 stash，未进本轮。 |
 
 这一次带上来的上游发行（细节以上游 changelog 为准）：
 
-- **v0.4.40**（2026-09-04）：MCP 改名不丢连接；换连接改成单独一步；保存 MCP 直指出错字段；execution 统一叫 run；搜索更快；升级期间任务仍能起；过期 session 回登录并清旧数据；离线不再登出；别人 runtime 上的共享 agent 显示 available；复用过的仓库 checkout 不再失败
-- tip 上还没进发行的提交：MUL-7053 Codex retired-compaction 404 说明
+- 没有新发行。基线仍是 **v0.4.40**
+- tip：MUL-7053 Codex retired-compaction 404 说明；`#8066` inbox 默认列表宽 320→280
 
-rebase 前备份分支：`main-prerebase-backup`（`241113ce1`）。`origin/main`
-更新并确认无误后可删。旧备份 `000873bd9` 已过期。
+rebase 前备份分支：`main-prerebase-backup`（`aafec8868`）。`origin/main`
+更新并确认无误后可删。旧备份 `241113ce1` 已过期。
 
 ## 拉取上游并 rebase
 
@@ -150,7 +151,7 @@ git -c commit.gpgsign=false rebase --empty=drop v0.4.36
 | 42.0.0 | v0.4.32 | ad64e0f800 | fork 发版 CI（CLI / Helm 发到本仓库） |
 
 发一版加一行。Release body 第一行写 `Based on upstream v0.4.37`（按实际基线改）。
-当前 `main` 已 rebase 到 v0.4.40 之后的 `upstream/main` 尖（`ca47495fc`），下一发应升 **42.1.0**。若发行要钉在 tag 而不是 tip，从 `v0.4.40` cherry-pick fork commit。Release body 第一行写 `Based on upstream v0.4.40`。
+当前 `main` 已 rebase 到 v0.4.40 之后的 `upstream/main` 尖（`7a438bd5b`），下一发应升 **42.1.0**。若发行要钉在 tag 而不是 tip，从 `v0.4.40` cherry-pick fork commit。Release body 第一行写 `Based on upstream v0.4.40`。
 
 ## 产物
 
