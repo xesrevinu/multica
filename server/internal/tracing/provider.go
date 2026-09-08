@@ -44,7 +44,7 @@ func setProvider(tp trace.TracerProvider, stop func(context.Context) error) {
 }
 
 // Setup installs the OTLP/HTTP tracer when cfg.Endpoint is set. Compression
-// is forced off: the local motel collector does not document gzip support.
+// is forced off so the payload is uncompressed protobuf.
 func Setup(ctx context.Context, cfg Config, version string) (func(context.Context) error, error) {
 	if !cfg.Enabled() {
 		setProvider(nil, nil)

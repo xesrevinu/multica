@@ -22,13 +22,13 @@ func TestConfigWhitespaceIsDisabled(t *testing.T) {
 }
 
 func TestConfigFromEnv(t *testing.T) {
-	t.Setenv("MULTICA_OTEL_ENDPOINT", "http://127.0.0.1:27686")
+	t.Setenv("MULTICA_OTEL_ENDPOINT", "http://127.0.0.1:4318")
 	t.Setenv("MULTICA_OTEL_SERVICE_NAME", "multica-api-test")
 	cfg := ConfigFromEnv()
 	if !cfg.Enabled() {
 		t.Fatal("endpoint must enable tracing")
 	}
-	if cfg.Endpoint != "http://127.0.0.1:27686" {
+	if cfg.Endpoint != "http://127.0.0.1:4318" {
 		t.Fatalf("Endpoint = %q", cfg.Endpoint)
 	}
 	if cfg.ServiceName != "multica-api-test" {
@@ -37,12 +37,12 @@ func TestConfigFromEnv(t *testing.T) {
 }
 
 func TestTracesURLAppendsPath(t *testing.T) {
-	got := tracesURL("http://127.0.0.1:27686")
-	if got != "http://127.0.0.1:27686/v1/traces" {
+	got := tracesURL("http://127.0.0.1:4318")
+	if got != "http://127.0.0.1:4318/v1/traces" {
 		t.Fatalf("tracesURL = %q", got)
 	}
-	got = tracesURL("http://127.0.0.1:27686/v1/traces")
-	if got != "http://127.0.0.1:27686/v1/traces" {
+	got = tracesURL("http://127.0.0.1:4318/v1/traces")
+	if got != "http://127.0.0.1:4318/v1/traces" {
 		t.Fatalf("tracesURL preserved path = %q", got)
 	}
 }
