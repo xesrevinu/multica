@@ -46,15 +46,17 @@ git rev-list --left-right --count upstream/main...HEAD
 | `b22cca7d1` | hover 用 `pointer:fine` 门控，iPad 可点 | 保留。上游原生 iPad（`apps/mobile` Expo）不覆盖这层 |
 | `4cd186680` | Web session tab 前进 / 后退 | 保留 |
 | `9ec8392d6` | i18n eslint guard 先 load TS 6 parser API | 保留 |
-| `106c6fd33` | FX-141：agents 并进 runtimes，配置项移进导航 | 保留。2026-09-04 rebase 接受上游删掉 `desktop-runtimes-page.test.tsx`（MUL-6977 implementation-only） |
-| `5de75a598` / `e7079c585` / `0fe2f1c74` / `ed224e51d` / `23478b57c` | FX-147：Web UI 质感、header 整合、侧栏与 traffic lights | 保留。rebase 时 `squads-page.tsx` 保留 `PAGE_TOOLBAR_INLINE` 并接上游 `useLocale` |
+| `106c6fd33` | FX-141：agents 并进 runtimes，配置项移进导航 | 保留。2026-09-08 rebase 接上游 Work / AI Team / Utility 分组，仍不给 agents 单独一行，Runtimes 在 `/agents` 保持高亮 |
+| `5de75a598` / `e7079c585` / `0fe2f1c74` / `ed224e51d` / `23478b57c` | FX-147：Web UI 质感、header 整合、侧栏与 traffic lights | 保留。2026-09-08 settings 以上游重组为准，叠 `min-w-0`；侧栏仍去掉 My Issues |
+| `ca9fb95ca` | 可选 OTLP/HTTP traces（`MULTICA_OTEL_ENDPOINT`） | 保留。示例走标准端口 4318，不绑特定 collector |
+| `6120d3410` | OpenCode 2：`--standalone --auto`、`model#variant`、EOF 算完成 | 保留。MCP / agents_probe 仍未叠 |
 
 「mobile」在这里指 compact（小于 1024px），不是 Expo。见 `docs/adr/0001-web-session-tabs.md`。
 
 候选（尚未落地）：
 
-- OpenCode V2：`server/pkg/agent/opencode.go`、`opencode_mcp.go`、
-  `server/internal/daemon/agents_probe.go`
+- OpenCode V2 余下：`opencode_mcp.go`、`server/internal/daemon/agents_probe.go`
+  （`opencode.go` 的 v2 run flags / EOF 已进 main）
 
 拆 commit：schema / 协议 → backend → CLI。能给上游的单独成 commit。
 
@@ -72,14 +74,15 @@ git rev-list --left-right --count upstream/main...HEAD
 | 2026-09-04 | rebase `upstream/main` | `4dfa08917` + 29 个 fork commit | `54e641aaa`（v0.4.39 + 17 个 tip） | 22 个上游 commit。冲突按意图：`row-actions-menu.test.tsx` / `execution-log-section.test.tsx` 保留 `pointer:fine` hover 断言；`desktop-runtimes-page.test.tsx` 以上游 MUL-6977 为准删除（implementation-only）。其余 fork commit 无冲突重放。rebase 后补 `use-tab-selection-shortcut` 改从 `@multica/core/tabs` 读 store。`apps/web/package.json` 仍是 Turbopack / Next 16.3.3，version 跟上游 `0.4.39`。工作区另有未提交 WIP（`in_review` 算 stage terminal + daemon `PSTACK_ROLE=worker`），未推进 origin。 |
 | 2026-09-05 | rebase `upstream/main` | `54e641aaa` + 32 个 fork commit | `ca47495fc`（v0.4.40 + 1 个 tip） | 14 个上游 commit。重叠文件 `App.tsx` / `apps/web/package.json` / `CLAUDE.md` / `agent-profile-card.tsx` 均无冲突重放。`apps/web/package.json` 仍是 Turbopack / Next 16.3.3，version 跟上游 `0.4.40`。 |
 | 2026-09-06 | rebase `upstream/main` | `ca47495fc` + 33 个 fork commit | `7a438bd5b`（v0.4.40 + 2 个 tip） | 1 个上游 commit：`fix(inbox): narrow default list width to 280px`。重叠 `inbox-page.tsx` 无冲突重放：保留 FX-147 session-tab header，并接上上游 `defaultSize={280}`。OpenCode V2 WIP 仍 stash，未进本轮。 |
+| 2026-09-08 | rebase `upstream/main` | `7a438bd5b` + 37 个 fork commit | `261522e3e`（v0.4.41 + 8 个 tip） | 28 个上游 commit。冲突按意图：`app-sidebar.tsx` / `sidebar-nav.ts` 接上游 Work / AI Team / Utility，叠 FX-141（无 agents 行）和 FX-147（无 My Issues）；`settings-page.tsx` 以上游重组为准并叠 `min-w-0`；agent/skill 页签条保留 `no-scrollbar`。OTLP traces 与 OpenCode 2 无冲突重放。`apps/web/package.json` 仍是 Turbopack / Next 16.3.3，version 跟上游 `0.4.41`。 |
 
 这一次带上来的上游发行（细节以上游 changelog 为准）：
 
-- 没有新发行。基线仍是 **v0.4.40**
-- tip：MUL-7053 Codex retired-compaction 404 说明；`#8066` inbox 默认列表宽 320→280
+- **v0.4.41**（2026-09-07）：settings 导航重组；侧栏按 Work / AI Team 分组；issue thread outline；CLI `--fields` / 自定义属性名；task history 露出 usage；搜索 5s timeout；autopilot / 渠道 / editor 若干修复
+- tip：MUL-6788 claim-path 批量查询；inbox split view 去掉重复 sidebar toggle；thread outline 截断；AI Team 大小写；telegram / lark / DingTalk 修复
 
-rebase 前备份分支：`main-prerebase-backup`（`aafec8868`）。`origin/main`
-更新并确认无误后可删。旧备份 `241113ce1` 已过期。
+rebase 前备份分支：`main-prerebase-backup`（`2ec318232`）。`origin/main`
+更新并确认无误后可删。旧备份 `aafec8868` 已过期。
 
 ## 拉取上游并 rebase
 
@@ -151,7 +154,7 @@ git -c commit.gpgsign=false rebase --empty=drop v0.4.36
 | 42.0.0 | v0.4.32 | ad64e0f800 | fork 发版 CI（CLI / Helm 发到本仓库） |
 
 发一版加一行。Release body 第一行写 `Based on upstream v0.4.37`（按实际基线改）。
-当前 `main` 已 rebase 到 v0.4.40 之后的 `upstream/main` 尖（`7a438bd5b`），下一发应升 **42.1.0**。若发行要钉在 tag 而不是 tip，从 `v0.4.40` cherry-pick fork commit。Release body 第一行写 `Based on upstream v0.4.40`。
+当前 `main` 已 rebase 到 v0.4.41 之后的 `upstream/main` 尖（`261522e3e`），下一发应升 **42.1.0**。若发行要钉在 tag 而不是 tip，从 `v0.4.41` cherry-pick fork commit。Release body 第一行写 `Based on upstream v0.4.41`。
 
 ## 产物
 
