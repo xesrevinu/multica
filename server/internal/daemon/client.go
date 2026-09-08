@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/tracing"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/multica-ai/multica/server/pkg/remotemcp"
@@ -1294,6 +1295,7 @@ func (c *Client) postJSONViaObserved(ctx context.Context, httpClient *http.Clien
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	c.setIdentityHeaders(req)
+	tracing.InjectHTTP(ctx, req.Header)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -1332,6 +1334,7 @@ func (c *Client) getJSONWithToken(ctx context.Context, path, token string, respB
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	c.setIdentityHeaders(req)
+	tracing.InjectHTTP(ctx, req.Header)
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -1366,6 +1369,7 @@ func (c *Client) postJSONWithToken(ctx context.Context, path, token string, reqB
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	c.setIdentityHeaders(req)
+	tracing.InjectHTTP(ctx, req.Header)
 
 	resp, err := c.client.Do(req)
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/multica-ai/multica/server/internal/tracing"
 	"github.com/multica-ai/multica/server/pkg/remotemcp"
 	"time"
 
@@ -74,6 +75,27 @@ func TestClient_IdentityHeaders_PostJSON(t *testing.T) {
 
 	if err := c.postJSON(context.Background(), "/api/daemon/test", map[string]any{}, nil); err != nil {
 		t.Fatalf("postJSON: %v", err)
+	}
+}
+
+func TestClient_InjectsTraceparentOnPostJSON(t *testing.T) {
+	tracing.SetupTest(t)
+	ctx, span := tracing.StartDaemonTask(context.Background(), tracing.TaskAttrs{TaskID: "task-1"})
+	defer span.End()
+
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("Traceparent")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(srv.URL)
+	if err := c.postJSON(ctx, "/api/daemon/tasks/task-1/start", map[string]any{}, nil); err != nil {
+		t.Fatalf("postJSON: %v", err)
+	}
+	if got == "" {
+		t.Fatal("expected Traceparent on daemon HTTP request")
 	}
 }
 

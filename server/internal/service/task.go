@@ -27,6 +27,7 @@ import (
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/runtimeapps"
+	"github.com/multica-ai/multica/server/internal/tracing"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
@@ -354,7 +355,19 @@ func isTrivialDoneOutput(output string) bool {
 	return false
 }
 
+func taskTraceAttrs(task db.AgentTaskQueue) tracing.TaskAttrs {
+	return tracing.TaskAttrs{
+		TaskID:         util.UUIDToString(task.ID),
+		AgentID:        util.UUIDToString(task.AgentID),
+		IssueID:        util.UUIDToString(task.IssueID),
+		RuntimeID:      util.UUIDToString(task.RuntimeID),
+		AutopilotRunID: util.UUIDToString(task.AutopilotRunID),
+		EvidenceKind:   task.TriggerEvidenceKind.String,
+	}
+}
+
 func (s *TaskService) captureTaskQueued(ctx context.Context, task db.AgentTaskQueue) {
+	tracing.RecordTaskEnqueued(ctx, taskTraceAttrs(task))
 	if s.Metrics != nil {
 		source, runtimeMode, _ := s.taskMetricsContext(ctx, task)
 		s.Metrics.RecordTaskEnqueued(source, runtimeMode)
@@ -826,6 +839,7 @@ func (s *TaskService) OriginatorForIssueTask(ctx context.Context, issue db.Issue
 }
 
 func (s *TaskService) captureTaskDispatched(ctx context.Context, task db.AgentTaskQueue) {
+	tracing.RecordTaskClaimed(ctx, taskTraceAttrs(task))
 	if s.Metrics != nil {
 		source, runtimeMode, _ := s.taskMetricsContext(ctx, task)
 		s.Metrics.RecordTaskDispatched(util.UUIDToString(task.ID), source, runtimeMode, taskQueueWaitSeconds(task), taskClaimableWaitSeconds(task))
@@ -837,6 +851,7 @@ func (s *TaskService) AnalyticsContextForTask(ctx context.Context, task db.Agent
 }
 
 func (s *TaskService) captureTaskStarted(ctx context.Context, task db.AgentTaskQueue) {
+	tracing.RecordTaskStarted(ctx, taskTraceAttrs(task))
 	if s.Metrics != nil {
 		source, runtimeMode, provider := s.taskMetricsContext(ctx, task)
 		s.Metrics.RecordTaskStarted(source, runtimeMode, provider)
@@ -844,6 +859,7 @@ func (s *TaskService) captureTaskStarted(ctx context.Context, task db.AgentTaskQ
 }
 
 func (s *TaskService) captureTaskCompleted(ctx context.Context, task db.AgentTaskQueue) {
+	tracing.RecordTaskCompleted(ctx, taskTraceAttrs(task))
 	if s.Metrics != nil {
 		source, runtimeMode, _ := s.taskMetricsContext(ctx, task)
 		s.Metrics.RecordTaskTerminal(util.UUIDToString(task.ID), source, runtimeMode, task.Status, taskRunSeconds(task), taskTotalSeconds(task), task.Attempt)
@@ -852,6 +868,9 @@ func (s *TaskService) captureTaskCompleted(ctx context.Context, task db.AgentTas
 
 func (s *TaskService) captureTaskFailed(ctx context.Context, task db.AgentTaskQueue) {
 	failureReason := taskFailureReason(task)
+	attrs := taskTraceAttrs(task)
+	attrs.FailureReason = failureReason
+	tracing.RecordTaskFailed(ctx, attrs)
 	if s.Metrics != nil {
 		source, runtimeMode, _ := s.taskMetricsContext(ctx, task)
 		s.Metrics.RecordTaskTerminal(util.UUIDToString(task.ID), source, runtimeMode, task.Status, taskRunSeconds(task), taskTotalSeconds(task), task.Attempt)
@@ -860,6 +879,7 @@ func (s *TaskService) captureTaskFailed(ctx context.Context, task db.AgentTaskQu
 }
 
 func (s *TaskService) captureTaskCancelled(ctx context.Context, task db.AgentTaskQueue) {
+	tracing.RecordTaskCancelled(ctx, taskTraceAttrs(task))
 	if s.Metrics != nil {
 		source, runtimeMode, _ := s.taskMetricsContext(ctx, task)
 		s.Metrics.RecordTaskTerminal(util.UUIDToString(task.ID), source, runtimeMode, task.Status, taskRunSeconds(task), taskTotalSeconds(task), task.Attempt)

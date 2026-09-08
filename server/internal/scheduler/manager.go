@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/multica-ai/multica/server/internal/tracing"
 )
 
 // Options configure a Manager. Defaults are set in NewManager so all
@@ -336,6 +337,10 @@ func (m *Manager) runClaimed(
 		log.Info("scheduler claimed plan")
 	}
 
+	ctx, triggerSpan := tracing.StartTrigger(ctx, "scheduler", c.ID.String(), job.Name, scope.String())
+	var handlerErr error
+	defer func() { tracing.EndTrigger(triggerSpan, handlerErr) }()
+
 	// Per-handler context bounded by RunTimeout. Heartbeats use a
 	// detached background context so a slow ctx cancellation cannot
 	// drop the renewal.
@@ -348,7 +353,8 @@ func (m *Manager) runClaimed(
 	go m.runHeartbeats(hbCtx, hbDone, job, c, log)
 
 	start := time.Now()
-	res, handlerErr := func() (out HandlerResult, retErr error) {
+	var res HandlerResult
+	res, handlerErr = func() (out HandlerResult, retErr error) {
 		// recover() inside the deferred closure assigns to the named
 		// return retErr so that a panicking handler is treated exactly
 		// like a returned error: classifyError records it as

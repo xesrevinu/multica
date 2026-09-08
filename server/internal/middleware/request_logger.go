@@ -9,6 +9,8 @@ import (
 	"time"
 
 	chimw "github.com/go-chi/chi/v5/middleware"
+
+	"github.com/multica-ai/multica/server/internal/tracing"
 )
 
 // webhookTriggerIDKeyType is unexported so foreign packages cannot collide on
@@ -147,6 +149,7 @@ func RequestLogger(next http.Handler) http.Handler {
 		if rid := chimw.GetReqID(r.Context()); rid != "" {
 			attrs = append(attrs, "request_id", rid)
 		}
+		attrs = append(attrs, tracing.LogAttrs(r.Context())...)
 		if uid := r.Header.Get("X-User-ID"); uid != "" {
 			attrs = append(attrs, "user_id", uid)
 		}

@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/tracing"
 )
 
 // ClientVersion is the CLI version sent on every request as X-Client-Version.
@@ -250,6 +252,7 @@ func (c *APIClient) setHeaders(req *http.Request) {
 	if osName != "" {
 		req.Header.Set("X-Client-OS", osName)
 	}
+	tracing.InjectHTTP(req.Context(), req.Header)
 }
 
 // GetJSON performs a GET request and decodes the JSON response.

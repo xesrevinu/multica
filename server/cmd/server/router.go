@@ -42,6 +42,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/seatcapacity"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/storage"
+	"github.com/multica-ai/multica/server/internal/tracing"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/internal/util/secretbox"
 	composiosdk "github.com/multica-ai/multica/server/pkg/composio"
@@ -83,6 +84,8 @@ var corsAllowedHeaders = []string{
 	"X-Client-Capabilities",
 	// Sent by the host page when it relays a plugin surface's Action API call.
 	"X-Multica-Plugin-Installation",
+	"Traceparent",
+	"Tracestate",
 }
 
 // corsExposedHeaders lists response headers browser clients are allowed to read.
@@ -96,6 +99,7 @@ var corsAllowedHeaders = []string{
 var corsExposedHeaders = []string{
 	"ETag",
 	"X-Request-ID",
+	"Traceparent",
 	handler.HeaderCommentsTruncated,
 	handler.HeaderTimelineTruncated,
 	handler.HeaderActiveRunsTruncated,
@@ -1407,6 +1411,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 	// Global middleware
 	r.Use(chimw.RequestID)
+	r.Use(tracing.Middleware)
 	r.Use(middleware.ClientMetadata)
 	r.Use(middleware.RequestLogger)
 	if opts.HTTPMetrics != nil {

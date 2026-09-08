@@ -186,6 +186,9 @@ type Task struct {
 	// Empty or non-task-scoped values are fatal for writable agent tasks; the
 	// daemon must not fall back to its own token. See MUL-3292.
 	AuthToken string `json:"auth_token,omitempty"`
+	// Traceparent continues the API-side agent-run trace. Empty on old servers
+	// or when tracing is off. Never forwarded into the agent process.
+	Traceparent string `json:"traceparent,omitempty"`
 }
 
 // ChatAttachmentMeta is the structured attachment metadata the daemon

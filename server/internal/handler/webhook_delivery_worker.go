@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/internal/tracing"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -118,6 +119,9 @@ func (w *WebhookDeliveryWorker) ProcessNext(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("claim queued delivery: %w", err)
 	}
+
+	ctx, triggerSpan := tracing.StartTrigger(ctx, "webhook", uuidToString(delivery.ID), "", "")
+	defer triggerSpan.End()
 
 	if w.h.WebhookRateLimiter != nil {
 		key := uuidToString(delivery.TriggerID)

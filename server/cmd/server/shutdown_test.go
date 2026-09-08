@@ -31,11 +31,12 @@ func TestShutdownSequence_RunsInTheDocumentedOrder(t *testing.T) {
 		DrainChannelRouter:    record("router"),
 		StopMetricsServer:     record("metrics"),
 		StopProfiling:         record("pprof"),
+		FlushTracing:          record("tracing"),
 	}.run()
 
 	want := []string{
 		"autopilot", "maintenance", "http", "relay", "cancel", "heartbeats",
-		"webhooks", "telegram", "supervisor", "router", "metrics", "pprof",
+		"webhooks", "telegram", "supervisor", "router", "metrics", "pprof", "tracing",
 	}
 	if !slices.Equal(ran, want) {
 		t.Fatalf("shutdown order = %v, want %v", ran, want)

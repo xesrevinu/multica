@@ -11,6 +11,7 @@ import (
 	"github.com/lmittmann/tint"
 
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/tracing"
 )
 
 // isTerminal reports whether the given file descriptor is connected to a
@@ -100,6 +101,7 @@ func RequestAttrs(r *http.Request) []any {
 	if os != "" {
 		attrs = append(attrs, "client_os", os)
 	}
+	attrs = append(attrs, tracing.LogAttrs(r.Context())...)
 	return attrs
 }
 

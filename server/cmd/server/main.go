@@ -31,6 +31,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/scheduler"
 	"github.com/multica-ai/multica/server/internal/selfhosttelemetry"
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/internal/tracing"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/featureflag"
 	"github.com/multica-ai/multica/server/pkg/llm"
@@ -330,6 +331,11 @@ func main() {
 	// disabled case no collector or HTTP client is ever created.
 	telemetryConfig := selfhosttelemetry.ConfigFromDoNotTrack(os.Getenv("DO_NOT_TRACK"))
 	selfhosttelemetry.LogStartupStatus(slog.Default(), telemetryConfig)
+	tracingShutdown, err := tracing.Setup(context.Background(), tracing.ConfigFromEnv(), version)
+	if err != nil {
+		slog.Error("tracing setup failed", "error", err)
+		os.Exit(1)
+	}
 	// Warn about missing configuration
 	if err := jwtSecretBootError(os.Getenv("JWT_SECRET"), os.Getenv("APP_ENV")); err != nil {
 		slog.Error(
@@ -974,6 +980,13 @@ func main() {
 				slog.Error("pprof server forced to shutdown", "error", err)
 			}
 			profilingShutdownCancel()
+		},
+		FlushTracing: func() {
+			flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if err := tracingShutdown(flushCtx); err != nil {
+				slog.Error("tracing shutdown failed", "error", err)
+			}
+			flushCancel()
 		},
 	}.run()
 	slog.Info("server stopped")

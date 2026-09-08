@@ -31,6 +31,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
 	"github.com/multica-ai/multica/server/internal/selfexec"
+	"github.com/multica-ai/multica/server/internal/tracing"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/awakeclock"
@@ -2038,6 +2039,24 @@ func (d *Daemon) RunWithHealthListener(ctx context.Context, healthLn net.Listene
 
 func (d *Daemon) run(ctx context.Context, healthLn net.Listener) error {
 	var err error
+	otelCfg := tracing.ConfigFromEnv()
+	otelCfg.ServiceName = "multica-daemon"
+	version := d.cfg.CLIVersion
+	if version == "" {
+		version = "dev"
+	}
+	stopTracing, err := tracing.Setup(ctx, otelCfg, version)
+	if err != nil {
+		d.logger.Warn("tracing setup failed", "error", err)
+	} else {
+		defer func() {
+			flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if shutErr := stopTracing(flushCtx); shutErr != nil {
+				d.logger.Warn("tracing shutdown failed", "error", shutErr)
+			}
+			flushCancel()
+		}()
+	}
 	// Wrap context so handleUpdate can cancel the daemon for restart.
 	ctx, cancel := context.WithCancel(ctx)
 	d.cancelFunc = cancel
@@ -5653,6 +5672,16 @@ func (d *Daemon) watchTaskCancellation(ctx context.Context, taskID string, pollI
 }
 
 func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
+	ctx = tracing.ContextFromTraceparent(ctx, task.Traceparent)
+	ctx, taskSpan := tracing.StartDaemonTask(ctx, tracing.TaskAttrs{
+		TaskID:         task.ID,
+		AgentID:        task.AgentID,
+		IssueID:        task.IssueID,
+		RuntimeID:      task.RuntimeID,
+		AutopilotRunID: task.AutopilotRunID,
+	})
+	defer taskSpan.End()
+
 	d.mu.Lock()
 	rt, tracked := d.runtimeIndex[task.RuntimeID]
 	d.mu.Unlock()
@@ -5677,6 +5706,7 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 		return
 	}
 	provider := rt.Provider
+	tracing.SetSpanString(taskSpan, tracing.ProviderAttrKey(), provider)
 
 	// Task-scoped logger. The task id goes in whole: it is the key every
 	// other surface prints (task JSON, env-root ownership manifest, server
@@ -5689,6 +5719,9 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 	ctx = withTaskPhaseRecorder(ctx, phaseRecorder)
 	phaseRecorder.Mark(taskPhaseClaimed)
 	defer phaseRecorder.Mark(taskPhaseFinished)
+	if logAttrs := tracing.LogAttrs(ctx); len(logAttrs) > 0 {
+		taskLog = taskLog.With(logAttrs...)
+	}
 	agentName := "agent"
 	if task.Agent != nil {
 		agentName = task.Agent.Name
@@ -7623,6 +7656,14 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		return TaskResult{}, fmt.Errorf("refusing to spawn agent: task has no workspace_id (task_id=%s)", task.ID)
 	}
 
+	runCtx := ctx
+	ctx, prepareSpan := tracing.StartPhase(ctx, tracing.PhasePrepare)
+	defer func() {
+		if prepareSpan != nil {
+			tracing.EndPhase(prepareSpan, returnErr)
+		}
+	}()
+
 	prepareTimeout := d.effectiveTaskPrepareTimeout()
 	prepareCtx, cancelPrepare := context.WithTimeoutCause(ctx, prepareTimeout, errTaskPrepareTimeout)
 	prepareComplete := false
@@ -8385,6 +8426,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	stopPrepareLease()
 	prepareComplete = true
 	cancelPrepare()
+	tracing.EndPhase(prepareSpan, nil)
+	prepareSpan = nil
+	ctx = runCtx
 	_ = d.client.ReportProgress(ctx, task.ID, fmt.Sprintf("Launching %s", provider), 1, 2)
 
 	// usesCustomProfileCommand is the same provenance the backend receives as
@@ -8443,6 +8487,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		return TaskResult{}, err
 	}
 	agentEnv := taskMulticaEnvironment(task, provider, agentName, agentToken, env.MulticaConfigRoot, d.cfg.WorkspacesRoot, d.cfg.ServerBaseURL, d.cfg.HealthPort, slot, taskTempDir)
+	tracing.InjectEnv(ctx, agentEnv)
 	if checkoutMode := repoCheckoutModeFor(provider, runtime.GOOS); checkoutMode != "" {
 		agentEnv[repoCheckoutModeEnv] = checkoutMode
 	}
@@ -9266,16 +9311,19 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 	agentCtx, agentCancel := context.WithCancel(ctx)
 	defer agentCancel()
 
-	session, err := backend.Execute(agentCtx, prompt, opts)
+	launchCtx, launchSpan := tracing.StartPhase(agentCtx, tracing.PhaseLaunch)
+	session, err := backend.Execute(launchCtx, prompt, opts)
 	if err != nil {
 		// One provider-agnostic boundary for launches: every backend's
 		// cmd.Start() failure arrives here, so diagnosing ENOEXEC at this point
 		// covers claude, opencode and any CLI added later without a wrap in
 		// each backend (MUL-6164).
 		err = agent.ExplainExecError(err)
+		tracing.EndPhase(launchSpan, err)
 		taskLog.Debug("backend execute returned error", "error", err)
 		return agent.Result{}, 0, err
 	}
+	tracing.EndPhase(launchSpan, nil)
 	// This counter intentionally starts at the narrower provider-session
 	// boundary, not at the earlier server-side StartTask transition.
 	d.runningTasks.Add(1)
@@ -9318,6 +9366,11 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 	defer drainCancel()
 
 	var toolCount atomic.Int32
+	_, drainSpan := tracing.StartPhase(agentCtx, tracing.PhaseDrain)
+	endDrain := func(result agent.Result, err error) (agent.Result, int32, error) {
+		tracing.EndDrain(drainSpan, result.Status, err, toolCount.Load())
+		return result, toolCount.Load(), err
+	}
 	// lastActivityAt records (as awakeclock nanos) when the drain loop most
 	// recently received a message from the backend. The idle watchdog
 	// reads this to decide whether the agent has gone silent for too long.
@@ -9736,7 +9789,7 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 				result.Error = idleWatchdogReason(time.Duration(idleWatchdogThreshold.Load()))
 			}
 		}
-		return result, toolCount.Load(), nil
+		return endDrain(result, nil)
 	case <-drainCtx.Done():
 		// The drain loop is exiting on this same Done signal; wait for its
 		// final flush so the timeout/watchdog/cancel terminals below cannot
@@ -9763,7 +9816,7 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 			if result, delivered, authoritative := awaitTerminalResult("idle_watchdog"); authoritative {
 				// The backend had already read its authoritative result, so
 				// this is the real outcome, not a hang.
-				return result, toolCount.Load(), nil
+				return endDrain(result, nil)
 			} else if delivered {
 				// The backend's wait goroutine (e.g. claude.go) translates the
 				// SIGKILL we delivered via agentCancel into Status="aborted".
@@ -9773,12 +9826,12 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 				if result.Error == "" {
 					result.Error = idleWatchdogReason(time.Duration(idleWatchdogThreshold.Load()))
 				}
-				return result, toolCount.Load(), nil
+				return endDrain(result, nil)
 			}
-			return agent.Result{
+			return endDrain(agent.Result{
 				Status: "idle_watchdog",
 				Error:  idleWatchdogReason(time.Duration(idleWatchdogThreshold.Load())),
-			}, toolCount.Load(), nil
+			}, nil)
 		}
 		// Distinguish external cancellation (e.g. server-initiated cancel
 		// because the issue was reassigned, or the user invoked CancelTask)
@@ -9787,17 +9840,17 @@ func (d *Daemon) executeAndDrain(ctx context.Context, backend agent.Backend, pro
 		// drain deadline expiring on its own.
 		if errors.Is(drainCtx.Err(), context.Canceled) {
 			if result, _, authoritative := awaitTerminalResult("upstream_context"); authoritative {
-				return result, toolCount.Load(), nil
+				return endDrain(result, nil)
 			}
-			return agent.Result{
+			return endDrain(agent.Result{
 				Status: "cancelled",
 				Error:  "task cancelled by upstream context (server cancel or daemon shutdown)",
-			}, toolCount.Load(), nil
+			}, nil)
 		}
-		return agent.Result{
+		return endDrain(agent.Result{
 			Status: "timeout",
 			Error:  "agent did not produce result within drain timeout",
-		}, toolCount.Load(), nil
+		}, nil)
 	}
 }
 

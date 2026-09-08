@@ -576,6 +576,10 @@ type AgentTaskResponse struct {
 	// owning user; the daemon must not fall back to its own credential. See
 	// MUL-3292.
 	AuthToken string `json:"auth_token,omitempty"`
+	// Traceparent is the W3C parent of the in-process agent-run trace, so the
+	// daemon can continue the same trace across claim → start → complete.
+	// Omitted when tracing is disabled. Never injected into the agent process.
+	Traceparent string `json:"traceparent,omitempty"`
 }
 
 // TaskAttribution is the wire shape of a run's accountable-human provenance

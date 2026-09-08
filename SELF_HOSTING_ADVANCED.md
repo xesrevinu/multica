@@ -156,6 +156,7 @@ If the frontend and backend are served from different hostnames, `COOKIE_DOMAIN`
 | `PORT` | `8080` | Backend port — the one to edit. It is the port the backend process listens on for a local/bare run, and the host port the Compose self-host stack publishes. In Compose the container always listens on `8080` internally, so changing this needs no rebuild. |
 | `BACKEND_PORT` | Value of `PORT` | Optional alias that overrides `PORT` for the backend. `API_PORT` and `SERVER_PORT` are further aliases; the **alias order** is `BACKEND_PORT` → `API_PORT` → `SERVER_PORT` → `PORT` → `8080`, and it is the same in `Makefile`, `scripts/local-env.sh` and `docker-compose.selfhost.yml`. Leave them unset unless the host port must differ from the port the process listens on. |
 | `METRICS_ADDR` | empty | Optional Prometheus metrics listener, for example `127.0.0.1:9090` |
+| `MULTICA_OTEL_ENDPOINT` | empty | Optional OTLP/HTTP traces collector base URL, for example `http://127.0.0.1:27686`. Empty disables tracing. Does not export metrics. |
 | `FRONTEND_PORT` | `3000` | Frontend port. Host port in Compose; the container always listens on `3000` internally. |
 | `CORS_ALLOWED_ORIGINS` | Value of `FRONTEND_ORIGIN` | Comma-separated list of allowed origins. Governs **both** the HTTP CORS allowlist **and** the WebSocket `Origin` check. A browser origin that isn't listed here (and isn't `localhost`) has its real-time WebSocket upgrade rejected with `403`, so live updates stop working until a manual refresh. |
 | `LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, `error` |
@@ -695,6 +696,29 @@ networking, allowlists, NetworkPolicy, or proxy authentication. If you bind
 `METRICS_ADDR=0.0.0.0:9090` inside a container, only publish that port to a
 trusted network, for example a host-local mapping such as
 `127.0.0.1:9090:9090`.
+
+## OpenTelemetry traces
+
+The backend can export traces over OTLP/HTTP when `MULTICA_OTEL_ENDPOINT` is
+set. This is independent of Prometheus: metrics stay on `METRICS_ADDR`.
+
+```bash
+MULTICA_OTEL_ENDPOINT=http://127.0.0.1:27686 ./server/bin/server
+```
+
+The exporter posts to `{endpoint}/v1/traces` without gzip. A local
+[motel](https://github.com/kitlangton/motel) daemon is a typical collector:
+
+```bash
+bunx @kitlangton/motel start
+```
+
+HTTP requests become server spans named `{METHOD} {chi route}`. Internal
+scheduler and webhook-worker jobs start a `multica.trigger` root span. Agent
+task enqueue → claim → start → complete share one trace id (in-process) and
+link back to the HTTP or WS transport that caused each hop. Health probes are
+not traced. Span attributes never include URL paths, query strings, or
+authorization headers.
 
 ## Go Runtime Profiling
 

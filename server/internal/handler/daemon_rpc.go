@@ -9,6 +9,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/tracing"
 )
 
 // rpcResponseCapture is a minimal in-memory http.ResponseWriter so a WS RPC can
@@ -65,8 +66,10 @@ func (h *Handler) rpcClaimTasks(ctx context.Context, identity daemonws.ClientIde
 	if identity.DaemonID != "" {
 		reqCtx = middleware.WithDaemonContext(reqCtx, identity.PrimaryWorkspaceID(), identity.DaemonID)
 	}
+	reqCtx, rpcSpan := tracing.WrapRPC(reqCtx, "tasks.claim")
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, "/api/daemon/tasks/claim", bytes.NewReader(body))
 	if err != nil {
+		tracing.EndRPC(rpcSpan, http.StatusInternalServerError)
 		return http.StatusInternalServerError, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -86,5 +89,6 @@ func (h *Handler) rpcClaimTasks(ctx context.Context, identity daemonws.ClientIde
 	if status == 0 {
 		status = http.StatusOK
 	}
+	tracing.EndRPC(rpcSpan, status)
 	return status, json.RawMessage(rec.body.Bytes()), nil
 }

@@ -58,6 +58,7 @@ type shutdownSequence struct {
 
 	StopMetricsServer func()
 	StopProfiling     func()
+	FlushTracing      func()
 }
 
 // run performs the sequence. The order here IS the contract.
@@ -75,6 +76,7 @@ func (s shutdownSequence) run() {
 		s.DrainChannelRouter,
 		s.StopMetricsServer,
 		s.StopProfiling,
+		s.FlushTracing,
 	} {
 		if step != nil {
 			step()
