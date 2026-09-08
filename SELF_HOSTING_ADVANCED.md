@@ -400,13 +400,9 @@ External cron / systemd / Kubernetes `CronJob` setups that call `SELECT rollup_t
 `rollup_task_usage_hourly()` only processes new buckets after it starts running. If you already have `task_usage` rows from before the rollup was claimed for the first time — most commonly when upgrading from `v0.3.4` to `v0.3.5+` on a database that already has months of usage — you can run `backfill_task_usage_hourly` to seed historical buckets:
 
 ```bash
-# Docker Compose
-docker compose -f docker-compose.selfhost.yml exec backend \
-  ./backfill_task_usage_hourly --sleep-between-slices=2s
-
-# Kubernetes
-kubectl -n multica exec deploy/multica-backend -- \
-  ./backfill_task_usage_hourly --sleep-between-slices=2s
+# From a server checkout, against the same DATABASE_URL the backend uses.
+# The API image does not ship this binary.
+(cd server && go run ./cmd/backfill_task_usage_hourly --sleep-between-slices=2s)
 ```
 
 The command walks `task_usage`'s full time range in monthly slices and calls the same idempotent primitive the in-process scheduler uses, so it's safe to re-run, to interrupt with Ctrl-C, and to run concurrently with the scheduler (advisory lock 4246 serialises them). Flags:
@@ -423,7 +419,7 @@ After backfill completes, the rollup-state watermark is stamped to `now() - 5 mi
 
 Migration `103` adds a fail-closed guard that refuses to drop the legacy daily rollups until `task_usage_hourly` has caught up. As of MUL-2957 the migrate command runs an idempotent monthly-slice backfill (under advisory lock 4246) **automatically** immediately before applying migration `103`, so v0.3.4 → v0.3.5+ upgrades complete in a single `migrate up` invocation — no operator step is required.
 
-If you are upgrading from a binary that pre-dates MUL-2957 (or the auto-hook fails for an environmental reason), recovery is the manual path: run `backfill_task_usage_hourly` against the database, then re-run `migrate up` (or restart the backend container — migrations run automatically on startup). **Fresh installs are exempt** — the guard short-circuits when `task_usage` is empty, and the in-process scheduler picks up new buckets from the first tick.
+If you are upgrading from a binary that pre-dates MUL-2957 (or the auto-hook fails for an environmental reason), recovery is the manual path: from `server/` run `go run ./cmd/backfill_task_usage_hourly` against the same `DATABASE_URL`, then re-run `migrate up` (or restart the backend container — migrations run automatically on startup). **Fresh installs are exempt** — the guard short-circuits when `task_usage` is empty, and the in-process scheduler picks up new buckets from the first tick.
 
 ## Manual Setup (Without Docker Compose)
 

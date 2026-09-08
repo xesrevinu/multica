@@ -2,8 +2,12 @@
 node_modules
 .pnpm-store
 
-# Build outputs
+# Build outputs — list the web cache path after !/apps/web/ too (below)
+# so it stays excluded when that directory is re-included.
 .next
+**/.next
+**/.turbo
+**/*.tsbuildinfo
 dist
 server/bin
 server/tmp
@@ -43,6 +47,10 @@ coverage
 /apps/mobile/*
 !/apps/mobile/patches
 !/apps/mobile/patches/**
+apps/web/.next
+apps/web/.next/**
+apps/web/node_modules
+apps/web/*.tsbuildinfo
 
 # Repository-only tooling
 /.github/
