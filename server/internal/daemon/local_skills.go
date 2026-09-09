@@ -169,7 +169,15 @@ func localSkillRootsForProvider(provider string) ([]localSkillRoot, bool, error)
 		case "openclaw":
 			providerRoot = filepath.Join(home, ".openclaw", "skills")
 		case "pi":
-			providerRoot = filepath.Join(home, ".pi", "agent", "skills")
+			// PI_CODING_AGENT_DIR relocates Pi's agent config tree (settings,
+			// packages, user skills). Multica's Mac worker uses
+			// ~/.pi-worker/agent via that env; without it we fall back to the
+			// stock ~/.pi/agent layout. Mirror Codex's CODEX_HOME handling.
+			piAgentDir := strings.TrimSpace(os.Getenv("PI_CODING_AGENT_DIR"))
+			if piAgentDir == "" {
+				piAgentDir = filepath.Join(home, ".pi", "agent")
+			}
+			providerRoot = filepath.Join(piAgentDir, "skills")
 		case "cursor":
 			providerRoot = filepath.Join(home, ".cursor", "skills")
 		case "hermes":

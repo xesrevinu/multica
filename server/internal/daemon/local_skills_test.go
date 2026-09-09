@@ -693,6 +693,37 @@ func TestListRuntimeLocalSkills_CodexUsesSharedCODEXHOME(t *testing.T) {
 	}
 }
 
+func TestListRuntimeLocalSkills_PiUsesPICodingAgentDir(t *testing.T) {
+	home := t.TempDir()
+	piAgentDir := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PI_CODING_AGENT_DIR", piAgentDir)
+
+	writeTestLocalSkill(t, filepath.Join(piAgentDir, "skills"), "worker-only", map[string]string{
+		"SKILL.md": "# Worker Only\n",
+	})
+	writeTestLocalSkill(t, filepath.Join(home, ".pi", "agent", "skills"), "daily-only", map[string]string{
+		"SKILL.md": "# Daily Only\n",
+	})
+
+	skills, supported, err := listRuntimeLocalSkills("pi")
+	if err != nil {
+		t.Fatalf("listRuntimeLocalSkills: %v", err)
+	}
+	if !supported {
+		t.Fatal("pi should be supported")
+	}
+	if len(skills) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(skills))
+	}
+	if skills[0].Key != "worker-only" {
+		t.Fatalf("key = %q, want worker-only", skills[0].Key)
+	}
+	if skills[0].SourcePath != filepath.Join(piAgentDir, "skills", "worker-only") {
+		t.Fatalf("source_path = %q", skills[0].SourcePath)
+	}
+}
+
 // opencode (and possibly future providers) lay skills out one level deep,
 // e.g. ~/.config/opencode/skills/release/reporter/SKILL.md.
 // loadRuntimeLocalSkillBundle already accepts that nested key, so the list
