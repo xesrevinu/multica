@@ -49,14 +49,13 @@ git rev-list --left-right --count upstream/main...HEAD
 | `106c6fd33` | FX-141：agents 并进 runtimes，配置项移进导航 | 保留。2026-09-08 rebase 接上游 Work / AI Team / Utility 分组，仍不给 agents 单独一行，Runtimes 在 `/agents` 保持高亮 |
 | `5de75a598` / `e7079c585` / `0fe2f1c74` / `ed224e51d` / `23478b57c` | FX-147：Web UI 质感、header 整合、侧栏与 traffic lights | 保留。2026-09-08 settings 以上游重组为准，叠 `min-w-0`；侧栏仍去掉 My Issues |
 | `ca9fb95ca` | 可选 OTLP/HTTP traces（`MULTICA_OTEL_ENDPOINT`） | 保留。示例走标准端口 4318，不绑特定 collector |
-| `6120d3410` | OpenCode 2：`--standalone --auto`、`model#variant`、EOF 算完成 | 保留。MCP / agents_probe 仍未叠 |
+| `6120d3410` | OpenCode 2：`--standalone --auto`、`model#variant`、EOF 算完成 | **已撤销**（`42df0c09d` revert）。本机不再跟 OpenCode 2 |
 
 「mobile」在这里指 compact（小于 1024px），不是 Expo。见 `docs/adr/0001-web-session-tabs.md`。
 
 候选（尚未落地）：
 
-- OpenCode V2 余下：`opencode_mcp.go`、`server/internal/daemon/agents_probe.go`
-  （`opencode.go` 的 v2 run flags / EOF 已进 main）
+- OpenCode V2（整段搁置）：原先 `opencode.go` run flags / EOF 已 revert；`opencode_mcp.go`、`agents_probe.go` 也不再推进
 
 拆 commit：schema / 协议 → backend → CLI。能给上游的单独成 commit。
 
