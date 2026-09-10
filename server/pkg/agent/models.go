@@ -348,9 +348,12 @@ func ListModels(ctx context.Context, providerType string, runtimeCmd Command) (C
 // opencode's `run --model` and the DevEco fork of it resolve strictly through
 // `provider/model` and reject anything else — verified against opencode
 // 1.18.14, which answers a bare id with `UnknownError` before any provider
-// call. pi is deliberately absent: its resolver accepts a canonical selector,
-// a bare id, AND an id containing a slash (see buildPiArgs), so a pi task
-// launches correctly without the daemon qualifying anything first.
+// call. pi (0.84+, #7327) still accepts a canonical selector and a uniquely
+// authenticated bare id, but a bare id shared by more than one authenticated
+// provider is a hard error. The daemon therefore qualifies pi/omp against the
+// catalog and refuses to launch an ambiguous selector, rather than handing Pi
+// a string it will reject with only `exit status 1`. --provider is still never
+// synthesized (GH #7300); the catalog ID goes to --model whole.
 //
 // Built-in runtime identities resolve through their protocol family, so a fork
 // inherits the contract from its descriptor entry rather than a name here.
@@ -359,7 +362,7 @@ func ModelSelectorMustBeProviderQualified(providerType string) bool {
 		providerType = desc.ProtocolFamily
 	}
 	switch providerType {
-	case "opencode", "deveco":
+	case "opencode", "deveco", "pi":
 		return true
 	default:
 		return false
@@ -400,22 +403,53 @@ func QualifyModelID(catalog Catalog, model string) (string, bool) {
 			return model, false
 		}
 	}
-	qualified := ""
+	prefixed := providerPrefixedCatalogIDs(catalog, model)
+	if len(prefixed) != 1 {
+		// Zero claims: unknown, leave it for the CLI. Two or more: picking
+		// one would be a coin flip that silently routes the task to the
+		// wrong gateway — AmbiguousModelSelectors reports the candidates.
+		return model, false
+	}
+	return prefixed[0], true
+}
+
+// AmbiguousModelSelectors lists every catalog ID a persisted model string
+// could mean when more than one provider claims it. Empty when the value is
+// already a catalog ID, uniquely qualifiable, unknown, or the catalog is a
+// fallback. Callers that must hand the CLI a single selector (pi 0.84+)
+// fail closed on a non-empty result instead of launching the bare id.
+func AmbiguousModelSelectors(catalog Catalog, model string) []string {
+	model = strings.TrimSpace(model)
+	if model == "" || catalog.Fallback {
+		return nil
+	}
+	for _, m := range catalog.Models {
+		if m.ID == model {
+			return nil
+		}
+	}
+	prefixed := providerPrefixedCatalogIDs(catalog, model)
+	if len(prefixed) < 2 {
+		return nil
+	}
+	return prefixed
+}
+
+func providerPrefixedCatalogIDs(catalog Catalog, model string) []string {
+	var ids []string
+	seen := map[string]bool{}
 	for _, m := range catalog.Models {
 		if m.Provider == "" || m.ID != m.Provider+"/"+model {
 			continue
 		}
-		if qualified != "" && qualified != m.ID {
-			// Two providers expose this same bare id. Picking one would be a
-			// coin flip that silently routes the task to the wrong gateway.
-			return model, false
+		if seen[m.ID] {
+			continue
 		}
-		qualified = m.ID
+		seen[m.ID] = true
+		ids = append(ids, m.ID)
 	}
-	if qualified == "" {
-		return model, false
-	}
-	return qualified, true
+	sort.Strings(ids)
+	return ids
 }
 
 // ModelSelectionSupported reports whether setting `agent.model` has

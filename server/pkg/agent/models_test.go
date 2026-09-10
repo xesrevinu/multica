@@ -1790,6 +1790,29 @@ func TestQualifyModelID(t *testing.T) {
 	}
 }
 
+func TestAmbiguousModelSelectors(t *testing.T) {
+	t.Parallel()
+
+	shared := Catalog{Models: []Model{
+		{ID: "OpenAI/grok-4.6", Provider: "OpenAI"},
+		{ID: "SubGrok/grok-4.6", Provider: "SubGrok"},
+		{ID: "xai/grok-4.6", Provider: "xai"},
+	}}
+
+	if got := AmbiguousModelSelectors(shared, "grok-4.6"); strings.Join(got, ",") != "OpenAI/grok-4.6,SubGrok/grok-4.6,xai/grok-4.6" {
+		t.Errorf("AmbiguousModelSelectors(grok-4.6) = %v", got)
+	}
+	if got := AmbiguousModelSelectors(shared, "SubGrok/grok-4.6"); got != nil {
+		t.Errorf("already-canonical id must not be ambiguous, got %v", got)
+	}
+	if got := AmbiguousModelSelectors(shared, "nobody"); got != nil {
+		t.Errorf("unknown id must not be ambiguous, got %v", got)
+	}
+	if got := AmbiguousModelSelectors(Catalog{Models: shared.Models, Fallback: true}, "grok-4.6"); got != nil {
+		t.Errorf("fallback catalog must not report claims, got %v", got)
+	}
+}
+
 // A blank model means "let the runtime pick its own default" — there is
 // nothing to qualify, and the runtime resolves its own selection.
 func TestQualifyModelIDIgnoresBlankModel(t *testing.T) {
@@ -1845,9 +1868,10 @@ func TestSlashShapedPiModelKeepsItsThinkingCatalog(t *testing.T) {
 // only the ones whose CLI *rejects* the unprefixed form justify spending a
 // discovery subprocess before launch.
 //
-// The pi entries are the load-bearing ones: buildPiArgs and its tests prove pi
-// resolves a canonical selector, a bare id, and an id containing a slash all
-// on its own, so a pi task must launch without the daemon reading any catalog.
+// The pi entries are the load-bearing ones: Pi 0.84+ (#7327) still accepts a
+// uniquely authenticated bare id, but an ambiguous one is a hard error, so the
+// daemon qualifies against the catalog before launch. --model still receives
+// the catalog ID whole; --provider is never synthesized (GH #7300).
 func TestModelSelectorMustBeProviderQualifiedIsAnExecutionContract(t *testing.T) {
 	t.Parallel()
 
@@ -1858,8 +1882,8 @@ func TestModelSelectorMustBeProviderQualifiedIsAnExecutionContract(t *testing.T)
 	}{
 		{"opencode", true, "run --model resolves strictly through provider/model"},
 		{"deveco", true, "opencode fork with the same --model contract"},
-		{"pi", false, "pi's own resolver accepts bare and slash-shaped ids"},
-		{"omp", false, "pi-family fork, inherits pi's resolver"},
+		{"pi", true, "ambiguous bare ids are a hard error as of 0.84"},
+		{"omp", true, "pi-family fork, inherits pi's launch contract"},
 		{"claude", false, "bare model ids, no provider segment to miss"},
 		{"codex", false, "bare model ids"},
 		{"copilot", false, "bare model ids under a display-name provider"},

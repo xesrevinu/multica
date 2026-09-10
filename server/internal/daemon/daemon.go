@@ -7492,13 +7492,14 @@ type taskModelSelection struct {
 // Who asks for the catalog:
 //   - opencode and its DevEco fork cannot execute an unqualified selector, so
 //     a pinned model has to be resolved against the catalog before launch.
+//   - pi (and omp, via the pi protocol family) must hand `--model` a catalog
+//     ID. A uniquely claimed bare id is rewritten to `provider/id`; an
+//     ambiguous one is refused rather than launched (Pi 0.84+ #7327).
 //   - thinking_level / service_tier are catalog-owned and keyed on the
 //     catalog's own model id, so they need it whenever they are set.
 //
-// A pi task with no capability override asks for neither: pi's own resolver
-// accepts the persisted id in every shape it can take, so the daemon has
-// nothing to add and skips discovery entirely. Same for claude, codex, and any
-// task that pins no model.
+// claude, codex, and any task that pins no model still skip discovery when
+// they have no capability override.
 //
 // Qualification runs first because both checks below match on the catalog's
 // canonical id: an unqualified id silently fails every lookup and drops a
@@ -7509,7 +7510,7 @@ func resolveTaskModelSelection(
 	runtimeCmd agent.Command,
 	sel taskModelSelection,
 	taskLog *slog.Logger,
-) taskModelSelection {
+) (taskModelSelection, error) {
 	capabilityChecksPending := sel.ThinkingLevel != "" || sel.ServiceTier != ""
 
 	read := false
@@ -7525,7 +7526,11 @@ func resolveTaskModelSelection(
 		return catalog, catalogErr
 	}
 
-	sel.Model = qualifyTaskModel(provider, sel.Model, capabilityChecksPending, loadCatalog, taskLog)
+	model, err := qualifyTaskModel(provider, sel.Model, capabilityChecksPending, loadCatalog, taskLog)
+	if err != nil {
+		return sel, err
+	}
+	sel.Model = model
 
 	// service_tier is catalog-owned and currently Codex-only. As with
 	// thinking_level, stale or incompatible persisted values degrade to the
@@ -7583,7 +7588,7 @@ func resolveTaskModelSelection(
 		}
 	}
 
-	return sel
+	return sel, nil
 }
 
 // qualifyTaskModel promotes a persisted model id to the canonical
@@ -7605,12 +7610,12 @@ func qualifyTaskModel(
 	capabilityChecksPending bool,
 	loadCatalog func() (agent.Catalog, error),
 	taskLog *slog.Logger,
-) string {
+) (string, error) {
 	if model == "" {
-		return model
+		return model, nil
 	}
 	if !agent.ModelSelectorMustBeProviderQualified(provider) && !capabilityChecksPending {
-		return model
+		return model, nil
 	}
 	catalog, err := loadCatalog()
 	if err != nil {
@@ -7622,18 +7627,22 @@ func qualifyTaskModel(
 			"model", model,
 			"error", err,
 		)
-		return model
+		return model, nil
 	}
 	qualified, rewritten := agent.QualifyModelID(catalog, model)
-	if !rewritten {
-		return model
+	if rewritten {
+		taskLog.Info("model: qualified against the runtime catalog",
+			"provider", provider,
+			"configured_model", model,
+			"model", qualified,
+		)
+		return qualified, nil
 	}
-	taskLog.Info("model: qualified against the runtime catalog",
-		"provider", provider,
-		"configured_model", model,
-		"model", qualified,
-	)
-	return qualified
+	if ambiguous := agent.AmbiguousModelSelectors(catalog, model); len(ambiguous) > 0 {
+		return model, fmt.Errorf("model %q is ambiguous across providers: %s. Set the agent model to a catalog id (provider/model)",
+			model, strings.Join(ambiguous, ", "))
+	}
+	return model, nil
 }
 
 func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot int, taskLog *slog.Logger) (taskResult TaskResult, returnErr error) {
@@ -8676,8 +8685,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		thinkingLevel = task.Agent.ThinkingLevel
 		serviceTier = task.Agent.ServiceTier
 	}
-	selection := resolveTaskModelSelection(ctx, provider, agent.NewCommand(entry.Path, profileFixedArgs),
+	selection, err := resolveTaskModelSelection(ctx, provider, agent.NewCommand(entry.Path, profileFixedArgs),
 		taskModelSelection{Model: model, ThinkingLevel: thinkingLevel, ServiceTier: serviceTier}, taskLog)
+	if err != nil {
+		return TaskResult{}, err
+	}
 	model, thinkingLevel, serviceTier = selection.Model, selection.ThinkingLevel, selection.ServiceTier
 
 	var idleWatchdogTimeout time.Duration

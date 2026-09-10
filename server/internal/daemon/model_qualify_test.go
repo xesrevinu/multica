@@ -178,7 +178,10 @@ func TestResolveTaskModelSelectionReadsTheCatalogAtMostOnce(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reads := stubModelDiscovery(t, thinkingCatalogs())
 
-			got := resolveTaskModelSelection(context.Background(), tt.provider, agent.Command{}, tt.in, quietTaskLog())
+			got, err := resolveTaskModelSelection(context.Background(), tt.provider, agent.Command{}, tt.in, quietTaskLog())
+			if err != nil {
+				t.Fatalf("resolveTaskModelSelection(%s, %+v) error = %v", tt.provider, tt.in, err)
+			}
 			if got != tt.want {
 				t.Errorf("resolveTaskModelSelection(%s, %+v) = %+v, want %+v", tt.provider, tt.in, got, tt.want)
 			}
@@ -207,7 +210,10 @@ func TestResolveTaskModelSelectionFailsOpenOnDiscoveryError(t *testing.T) {
 	t.Cleanup(func() { listModels = orig })
 
 	in := taskModelSelection{Model: "claude/claude-opus-5", ThinkingLevel: "high"}
-	got := resolveTaskModelSelection(context.Background(), "opencode", agent.Command{}, in, quietTaskLog())
+	got, err := resolveTaskModelSelection(context.Background(), "opencode", agent.Command{}, in, quietTaskLog())
+	if err != nil {
+		t.Fatalf("resolveTaskModelSelection on discovery error = %v", err)
+	}
 	if got != in {
 		t.Errorf("resolveTaskModelSelection on discovery error = %+v, want %+v unchanged", got, in)
 	}
@@ -288,7 +294,10 @@ func TestResolveTaskModelSelectionPassesThroughUnverifiedCatalogs(t *testing.T) 
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			reads := stubModelDiscovery(t, map[string]agent.Catalog{tc.provider: tc.catalog})
-			got := resolveTaskModelSelection(context.Background(), tc.provider, agent.Command{}, tc.in, quietTaskLog())
+			got, err := resolveTaskModelSelection(context.Background(), tc.provider, agent.Command{}, tc.in, quietTaskLog())
+			if err != nil {
+				t.Fatalf("launch selection error = %v", err)
+			}
 			if got != tc.want {
 				t.Errorf("launch selection = %+v, want %+v", got, tc.want)
 			}
@@ -340,7 +349,10 @@ func TestResolveTaskModelSelectionKeepsLiveOnlyCodexOverridesOnFallback(t *testi
 				t.Fatal(err)
 			}
 
-			got := resolveTaskModelSelection(context.Background(), "codex", agent.Command{Path: binary}, tc.in, quietTaskLog())
+			got, err := resolveTaskModelSelection(context.Background(), "codex", agent.Command{Path: binary}, tc.in, quietTaskLog())
+			if err != nil {
+				t.Fatalf("launch selection error = %v", err)
+			}
 			if got != tc.want {
 				t.Fatalf("launch selection = %+v, want %+v", got, tc.want)
 			}
@@ -355,5 +367,36 @@ func TestResolveTaskModelSelectionKeepsLiveOnlyCodexOverridesOnFallback(t *testi
 				t.Fatalf("task capability checks must share a single fallback discovery: %q", calls)
 			}
 		})
+	}
+}
+
+// Pi 0.84+ rejects a bare id claimed by more than one authenticated provider.
+// Qualifying must not pick a winner; the task fails with the catalog IDs so
+// the agent can be set to an explicit provider/model selector.
+func TestResolveTaskModelSelectionFailsClosedOnAmbiguousPiModel(t *testing.T) {
+	reads := stubModelDiscovery(t, map[string]agent.Catalog{
+		"pi": {Models: []agent.Model{
+			{ID: "OpenAI/grok-4.6", Provider: "OpenAI"},
+			{ID: "SubGrok/grok-4.6", Provider: "SubGrok"},
+			{ID: "xai/grok-4.6", Provider: "xai"},
+		}},
+	})
+
+	got, err := resolveTaskModelSelection(context.Background(), "pi", agent.Command{},
+		taskModelSelection{Model: "grok-4.6"}, quietTaskLog())
+	if err == nil {
+		t.Fatalf("ambiguous grok-4.6 launched as %+v, want an error", got)
+	}
+	msg := err.Error()
+	for _, want := range []string{"grok-4.6", "OpenAI/grok-4.6", "SubGrok/grok-4.6", "xai/grok-4.6", "provider/model"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q does not contain %q", msg, want)
+		}
+	}
+	if got.Model != "grok-4.6" {
+		t.Errorf("failed selection model = %q, want the persisted id left in place", got.Model)
+	}
+	if reads() != 1 {
+		t.Errorf("catalog reads = %d, want 1", reads())
 	}
 }
