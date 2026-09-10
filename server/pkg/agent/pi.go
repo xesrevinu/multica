@@ -1090,6 +1090,7 @@ var piCustomArgModes = map[string]blockedArgMode{
 //
 //	-p                          non-interactive mode (prompt arrives on stdin)
 //	--mode json                 emit one JSON event per line on stdout
+//	--no-skills                 disable Pi skill discovery (~/.agents, repo .agents, packages)
 //	--session <path>            session log file (created upfront, reused on resume)
 //	--model <selector>          model selector, passed through verbatim
 //	--thinking <level>          per-agent reasoning level override
@@ -1101,6 +1102,11 @@ func buildPiArgs(sessionPath string, opts ExecOptions, logger *slog.Logger) []st
 	args := []string{
 		"-p",
 		"--mode", "json",
+		// Official skills are the sidecar at {cwd}/.pi/skills (execenv) plus
+		// worker-global ~/.pi-worker/agent/skills. The pi-worker extension
+		// @pi-extensions/multica-skills re-adds those roots via resources_discover.
+		// Without this flag Pi also loads ~/.agents and worktree .agents.
+		"--no-skills",
 	}
 	if sessionPath != "" {
 		args = append(args, "--session", sessionPath)

@@ -32,7 +32,7 @@ func TestBuildPiArgsBasicFlags(t *testing.T) {
 	}, slog.Default())
 
 	joined := strings.Join(args, " ")
-	for _, want := range []string{"-p", "--mode json", "--session /tmp/s.jsonl", "--model anthropic/claude-sonnet-4-20250514", "--thinking high"} {
+	for _, want := range []string{"-p", "--mode json", "--no-skills", "--session /tmp/s.jsonl", "--model anthropic/claude-sonnet-4-20250514", "--thinking high"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("expected %q in args, got: %v", want, args)
 		}
@@ -92,6 +92,22 @@ func countArg(args []string, want string) int {
 		}
 	}
 	return n
+}
+
+func TestBuildPiArgsDisablesSkillDiscovery(t *testing.T) {
+	args := buildPiArgs("/tmp/s.jsonl", ExecOptions{}, slog.Default())
+	found := false
+	for _, arg := range args {
+		if arg == "--no-skills" {
+			found = true
+		}
+		if arg == "--skill" {
+			t.Fatalf("buildPiArgs must not pass --skill; worker plugin owns skill roots, got: %v", args)
+		}
+	}
+	if !found {
+		t.Fatalf("expected --no-skills so Pi does not scan ~/.agents or repo .agents, got: %v", args)
+	}
 }
 
 func TestBuildPiArgsIgnoresSystemPrompt(t *testing.T) {
