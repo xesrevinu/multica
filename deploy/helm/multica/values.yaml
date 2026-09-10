@@ -165,6 +165,10 @@ backend:
     cloudfrontDomain: ""
     cloudfrontKeyPairId: ""
     localUploadBaseUrl: http://api.multica.dev.lan
+    # Optional OTLP/HTTP traces (empty = off). Example for in-cluster Maple:
+    # otelEndpoint: http://otel.maple.svc.cluster.local:4318
+    otelEndpoint: ""
+    otelServiceName: multica-api
   resources:
     requests:
       cpu: 100m

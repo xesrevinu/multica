@@ -31,6 +31,10 @@ data:
   CLOUDFRONT_DOMAIN: {{ .Values.backend.config.cloudfrontDomain | quote }}
   CLOUDFRONT_KEY_PAIR_ID: {{ .Values.backend.config.cloudfrontKeyPairId | quote }}
   LOCAL_UPLOAD_BASE_URL: {{ .Values.backend.config.localUploadBaseUrl | quote }}
+  # Optional OTLP/HTTP traces. Empty disables. Cluster-local Maple collector:
+  # http://otel.maple.svc.cluster.local:4318
+  MULTICA_OTEL_ENDPOINT: {{ .Values.backend.config.otelEndpoint | default "" | quote }}
+  MULTICA_OTEL_SERVICE_NAME: {{ .Values.backend.config.otelServiceName | default "multica-api" | quote }}
 
   {{- if not .Values.postgres.external.enabled }}
   # --- PostgreSQL (consumed by the backend to build DATABASE_URL) ---
