@@ -89,7 +89,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
-import { hoverRevealRowOpacity } from "@multica/ui/lib/pointer-affordances";
 import {
   Select,
   SelectContent,

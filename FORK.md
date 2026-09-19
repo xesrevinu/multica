@@ -37,7 +37,7 @@ git rev-list --left-right --count upstream/main...HEAD
 | `0be3822c3` | nix flake + direnv 钉 Node 22 / pnpm 10 / Go 1.26 | 保留 |
 | `b76e9d4c5` | Web 宽屏 session tab（与 Electron 同一套 store / TabBar） | 保留。2026-09-04 另叠 `use-tab-selection-shortcut` 改从 `@multica/core/tabs` 读 store（上游 MUL-6923 仍写桌面本地路径） |
 | `0af0151dc` | `make db-from-k8s` / `make dev-from-k8s`：家里 K8s Postgres 快照进本地 Docker | 保留。与上游 `make up` / `down` / `status` 并存 |
-| `2ef31f105` | Next 16.3.3 走 Turbopack；token 从 Linear seed 推导 | 保留 |
+| `2ef31f105` | Next 走 Turbopack；token 从 Linear seed 推导 | 保留。2026-09-19 接上游 Next `^16.3.4`，继续不传 `--webpack` |
 | `0202a0f7d` | Cursor Fast / thinking-suffix 定价 | 保留。rebase 接上游 Fable 5.1（`claudeVersionEnd`），并保留 `claude-opus-5-fast` 规则在 `claude-opus-5` 之前 |
 | `b30ce394f` / `3fd633f42` | typecheck 走 TypeScript 7 native，并行并保留 incremental info | 保留 |
 | `13e1a5e09` | landing / dashboard shell 离开胖 view barrel | 保留 |
@@ -49,7 +49,7 @@ git rev-list --left-right --count upstream/main...HEAD
 | `106c6fd33` | FX-141：agents 并进 runtimes，配置项移进导航 | 保留。2026-09-08 rebase 接上游 Work / AI Team / Utility 分组，仍不给 agents 单独一行，Runtimes 在 `/agents` 保持高亮 |
 | `5de75a598` / `e7079c585` / `0fe2f1c74` / `ed224e51d` / `23478b57c` | FX-147：Web UI 质感、header 整合、侧栏与 traffic lights | 保留。2026-09-08 settings 以上游重组为准，叠 `min-w-0`；侧栏仍去掉 My Issues |
 | `ca9fb95ca` | 可选 OTLP/HTTP traces（`MULTICA_OTEL_ENDPOINT`） | 保留。示例走标准端口 4318，不绑特定 collector |
-| `6120d3410` | OpenCode 2：`--standalone --auto`、`model#variant`、EOF 算完成 | **已撤销**（`42df0c09d` revert）。本机不再跟 OpenCode 2 |
+| `6120d3410` | OpenCode 2：`--standalone --auto`、`model#variant`、EOF 算完成 | **已跳过**（2026-09-19 rebase 不再重放，随后 revert 也 skip）。本机不再跟 OpenCode 2 |
 | `a9ddaa975` | daemon 读 `PI_CODING_AGENT_DIR` 列 worker local skills | 保留 |
 | `da38dcb23` | Pi execute 传 `--no-skills`，只加载 sidecar / worker-global | 保留 |
 | `1ec043458` | Pi 启动前 qualify `provider/id`；多家认领则 fail closed | 保留。上游仍把 Pi 当成裸 id 可启动（0.84+ #7327 已否） |
@@ -78,14 +78,17 @@ git rev-list --left-right --count upstream/main...HEAD
 | 2026-09-06 | rebase `upstream/main` | `ca47495fc` + 33 个 fork commit | `7a438bd5b`（v0.4.40 + 2 个 tip） | 1 个上游 commit：`fix(inbox): narrow default list width to 280px`。重叠 `inbox-page.tsx` 无冲突重放：保留 FX-147 session-tab header，并接上上游 `defaultSize={280}`。OpenCode V2 WIP 仍 stash，未进本轮。 |
 | 2026-09-08 | rebase `upstream/main` | `7a438bd5b` + 37 个 fork commit | `261522e3e`（v0.4.41 + 8 个 tip） | 28 个上游 commit。冲突按意图：`app-sidebar.tsx` / `sidebar-nav.ts` 接上游 Work / AI Team / Utility，叠 FX-141（无 agents 行）和 FX-147（无 My Issues）；`settings-page.tsx` 以上游重组为准并叠 `min-w-0`；agent/skill 页签条保留 `no-scrollbar`。OTLP traces 与 OpenCode 2 无冲突重放。`apps/web/package.json` 仍是 Turbopack / Next 16.3.3，version 跟上游 `0.4.41`。 |
 | 2026-09-10 | rebase `upstream/main` | `261522e3e` + 44 个 fork commit | `7e1dfba12`（v0.4.42 + 23 个 tip） | 51 个上游 commit。冲突按意图：session tabs 接到 MUL-7233 browsing history（store 仍在 `@multica/core/tabs`）；FX-141/147 继续无 agents 行、无 My Issues，叠上游 `NAV`/`SIDEBAR_ITEM_CLASS`；OTLP traces 叠 MUL-6941 phase latency。Pi model qualify 无冲突重放。`apps/web/package.json` 仍是 Turbopack / Next 16.3.3，version 跟上游 `0.4.42`。 |
+| 2026-09-19 | rebase `upstream/main` | `7e1dfba12` + 46 个 fork commit | `2df765a3c`（v0.5.0） | 137 个上游 commit。冲突按意图：`db-from-k8s` 叠进上游 AGENTS 环境说明；tokens 以上游 type scale / generated OKLCH 为准并保留 landing radius；pricing 保留 Cursor Fast 并接 `gpt-6-astra`；status 叶导入叠 MUL-7365 catalog；`pointer:fine` 叠 `rounded-xs`；FX-141 保留 invitation self-heal 测试；FX-147 不去掉上游 surface `RefreshablePageIcon`，inbox archive 用 `Footer` + `PAGE_GUTTER`；OTLP 叠 self-host telemetry / maintenance shutdown 与 `awaitTerminalResult`；Docker 去掉 backfill 但留下 `maintenance`。OpenCode 2 与其 revert 都 skip（空壳）。`apps/web/package.json` 仍走 Turbopack，Next `^16.3.4`，version 跟上游 `0.5.0`。 |
 
 这一次带上来的上游发行（细节以上游 changelog 为准）：
 
-- **v0.4.42**（2026-09-09）：comment thread 内联 agent 执行；搜索 timeout 8s；若干 DB index / 分页；wecom / lark；Cursor 后台 shell 卡死；ACP ghost session
-- tip：桌面导航 history 菜单（MUL-7233）；landing provider 行；Codex `gpt-6-astra` fallback；transcript remount（MUL-7227）；GitHub reference-only PR 链接下线
+- **v0.4.43**（2026-09-11）：changelog 见上游 landing
+- **v0.4.44**（2026-09-15）：changelog 见上游 landing
+- **v0.5.0**（2026-09-18）：法语产品 UI；Quick Create / Codex stream / Pi silent provider / OpenCode min 1.1.54 等。Triage / UI Lab 未进 changelog
+- tip：与 `v0.5.0` 同 SHA（`2df765a3c`）
 
-rebase 前备份分支：`main-prerebase-backup`（`5bc27e6ef`）。`origin/main`
-更新并确认无误后可删。旧备份 `2ec318232` 已过期。
+rebase 前备份分支：`main-prerebase-backup`（`55be939c4`）。`origin/main`
+更新并确认无误后可删。旧备份 `5bc27e6ef` 已过期。
 
 ## 拉取上游并 rebase
 
@@ -157,7 +160,7 @@ git -c commit.gpgsign=false rebase --empty=drop v0.4.36
 | 42.0.0 | v0.4.32 | ad64e0f800 | fork 发版 CI（CLI / Helm 发到本仓库） |
 
 发一版加一行。Release body 第一行写 `Based on upstream v0.4.37`（按实际基线改）。
-当前 `main` 已 rebase 到 v0.4.42 之后的 `upstream/main` 尖（`7e1dfba12`），下一发应升 **42.1.0**。若发行要钉在 tag 而不是 tip，从 `v0.4.42` cherry-pick fork commit。Release body 第一行写 `Based on upstream v0.4.42`。
+当前 `main` 已 rebase 到 v0.5.0 的 `upstream/main` 尖（`2df765a3c`），下一发应升 **42.1.0**。若发行要钉在 tag 而不是 tip，从 `v0.5.0` cherry-pick fork commit。Release body 第一行写 `Based on upstream v0.5.0`。
 
 ## 产物
 
