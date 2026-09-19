@@ -156,6 +156,10 @@ export function isBuiltInIssueStatus(value: string): value is BuiltInIssueStatus
   return BUILT_IN.has(value);
 }
 
+export function isIssueStatusCategory(value: string): value is IssueStatusCategory {
+  return STATUS_ORDER.includes(value as IssueStatusCategory);
+}
+
 export { normalizeIssueStatusCategory } from "../issues/config/status";
 
 /**
