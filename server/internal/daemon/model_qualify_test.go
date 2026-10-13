@@ -370,10 +370,9 @@ func TestResolveTaskModelSelectionKeepsLiveOnlyCodexOverridesOnFallback(t *testi
 	}
 }
 
-// Pi 0.84+ rejects a bare id claimed by more than one authenticated provider.
-// Qualifying must not pick a winner; the task fails with the catalog IDs so
-// the agent can be set to an explicit provider/model selector.
-func TestResolveTaskModelSelectionFailsClosedOnAmbiguousPiModel(t *testing.T) {
+// Ambiguity is checked on the catalog read a capability override already
+// pays for. A bare Pi id with no override still launches without a read.
+func TestResolveTaskModelSelectionFailsClosedOnAmbiguousPiModelWithThinking(t *testing.T) {
 	reads := stubModelDiscovery(t, map[string]agent.Catalog{
 		"pi": {Models: []agent.Model{
 			{ID: "OpenAI/grok-4.6", Provider: "OpenAI"},
@@ -383,7 +382,7 @@ func TestResolveTaskModelSelectionFailsClosedOnAmbiguousPiModel(t *testing.T) {
 	})
 
 	got, err := resolveTaskModelSelection(context.Background(), "pi", agent.Command{},
-		taskModelSelection{Model: "grok-4.6"}, quietTaskLog())
+		taskModelSelection{Model: "grok-4.6", ThinkingLevel: "high"}, quietTaskLog())
 	if err == nil {
 		t.Fatalf("ambiguous grok-4.6 launched as %+v, want an error", got)
 	}

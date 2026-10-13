@@ -7614,7 +7614,12 @@ func qualifyTaskModel(
 	if model == "" {
 		return model, nil
 	}
-	if !agent.ModelSelectorMustBeProviderQualified(provider) && !capabilityChecksPending {
+	// Opencode cannot launch an unqualified selector, so it always reads.
+	// Pi still launches a uniquely claimed bare id; only read its catalog
+	// when a capability override already needs that read, then fail closed
+	// if more than one provider claims the id (Pi 0.84+ #7327).
+	mustRead := provider == "opencode" || provider == "deveco" || capabilityChecksPending
+	if !mustRead {
 		return model, nil
 	}
 	catalog, err := loadCatalog()

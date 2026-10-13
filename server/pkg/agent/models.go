@@ -350,9 +350,11 @@ func ListModels(ctx context.Context, providerType string, runtimeCmd Command) (C
 // 1.18.14, which answers a bare id with `UnknownError` before any provider
 // call. pi (0.84+, #7327) still accepts a canonical selector and a uniquely
 // authenticated bare id, but a bare id shared by more than one authenticated
-// provider is a hard error. The daemon therefore qualifies pi/omp against the
-// catalog and refuses to launch an ambiguous selector, rather than handing Pi
-// a string it will reject with only `exit status 1`. --provider is still never
+// provider is a hard error. The daemon therefore qualifies pi/omp when it is
+// already reading the catalog for a capability override, and refuses to launch
+// an ambiguous selector, rather than handing Pi a string it will reject with
+// only `exit status 1`. A bare Pi id with no override is left alone so launch
+// does not pay for a catalog subprocess. --provider is still never
 // synthesized (GH #7300); the catalog ID goes to --model whole.
 //
 // Built-in runtime identities resolve through their protocol family, so a fork
@@ -362,7 +364,7 @@ func ModelSelectorMustBeProviderQualified(providerType string) bool {
 		providerType = desc.ProtocolFamily
 	}
 	switch providerType {
-	case "opencode", "deveco", "pi":
+	case "opencode", "deveco":
 		return true
 	default:
 		return false

@@ -1868,10 +1868,11 @@ func TestSlashShapedPiModelKeepsItsThinkingCatalog(t *testing.T) {
 // only the ones whose CLI *rejects* the unprefixed form justify spending a
 // discovery subprocess before launch.
 //
-// The pi entries are the load-bearing ones: Pi 0.84+ (#7327) still accepts a
-// uniquely authenticated bare id, but an ambiguous one is a hard error, so the
-// daemon qualifies against the catalog before launch. --model still receives
-// the catalog ID whole; --provider is never synthesized (GH #7300).
+// Pi 0.84+ (#7327) still accepts a uniquely authenticated bare id, so a bare
+// Pi selector does not by itself justify a discovery subprocess. Ambiguous
+// ids fail closed only when the daemon is already reading the catalog for a
+// capability override. --model still receives the catalog ID whole;
+// --provider is never synthesized (GH #7300).
 func TestModelSelectorMustBeProviderQualifiedIsAnExecutionContract(t *testing.T) {
 	t.Parallel()
 
@@ -1882,8 +1883,8 @@ func TestModelSelectorMustBeProviderQualifiedIsAnExecutionContract(t *testing.T)
 	}{
 		{"opencode", true, "run --model resolves strictly through provider/model"},
 		{"deveco", true, "opencode fork with the same --model contract"},
-		{"pi", true, "ambiguous bare ids are a hard error as of 0.84"},
-		{"omp", true, "pi-family fork, inherits pi's launch contract"},
+		{"pi", false, "bare ids still launch; ambiguity is checked on a shared catalog read"},
+		{"omp", false, "pi-family fork, inherits pi's launch contract"},
 		{"claude", false, "bare model ids, no provider segment to miss"},
 		{"codex", false, "bare model ids"},
 		{"copilot", false, "bare model ids under a display-name provider"},
