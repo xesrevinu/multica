@@ -38,7 +38,7 @@ git rev-list --left-right --count upstream/main...HEAD
 | `b76e9d4c5` | Web 宽屏 session tab（与 Electron 同一套 store / TabBar） | 保留。2026-09-04 另叠 `use-tab-selection-shortcut` 改从 `@multica/core/tabs` 读 store（上游 MUL-6923 仍写桌面本地路径） |
 | `0af0151dc` | `make db-from-k8s` / `make dev-from-k8s`：家里 K8s Postgres 快照进本地 Docker | 保留。与上游 `make up` / `down` / `status` 并存 |
 | `2ef31f105` | Next 走 Turbopack；token 从 Linear seed 推导 | 保留。2026-10-12 接上游 Next `^16.3.8`，继续不传 `--webpack` |
-| `0202a0f7d` | Cursor Fast / thinking-suffix 定价 | 保留。rebase 接上游 gpt-6 / Opus 5.5（`claudeVersionEnd`），并保留 `claude-opus-5-fast` 规则在裸 `claude-opus-5` 之前 |
+| `0202a0f7d` | Cursor Fast / thinking-suffix 定价 | **前端半段已由上游接手**（MUL-8050 #9295 的 `cursorBaseModel` / `cursorPricingCandidates` 覆盖 effort、thinking、`-fast` 与 `[fast=true]`），2026-10-18 起只留后端 `pricing.go` 的 Cursor 行与 alias 规则，外加前端 `cursor/claude-opus-5-fast` 一行 |
 | `b30ce394f` / `3fd633f42` | typecheck 走 TypeScript 7 native，并行并保留 incremental info | 保留 |
 | `13e1a5e09` | landing / dashboard shell 离开胖 view barrel | 保留 |
 | `e7d658b2c` | 手机 PWA 的 static-first service worker | 保留 |
@@ -53,6 +53,9 @@ git rev-list --left-right --count upstream/main...HEAD
 | `a9ddaa975` | daemon 读 `PI_CODING_AGENT_DIR` 列 worker local skills | 保留 |
 | `da38dcb23` | Pi execute 传 `--no-skills`，只加载 sidecar / worker-global | 保留 |
 | `1ec043458` | Pi 启动前 qualify `provider/id`；多家认领则 fail closed | 保留。2026-10-12 接上游 `resolveTaskModelSelection` 的 error 返回；上游仍把 Pi 当成裸 id 可启动（0.84+ #7327 已否） |
+| `8f69825f4` | daemon 挂载技能只写裸 slug，目录被占用就跳过并记日志（去掉 `-multica` / `-multica-N` 后缀） | 保留。修 MUL-5550 的「brief 列表与磁盘目录不一致」；同批重名也按「先到先得、后者不挂载」处理 |
+| `81113cd2f` | repocache 测试的 git 命令不再继承 `~/.gitconfig`（`tag.gpgSign=true` 会让 `git tag` 打开编辑器，整个包挂到 600s 超时） | 保留。没有它，本机 `go test ./internal/daemon/...` 跑不完 |
+| `9e0ae6c85` / `a0289a480` / `af739f0e2` / `a4a944368` / `705b14ce5` / `e98489bef` | 2026-10-18 rebase 的集成修复：`className={\`…\`}` 漏写、landing 词典补 `docsHref`、desktop 改读 `@multica/core/tabs`、恢复 landing 词典懒加载、`--app-shell` 生成锚点 | 保留。前四项是把 fork 行为重新叠回上游文件，后两项是 rebase 后 `pointer:fine` 与 token 生成器的落地修正 |
 
 「mobile」在这里指 compact（小于 1024px），不是 Expo。见 `docs/adr/0001-web-session-tabs.md`。
 
@@ -80,18 +83,21 @@ git rev-list --left-right --count upstream/main...HEAD
 | 2026-09-10 | rebase `upstream/main` | `261522e3e` + 44 个 fork commit | `7e1dfba12`（v0.4.42 + 23 个 tip） | 51 个上游 commit。冲突按意图：session tabs 接到 MUL-7233 browsing history（store 仍在 `@multica/core/tabs`）；FX-141/147 继续无 agents 行、无 My Issues，叠上游 `NAV`/`SIDEBAR_ITEM_CLASS`；OTLP traces 叠 MUL-6941 phase latency。Pi model qualify 无冲突重放。`apps/web/package.json` 仍是 Turbopack / Next 16.3.3，version 跟上游 `0.4.42`。 |
 | 2026-09-19 | rebase `upstream/main` | `7e1dfba12` + 46 个 fork commit | `2df765a3c`（v0.5.0） | 137 个上游 commit。冲突按意图：`db-from-k8s` 叠进上游 AGENTS 环境说明；tokens 以上游 type scale / generated OKLCH 为准并保留 landing radius；pricing 保留 Cursor Fast 并接 `gpt-6-astra`；status 叶导入叠 MUL-7365 catalog；`pointer:fine` 叠 `rounded-xs`；FX-141 保留 invitation self-heal 测试；FX-147 不去掉上游 surface `RefreshablePageIcon`，inbox archive 用 `Footer` + `PAGE_GUTTER`；OTLP 叠 self-host telemetry / maintenance shutdown 与 `awaitTerminalResult`；Docker 去掉 backfill 但留下 `maintenance`；web runner 用 `alpine:3.24` 以接 MUL-7373 OpenSSL `>=3.5.8`。OpenCode 2 与其 revert 都 skip（空壳）。`apps/web/package.json` 仍走 Turbopack，Next `^16.3.4`，version 跟上游 `0.5.0`。 |
 | 2026-10-12 | rebase `upstream/main` | `2df765a3c`（v0.5.0）+ 48 个 fork commit | `b115ec80f`（v0.6.1 + 36 个 tip） | 195 个上游 commit。冲突按意图：session tab 桌面薄封装接上游 TabBar；`.gitignore` 保留 mobile env 例外并加 `.direnv`；`packages/ui` 留 `esbuild` + `vitest`；pricing 接 gpt-6 / Opus 5.5，`claude-opus-5-fast` 仍在裸 Opus 5 之前；landing 词典跟上游同步 `createLandingDict`（含 `docsHref`），chat 继续引 `can-assign-agent` 叶；`pointer:fine` 丢掉已删的 HTML attachment 预览，叠到 DynamicBlock；FX-141 `/agents` 仍走 `AgentsRuntimesPage`；FX-147 保留 wakeups tab，skills header 同时留 tagline 与 toolbar；OTLP 叠 awakeclock idle watchdog 与 wakeup claim；Pi `--no-skills` 测试与 MCP extension 测试都留；Pi qualify 接上游 `resolveTaskModelSelection` 的 error 返回。上次 lockfile 刷新 commit skip，rebase 后按当前 catalog 重生成。`apps/web/package.json` 仍走 Turbopack，Next `^16.3.8`，Go `1.26.9`。 |
+| 2026-10-18 | rebase `upstream/main` | `b115ec80f`（v0.6.1 + 36 个 tip）+ 49 个 fork commit | `18fa9f728`（v0.6.3，与 tag 同尖） | 32 个上游 commit，含 v0.6.2（`7ab92d762`）/ v0.6.3。冲突按意图：session tabs 三个文件取 fork 的搬移结果（`tab-store.ts` 留上游清理后的注释，`tab-bar.tsx` 只剩薄封装），并把上游 MUL-7978 的「跨工作区裸 Issues 根续用上次 tab」移植进 `packages/core/tabs/session-navigation.ts`（+ 回归测试）；FX-141 的注释按上游；FX-147 的 `nativeButton={false}` 叠回上游的 `TooltipTrigger render={` 排版；OTLP 初始化搬进上游新拆的 `run(ctx, healthLn)`（`Run` / `RunWithHealthListener` 都走它），`go mod tidy` 补 `backup/v5` 的 go.sum；`.dockerignore` 两边都留；Cursor 定价丢掉被 MUL-8050 覆盖的前端半段、只留后端与 `claude-opus-5-fast`。rebase 后顺手修掉四处本来就红的门：`className={\`…\`}`、landing 词典 `docsHref`、desktop 改读 `@multica/core/tabs`、恢复 landing 词典懒加载（`import-boundaries.test.ts` 重新通过）。`pnpm typecheck` 全绿；`pnpm test` 仅剩 `apps/ui-lab` 3 个用例红（见下）。`apps/web/package.json` 仍走 Turbopack，Next `^16.3.8`，Go `1.26.9`。 |
 
 这一次带上来的上游发行（细节以上游 changelog 为准）：
 
-- **v0.5.1**（2026-09-21）：`38e894529`
-- **v0.5.2**（2026-09-23）：`02d3e7cb8`
-- **v0.5.3**（2026-09-24）：`207e22716`
-- **v0.6.0**（2026-09-28）：`2253c2cc7`
-- **v0.6.1**（2026-10-01）：`09e5d78ad`
-- tip：`b115ec80f`（v0.6.1 之后 36 个 commit，2026-10-12）
+- **v0.6.2**（2026-10-13）：`7ab92d762`
+- **v0.6.3**（2026-10-16）：`18fa9f728`
+- tip：`18fa9f728`（= v0.6.3，2026-10-18）
 
-rebase 前备份分支：`main-prerebase-backup`（`51dfdef3a`）。`origin/main`
-更新并确认无误后可删。旧备份 `55be939c4` 已过期。
+rebase 前备份分支：`main-prerebase-backup`（`be17fab9a`，2026-10-18）。`origin/main`
+更新并确认无误后可删。旧备份 `51dfdef3a` 已过期。
+
+本轮唯一没修的红：`apps/ui-lab` 的 3 个用例（`tokens.test.ts` / `colors-scene.test.ts` /
+`color.test.ts`）。原因不是 rebase——fork 的 `packages/ui/appearance/generate.ts` 把
+语义角色写成字面 OKLCH，上游 ui-lab 读 `tokens.css` 时期望 `--background: var(--page-canvas)`
+这类别名。要么让生成器输出上游那套别名，要么先不把 ui-lab 算进 fork 的门。
 
 ## 拉取上游并 rebase
 
@@ -163,7 +169,7 @@ git -c commit.gpgsign=false rebase --empty=drop v0.4.36
 | 42.0.0 | v0.4.32 | ad64e0f800 | fork 发版 CI（CLI / Helm 发到本仓库） |
 
 发一版加一行。Release body 第一行写 `Based on upstream v0.4.37`（按实际基线改）。
-当前 `main` 已 rebase 到 v0.6.1 之后的 `upstream/main` 尖（`b115ec80f`），下一发应升 **42.2.0**（42.1.0 仍未发，但基线已从 v0.5.0 跨到 v0.6.x）。若发行要钉在 tag 而不是 tip，从 `v0.6.1` cherry-pick fork commit。Release body 第一行写 `Based on upstream v0.6.1`。
+当前 `main` 已 rebase 到 `upstream/main` 尖（`18fa9f728`，= v0.6.3），下一发应升 **42.3.0**（基线从 v0.6.1 跨到 v0.6.3）。若发行要钉在 tag 而不是 tip，从 `v0.6.3` cherry-pick fork commit。Release body 第一行写 `Based on upstream v0.6.3`。
 
 ## 产物
 
