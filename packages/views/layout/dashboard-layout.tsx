@@ -16,7 +16,7 @@ import { NavigationProgress } from "./navigation-progress";
 import { WorkspacePresencePrefetch } from "./workspace-presence-prefetch";
 import { GlobalShortcuts } from "./global-shortcuts";
 import { SessionHistoryControls } from "./session-history-controls";
-import { useSessionTabsEnabled } from "./session-tabs";
+import { SessionTabsProvider, useSessionTabsEnabled } from "./session-tabs";
 
 // Compact web never renders session tabs (see useSessionTabsEnabled). Keep
 // the strip off the dashboard module graph so a phone does not download
@@ -127,24 +127,26 @@ export function DashboardLayout({
         </div>
       }
     >
-      <SidebarProvider
-        hasExternalTrigger={sessionTabs}
-        className={cn(
-          "h-svh bg-app-shell",
-          sessionTabs && "[--sidebar-wrapper-fill:var(--app-shell)]",
-        )}
-      >
-        <GlobalShortcuts />
-        <WorkspacePresencePrefetch />
-        {sessionTabs ? (
-          <SessionTabChrome canvas={canvas} searchSlot={searchSlot} />
-        ) : (
-          <>
-            <AppSidebar searchSlot={searchSlot} />
-            <SidebarInset className="relative overflow-hidden">{canvas}</SidebarInset>
-          </>
-        )}
-      </SidebarProvider>
+      <SessionTabsProvider enabled={sessionTabs}>
+        <SidebarProvider
+          hasExternalTrigger={sessionTabs}
+          className={cn(
+            "h-svh bg-app-shell",
+            sessionTabs && "[--sidebar-wrapper-fill:var(--app-shell)]",
+          )}
+        >
+          <GlobalShortcuts />
+          <WorkspacePresencePrefetch />
+          {sessionTabs ? (
+            <SessionTabChrome canvas={canvas} searchSlot={searchSlot} />
+          ) : (
+            <>
+              <AppSidebar searchSlot={searchSlot} />
+              <SidebarInset className="relative overflow-hidden">{canvas}</SidebarInset>
+            </>
+          )}
+        </SidebarProvider>
+      </SessionTabsProvider>
     </DashboardGuard>
   );
 }

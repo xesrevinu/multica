@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useEffect } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, render, waitFor } from "@testing-library/react";
@@ -90,6 +91,7 @@ vi.mock("@multica/views/workspace/use-workspace-seen", () => ({
 }));
 
 vi.mock("@multica/views/layout", () => ({
+  SessionTabsProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
   WorkspacePresencePrefetch: () => null,
 }));
 

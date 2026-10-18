@@ -11,11 +11,13 @@ import {
   SidebarProvider,
   useSidebar,
 } from "@multica/ui/components/ui/sidebar";
+import { useIsCompact } from "@multica/ui/hooks/use-mobile";
 import { ModalRegistry } from "@multica/views/modals/registry";
 import {
   AppSidebar,
   GlobalShortcuts,
   NavigationProgress,
+  SessionTabsProvider,
 } from "@multica/views/layout";
 import { SearchCommand, SearchTrigger } from "@multica/views/search";
 import { FloatingChat } from "@multica/views/chat/floating-chat";
@@ -206,6 +208,7 @@ function DesktopInboxBridge() {
 }
 
 export function DesktopShell() {
+  const isCompact = useIsCompact();
   useInternalLinkHandler();
   useNativeNavigationGestures();
   useNavigationInputBindings();
@@ -266,29 +269,31 @@ export function DesktopShell() {
               top of it — desktop windows sit below `xl`, exactly where that
               fallback renders, so every page showed a second identical icon
               50px under this one (MUL-6218). */}
-          <SidebarProvider
-            hasExternalTrigger
-            className="flex-1 bg-app-shell [--sidebar-wrapper-fill:var(--app-shell)]"
-          >
-            {slug && <GlobalShortcuts />}
-            {slug && <WindowToolbar />}
-            {slug && <AppSidebar topSlot={<SidebarTopSpacer />} searchSlot={<SearchTrigger />} />}
-            {/* Right side: header + content container */}
-            <div className="flex flex-1 min-w-0 flex-col">
-              <MainTopBar sidebarMounted={Boolean(slug)} />
-              <MainCanvas showWorkspaceLoading={!slug}>
-                {/* Same indicator, same anchor as web: DashboardLayout puts it
-                    at the top of the session canvas (below the tab strip), and
-                    MainCanvas is desktop's equivalent relative/overflow-hidden
-                    content box. Desktop used to have no navigation feedback at
-                    all — a click just froze until the destination committed
-                    (MUL-6404). */}
-                <NavigationProgress />
-                <TabContent />
-                {slug && <FloatingChat />}
-              </MainCanvas>
-            </div>
-          </SidebarProvider>
+          <SessionTabsProvider enabled={!isCompact}>
+            <SidebarProvider
+              hasExternalTrigger
+              className="flex-1 bg-app-shell [--sidebar-wrapper-fill:var(--app-shell)]"
+            >
+              {slug && <GlobalShortcuts />}
+              {slug && <WindowToolbar />}
+              {slug && <AppSidebar topSlot={<SidebarTopSpacer />} searchSlot={<SearchTrigger />} />}
+              {/* Right side: header + content container */}
+              <div className="flex flex-1 min-w-0 flex-col">
+                <MainTopBar sidebarMounted={Boolean(slug)} />
+                <MainCanvas showWorkspaceLoading={!slug}>
+                  {/* Same indicator, same anchor as web: DashboardLayout puts it
+                      at the top of the session canvas (below the tab strip), and
+                      MainCanvas is desktop's equivalent relative/overflow-hidden
+                      content box. Desktop used to have no navigation feedback at
+                      all — a click just froze until the destination committed
+                      (MUL-6404). */}
+                  <NavigationProgress />
+                  <TabContent />
+                  {slug && <FloatingChat />}
+                </MainCanvas>
+              </div>
+            </SidebarProvider>
+          </SessionTabsProvider>
         </div>
         {slug && <ModalRegistry />}
         {slug && <SearchCommand />}

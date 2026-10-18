@@ -79,6 +79,7 @@ vi.mock("@multica/views/platform", () => ({
 // Each workspace-scoped component gets a marker so the assertions can tell
 // which of them the shell decided to mount.
 vi.mock("@multica/views/layout", () => ({
+  SessionTabsProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
   AppSidebar: () => <div data-testid="app-sidebar" />,
   GlobalShortcuts: () => <div data-testid="global-shortcuts" />,
   NavigationProgress: () => <div data-testid="navigation-progress" />,

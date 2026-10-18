@@ -66,6 +66,7 @@ vi.mock("@multica/views/platform", () => ({
 }));
 
 vi.mock("@multica/views/layout", () => ({
+  SessionTabsProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
   AppSidebar: () => null,
   GlobalShortcuts: () => null,
   NavigationProgress: () => null,

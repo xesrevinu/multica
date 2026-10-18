@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -43,6 +44,7 @@ vi.mock("@multica/views/modals/registry", () => ({
 }));
 
 vi.mock("@multica/views/layout", () => ({
+  SessionTabsProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
   WorkspacePresencePrefetch: () => null,
 }));
 

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { ComponentProps } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,6 +28,7 @@ vi.mock("@/hooks/use-tab-history", () => ({
 }));
 
 vi.mock("@multica/views/layout", () => ({
+  SessionTabsProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
   useTabPresentation: (url: string, fallbackTitle?: string) => ({
     visual: { kind: "icon", icon: "Inbox" },
     title: fallbackTitle ?? `Title ${url}`,
