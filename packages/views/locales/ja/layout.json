@@ -73,5 +73,20 @@
     "unpin": "ピン留めを解除",
     "open_window": "新しいウィンドウで開く",
     "new": "新しいタブ"
+  },
+  "active_work": {
+    "label": "作業中",
+    "show_more": "さらに {{count}} 件表示…",
+    "show_fewer": "折りたたむ",
+    "chat_run": "チャット実行",
+    "autopilot_run": "オートパイロット実行",
+    "task_run": "タスク実行",
+    "unknown_agent": "エージェント",
+    "status": {
+      "running": "実行中",
+      "dispatched": "起動中",
+      "waiting_local_directory": "フォルダ待ち",
+      "queued": "待機中"
+    }
   }
 }

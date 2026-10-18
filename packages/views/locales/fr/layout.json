@@ -73,5 +73,20 @@
     "unpin": "Détacher l'onglet",
     "open_window": "Ouvrir dans une nouvelle fenêtre",
     "new": "Nouvel onglet"
+  },
+  "active_work": {
+    "label": "En cours",
+    "show_more": "Afficher {{count}} de plus…",
+    "show_fewer": "Afficher moins",
+    "chat_run": "Exécution de discussion",
+    "autopilot_run": "Exécution d'autopilote",
+    "task_run": "Exécution de tâche",
+    "unknown_agent": "Agent",
+    "status": {
+      "running": "En cours",
+      "dispatched": "Démarrage",
+      "waiting_local_directory": "En attente du dossier",
+      "queued": "En file d'attente"
+    }
   }
 }

@@ -73,5 +73,20 @@
     "unpin": "Unpin tab",
     "open_window": "Open as new window",
     "new": "New tab"
+  },
+  "active_work": {
+    "label": "Working now",
+    "show_more": "Show {{count}} more…",
+    "show_fewer": "Show fewer",
+    "chat_run": "Chat run",
+    "autopilot_run": "Autopilot run",
+    "task_run": "Task run",
+    "unknown_agent": "Agent",
+    "status": {
+      "running": "Working",
+      "dispatched": "Starting",
+      "waiting_local_directory": "Waiting for folder",
+      "queued": "Queued"
+    }
   }
 }

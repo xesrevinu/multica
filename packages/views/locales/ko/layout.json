@@ -73,5 +73,20 @@
     "unpin": "탭 고정 해제",
     "open_window": "새 창에서 열기",
     "new": "새 탭"
+  },
+  "active_work": {
+    "label": "작업 중",
+    "show_more": "{{count}}개 더 보기…",
+    "show_fewer": "접기",
+    "chat_run": "채팅 실행",
+    "autopilot_run": "오토파일럿 실행",
+    "task_run": "작업 실행",
+    "unknown_agent": "에이전트",
+    "status": {
+      "running": "실행 중",
+      "dispatched": "시작 중",
+      "waiting_local_directory": "폴더 대기",
+      "queued": "대기 중"
+    }
   }
 }

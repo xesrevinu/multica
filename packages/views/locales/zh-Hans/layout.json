@@ -73,5 +73,20 @@
     "unpin": "取消固定标签页",
     "open_window": "在新窗口中打开",
     "new": "新建标签页"
+  },
+  "active_work": {
+    "label": "正在工作",
+    "show_more": "再显示 {{count}} 个…",
+    "show_fewer": "收起",
+    "chat_run": "对话任务",
+    "autopilot_run": "自动驾驶任务",
+    "task_run": "任务",
+    "unknown_agent": "智能体",
+    "status": {
+      "running": "工作中",
+      "dispatched": "启动中",
+      "waiting_local_directory": "等待目录",
+      "queued": "排队中"
+    }
   }
 }

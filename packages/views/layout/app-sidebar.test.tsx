@@ -9,6 +9,11 @@ import { ApiError } from "@multica/core/api";
 import { renderWithI18n } from "../test/i18n";
 import { AppSidebar } from "./app-sidebar";
 
+// The live-work section owns its own queries and suite; the sidebar suite
+// asserts nav, pins, and badges, so the section is stubbed out here rather
+// than dragging a QueryClient through every case.
+vi.mock("./active-work-section", () => ({ ActiveWorkSection: () => null }));
+
 const { appForeground, chatSessions, chatStore, detail, deletePin, invitationApi, navigation, pins, sidebarState, summary, workspaces } = vi.hoisted(() => ({
   appForeground: { current: true },
   sidebarState: { setOpenMobile: vi.fn() },

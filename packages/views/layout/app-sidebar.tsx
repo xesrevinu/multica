@@ -80,6 +80,7 @@ import { projectDetailOptions } from "@multica/core/projects/queries";
 import type { PinnedItem } from "@multica/core/types";
 import { useLogout } from "../auth";
 import { ProjectIcon } from "../projects/components/project-icon";
+import { ActiveWorkSection } from "./active-work-section";
 import { routeIconForPath } from "./route-icon-components";
 import { aiTeamNav, personalNav, utilityNav, workNav } from "./sidebar-nav";
 import { useT } from "../i18n";
@@ -843,6 +844,11 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
+
+          {/* Live work sits under AI Team because that is where agents live:
+              the group answers "who exists", this section answers "who is
+              busy right now". Renders nothing when the workspace is idle. */}
+          <ActiveWorkSection />
         </SidebarContent>
 
         <SidebarFooter className="p-2">
