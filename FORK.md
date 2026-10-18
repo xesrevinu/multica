@@ -97,8 +97,16 @@ git rev-list --left-right --count upstream/main...HEAD
 - **v0.6.3**（2026-10-16）：`18fa9f728`
 - tip：`18fa9f728`（= v0.6.3，2026-10-18）
 
-rebase 前备份分支：`main-prerebase-backup`（`be17fab9a`，2026-10-18）。`origin/main`
-更新并确认无误后可删。旧备份 `51dfdef3a` 已过期。
+备份分支 `main-prerebase-backup`（`be17fab9a`）在 `origin/main` 确认后已删（2026-10-18）。
+`origin/main` 当时停在 `55be939c4`（2026-09-10），即 09-19 与 10-12 两次 rebase 都没推过；
+本次一并推平。
+
+推 `origin` 走 **SSH**：`gh` 的 OAuth token 只有 `gist` / `read:org` / `repo`，推 main 会因为
+`.github/workflows/ci.yml` 改动被拒绝（需要 `workflow` scope）。
+
+```sh
+git push --force-with-lease=main:<远程当前 sha> git@github.com:xesrevinu/multica.git main
+```
 
 2026-10-18 之后 `pnpm typecheck` / `pnpm lint` / `pnpm test` / `pnpm build` 全部为绿：
 ui-lab 的 3 个用例靠生成器输出 `var()` 别名 + 用例改从 token 推导 alpha 修掉；
