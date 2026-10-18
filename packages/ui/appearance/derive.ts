@@ -80,18 +80,37 @@ const BACKGROUND_TOKEN_KEYS = [
 
 export type TokenMap = Record<string, string>;
 
+// Semantic roles that are the same colour as a source role in both themes.
+// Upstream spells them as aliases, so a theme override of the source role
+// carries through to everything built on it; a literal colour instead makes
+// them look duplicated and lets such an override stop half way.
+const SURFACE_ALIASES: Record<string, string> = {
+  "--background": "--page-canvas",
+  "--card": "--surface",
+  "--popover": "--surface-raised",
+};
+
 export function deriveHexTokens(variant: ThemeVariant): TokenMap {
   const seeds = PRODUCT_SKIN[variant];
   return variant === "light" ? deriveLightHex(seeds) : deriveDarkHex(seeds);
 }
 
 export function deriveTokens(variant: ThemeVariant): TokenMap {
-  return Object.fromEntries(
-    Object.entries(deriveHexTokens(variant)).map(([name, value]) => [
+  const hex = deriveHexTokens(variant);
+  const tokens: TokenMap = Object.fromEntries(
+    Object.entries(hex).map(([name, value]) => [
       name,
       value.startsWith("#") ? hexToOklchCss(value) : value,
     ]),
   );
+  for (const [alias, source] of Object.entries(SURFACE_ALIASES)) {
+    // Only alias while the two roles still resolve to the same colour; a palette
+    // change that separates them has to keep the literal value.
+    if (hex[alias] !== undefined && hex[alias] === hex[source]) {
+      tokens[alias] = `var(${source})`;
+    }
+  }
+  return tokens;
 }
 
 function deriveLightHex(seeds: ChromeSeeds): TokenMap {

@@ -4,6 +4,7 @@ import { colorToHex, hexToOklch, isSrgb } from "./color";
 import {
   baseline,
   colorAlpha,
+  parseColor,
   withColorAlpha,
   emptyDraft,
   exportCss,
@@ -64,14 +65,19 @@ describe("transparent semantic colors", () => {
   it("restores equivalent percentage and decimal alpha without leaving a change", () => {
     const original = baseline.dark["--border"]!;
     expect(withColorAlpha(original, colorAlpha(original))).toBe(original);
+    // The palette owns the colour (packages/ui/appearance derives it), so take
+    // the channel triple and the baseline alpha from the token itself instead
+    // of pinning one specific border colour.
+    const channels = parseColor(original).join(" ");
     const draft = updateToken(
       emptyDraft(),
       "dark",
       "--border",
-      "oklch(1 0 0 / 0.2)",
+      `oklch(${channels} / 0.2)`,
     );
+    const percent = `${Number((colorAlpha(original) * 100).toFixed(6))}%`;
     expect(
-      updateToken(draft, "dark", "--border", "oklch(1 0 0 / 0.06)"),
+      updateToken(draft, "dark", "--border", `oklch(${channels} / ${percent})`),
     ).toEqual(emptyDraft());
     for (const value of [
       "oklch(1 0 0 / 0)",
