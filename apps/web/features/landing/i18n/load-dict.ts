@@ -1,3 +1,4 @@
+import { docsHrefForLocale } from "@/lib/docs-href";
 import {
   toLandingDictionaryLocale,
   type LandingDict,
@@ -7,7 +8,7 @@ import {
 
 async function loadFactory(
   locale: LandingDictionaryLocale,
-): Promise<(allowSignup: boolean) => LandingDict> {
+): Promise<(allowSignup: boolean, docsHref: string) => LandingDict> {
   switch (locale) {
     case "ja":
       return (await import("./ja")).createJaDict;
@@ -25,5 +26,5 @@ export async function loadLandingDict(
   allowSignup: boolean,
 ): Promise<LandingDict> {
   const factory = await loadFactory(toLandingDictionaryLocale(locale));
-  return factory(allowSignup);
+  return factory(allowSignup, docsHrefForLocale(locale));
 }
