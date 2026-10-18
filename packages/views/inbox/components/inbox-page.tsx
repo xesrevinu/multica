@@ -500,15 +500,6 @@ export function InboxPage() {
   const sessionTabs = useSessionTabsEnabled();
   const inboxHeaderActions = (
     <>
-      {unreadCount > 0 && (
-        <NumberFlow
-          value={unreadCount}
-          animated={false}
-          format={{ maximumFractionDigits: 0 }}
-          aria-label={String(unreadCount)}
-          className="text-caption text-muted-foreground"
-        />
-      )}
       <InboxFilterMenu
         wsId={wsId}
         items={viewItems}
@@ -559,6 +550,17 @@ export function InboxPage() {
       <div className="flex flex-1 items-center gap-2">
         {!sessionTabs && (
           <h1 className="text-body font-semibold">{t(($) => $.page.title)}</h1>
+        )}
+        {/* The count belongs to the title, not the toolbar: it survives the
+            session-tab layout, where the strip names the page for us. */}
+        {unreadCount > 0 && (
+          <NumberFlow
+            value={unreadCount}
+            animated={false}
+            format={{ maximumFractionDigits: 0 }}
+            aria-label={String(unreadCount)}
+            className="text-caption text-muted-foreground"
+          />
         )}
       </div>
       {inboxHeaderActions}
