@@ -65,5 +65,13 @@
   "tab_history": {
     "back": "后退",
     "forward": "前进"
+  },
+  "tab_actions": {
+    "close": "关闭标签页",
+    "close_others": "关闭其他标签页",
+    "pin": "固定标签页",
+    "unpin": "取消固定标签页",
+    "open_window": "在新窗口中打开",
+    "new": "新建标签页"
   }
 }

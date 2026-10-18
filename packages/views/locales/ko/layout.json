@@ -65,5 +65,13 @@
   "tab_history": {
     "back": "뒤로",
     "forward": "앞으로"
+  },
+  "tab_actions": {
+    "close": "탭 닫기",
+    "close_others": "다른 탭 닫기",
+    "pin": "탭 고정",
+    "unpin": "탭 고정 해제",
+    "open_window": "새 창에서 열기",
+    "new": "새 탭"
   }
 }

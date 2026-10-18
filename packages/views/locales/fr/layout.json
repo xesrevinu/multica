@@ -61,5 +61,17 @@
       "title": "Rejoignez notre Discord",
       "dismiss": "Ignorer"
     }
+  },
+  "tab_history": {
+    "back": "Retour",
+    "forward": "Avancer"
+  },
+  "tab_actions": {
+    "close": "Fermer l'onglet",
+    "close_others": "Fermer les autres onglets",
+    "pin": "Épingler l'onglet",
+    "unpin": "Détacher l'onglet",
+    "open_window": "Ouvrir dans une nouvelle fenêtre",
+    "new": "Nouvel onglet"
   }
 }

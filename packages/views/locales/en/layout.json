@@ -65,5 +65,13 @@
   "tab_history": {
     "back": "Go back",
     "forward": "Go forward"
+  },
+  "tab_actions": {
+    "close": "Close tab",
+    "close_others": "Close other tabs",
+    "pin": "Pin tab",
+    "unpin": "Unpin tab",
+    "open_window": "Open as new window",
+    "new": "New tab"
   }
 }

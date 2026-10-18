@@ -1,4 +1,11 @@
 import "@testing-library/jest-dom/vitest";
+import { createI18n } from "@multica/core/i18n/react";
+import { RESOURCES } from "../locales";
+
+// Components call useT, and react-i18next falls back to its module-level
+// instance when a test renders without a provider. Initialise English once so
+// assertions read the real strings ("Close tab") instead of raw keys.
+createI18n("en", RESOURCES);
 
 function createMemoryStorage(): Storage {
   const values = new Map<string, string>();

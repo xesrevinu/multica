@@ -65,5 +65,13 @@
   "tab_history": {
     "back": "戻る",
     "forward": "進む"
+  },
+  "tab_actions": {
+    "close": "タブを閉じる",
+    "close_others": "他のタブを閉じる",
+    "pin": "タブをピン留め",
+    "unpin": "ピン留めを解除",
+    "open_window": "新しいウィンドウで開く",
+    "new": "新しいタブ"
   }
 }

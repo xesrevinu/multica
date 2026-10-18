@@ -25,7 +25,12 @@
     "bootstrapping": {
       "title": "Démarrage du runtime local…",
       "hint": "Connexion à l’espace de travail..."
-    }
+    },
+    "fused_tagline": "Les agents et les machines sur lesquelles ils s'exécutent."
+  },
+  "rail": {
+    "all": "Toutes les machines",
+    "open_machine": "Ouvrir {{machine}}"
   },
   "mika_setup": {
     "title": "Votre runtime est prêt. Commencez avec Mika.",
