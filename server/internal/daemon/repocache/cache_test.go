@@ -468,6 +468,33 @@ func TestIsBareRepo(t *testing.T) {
 	}
 }
 
+// testGitEnv is the environment the git commands in this file run with: the
+// production gitEnv (full daemon env, GIT_TERMINAL_PROMPT=0, safe.directory=*)
+// plus the fixes a test binary needs, and minus the developer's own config.
+//
+// The developer config has to go. With `tag.gpgSign = true` in ~/.gitconfig the
+// bare `git tag v1` in the worktree tests becomes a *signed annotated* tag, git
+// opens `core.editor` to compose the tag message, and the command blocks forever
+// on a test binary with no TTY — that is what hung
+// TestCreateWorktreeWithRequestedTagRef on a workstation where the suite passes
+// in CI. GIT_EDITOR=true makes any remaining editor launch a no-op instead of a
+// hang, and the fixed identity keeps commits independent of ~/.gitconfig.
+func testGitEnv(t *testing.T) []string {
+	t.Helper()
+	env := gitEnv()
+	// A path that never exists: git reads a missing global config as empty, and
+	// t.TempDir() is stable across calls within one test.
+	if os.Getenv("GIT_CONFIG_GLOBAL") == "" {
+		env = append(env, "GIT_CONFIG_GLOBAL="+filepath.Join(t.TempDir(), "no-global-gitconfig"))
+	}
+	return append(env,
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_EDITOR=true",
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
+	)
+}
+
 // createTestRepo creates a local git repo with an initial commit and returns its path.
 func createTestRepo(t *testing.T) string {
 	t.Helper()
@@ -484,10 +511,7 @@ func createTestRepoAt(t *testing.T, dir string) string {
 		{"-C", dir, "commit", "--allow-empty", "-m", "initial"},
 	} {
 		cmd := exec.Command("git", args...)
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
-			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
-		)
+		cmd.Env = testGitEnv(t)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Skipf("git setup failed: %s: %v", out, err)
 		}
@@ -1489,10 +1513,7 @@ func gitRefCommit(t *testing.T, repoPath, ref string) string {
 func addEmptyCommit(t *testing.T, repoPath, message string) {
 	t.Helper()
 	cmd := exec.Command("git", "-C", repoPath, "commit", "--allow-empty", "-m", message)
-	cmd.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
-		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
-	)
+	cmd.Env = testGitEnv(t)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git commit failed in %s: %s: %v", repoPath, out, err)
 	}
@@ -1503,10 +1524,7 @@ func runGitAuthored(t *testing.T, repoPath string, args ...string) {
 	t.Helper()
 	full := append([]string{"-C", repoPath}, args...)
 	cmd := exec.Command("git", full...)
-	cmd.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
-		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
-	)
+	cmd.Env = testGitEnv(t)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v in %s: %s: %v", args, repoPath, out, err)
 	}
