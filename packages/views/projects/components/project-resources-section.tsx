@@ -848,7 +848,7 @@ function LocalDirectoryRow({
       <button
         type="button"
         onClick={onRemove}
-        className=`${hoverRevealOpacity} transition-opacity rounded-sm p-0.5 hover:bg-accent`
+        className={`${hoverRevealOpacity} transition-opacity rounded-sm p-0.5 hover:bg-accent`}
         title={t(($) => $.resources.remove_tooltip)}
       >
         <Trash2 className="size-3 text-muted-foreground" />
