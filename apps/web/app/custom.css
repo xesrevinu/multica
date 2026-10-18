@@ -15,10 +15,11 @@
 .landing-light * {
     color-scheme: light;
 }
+/* Landing has an editorial radius language independent from product UI.
+   Components consume these by role, so a redesign does not require
+   rediscovering scattered one-off pixel values. Declared in its own rule
+   because the generated color block below must start at `--app-shell`. */
 .landing-light {
-    /* Landing has an editorial radius language independent from product UI.
-       Components consume these by role, so a redesign does not require
-       rediscovering scattered one-off pixel values. */
     --landing-radius-checkbox: 4px;
     --landing-radius-menu-item: 6px;
     --landing-radius-nav-item: 9px;
@@ -27,6 +28,8 @@
     --landing-radius-action: 12px;
     --landing-radius-menu: 14px;
     --landing-radius-card: 16px;
+}
+.landing-light {
     --app-shell: oklch(0.955227 0.00415 271.369);
     --page-canvas: oklch(0.997025 0 0);
     --surface: oklch(0.997025 0 0);
