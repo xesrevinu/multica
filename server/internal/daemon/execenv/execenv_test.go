@@ -822,7 +822,7 @@ func TestWriteContextFiles(t *testing.T) {
 		},
 	}
 
-	if err := writeContextFiles(dir, "", ctx, nil); err != nil {
+	if err := writeContextFiles(dir, "", ctx, nil, nil); err != nil {
 		t.Fatalf("writeContextFiles failed: %v", err)
 	}
 
@@ -863,7 +863,7 @@ func TestWriteContextFilesLeavesNoAgentContextWhenNothingToWrite(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	if err := writeContextFiles(dir, "", TaskContextForEnv{IssueID: "minimal-issue-id"}, nil); err != nil {
+	if err := writeContextFiles(dir, "", TaskContextForEnv{IssueID: "minimal-issue-id"}, nil, nil); err != nil {
 		t.Fatalf("writeContextFiles failed: %v", err)
 	}
 
@@ -894,7 +894,7 @@ func TestWriteContextFilesClaudeNativeSkills(t *testing.T) {
 		},
 	}
 
-	if err := writeContextFiles(dir, "claude", ctx, nil); err != nil {
+	if err := writeContextFiles(dir, "claude", ctx, nil, nil); err != nil {
 		t.Fatalf("writeContextFiles failed: %v", err)
 	}
 
@@ -954,7 +954,7 @@ func TestWriteContextFilesCodebuddyNativeSkills(t *testing.T) {
 		},
 	}
 
-	if err := writeContextFiles(dir, "codebuddy", ctx, nil); err != nil {
+	if err := writeContextFiles(dir, "codebuddy", ctx, nil, nil); err != nil {
 		t.Fatalf("writeContextFiles failed: %v", err)
 	}
 
@@ -999,11 +999,10 @@ func TestWriteContextFilesCodebuddyNativeSkills(t *testing.T) {
 
 // TestReuseRefreshesSkillsWithoutDuplicating is the regression guard for
 // GitHub #3684: re-dispatching the same agent on the same issue goes through
-// the Reuse path, which must refresh skills in place rather than pile up
-// collision-free duplicates (issue-review, issue-review-multica,
-// issue-review-multica-2, …). Reuse rolls back the prior dispatch's writes
-// via its sidecar manifest before re-writing, so each skill lands at its
-// natural slug on every dispatch instead of dodging its own prior output.
+// the Reuse path, which must refresh skills in place. Reuse rolls back the
+// prior dispatch's writes via its sidecar manifest before re-writing, so each
+// skill lands at its natural slug on every dispatch instead of finding its own
+// prior output occupying the slug and being skipped.
 func TestReuseRefreshesSkillsWithoutDuplicating(t *testing.T) {
 	t.Parallel()
 
@@ -1049,7 +1048,7 @@ func TestReuseRefreshesSkillsWithoutDuplicating(t *testing.T) {
 		names = append(names, e.Name())
 	}
 	if len(names) != 1 || names[0] != "issue-review" {
-		t.Fatalf("after re-dispatch the skills dir = %v, want exactly [issue-review] with no -multica duplicates", names)
+		t.Fatalf("after re-dispatch the skills dir = %v, want exactly [issue-review]", names)
 	}
 
 	// The surviving skill keeps its natural slug in frontmatter, so the agent
@@ -1067,9 +1066,8 @@ func TestReuseRefreshesSkillsWithoutDuplicating(t *testing.T) {
 // #3716 review surfaced: a prior-dispatch agent writes a file into the
 // platform's managed skill directory. CleanupSidecars on its own would keep
 // that now-non-empty directory, leaving the canonical slug occupied so the
-// next refresh dodges to issue-review-multica. Reuse must reclaim the
-// platform-owned skill directory so the refreshed skill stays at its natural
-// slug.
+// next refresh skips the skill entirely. Reuse must reclaim the platform-owned
+// skill directory so the refreshed skill stays at its natural slug.
 func TestReuseReclaimsManagedSkillDirWithStrayAgentFile(t *testing.T) {
 	t.Parallel()
 
@@ -1118,7 +1116,7 @@ func TestReuseReclaimsManagedSkillDirWithStrayAgentFile(t *testing.T) {
 		names = append(names, e.Name())
 	}
 	if len(names) != 1 || names[0] != "issue-review" {
-		t.Fatalf("after reuse with a stray agent file the skills dir = %v, want exactly [issue-review] with no -multica duplicate", names)
+		t.Fatalf("after reuse with a stray agent file the skills dir = %v, want exactly [issue-review]", names)
 	}
 
 	// The managed skill dir is platform-owned: reclaiming it drops the agent's
@@ -1159,7 +1157,7 @@ func TestReuseSkillRefreshIsCanonicalAcrossProviders(t *testing.T) {
 
 			// First dispatch: write context + persist the manifest.
 			m1 := &sidecarManifest{}
-			if err := writeContextFiles(workDir, provider, task, m1); err != nil {
+			if err := writeContextFiles(workDir, provider, task, m1, nil); err != nil {
 				t.Fatalf("first writeContextFiles: %v", err)
 			}
 			if err := writeSidecarManifest(envRoot, m1); err != nil {
@@ -1181,7 +1179,7 @@ func TestReuseSkillRefreshIsCanonicalAcrossProviders(t *testing.T) {
 				t.Fatalf("CleanupSidecars: %v", err)
 			}
 			m2 := &sidecarManifest{}
-			if err := writeContextFiles(workDir, provider, task, m2); err != nil {
+			if err := writeContextFiles(workDir, provider, task, m2, nil); err != nil {
 				t.Fatalf("second writeContextFiles: %v", err)
 			}
 			if err := writeSidecarManifest(envRoot, m2); err != nil {
@@ -1555,7 +1553,7 @@ func TestWriteContextFilesCopilotNativeSkills(t *testing.T) {
 		},
 	}
 
-	if err := writeContextFiles(dir, "copilot", ctx, nil); err != nil {
+	if err := writeContextFiles(dir, "copilot", ctx, nil, nil); err != nil {
 		t.Fatalf("writeContextFiles failed: %v", err)
 	}
 
@@ -1609,7 +1607,7 @@ func TestWriteContextFilesOpencodeNativeSkills(t *testing.T) {
 		},
 	}
 
-	if err := writeContextFiles(dir, "opencode", ctx, nil); err != nil {
+	if err := writeContextFiles(dir, "opencode", ctx, nil, nil); err != nil {
 		t.Fatalf("writeContextFiles failed: %v", err)
 	}
 
@@ -1688,7 +1686,7 @@ func TestWriteContextFilesForcesSkillFrontmatterNameToSlug(t *testing.T) {
 		},
 	}
 
-	if err := writeContextFiles(dir, "opencode", ctx, nil); err != nil {
+	if err := writeContextFiles(dir, "opencode", ctx, nil, nil); err != nil {
 		t.Fatalf("writeContextFiles failed: %v", err)
 	}
 
@@ -1705,13 +1703,11 @@ func TestWriteContextFilesForcesSkillFrontmatterNameToSlug(t *testing.T) {
 	}
 }
 
-// The directory-name == frontmatter-name invariant must survive collision
-// fallback, where the allocated slug is NOT sanitizeSkillName(Name). A
-// user-installed skill already sitting at the natural slug pushes Multica's
-// copy to `<slug>-multica`; the frontmatter has to follow it there, or the
-// skill answers to the user's slug on Claude and to its own stale name on
-// OpenCode.
-func TestWriteContextFilesFrontmatterNameFollowsCollisionSlug(t *testing.T) {
+// A skill whose natural slug is already taken is skipped, not renamed: the
+// existing directory keeps its bytes, and the Multica copy is written nowhere —
+// so no second name for one skill can leak into either the frontmatter or the
+// runtime brief.
+func TestWriteContextFilesSkipsSkillWhenSlugIsTaken(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
@@ -1732,7 +1728,7 @@ func TestWriteContextFilesFrontmatterNameFollowsCollisionSlug(t *testing.T) {
 		},
 	}
 
-	if err := writeContextFiles(dir, "opencode", ctx, nil); err != nil {
+	if err := writeContextFiles(dir, "opencode", ctx, nil, testLogger()); err != nil {
 		t.Fatalf("writeContextFiles failed: %v", err)
 	}
 
@@ -1745,14 +1741,13 @@ func TestWriteContextFilesFrontmatterNameFollowsCollisionSlug(t *testing.T) {
 		t.Errorf("user skill was overwritten; got:\n%s", got)
 	}
 
-	// Multica's copy landed at the fallback slug and names itself after it.
-	moved, err := os.ReadFile(filepath.Join(dir, ".opencode", "skills", "review-multica", "SKILL.md"))
+	// Nothing else was mounted beside it.
+	entries, err := os.ReadDir(filepath.Join(dir, ".opencode", "skills"))
 	if err != nil {
-		t.Fatalf("read relocated SKILL.md: %v", err)
+		t.Fatalf("read skills dir: %v", err)
 	}
-	want := "---\nname: review-multica\n---\n\nmultica body"
-	if string(moved) != want {
-		t.Errorf("frontmatter name did not follow the collision slug; got:\n%s\nwant:\n%s", moved, want)
+	if len(entries) != 1 || entries[0].Name() != "review" {
+		t.Errorf("skills dir = %v, want exactly [review]", entries)
 	}
 }
 
@@ -1774,7 +1769,7 @@ func TestWriteContextFilesLeavesNestedFrontmatterNameAlone(t *testing.T) {
 		},
 	}
 
-	if err := writeContextFiles(dir, "opencode", ctx, nil); err != nil {
+	if err := writeContextFiles(dir, "opencode", ctx, nil, nil); err != nil {
 		t.Fatalf("writeContextFiles failed: %v", err)
 	}
 
@@ -1813,7 +1808,7 @@ func TestWriteContextFilesInjectsNameIntoNamelessFrontmatter(t *testing.T) {
 		},
 	}
 
-	if err := writeContextFiles(dir, "opencode", ctx, nil); err != nil {
+	if err := writeContextFiles(dir, "opencode", ctx, nil, nil); err != nil {
 		t.Fatalf("writeContextFiles failed: %v", err)
 	}
 
@@ -1851,7 +1846,7 @@ func TestWriteContextFilesOpenclawNativeSkills(t *testing.T) {
 		},
 	}
 
-	if err := writeContextFiles(dir, "openclaw", ctx, nil); err != nil {
+	if err := writeContextFiles(dir, "openclaw", ctx, nil, nil); err != nil {
 		t.Fatalf("writeContextFiles failed: %v", err)
 	}
 
@@ -1891,7 +1886,7 @@ func TestWriteContextFilesKiroNativeSkills(t *testing.T) {
 		},
 	}
 
-	if err := writeContextFiles(dir, "kiro", ctx, nil); err != nil {
+	if err := writeContextFiles(dir, "kiro", ctx, nil, nil); err != nil {
 		t.Fatalf("writeContextFiles failed: %v", err)
 	}
 
@@ -1918,7 +1913,7 @@ func TestWriteContextFilesQoderNativeSkills(t *testing.T) {
 		},
 	}
 
-	if err := writeContextFiles(dir, "qoder", ctx, nil); err != nil {
+	if err := writeContextFiles(dir, "qoder", ctx, nil, nil); err != nil {
 		t.Fatalf("writeContextFiles failed: %v", err)
 	}
 
@@ -1945,7 +1940,7 @@ func TestWriteContextFilesQoderCNNativeSkills(t *testing.T) {
 		},
 	}
 
-	if err := writeContextFiles(dir, "qoderclicn", ctx, nil); err != nil {
+	if err := writeContextFiles(dir, "qoderclicn", ctx, nil, nil); err != nil {
 		t.Fatalf("writeContextFiles failed: %v", err)
 	}
 
@@ -1972,7 +1967,7 @@ func TestWriteContextFilesQwenNativeSkills(t *testing.T) {
 		},
 	}
 
-	if err := writeContextFiles(dir, "qwen", ctx, nil); err != nil {
+	if err := writeContextFiles(dir, "qwen", ctx, nil, nil); err != nil {
 		t.Fatalf("writeContextFiles failed: %v", err)
 	}
 
@@ -2193,7 +2188,7 @@ func TestWriteContextFilesAntigravityNativeSkills(t *testing.T) {
 		},
 	}
 
-	if err := writeContextFiles(dir, "antigravity", ctx, nil); err != nil {
+	if err := writeContextFiles(dir, "antigravity", ctx, nil, nil); err != nil {
 		t.Fatalf("writeContextFiles failed: %v", err)
 	}
 
@@ -2681,7 +2676,7 @@ func TestWriteContextFilesHermesSkipsWorkdirSkills(t *testing.T) {
 		},
 	}
 
-	if err := writeContextFiles(dir, "hermes", ctx, nil); err != nil {
+	if err := writeContextFiles(dir, "hermes", ctx, nil, nil); err != nil {
 		t.Fatalf("writeContextFiles failed: %v", err)
 	}
 

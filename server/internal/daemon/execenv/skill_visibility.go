@@ -17,16 +17,14 @@ import (
 // identifier that does not resolve (MUL-5529).
 //
 // Slugs come from resolveSkillSlugs over the *unfiltered* batch, because
-// writeSkillFiles lays down every skill — including the ones hidden here — and
-// each one consumes a slug. Filtering first would shift the suffixes and make
-// the listing disagree with the directories.
+// writeSkillFiles resolves slugs over every skill — including the ones hidden
+// here — and a hidden skill that claims a slug also denies it to the later
+// claimant. Filtering first would make the listing disagree with the
+// directories on disk.
 //
-// Known gap: resolveSkillSlugs cannot see the filesystem, so a skill that
-// collides with a *user-installed* directory is still written to
-// `<slug>-multica` while the listing shows the bare slug. Closing that needs
-// the allocated slug threaded back from Prepare, which these renderers
-// deliberately cannot reach — they are pure so the brief stays byte-identical
-// across runs. Tracked in MUL-5550.
+// A skill that loses a batch collision has no directory at all, so it is
+// omitted from the listing rather than advertised under a name nothing
+// answers to.
 func modelVisibleSkills(skills []SkillContextForEnv) []SkillContextForEnv {
 	if len(skills) == 0 {
 		return nil
@@ -34,39 +32,36 @@ func modelVisibleSkills(skills []SkillContextForEnv) []SkillContextForEnv {
 	slugs := resolveSkillSlugs(skills)
 	visible := make([]SkillContextForEnv, 0, len(skills))
 	for i, skill := range skills {
-		if skillModelInvocationVisible(skill) {
-			skill.Name = slugs[i]
-			visible = append(visible, skill)
+		if slugs[i] == "" || !skillModelInvocationVisible(skill) {
+			continue
 		}
+		skill.Name = slugs[i]
+		visible = append(visible, skill)
 	}
 	return visible
 }
 
 // resolveSkillSlugs assigns each skill in a batch its on-disk directory slug,
-// deduplicating within the batch so two skills never claim the same directory.
+// and "" to the skills that get no directory at all.
 //
-// sanitizeSkillName alone is not injective: "A B" and "A-B" both reduce to
-// "a-b". writeSkillFiles resolves that at write time via
-// allocateCollisionFreeSkillDir, so the second skill lands in `a-b-multica` —
-// but a listing built from sanitizeSkillName alone would name both `a-b`,
-// leaving the second skill with no invocable name and silently pointing the
-// model at the first. Deriving both sides from this function keeps them in
-// step. It is deterministic in the batch (index order only), so the brief stays
+// sanitizeSkillName is not injective: "A B" and "A-B" both reduce to "a-b",
+// and one directory cannot hold two skills. The first claimant in batch order
+// keeps the slug and every later claimant is dropped — dropped rather than
+// renamed, because a suffixed directory ("a-b-multica") is a second name for
+// the same skill that nothing else in the system knows about. writeSkillFiles
+// applies this same function, so the listing and the directories stay in step;
+// it is deterministic in the batch (index order only), so the brief stays
 // byte-identical across runs for identical input.
 func resolveSkillSlugs(skills []SkillContextForEnv) []string {
 	slugs := make([]string, len(skills))
 	taken := make(map[string]struct{}, len(skills))
 	for i, skill := range skills {
 		base := sanitizeSkillName(skill.Name)
-		slug := base
-		for attempt := 1; ; attempt++ {
-			if _, clash := taken[slug]; !clash {
-				break
-			}
-			slug = skillSlugCandidate(base, attempt)
+		if _, clash := taken[base]; clash {
+			continue
 		}
-		taken[slug] = struct{}{}
-		slugs[i] = slug
+		taken[base] = struct{}{}
+		slugs[i] = base
 	}
 	return slugs
 }

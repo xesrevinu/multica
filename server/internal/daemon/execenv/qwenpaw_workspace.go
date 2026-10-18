@@ -61,6 +61,10 @@ func prepareQwenpawWorkspace(qwenpawWorkspace string, workspaceSkills []SkillCon
 	slugs := resolveSkillSlugs(workspaceSkills)
 	for i, skill := range workspaceSkills {
 		slug := slugs[i]
+		if slug == "" {
+			warnSkillSkipped(logger, "execenv: qwenpaw skill skipped, another skill in this batch already uses its directory name", skill.Name, "")
+			continue
+		}
 		skillDir := filepath.Join(skillsDir, slug)
 
 		if err := os.MkdirAll(skillDir, 0o755); err != nil {

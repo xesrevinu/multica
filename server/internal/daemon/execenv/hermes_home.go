@@ -748,7 +748,7 @@ func writeHermesBoundSkills(hermesHome string, workspaceSkills []SkillContextFor
 	}
 	// Skills live under env.RootDir/hermes-home, which the GC loop (cloud) or
 	// env teardown (local_directory) wipes wholesale — no sidecar manifest.
-	return writeSkillFiles(skillsDir, workspaceSkills, nil)
+	return writeSkillFiles(skillsDir, workspaceSkills, nil, logger)
 }
 
 // existingHermesExternalDirs reads the raw skills.external_dirs entries from a

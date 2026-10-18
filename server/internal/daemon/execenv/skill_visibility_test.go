@@ -139,14 +139,15 @@ Hidden body.`,
 }
 
 // sanitizeSkillName is not injective — "A B" and "A-B" both reduce to "a-b" —
-// so a listing built from it alone names two skills identically while
-// writeSkillFiles puts the second in `a-b-multica`. The second skill then has
-// no invocable name and the model is silently pointed at the first. This needs
-// no user-installed skill and no local_directory: an ordinary task with two
-// such skills bound reproduces it in a clean workdir.
+// and one directory cannot hold both. The first skill in batch order keeps the
+// slug; the later claimants get no directory and, crucially, no listing entry
+// either: advertising a name nothing answers to is worse than admitting the
+// skill was not mounted. This needs no user-installed skill and no
+// local_directory: an ordinary task with two such skills bound reproduces it in
+// a clean workdir.
 //
 // The assertion is set equality between what is listed and what exists on
-// disk, so any future drift between the two allocators fails here.
+// disk, so any future drift between the two sides fails here.
 func TestSkillListingNamesMatchDirectoriesOnBatchSlugCollision(t *testing.T) {
 	t.Parallel()
 
@@ -157,7 +158,7 @@ func TestSkillListingNamesMatchDirectoriesOnBatchSlugCollision(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	if err := writeSkillFiles(dir, skills, nil); err != nil {
+	if err := writeSkillFiles(dir, skills, nil, nil); err != nil {
 		t.Fatalf("writeSkillFiles failed: %v", err)
 	}
 
@@ -181,8 +182,16 @@ func TestSkillListingNamesMatchDirectoriesOnBatchSlugCollision(t *testing.T) {
 		listed[s.Name] = struct{}{}
 	}
 
-	if len(listed) != len(skills) {
-		t.Errorf("listed %d distinct names for %d skills: %v", len(listed), len(skills), listed)
+	// The winner keeps the natural slug; the two losers get neither a
+	// directory nor a listing entry.
+	if len(onDisk) != 1 {
+		t.Fatalf("on disk %v, want exactly one directory (the first claimant)", onDisk)
+	}
+	if _, ok := onDisk["a-b"]; !ok {
+		t.Errorf("the first claimant did not keep the natural slug; on disk: %v", onDisk)
+	}
+	if _, ok := listed["a-b"]; !ok {
+		t.Errorf("the mounted skill is not listed; listed: %v", listed)
 	}
 	for name := range listed {
 		if _, ok := onDisk[name]; !ok {
@@ -196,9 +205,10 @@ func TestSkillListingNamesMatchDirectoriesOnBatchSlugCollision(t *testing.T) {
 	}
 }
 
-// Hidden skills still occupy a directory, so they must still consume a slug.
-// Allocating over the filtered list instead of the full batch would shift every
-// later suffix and desynchronize the listing from disk.
+// A hidden (disable-model-invocation) skill still claims its directory, because
+// writeSkillFiles mounts it too. It therefore also denies the slug to a later
+// visible skill, which ends up unlisted and unmounted rather than advertised
+// under a name that does not exist on disk.
 func TestBatchSlugAllocationCountsHiddenSkills(t *testing.T) {
 	t.Parallel()
 
@@ -208,21 +218,22 @@ func TestBatchSlugAllocationCountsHiddenSkills(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	if err := writeSkillFiles(dir, skills, nil); err != nil {
+	if err := writeSkillFiles(dir, skills, nil, nil); err != nil {
 		t.Fatalf("writeSkillFiles failed: %v", err)
 	}
 
-	visible := modelVisibleSkills(skills)
-	if len(visible) != 1 {
-		t.Fatalf("expected 1 visible skill, got %d", len(visible))
+	if visible := modelVisibleSkills(skills); len(visible) != 0 {
+		t.Fatalf("expected the visible skill to be dropped, got %+v", visible)
 	}
-	// The hidden skill took `a-b`, so the visible one must be listed — and
-	// written — as `a-b-multica`.
-	if visible[0].Name != "a-b-multica" {
-		t.Errorf("visible skill listed as %q, want %q", visible[0].Name, "a-b-multica")
+	if _, err := os.Stat(filepath.Join(dir, "a-b", "SKILL.md")); err != nil {
+		t.Errorf("hidden skill should still own its directory: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "a-b-multica", "SKILL.md")); err != nil {
-		t.Errorf("listed name has no matching directory: %v", err)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read skills dir: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("skills dir has %d entries, want exactly 1", len(entries))
 	}
 }
 
@@ -277,7 +288,7 @@ Hidden body.`,
 		},
 	}
 
-	if err := writeContextFiles(dir, "", ctx, nil); err != nil {
+	if err := writeContextFiles(dir, "", ctx, nil, nil); err != nil {
 		t.Fatalf("writeContextFiles failed: %v", err)
 	}
 

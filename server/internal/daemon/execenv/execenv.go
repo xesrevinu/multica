@@ -599,7 +599,7 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 		}()
 	}
 
-	if err := writeContextFiles(workDir, params.Provider, params.Task, manifest); err != nil {
+	if err := writeContextFiles(workDir, params.Provider, params.Task, manifest, logger); err != nil {
 		return nil, fmt.Errorf("execenv: write context files: %w", err)
 	}
 	if err := prepareOmpMcpConfig(workDir, params.Provider, params.McpConfig, manifest); err != nil {
@@ -853,15 +853,14 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 	// Roll back the previous dispatch's sidecar writes before refreshing.
 	// On reuse the workdir still holds the prior run's skill directories (and,
 	// for a workdir prepared before MUL-6984, its issue_context.md); without
-	// clearing them first, writeSkillFiles sees
-	// its own earlier output occupying the canonical slug and falls back to
-	// a collision-free sibling (issue-review, issue-review-multica,
-	// issue-review-multica-2, …), accumulating a fresh duplicate on every
-	// re-dispatch to the same issue. allocateCollisionFreeSkillDir exists to
-	// dodge *user*-owned skill dirs (the local_directory flow), not our own
-	// prior writes, so we undo them via the prior manifest first and let the
-	// refresh below re-create each skill at its natural slug. This also brings
-	// the standard providers in line with the Codex path, where
+	// clearing them first, writeSkillFiles sees its own earlier output
+	// occupying the canonical slug and skips the skill outright (the writer no
+	// longer renames around a taken slug), so the re-dispatch would silently
+	// lose every skill it had already mounted. The skill dirs are ours — the
+	// manifest is
+	// proof we created them — so we undo them via the prior manifest first and
+	// let the refresh below re-create each skill at its natural slug. This also
+	// brings the standard providers in line with the Codex path, where
 	// hydrateCodexSkills already wipes its skills dir before re-hydrating.
 	//
 	// Two steps, in order:
@@ -869,8 +868,8 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 	//      directories even when a prior-run agent left a file inside one.
 	//      CleanupSidecars alone can't do this — it preserves any recorded dir
 	//      the agent populated (correct on the local_directory teardown path),
-	//      which would otherwise keep the canonical slug occupied and push the
-	//      refresh back to issue-review-multica.
+	//      which would otherwise keep the canonical slug occupied and make the
+	//      refresh skip the skill for the rest of the task's life.
 	//   2. CleanupSidecars rolls back the remaining sidecar files (project
 	//      resources today, plus any issue_context.md recorded by a manifest
 	//      an older build wrote — legacy upgrade cleanup, not a live writer)
@@ -898,7 +897,7 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 	// legacy local_directory Reuse fallback — skip the persist in that
 	// case to avoid creating a stray manifest at the filesystem root.
 	manifest := &sidecarManifest{}
-	if err := writeContextFiles(params.WorkDir, params.Provider, params.Task, manifest); err != nil {
+	if err := writeContextFiles(params.WorkDir, params.Provider, params.Task, manifest, logger); err != nil {
 		logger.Warn("execenv: refresh context files failed", "error", err)
 	}
 	if err := prepareOmpMcpConfig(params.WorkDir, params.Provider, params.McpConfig, manifest); err != nil {
@@ -1066,7 +1065,7 @@ func hydrateCodexSkills(codexHome string, workspaceSkills []SkillContextForEnv, 
 		logger.Warn("execenv: seed user codex skills failed", "error", err)
 	}
 	if len(workspaceSkills) > 0 {
-		if err := writeSkillFiles(skillsDir, workspaceSkills, nil); err != nil {
+		if err := writeSkillFiles(skillsDir, workspaceSkills, nil, logger); err != nil {
 			return err
 		}
 	}

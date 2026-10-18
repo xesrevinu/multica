@@ -187,9 +187,10 @@ func TestHydrateCodexSkillsWipeKeepsUserSkillContent(t *testing.T) {
 	}
 }
 
-// A workspace skill whose name only collides after directory naming — the
-// sanitized-name pre-filter does not catch it — must land in a sibling
-// directory instead of being written through the user's link.
+// A workspace skill whose directory slug is already occupied — here by the
+// link seedUserCodexSkills left for the user's own skill — is skipped rather
+// than written through that link or renamed beside it. The user's directory and
+// the codex-home link both stay exactly as the user installed them.
 func TestHydrateCodexSkillsNeverWritesThroughAUserSkillLink(t *testing.T) {
 	sharedHome := t.TempDir()
 	t.Setenv("CODEX_HOME", sharedHome)
@@ -202,8 +203,8 @@ func TestHydrateCodexSkillsNeverWritesThroughAUserSkillLink(t *testing.T) {
 		t.Fatalf("seedUserCodexSkills: %v", err)
 	}
 	// writeSkillFiles runs without the pre-filter that hydrateCodexSkills
-	// applies, which is exactly the case allocateCollisionFreeSkillDir guards.
-	if err := writeSkillFiles(skillsDir, []SkillContextForEnv{{Name: "alpha", Content: "workspace version"}}, nil); err != nil {
+	// applies, which is exactly the case the occupied-slug check guards.
+	if err := writeSkillFiles(skillsDir, []SkillContextForEnv{{Name: "alpha", Content: "workspace version"}}, nil, testLogger()); err != nil {
 		t.Fatalf("writeSkillFiles: %v", err)
 	}
 
@@ -214,7 +215,13 @@ func TestHydrateCodexSkillsNeverWritesThroughAUserSkillLink(t *testing.T) {
 	if string(body) != "user version" {
 		t.Fatalf("workspace skill was written through the link into the user's skill dir: %q", body)
 	}
-	if _, err := os.Stat(filepath.Join(skillsDir, "alpha-multica", "SKILL.md")); err != nil {
-		t.Errorf("colliding workspace skill did not land in a sibling dir: %v", err)
+	// One directory, one name: the colliding workspace skill is not mounted
+	// anywhere else.
+	entries, err := os.ReadDir(skillsDir)
+	if err != nil {
+		t.Fatalf("read task skills dir: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "alpha" {
+		t.Errorf("task skills dir = %v, want exactly [alpha]", entries)
 	}
 }

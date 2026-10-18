@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -156,7 +157,7 @@ func writeWorkspacesRootMarkerAtomic(path string, data []byte) error {
 // state for local_directory tasks. Callers that don't need cleanup —
 // cloud-mode tasks whose envRoot is wiped wholesale by the GC loop — may
 // pass nil to skip the bookkeeping entirely.
-func writeContextFiles(workDir, provider string, ctx TaskContextForEnv, manifest *sidecarManifest) error {
+func writeContextFiles(workDir, provider string, ctx TaskContextForEnv, manifest *sidecarManifest, logger *slog.Logger) error {
 	if err := writeTaskContextMarker(workDir, ctx, manifest); err != nil {
 		return err
 	}
@@ -173,7 +174,7 @@ func writeContextFiles(workDir, provider string, ctx TaskContextForEnv, manifest
 			}
 			// Codex skills are written to codex-home in Prepare; skip here.
 			if provider != "codex" {
-				if err := writeSkillFiles(skillsDir, ctx.AgentSkills, manifest); err != nil {
+				if err := writeSkillFiles(skillsDir, ctx.AgentSkills, manifest, logger); err != nil {
 					return fmt.Errorf("write skill files: %w", err)
 				}
 			}
@@ -460,7 +461,7 @@ var nonAlphaNum = regexp.MustCompile(`[^a-z0-9]+`)
 // frontmatter `name` — so letting the two diverge gives a single skill two
 // different invocable names depending on where it runs (MUL-5529). The slug is
 // authoritative because it is what lands on disk and the only value carrying a
-// uniqueness guarantee (allocateCollisionFreeSkillDir); a frontmatter `name` is
+// uniqueness guarantee (resolveSkillSlugs); a frontmatter `name` is
 // author-supplied and two imported skills may both claim the same one. Every
 // other key stays byte-identical, so deliberately shaped upstream frontmatter
 // still survives the round-trip.
@@ -917,6 +918,20 @@ func sanitizeSkillName(name string) string {
 	return s
 }
 
+// warnSkillSkipped logs a skill the writer declined to place, so a missing
+// Multica skill is diagnosable from the daemon log alone instead of looking
+// like the agent simply ignored it.
+func warnSkillSkipped(logger *slog.Logger, msg, skill, dir string) {
+	if logger == nil {
+		return
+	}
+	attrs := []any{"skill", skill}
+	if dir != "" {
+		attrs = append(attrs, "path", dir)
+	}
+	logger.Warn(msg, attrs...)
+}
+
 // writeSkillFiles writes skill directories into the given parent directory.
 // Each skill gets its own subdirectory containing SKILL.md and supporting
 // files. manifest, when non-nil, is populated with every newly-created
@@ -924,42 +939,50 @@ func sanitizeSkillName(name string) string {
 // local_directory teardown without touching user-owned skill directories
 // that happen to live alongside ours under the same skills/ parent.
 //
-// When a Multica skill's natural slug collides with a user-installed
-// skill at the same path, we allocate a collision-free sibling slug
-// (e.g. `issue-review-multica`) and write there instead. Provider-native
-// discovery still picks it up because every subdir under skillsDir is a
-// distinct skill; the user's original directory stays bit-for-bit
-// intact. Without this fallback writeSkillFiles would have to either
-// overwrite user bytes (the bug PR #3444 review caught) or skip the
-// skill entirely (which would silently drop a Multica skill the agent
-// expects to see).
-func writeSkillFiles(skillsDir string, skills []SkillContextForEnv, manifest *sidecarManifest) error {
+// A skill is written at its natural slug (sanitizeSkillName of its name) and
+// nowhere else. When that directory is already taken — by a user-installed
+// skill in a local_directory checkout, by a link the Codex path seeded, or by
+// a path we cannot prove we created — the skill is skipped and logged: the
+// existing directory keeps both its name and its bytes. There is no fallback
+// slug. A second name for the same skill (the old `issue-review-multica`
+// sibling) is invisible to the runtime brief and to the user's own directory,
+// so it bought discoverability at the cost of two names for one skill
+// (MUL-5550).
+func writeSkillFiles(skillsDir string, skills []SkillContextForEnv, manifest *sidecarManifest, logger *slog.Logger) error {
 	if err := recordMkdirAll(skillsDir, 0o755, manifest); err != nil {
 		return fmt.Errorf("create skills dir: %w", err)
 	}
 
-	// resolveSkillSlugs deduplicates within the batch first, so two skills whose
-	// names sanitize alike ("A B" / "A-B") get distinct bases here instead of
-	// racing for the same directory. The listings derive from the same function,
-	// which is what keeps them naming the directories this loop creates.
-	// allocateCollisionFreeSkillDir still runs on top, for collisions against
-	// directories we did not write (user-installed skills).
+	// resolveSkillSlugs assigns the slugs and marks the batch duplicates (two
+	// skills whose names sanitize alike, e.g. "A B" / "A-B") as unclaimed.
+	// The listings derive from the same function, which is what keeps them
+	// naming the directories this loop creates.
 	batchSlugs := resolveSkillSlugs(skills)
 
 	for i, skill := range skills {
-		slug, dir, err := allocateCollisionFreeSkillDir(skillsDir, batchSlugs[i])
-		if err != nil {
-			return fmt.Errorf("allocate skill dir for %q: %w", skill.Name, err)
+		slug := batchSlugs[i]
+		if slug == "" {
+			// Another skill in this batch already took the sanitized name.
+			warnSkillSkipped(logger, "execenv: skill skipped, another skill in this batch already uses its directory name", skill.Name, "")
+			continue
+		}
+		dir := filepath.Join(skillsDir, slug)
+		if _, statErr := os.Lstat(dir); statErr == nil {
+			// Something we did not write in this run owns the slug. Never
+			// overwrite it (PR #3444) and never rename around it: the
+			// agent keeps whatever is already mounted at that name.
+			warnSkillSkipped(logger, "execenv: skill skipped, its directory already exists and is not ours to overwrite", skill.Name, dir)
+			continue
+		} else if !os.IsNotExist(statErr) {
+			return fmt.Errorf("stat skill dir %s: %w", dir, statErr)
 		}
 		if err := recordMkdirAll(dir, 0o755, manifest); err != nil {
 			return err
 		}
 
 		// ensureSkillFrontmatter synthesises a `name:` value when the
-		// upstream skill is missing one. Use the chosen slug (which
-		// may differ from baseSlug on collision) so the YAML name
-		// matches the directory name; runtimes that key on either
-		// stay consistent.
+		// upstream skill is missing one and pins it to the directory
+		// name, so runtimes that key on either stay consistent.
 		body := ensureSkillFrontmatter(skill.Content, slug, skill.Description)
 		if err := recordWriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644, manifest); err != nil {
 			return err

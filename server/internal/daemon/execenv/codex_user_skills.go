@@ -25,10 +25,10 @@ import (
 //
 // Workspace-assigned skills take precedence on name conflict: any user skill
 // whose sanitized name matches a workspace skill's sanitized name is skipped
-// here, and writeSkillFiles then writes the workspace version into a clean
-// slot. writeSkillFiles never writes through a link it did not create:
-// allocateCollisionFreeSkillDir probes with os.Lstat, so a link left here
-// counts as occupied and the workspace skill lands in a `-multica` sibling.
+// here, and writeSkillFiles then writes the workspace version into the freed
+// slot. writeSkillFiles never writes through a link it did not create: it
+// probes with os.Lstat, so a link left here counts as occupied and the
+// workspace skill is skipped instead of clobbering the user's directory.
 //
 // Per-skill failures are logged and skipped — a single broken user skill
 // must not prevent the task from running. Returning an error is reserved for

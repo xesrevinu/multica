@@ -26,10 +26,8 @@ const sidecarManifestFile = ".multica_sidecar_manifest.json"
 //
 // Callers handle this in one of two ways:
 //
-//   - For per-skill directories the caller allocates a collision-free
-//     alternative slug (see allocateCollisionFreeSkillDir) and retries
-//     so the agent still discovers the Multica skill, just under a
-//     different directory name.
+//   - For per-skill directories the caller skips the skill and logs it, so
+//     a pre-existing directory keeps both its name and its contents.
 //   - For the Multica-only namespace (.multica/project/resources.json)
 //     the caller swallows the error and proceeds — the agent's runtime
 //     brief already carries every fact that would have appeared in that
@@ -151,58 +149,6 @@ func recordWriteFile(path string, data []byte, perm os.FileMode, m *sidecarManif
 	}
 	m.Files = append(m.Files, path)
 	return nil
-}
-
-// allocateCollisionFreeSkillDir picks a directory under skillsParent
-// whose path does NOT currently exist, so writeSkillFiles can lay
-// down a Multica skill without colliding with a user-installed skill
-// of the same slug. The first attempt is always the natural baseSlug
-// — that's the path provider-native discovery already knows. On
-// collision we append `-multica`, then `-multica-2`, `-multica-3`,
-// … until a free slot is found. The chosen slug is returned alongside
-// the absolute path so callers can use it in frontmatter and brief
-// listings.
-//
-// The collision-free fallback name is still a sibling under the same
-// skillsParent, so provider-native discovery still picks the skill up
-// (each subdir under .claude/skills/ etc. is scanned independently).
-// The user's directory at baseSlug is left bit-for-bit intact.
-//
-// The probe is bounded to a small ceiling — a user with thousands of
-// collisions on the same slug indicates an upstream bug, not a
-// realistic state. Returning an error in that case forces the caller
-// to surface the problem instead of looping forever.
-func allocateCollisionFreeSkillDir(skillsParent, baseSlug string) (slug, dir string, err error) {
-	const maxAttempts = 64
-	for i := 0; i < maxAttempts; i++ {
-		candidate := skillSlugCandidate(baseSlug, i)
-		path := filepath.Join(skillsParent, candidate)
-		if _, statErr := os.Lstat(path); statErr != nil {
-			if errors.Is(statErr, fs.ErrNotExist) {
-				return candidate, path, nil
-			}
-			return "", "", fmt.Errorf("stat candidate %s: %w", path, statErr)
-		}
-	}
-	return "", "", fmt.Errorf("allocate collision-free skill dir under %s: exhausted %d attempts for base %q", skillsParent, maxAttempts, baseSlug)
-}
-
-// skillSlugCandidate is the nth name to try for a skill whose natural slug is
-// baseSlug: the bare slug first, then `-multica`, then numbered variants.
-//
-// Two callers must agree on this sequence — allocateCollisionFreeSkillDir,
-// which probes the filesystem, and resolveSkillSlugs, which deduplicates a
-// batch in memory before anything is written. If they disagreed, a skill would
-// be listed under one name and written under another.
-func skillSlugCandidate(baseSlug string, attempt int) string {
-	switch {
-	case attempt <= 0:
-		return baseSlug
-	case attempt == 1:
-		return baseSlug + "-multica"
-	default:
-		return fmt.Sprintf("%s-multica-%d", baseSlug, attempt)
-	}
 }
 
 // writeSidecarManifest persists m to {envRoot}/{sidecarManifestFile}.
@@ -357,8 +303,8 @@ func rollBackPreparedSidecars(m sidecarManifest) error {
 // survive. But that same preservation reopens #3684 on the reuse path: if a
 // prior-run agent wrote into .claude/skills/issue-review/, CleanupSidecars
 // deletes the recorded SKILL.md yet keeps the directory, so the canonical
-// slug stays occupied and the refreshed skill dodges to
-// issue-review-multica. A managed skill directory is platform-owned — the
+// slug stays occupied and the refreshed skill is skipped for the rest of the
+// task's life. A managed skill directory is platform-owned — the
 // manifest is proof we created it — so on reuse we reclaim the whole
 // directory (dropping any scratch the agent left inside it, exactly as the
 // Codex path's os.RemoveAll(skillsDir) already does) and let the refresh
