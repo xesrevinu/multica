@@ -2155,6 +2155,11 @@ func (d *Daemon) run(ctx context.Context, healthLn net.Listener) error {
 	taskWakeups := make(chan taskWakeup, 256)
 	go d.taskWakeupLoop(ctx, taskWakeups)
 	go d.heartbeatLoop(ctx)
+	if os.Getenv(execenv.IdleWorktreeRegistryEnv) == "" && d.cfg.WorkspacesRoot != "" {
+		// Parked worktrees are indexed here, inside the daemon's own root,
+		// so a test daemon cannot reap a checkout the user parked.
+		_ = os.Setenv(execenv.IdleWorktreeRegistryEnv, filepath.Join(d.cfg.WorkspacesRoot, ".idle-worktree-roots.json"))
+	}
 	go d.gcLoop(ctx)
 	go d.autoUpdateLoop(ctx)
 	go d.tokenRenewalLoop(ctx)
@@ -8186,7 +8191,12 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			Task:                  taskCtx,
 		}
 		if localAssignment.UsesWorktree() {
-			prepParams.LocalWorktree = &execenv.LocalWorktreeParams{LocalPath: localAssignment.AbsPath}
+			prepParams.LocalWorktree = &execenv.LocalWorktreeParams{
+				LocalPath: localAssignment.AbsPath,
+				// The prepare helper exits before the agent runs. Record this
+				// process so an idle reap can tell a live run from a dead one.
+				HolderPID: os.Getpid(),
+			}
 			// Take the per-path mutex for the snapshot alone, then hand it
 			// straight back — long enough to read a consistent tree, short
 			// enough that worktree tasks still overlap for the run itself.

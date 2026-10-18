@@ -84,6 +84,14 @@ type gcStats struct {
 
 // runGC performs a single GC scan across all workspace directories.
 func (d *Daemon) runGC(ctx context.Context) {
+	// Parked worktrees live in the user's repo, not under WorkspacesRoot, so
+	// this has to run even when that root is missing.
+	if removed, err := execenv.ReapIdleLocalWorktrees(d.cfg.GCTTL, execenv.IdleWorktreeCap, time.Now(), d.logger); err != nil {
+		d.logger.Warn("gc: reap idle worktrees failed", "error", err)
+	} else if removed > 0 {
+		d.logger.Info("gc: reaped idle worktrees", "removed", removed)
+	}
+
 	root := d.cfg.WorkspacesRoot
 	entries, err := os.ReadDir(root)
 	if err != nil {

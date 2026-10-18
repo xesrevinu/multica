@@ -20,8 +20,10 @@ import (
 // Local worktree mode gives every task on a local_directory resource its own
 // git worktree of the user's repo. A checkout that contains .config/wt.toml is
 // created with `wt switch`, so the branch, the directory, and the start/remove
-// hooks match a worktree created by hand with wt. Every other checkout stays
-// inside the daemon-owned env root.
+// hooks match a worktree created by hand with wt. A successful run parks that
+// checkout for the next turn of the same conversation; idle ones are reaped
+// later, and a checkout a run is still using is not. Every other checkout stays
+// inside the daemon-owned env root and is removed when the run finishes.
 // Tasks on the same directory then run concurrently instead of queueing on the
 // per-path mutex, and each one delivers its work as a branch in the user's own
 // repo — discoverable with `git branch`, no new result channel needed.
@@ -110,6 +112,11 @@ type LocalWorktreeParams struct {
 	WorkspaceID    string
 	AgentID        string
 	ConversationID string
+	// HolderPID is the daemon process that runs the agent after prepare
+	// returns. The prepare helper's own pid is already dead by then, so an
+	// active hold records this one. Zero means there is no separate holder;
+	// the hold stays in use until Finalize parks or releases it.
+	HolderPID int
 }
 
 // owner is the identity a branch created for this task is recorded under.
@@ -387,13 +394,32 @@ func PrepareLocalWorktree(params LocalWorktreeParams, logger *slog.Logger) (*Loc
 	worktreePath := legacyPath
 	var actualBranch string
 	var createdBranch bool
-	if worktrunkConfigPresent(gitRoot) {
-		worktreePath, actualBranch, createdBranch, err = addWorktrunkWorktree(gitRoot, plan, params.TaskID, logger)
-	} else {
-		actualBranch, createdBranch, err = addLocalWorktree(gitRoot, worktreePath, plan, params.TaskID)
+	reused := false
+	// Parked Worktrunk checkouts are per repository. Drop the ones the cache
+	// no longer keeps before deciding whether this turn can take one, so a
+	// merged or over-cap checkout is not still holding its branch.
+	if worktrunkConfigPresent(gitRoot) && plan.tracksState {
+		if _, reapErr := reapIdleWorktreesInRepo(gitRoot, time.Now(), 0, IdleWorktreeCap, logger); reapErr != nil && logger != nil {
+			logger.Warn("execenv: could not reap parked worktrees", "git_root", gitRoot, "error", reapErr)
+		}
+		path, ok, reuseErr := claimIdleWorktree(gitRoot, plan, params.owner(), logger)
+		if reuseErr != nil {
+			return nil, reuseErr
+		}
+		if ok {
+			worktreePath, actualBranch, createdBranch = path, plan.name, false
+			reused = true
+		}
 	}
-	if err != nil {
-		return nil, err
+	if !reused {
+		if worktrunkConfigPresent(gitRoot) {
+			worktreePath, actualBranch, createdBranch, err = addWorktrunkWorktree(gitRoot, plan, params.TaskID, logger)
+		} else {
+			actualBranch, createdBranch, err = addLocalWorktree(gitRoot, worktreePath, plan, params.TaskID)
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	wt := &LocalWorktree{
@@ -420,6 +446,9 @@ func PrepareLocalWorktree(params LocalWorktreeParams, logger *slog.Logger) (*Loc
 	// it because THIS turn could not start would destroy the very thing the
 	// task was meant to build on.
 	rollback := func() {
+		if clearErr := clearWorktreeHold(gitRoot, actualBranch); clearErr != nil && logger != nil {
+			logger.Warn("execenv: could not clear worktree hold", "branch", actualBranch, "error", clearErr)
+		}
 		removeLocalWorktreeDir(gitRoot, worktreePath, logger)
 		if createdBranch {
 			dropBranch(gitRoot, actualBranch, logger)
@@ -510,16 +539,29 @@ func PrepareLocalWorktree(params LocalWorktreeParams, logger *slog.Logger) (*Loc
 			"branch", actualBranch,
 			"base", wt.BaseCommit,
 			"continued", wt.Continued,
+			"reused", reused,
 			"dirty_base_captured", wt.DirtyBaseCaptured,
 			"replay_conflicts", len(wt.ReplayConflicts),
 		)
 	}
+	// Mark the hold only after the tree is actually usable. A failure
+	// above rolls the directory back and must not leave an active claim that
+	// makes the next turn treat a deleted checkout as busy.
+	if wt.tracksState && worktrunkConfigPresent(gitRoot) {
+		if err := markWorktreeActive(gitRoot, worktreePath, actualBranch, wt.owner, params.HolderPID); err != nil && logger != nil {
+			// The run can still deliver on the branch. Without the hold the
+			// next turn cannot reuse this directory, and Finalize removes it.
+			logger.Warn("execenv: could not record the worktree hold", "branch", actualBranch, "error", err)
+		}
+	}
+
 	return wt, nil
 }
 
-// Finalize commits whatever the agent left behind, removes the worktree, and
-// reports the branch. Called after the agent exits, before the env root is
-// handed to the GC.
+// Finalize commits whatever the agent left behind and reports the branch.
+// A Worktrunk checkout for a conversation branch is parked for the next
+// turn. Every other worktree is removed. Called after the agent exits,
+// before the env root is handed to the GC.
 //
 // The auto-commit is the reason a worktree task can't lose work: `git worktree
 // remove --force` would happily delete uncommitted edits, and the user would
@@ -692,7 +734,7 @@ func (w *LocalWorktree) Finalize(logger *slog.Logger) (LocalWorktreeOutcome, err
 		}
 	}
 
-	if removeErr := removeLocalWorktreeDir(w.GitRoot, w.Path, logger); removeErr != nil {
+	if removeErr := w.finishWorktree(dropped, logger); removeErr != nil {
 		outcome.PreservedPath = w.Path
 		return outcome, fmt.Errorf(
 			"could not remove finalized worktree for branch %s: %w; the task worktree remains at %s",
@@ -714,6 +756,29 @@ func (w *LocalWorktree) Finalize(logger *slog.Logger) (LocalWorktreeOutcome, err
 		)
 	}
 	return outcome, nil
+}
+
+// finishWorktree parks a conversation checkout that Worktrunk created, and
+// removes every other worktree. Parking is skipped when this turn is about
+// to delete the branch: an empty checkout is not worth keeping, and the
+// branch cannot be deleted while it is still checked out.
+func (w *LocalWorktree) finishWorktree(dropped bool, logger *slog.Logger) error {
+	if !dropped && w.tracksState && worktrunkConfigPresent(w.GitRoot) {
+		if err := parkIdleWorktree(w, time.Now(), logger); err != nil {
+			if logger != nil {
+				logger.Warn("execenv: could not retain the worktree; removing it", "path", w.Path, "error", err)
+			}
+			if clearErr := clearWorktreeHold(w.GitRoot, w.Branch); clearErr != nil && logger != nil {
+				logger.Warn("execenv: could not clear worktree hold", "branch", w.Branch, "error", clearErr)
+			}
+			return removeLocalWorktreeDir(w.GitRoot, w.Path, logger)
+		}
+		return nil
+	}
+	if clearErr := clearWorktreeHold(w.GitRoot, w.Branch); clearErr != nil && logger != nil {
+		logger.Warn("execenv: could not clear worktree hold", "branch", w.Branch, "error", clearErr)
+	}
+	return removeLocalWorktreeDir(w.GitRoot, w.Path, logger)
 }
 
 // Discard tears a worktree down without delivering anything: unregister it,
@@ -738,6 +803,9 @@ func (w *LocalWorktree) Discard(logger *slog.Logger) {
 		return
 	}
 	defer unlock()
+	if clearErr := clearWorktreeHold(w.GitRoot, w.Branch); clearErr != nil && logger != nil {
+		logger.Warn("execenv: could not clear worktree hold", "branch", w.Branch, "error", clearErr)
+	}
 	removeLocalWorktreeDir(w.GitRoot, w.Path, logger)
 	// Same rule as every other teardown: a branch this prepare did not create
 	// belongs to the turns before it and outlives this task.
