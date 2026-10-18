@@ -398,9 +398,11 @@ describe("navigation item presentation", () => {
 
     expect(referenceClassName).toBeTruthy();
 
+    // The footer pair carries the same nav styling and sits one type step
+    // smaller (FX-147 typography), which is the only difference allowed here.
     for (const href of ["/acme/usage", "/acme/settings"]) {
       expect(container.querySelector(`button[data-href="${href}"]`)?.className).toBe(
-        referenceClassName,
+        `${referenceClassName} text-caption`,
       );
     }
   });

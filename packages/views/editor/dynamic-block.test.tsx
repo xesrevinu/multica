@@ -62,7 +62,10 @@ describe("DynamicBlock", () => {
     copyTextMock.mockResolvedValue(true);
     const { container } = renderBlock();
     const actions = container.querySelector<HTMLElement>("[data-dynamic-block-actions]")!;
-    const hiddenUntilHover = "[@media(hover:hover)]:opacity-0";
+    // The gate is pointer-qualified so an iPad's synthetic hover cannot hide
+    // the actions (see packages/ui/lib/pointer-affordances.ts).
+    const hiddenUntilHover =
+      "[@media(hover:hover)_and_(pointer:fine)]:opacity-0";
 
     // The title always shows; only the actions wait for hover or focus.
     expect(actions.textContent).not.toContain("Latency");
