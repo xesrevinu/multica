@@ -105,7 +105,7 @@ vi.mock("./components/issue-window", () => ({
   IssueWindow: () => <div data-testid="issue-window" />,
 }));
 
-vi.mock("./stores/tab-store", () => ({
+vi.mock("@multica/core/tabs", () => ({
   useTabStore: Object.assign(
     (selector: (value: typeof tabStore) => unknown) => selector(tabStore),
     { getState: () => tabStore },

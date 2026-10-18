@@ -18,12 +18,12 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
 } from "@multica/ui/components/ui/dropdown-menu";
+import { browsingHistoryKeyForUrl } from "@multica/core/tabs";
 import {
   ResourceLeadingVisual,
   useTabPresentation,
 } from "@multica/views/layout";
 import { useTabHistory } from "@/hooks/use-tab-history";
-import { browsingHistoryKeyForUrl } from "@/stores/tab-store";
 
 // Controls sit left-aligned just past the macOS traffic lights, which end
 // around x=76 with trafficLightPosition { x: 16 }. The clearance covers that
