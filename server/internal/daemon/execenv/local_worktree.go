@@ -18,7 +18,10 @@ import (
 )
 
 // Local worktree mode gives every task on a local_directory resource its own
-// git worktree of the user's repo, created inside the daemon-owned env root.
+// git worktree of the user's repo. A checkout that contains .config/wt.toml is
+// created with `wt switch`, so the branch, the directory, and the start/remove
+// hooks match a worktree created by hand with wt. Every other checkout stays
+// inside the daemon-owned env root.
 // Tasks on the same directory then run concurrently instead of queueing on the
 // per-path mutex, and each one delivers its work as a branch in the user's own
 // repo — discoverable with `git branch`, no new result channel needed.
@@ -321,7 +324,7 @@ func PrepareLocalWorktree(params LocalWorktreeParams, logger *slog.Logger) (*Loc
 		return nil, fmt.Errorf("execenv: %q is not inside its repository root %q", localPath, gitRoot)
 	}
 
-	worktreePath := filepath.Join(params.EnvRoot, localWorktreeDirName)
+	legacyPath := filepath.Join(params.EnvRoot, localWorktreeDirName)
 
 	// Everything below mutates the repo's worktree admin state or its refs, so
 	// take the per-repo lock first. It covers the stale-path cleanup, which runs
@@ -335,11 +338,12 @@ func PrepareLocalWorktree(params LocalWorktreeParams, logger *slog.Logger) (*Loc
 	}
 	defer unlock()
 
-	if _, statErr := os.Stat(worktreePath); statErr == nil {
+	if _, statErr := os.Stat(legacyPath); statErr == nil {
 		// Prepare wipes and recreates envRoot, so an existing worktree path
 		// means a stale registration in the user's repo pointing here. Remove
-		// both rather than failing the task.
-		removeLocalWorktreeDir(gitRoot, worktreePath, logger)
+		// both rather than failing the task. A wt-created worktree lives
+		// outside envRoot; this only clears the legacy location.
+		removeLocalWorktreeDir(gitRoot, legacyPath, logger)
 	}
 
 	// Self-heal registrations orphaned by a crashed daemon: their env roots are
@@ -380,7 +384,14 @@ func PrepareLocalWorktree(params LocalWorktreeParams, logger *slog.Logger) (*Loc
 	}
 
 	plan := resolveTaskBranch(gitRoot, params, headSHA, logger)
-	actualBranch, createdBranch, err := addLocalWorktree(gitRoot, worktreePath, plan, params.TaskID)
+	worktreePath := legacyPath
+	var actualBranch string
+	var createdBranch bool
+	if worktrunkConfigPresent(gitRoot) {
+		worktreePath, actualBranch, createdBranch, err = addWorktrunkWorktree(gitRoot, plan, params.TaskID, logger)
+	} else {
+		actualBranch, createdBranch, err = addLocalWorktree(gitRoot, worktreePath, plan, params.TaskID)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -840,6 +851,14 @@ func worktreeIsDirty(worktreePath string) (bool, error) {
 // deletes its directory. The branch is deliberately left alone — it is the
 // task's deliverable.
 func removeLocalWorktreeDir(gitRoot, worktreePath string, logger *slog.Logger) error {
+	if worktrunkConfigPresent(gitRoot) {
+		if err := removeViaWorktrunk(gitRoot, worktreePath, logger); err == nil {
+			return nil
+		} else if logger != nil {
+			logger.Warn("execenv: wt remove failed; falling back to git worktree remove",
+				"path", worktreePath, "error", err)
+		}
+	}
 	var removeErr error
 	if out, err := runGit(gitRoot, "worktree", "remove", "--force", worktreePath); err != nil {
 		removeErr = err
