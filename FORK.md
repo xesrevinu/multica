@@ -62,6 +62,7 @@ git rev-list --left-right --count upstream/main...HEAD
 | `b7df9ed83` | 收件箱未读数放回标题行 | 保留。session tab 模式下标题被 tab 条替代，计数仍属页面数据 |
 | `553b204f4` | 两处测试跟随 fork 行为：`pointer:fine` 门控、侧栏 footer `text-caption` | 保留 |
 | `23d98db7d` | `apps/docs` 钉 TypeScript 5.8.2 | 保留。catalog 升到 TS 7 后 Next 15 会自己 `pnpm add typescript@5.8.2` 并崩掉构建 |
+| `dd4463ee7` | 侧栏「正在工作」section：列出在跑的 agent + 任务名 + 触发评论（读 `agentTaskSnapshot`，无额外请求） | 保留。上游没有这块；任务名走 issue 详情缓存，只解析可见行 |
 
 「mobile」在这里指 compact（小于 1024px），不是 Expo。见 `docs/adr/0001-web-session-tabs.md`。
 
