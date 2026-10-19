@@ -97,7 +97,19 @@
     "load_failed": "이 이슈를 불러올 수 없습니다",
     "status_label": "상태",
     "risk_label": "위험도 {{risk}}",
-    "jump_latest": "최신"
+    "jump_latest": "최신",
+    "mode_worktree": "워크트리",
+    "mode_local": "로컬 체크아웃",
+    "mode_manual": "수동",
+    "no_agent": "에이전트 없음",
+    "agent_title": "이 이슈의 에이전트",
+    "no_branch": "브랜치 없음",
+    "worked_for_short": "{{duration}} 작업함",
+    "working_short": "{{duration}} 작업 중",
+    "failed_short": "{{duration}} 후 실패",
+    "cancelled_short": "{{duration}} 후 취소",
+    "queued_short": "대기 중",
+    "description_by": "{{who}} 님이 생성"
   },
   "actions": {
     "accept": "승인",
@@ -152,7 +164,30 @@
     "snapshot_only": "실시간 데이터를 가져올 수 없어 마지막 스냅샷을 표시합니다",
     "engine_merges": "승인 후 오케스트레이터가 병합합니다",
     "no_checks": "아직 검사가 없습니다",
-    "files": "파일 {{count}}개"
+    "files": "파일 {{count}}개",
+    "merging_base": "{{base}}을(를) 브랜치에 병합하는 중…",
+    "resolving": "해결 중",
+    "conflict_count_other": "충돌 파일 {{count}}개",
+    "checks_passed": "{{passed}}/{{total}} 검사 통과",
+    "checks_running": "{{count}}개 검사 실행 중",
+    "checks_failed": "{{count}}개 검사 실패",
+    "reviews": "리뷰",
+    "review_state": {
+      "APPROVED": "승인",
+      "CHANGES_REQUESTED": "변경 요청",
+      "COMMENTED": "댓글",
+      "DISMISSED": "기각"
+    },
+    "sync_labels": "레이블 동기화",
+    "delete_branch": "브랜치 삭제",
+    "delete_branch_confirm": "GitHub의 {{branch}} 브랜치를 삭제할까요?",
+    "branch_deleted": "브랜치 삭제됨",
+    "done": "완료",
+    "other_prs": "연결된 PR",
+    "review_comments": "리뷰 댓글",
+    "view_files": "변경된 파일",
+    "base_tip": "{{base}} 최신",
+    "loading": "PR 불러오는 중…"
   },
   "drawer": {
     "title": "세부 정보",

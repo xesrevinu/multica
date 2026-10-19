@@ -97,7 +97,19 @@
     "load_failed": "Could not load this issue",
     "status_label": "Status",
     "risk_label": "Risk {{risk}}",
-    "jump_latest": "Latest"
+    "jump_latest": "Latest",
+    "mode_worktree": "Worktree",
+    "mode_local": "Local checkout",
+    "mode_manual": "Manual",
+    "no_agent": "No agent",
+    "agent_title": "Agent on this issue",
+    "no_branch": "No branch yet",
+    "worked_for_short": "Worked for {{duration}}",
+    "working_short": "Working for {{duration}}",
+    "failed_short": "Failed after {{duration}}",
+    "cancelled_short": "Cancelled after {{duration}}",
+    "queued_short": "Queued",
+    "description_by": "Opened by {{who}}"
   },
   "actions": {
     "accept": "Accept",
@@ -152,7 +164,31 @@
     "snapshot_only": "Live data unavailable — showing the last snapshot",
     "engine_merges": "Merged by the orchestrator after you accept",
     "no_checks": "No checks yet",
-    "files": "{{count}} files"
+    "files": "{{count}} files",
+    "merging_base": "Merging {{base}} into the branch…",
+    "resolving": "Resolving",
+    "conflict_count_one": "{{count}} conflicting file",
+    "conflict_count_other": "{{count}} conflicting files",
+    "checks_passed": "{{passed}}/{{total}} checks passed",
+    "checks_running": "{{count}} checks running",
+    "checks_failed": "{{count}} checks failed",
+    "reviews": "Reviews",
+    "review_state": {
+      "APPROVED": "approved",
+      "CHANGES_REQUESTED": "requested changes",
+      "COMMENTED": "commented",
+      "DISMISSED": "dismissed"
+    },
+    "sync_labels": "Sync labels",
+    "delete_branch": "Delete branch",
+    "delete_branch_confirm": "Delete branch {{branch}} on GitHub?",
+    "branch_deleted": "Branch deleted",
+    "done": "Done",
+    "other_prs": "Linked pull requests",
+    "review_comments": "Review comments",
+    "view_files": "Files changed",
+    "base_tip": "{{base}} tip",
+    "loading": "Loading pull request…"
   },
   "drawer": {
     "title": "Details",

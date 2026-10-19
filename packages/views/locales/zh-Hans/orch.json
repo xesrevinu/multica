@@ -97,7 +97,19 @@
     "load_failed": "无法加载这个 issue",
     "status_label": "状态",
     "risk_label": "风险 {{risk}}",
-    "jump_latest": "最新"
+    "jump_latest": "最新",
+    "mode_worktree": "工作树",
+    "mode_local": "本地检出",
+    "mode_manual": "手动",
+    "no_agent": "无智能体",
+    "agent_title": "负责此任务的智能体",
+    "no_branch": "尚无分支",
+    "worked_for_short": "工作了 {{duration}}",
+    "working_short": "已工作 {{duration}}",
+    "failed_short": "{{duration}} 后失败",
+    "cancelled_short": "{{duration}} 后取消",
+    "queued_short": "排队中",
+    "description_by": "由 {{who}} 创建"
   },
   "actions": {
     "accept": "验收通过",
@@ -152,7 +164,30 @@
     "snapshot_only": "无法获取实时数据——显示最近快照",
     "engine_merges": "你验收后由编排器合并",
     "no_checks": "还没有检查",
-    "files": "{{count}} 个文件"
+    "files": "{{count}} 个文件",
+    "merging_base": "正在将 {{base}} 合并到分支…",
+    "resolving": "处理中",
+    "conflict_count_other": "{{count}} 个冲突文件",
+    "checks_passed": "{{passed}}/{{total}} 项检查通过",
+    "checks_running": "{{count}} 项检查运行中",
+    "checks_failed": "{{count}} 项检查失败",
+    "reviews": "评审",
+    "review_state": {
+      "APPROVED": "已批准",
+      "CHANGES_REQUESTED": "要求修改",
+      "COMMENTED": "已评论",
+      "DISMISSED": "已驳回"
+    },
+    "sync_labels": "同步标签",
+    "delete_branch": "删除分支",
+    "delete_branch_confirm": "删除 GitHub 上的分支 {{branch}}？",
+    "branch_deleted": "分支已删除",
+    "done": "完成",
+    "other_prs": "关联的 PR",
+    "review_comments": "评审意见",
+    "view_files": "变更文件",
+    "base_tip": "{{base}} 最新",
+    "loading": "正在加载 PR…"
   },
   "drawer": {
     "title": "详情",

@@ -97,7 +97,19 @@
     "load_failed": "この Issue を読み込めませんでした",
     "status_label": "ステータス",
     "risk_label": "リスク {{risk}}",
-    "jump_latest": "最新"
+    "jump_latest": "最新",
+    "mode_worktree": "ワークツリー",
+    "mode_local": "ローカルチェックアウト",
+    "mode_manual": "手動",
+    "no_agent": "エージェントなし",
+    "agent_title": "この課題のエージェント",
+    "no_branch": "ブランチなし",
+    "worked_for_short": "{{duration}} 作業",
+    "working_short": "{{duration}} 作業中",
+    "failed_short": "{{duration}} 後に失敗",
+    "cancelled_short": "{{duration}} 後にキャンセル",
+    "queued_short": "待機中",
+    "description_by": "{{who}} が作成"
   },
   "actions": {
     "accept": "承認",
@@ -152,7 +164,30 @@
     "snapshot_only": "ライブデータを取得できません — 最後のスナップショットを表示",
     "engine_merges": "承認後にオーケストレーターがマージします",
     "no_checks": "チェックはまだありません",
-    "files": "{{count}} ファイル"
+    "files": "{{count}} ファイル",
+    "merging_base": "{{base}} をブランチにマージ中…",
+    "resolving": "解決中",
+    "conflict_count_other": "競合ファイル {{count}} 件",
+    "checks_passed": "{{passed}}/{{total}} チェック合格",
+    "checks_running": "{{count}} チェック実行中",
+    "checks_failed": "{{count}} チェック失敗",
+    "reviews": "レビュー",
+    "review_state": {
+      "APPROVED": "承認",
+      "CHANGES_REQUESTED": "変更を要求",
+      "COMMENTED": "コメント",
+      "DISMISSED": "却下"
+    },
+    "sync_labels": "ラベルを同期",
+    "delete_branch": "ブランチを削除",
+    "delete_branch_confirm": "GitHub のブランチ {{branch}} を削除しますか？",
+    "branch_deleted": "ブランチ削除済み",
+    "done": "完了",
+    "other_prs": "リンクされた PR",
+    "review_comments": "レビューコメント",
+    "view_files": "変更ファイル",
+    "base_tip": "{{base}} 先端",
+    "loading": "PR を読み込み中…"
   },
   "drawer": {
     "title": "詳細",

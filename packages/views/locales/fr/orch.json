@@ -97,7 +97,19 @@
     "load_failed": "Impossible de charger ce ticket",
     "status_label": "Statut",
     "risk_label": "Risque {{risk}}",
-    "jump_latest": "Récent"
+    "jump_latest": "Récent",
+    "mode_worktree": "Worktree",
+    "mode_local": "Copie locale",
+    "mode_manual": "Manuel",
+    "no_agent": "Aucun agent",
+    "agent_title": "Agent sur ce ticket",
+    "no_branch": "Pas encore de branche",
+    "worked_for_short": "A travaillé {{duration}}",
+    "working_short": "Travaille depuis {{duration}}",
+    "failed_short": "Échec après {{duration}}",
+    "cancelled_short": "Annulé après {{duration}}",
+    "queued_short": "En file",
+    "description_by": "Ouvert par {{who}}"
   },
   "actions": {
     "accept": "Valider",
@@ -152,7 +164,31 @@
     "snapshot_only": "Données en direct indisponibles — dernier instantané affiché",
     "engine_merges": "Fusionné par l’orchestrateur après votre validation",
     "no_checks": "Aucune vérification",
-    "files": "{{count}} fichiers"
+    "files": "{{count}} fichiers",
+    "merging_base": "Fusion de {{base}} dans la branche…",
+    "resolving": "Résolution",
+    "conflict_count_one": "{{count}} fichier en conflit",
+    "conflict_count_other": "{{count}} fichiers en conflit",
+    "checks_passed": "{{passed}}/{{total}} vérifications réussies",
+    "checks_running": "{{count}} vérifications en cours",
+    "checks_failed": "{{count}} vérifications échouées",
+    "reviews": "Revues",
+    "review_state": {
+      "APPROVED": "approuvé",
+      "CHANGES_REQUESTED": "modifications demandées",
+      "COMMENTED": "a commenté",
+      "DISMISSED": "rejeté"
+    },
+    "sync_labels": "Synchroniser les libellés",
+    "delete_branch": "Supprimer la branche",
+    "delete_branch_confirm": "Supprimer la branche {{branch}} sur GitHub ?",
+    "branch_deleted": "Branche supprimée",
+    "done": "Terminé",
+    "other_prs": "Pull requests liées",
+    "review_comments": "Commentaires de revue",
+    "view_files": "Fichiers modifiés",
+    "base_tip": "tête de {{base}}",
+    "loading": "Chargement de la pull request…"
   },
   "drawer": {
     "title": "Détails",

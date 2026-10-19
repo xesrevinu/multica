@@ -26,10 +26,42 @@ import { buildChatItems, type ChatItem } from "./build-items";
 import { DetailsDrawer } from "./details-drawer";
 import { FlowStateCard } from "./flow-cards";
 import { PRCard } from "./pr-card";
-import { StatusStrip } from "./status-strip";
+import { ComposerChips, StatusStrip } from "./status-strip";
 import { ActivitiesFold, TransitionDivider, WorkedForFold } from "./timeline-parts";
 
 const EMPTY_REPLIES: never[] = [];
+
+// MessageFrame restyles the shared comment card for the chat: agent messages
+// sit on the page with no card chrome (t3code assistant messages), member
+// messages become a soft right-leaning bubble.
+const PLAIN_VARS = {
+  "--surface": "var(--background)",
+  "--card": "var(--background)",
+  "--surface-border": "transparent",
+  "--surface-shadow": "none",
+} as React.CSSProperties;
+const BUBBLE_VARS = {
+  "--surface": "var(--muted)",
+  "--card": "var(--muted)",
+  "--surface-border": "transparent",
+  "--surface-shadow": "none",
+} as React.CSSProperties;
+function MessageFrame({ mine, children }: { mine: boolean; children: React.ReactNode }) {
+  return (
+    <div
+      data-orch-message={mine ? "member" : "agent"}
+      style={mine ? BUBBLE_VARS : PLAIN_VARS}
+      // The chat has one composer at the bottom; per-thread reply boxes are
+      // hidden so the conversation reads as one stream (t3code).
+      className={cn(
+        "[&_[data-comment-reply-input]]:hidden",
+        mine ? "ml-auto w-full max-w-[88%] [&_[data-slot=card]]:rounded-2xl" : "-mx-4 max-md:-mx-3",
+      )}
+    >
+      {children}
+    </div>
+  );
+}
 
 // IssueChatView: the issue as a conversation (newest at the bottom), with
 // the one pending decision pinned above a fixed composer and a status strip
@@ -133,16 +165,19 @@ export function IssueChatView({ issueId }: { issueId: string }) {
         return <ActivitiesFold entries={item.entries} />;
       case "comment":
         return (
+          <MessageFrame mine={item.entry.actor_type === "member"}>
           <CommentCard
             {...commonCommentProps}
             entry={item.entry}
             replies={model.threadReplies.get(item.id) ?? EMPTY_REPLIES}
             runs={runView.runs.get(item.id) ?? EMPTY_COMMENT_RUNS}
           />
+          </MessageFrame>
         );
       case "run": {
         if (item.reply) {
           return (
+            <MessageFrame mine={false}>
             <AgentRunComment
               run={item.run}
               standalone
@@ -153,6 +188,7 @@ export function IssueChatView({ issueId }: { issueId: string }) {
                 runs: runView.runs.get(item.reply.id) ?? EMPTY_COMMENT_RUNS,
               }}
             />
+            </MessageFrame>
           );
         }
         const agentName = getActorName("agent", item.run.task.agent_id);
@@ -218,13 +254,13 @@ export function IssueChatView({ issueId }: { issueId: string }) {
         </header>
 
         <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto" data-testid="orch-chat-scroll">
-          <div ref={contentRef} className="mx-auto flex w-full max-w-3xl flex-col gap-2 px-4 py-6">
+          <div ref={contentRef} className="mx-auto flex w-full max-w-[46rem] flex-col gap-3 px-4 py-6 sm:px-6">
             {/* The issue description opens the conversation, like the first message. */}
-            <div className="mb-2 rounded-2xl border border-border/60 bg-muted/30 p-4">
-              <p className="mb-1 text-micro text-muted-foreground">
-                {getActorName(issue.creator_type, issue.creator_id)} · {timeAgo(issue.created_at)}
+            <div className="mb-1 px-1" data-testid="orch-issue-intro">
+              <p className="mb-1.5 text-caption text-muted-foreground">
+                {t(($) => $.chat.description_by, { who: getActorName(issue.creator_type, issue.creator_id) })} · {timeAgo(issue.created_at)}
               </p>
-              <h1 className="text-title-sm font-semibold">{issue.title}</h1>
+              <h1 className="text-title-sm font-semibold text-foreground">{issue.title}</h1>
               {issue.description ? <ReadonlyContent content={issue.description} className="mt-2 text-body" /> : null}
             </div>
             {loading && <Skeleton className="h-16 w-full" />}
@@ -249,12 +285,22 @@ export function IssueChatView({ issueId }: { issueId: string }) {
           </button>
         )}
 
-        <footer className="shrink-0 border-t border-border/60 bg-background">
-          <div className="mx-auto flex w-full max-w-3xl flex-col gap-2 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+        <footer className="shrink-0 bg-background">
+          <div className="mx-auto flex w-full max-w-[46rem] flex-col gap-2 px-4 pt-1 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6">
             {v?.paused && <p className="rounded-md bg-muted px-2 py-1 text-caption text-muted-foreground">{t(($) => $.chat.paused_banner)}</p>}
             {orch && <FlowStateCard wsId={wsId} timeline={orch} />}
-            <CommentInput key={issueId} issueId={issueId} onSubmit={submitComment} onAccepted={() => scrollToBottom(true)} onEditAnnotation={() => false} />
-            <StatusStrip wsId={wsId} issue={issue} timeline={orch} />
+            <div className="flex flex-col">
+              <CommentInput
+                key={issueId}
+                issueId={issueId}
+                onSubmit={submitComment}
+                onAccepted={() => scrollToBottom(true)}
+                onEditAnnotation={() => false}
+                className="z-10 rounded-3xl bg-card px-1 pt-1 pb-10 shadow-[0_12px_28px_-18px_rgb(0_0_0/40%)] ring-border"
+                toolbar={<ComposerChips wsId={wsId} issue={issue} timeline={orch} />}
+              />
+              <StatusStrip wsId={wsId} issue={issue} timeline={orch} />
+            </div>
           </div>
         </footer>
         <DetailsDrawer open={drawerOpen} onOpenChange={setDrawerOpen} wsId={wsId} issue={issue} timeline={orch} />

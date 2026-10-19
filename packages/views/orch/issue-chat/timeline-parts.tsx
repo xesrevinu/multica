@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronRight, GitCommitHorizontal } from "lucide-react";
+import { ChevronRight, GitCommitHorizontal, Loader2 } from "lucide-react";
 import { isBuiltInIssueStatus } from "@multica/core/issue-statuses";
 import type { TimelineEntry } from "@multica/core/types";
 import { useActorName } from "@multica/core/workspace/hooks";
@@ -18,7 +18,7 @@ export function useStatusText() {
   return (status: string | undefined) => (status && isBuiltInIssueStatus(status) ? t(($) => $.status[status]) : (status ?? ""));
 }
 
-// TransitionDivider: an orchestrator transition as a centered system pill
+// TransitionDivider: an orchestrator transition as a centered system label
 // between two hairlines (t3code TimelineSystemDivider).
 export function TransitionDivider({ entry }: { entry: TimelineEntry }) {
   const { t } = useT("orch");
@@ -29,19 +29,15 @@ export function TransitionDivider({ entry }: { entry: TimelineEntry }) {
   if (d.status) parts.push(t(($) => $.chat.moved_to, { status: statusText(d.status) }));
   if (d.assignee) parts.push(t(($) => $.chat.assigned_to, { who: d.assignee }));
   return (
-    <div className="flex items-center gap-3 py-2" data-testid="orch-transition">
-      <span className="h-px flex-1 bg-border/70" />
-      <span
-        className="inline-flex max-w-[80%] items-center gap-1.5 rounded-full border border-border/70 bg-muted/30 px-2.5 py-0.5 text-micro text-muted-foreground"
-        title={d.why || undefined}
-      >
-        <GitCommitHorizontal className="size-3 shrink-0" />
-        {d.tid && <span className="font-mono text-muted-foreground">{d.tid}</span>}
+    <div className="flex items-center gap-3 py-3" data-testid="orch-transition">
+      <span className="h-px flex-1 bg-border" />
+      <span className="inline-flex max-w-[80%] items-center gap-1.5 text-micro text-muted-foreground" title={d.why || undefined}>
+        <GitCommitHorizontal className="size-3 shrink-0 text-faint-foreground" />
+        {d.tid && <span className="font-mono">{d.tid.replace(/^T\d+_/, "")}</span>}
         {parts.length > 0 && <span className="truncate">{parts.join(" · ")}</span>}
-        {d.why && <span className="hidden truncate text-muted-foreground md:inline">— {d.why}</span>}
-        <span className="shrink-0 text-faint-foreground">{timeAgo(entry.created_at)}</span>
+        <span className="shrink-0 text-faint-foreground">· {timeAgo(entry.created_at)}</span>
       </span>
-      <span className="h-px flex-1 bg-border/70" />
+      <span className="h-px flex-1 bg-border" />
     </div>
   );
 }
@@ -81,38 +77,43 @@ export function ActivitiesFold({ entries, defaultOpen = false }: { entries: Time
   );
 }
 
-// WorkedForFold: a run without its own reply comment, folded to
-// "agent worked for 3m" (t3code WorkLog), expanding to the full run card.
+// WorkedForFold: a run without its own reply comment, folded to t3code's
+// "Worked for 1m 17s ›" row (hairline under it, time on the right),
+// expanding to the full run transcript.
 export function WorkedForFold({ run, entering, agentName }: { run: CommentRun; entering: boolean; agentName: string }) {
   const { t } = useT("orch");
+  const timeAgo = useTimeAgo();
   const status = run.task.status;
   const active = status === "running" || status === "queued" || status === "dispatched" || status === "waiting_local_directory" || status === "deferred";
-  const [open, setOpen] = useState(active);
+  const queued = status === "queued" || status === "dispatched" || status === "deferred";
+  const [open, setOpen] = useState(active && !queued);
   const duration = formatDuration(runDurationMs(run));
-  const label =
-    status === "queued" || status === "dispatched" || status === "deferred"
-      ? t(($) => $.chat.queued_run, { agent: agentName })
-      : active
-        ? t(($) => $.chat.running_for, { agent: agentName, duration })
-        : status === "failed"
-          ? t(($) => $.chat.run_failed, { agent: agentName, duration })
-          : status === "cancelled"
-            ? t(($) => $.chat.run_cancelled, { agent: agentName, duration })
-            : t(($) => $.chat.worked_for, { agent: agentName, duration });
+  const label = queued
+    ? t(($) => $.chat.queued_short)
+    : active
+      ? t(($) => $.chat.working_short, { duration })
+      : status === "failed"
+        ? t(($) => $.chat.failed_short, { duration })
+        : status === "cancelled"
+          ? t(($) => $.chat.cancelled_short, { duration })
+          : t(($) => $.chat.worked_for_short, { duration });
+  const at = (run.task as { completed_at?: string | null; created_at?: string }).completed_at ?? run.task.created_at;
   return (
-    <div className="py-1" data-testid="orch-run-fold">
+    <div className="py-0.5" data-testid="orch-run-fold">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         className={cn(
-          "flex w-full items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-2.5 py-1.5 text-left text-caption text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground",
-          status === "failed" && "border-red-500/30 text-red-700 dark:text-red-300",
+          "group/fold flex w-full items-center gap-1.5 border-b border-border pb-1.5 text-left text-body text-muted-foreground transition-colors hover:text-foreground",
+          status === "failed" && "text-red-600 dark:text-red-400",
         )}
       >
-        <ChevronRight className={cn("size-3 shrink-0 transition-transform", open && "rotate-90")} />
-        {active && <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-emerald-500" />}
+        {active && !queued && <Loader2 className="size-3.5 shrink-0 animate-spin text-sky-600 dark:text-sky-400" />}
+        <span className="shrink-0 text-foreground">{agentName}</span>
         <span className="truncate">{label}</span>
+        <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} />
+        {at && <span className="ml-auto shrink-0 text-caption text-faint-foreground">{timeAgo(at)}</span>}
       </button>
       {open && (
         <div className="mt-2">
