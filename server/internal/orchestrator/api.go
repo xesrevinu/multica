@@ -28,10 +28,14 @@ func (s *Service) Routes() http.Handler {
 	r.Get("/flow/{key}", s.hShow)
 	r.Get("/flow/{key}/log", s.hLog)
 	r.Post("/flow/{key}/unblock", s.hMeta(StBlocked, "", map[string]string{"phase": PhUnblocked}))
-	r.Post("/flow/{key}/cancel", s.hMeta(StBlocked, "", map[string]string{"phase": PhCancelProposed}))
+	r.Post("/flow/{key}/cancel", s.hCancel)
+	r.Post("/flow/{key}/pause", s.hFlowPause(true))
+	r.Post("/flow/{key}/resume", s.hFlowPause(false))
 	r.Post("/flow/{key}/accept", s.hMeta("", PhAwaitAcceptance, map[string]string{"acceptance": "ok"}))
 	r.Post("/flow/{key}/reject", s.hMeta("", PhAwaitAcceptance, map[string]string{"acceptance": "reject"}))
 	r.Post("/flow/{key}/replay", s.hReplay)
+	r.Get("/issues", s.hIssues)
+	r.Get("/issues/{key}/timeline", s.hIssueTimeline)
 	return r
 }
 
@@ -347,15 +351,61 @@ func (s *Service) hMeta(needStatus, needPhase string, meta map[string]string) ht
 		if body.Reason != "" && m["phase"] == PhUnblocked {
 			m["unblock_note"] = body.Reason
 		}
-		sj, _ := json.Marshal(m)
-		if _, err := s.opt.Pool.Exec(r.Context(), `UPDATE issue SET metadata = metadata || $2::jsonb, revision=revision+1, updated_at=now() WHERE id=$1`, row.ID, sj); err != nil {
-			writeErr(w, 500, "internal", err.Error())
+		s.writeFlowMeta(w, r, row, m)
+	}
+}
+
+// writeFlowMeta merges member-written flow metadata, announces it and
+// re-evaluates the issue.
+func (s *Service) writeFlowMeta(w http.ResponseWriter, r *http.Request, row *issueRow, m map[string]string) {
+	sj, _ := json.Marshal(m)
+	if _, err := s.opt.Pool.Exec(r.Context(), `UPDATE issue SET metadata = metadata || $2::jsonb, revision=revision+1, updated_at=now() WHERE id=$1`, row.ID, sj); err != nil {
+		writeErr(w, 500, "internal", err.Error())
+		return
+	}
+	s.publishMeta(r.Context(), row)
+	_ = s.st.enqueue(r.Context(), row.ID, "flow:"+chi.URLParam(r, "key"))
+	s.Kick()
+	writeJSON(w, 200, map[string]any{"key": row.Key, "metadata": m, "accepted_by": r.Header.Get("X-User-ID")})
+}
+
+func settled(status string) bool { return status == StDone || status == StCancelled }
+
+// hCancel: a blocked issue goes through the lead's cancel proposal (T8);
+// any other open issue is cancelled at once (T8b), stopping its live run.
+func (s *Service) hCancel(w http.ResponseWriter, r *http.Request) {
+	row, _, ok := s.issueFor(w, r)
+	if !ok {
+		return
+	}
+	if settled(row.Status) {
+		writeErr(w, 409, "wrong_state", fmt.Sprintf("%s is already %s", row.Key, row.Status))
+		return
+	}
+	if row.Status == StBlocked {
+		s.writeFlowMeta(w, r, row, map[string]string{"phase": PhCancelProposed})
+		return
+	}
+	s.writeFlowMeta(w, r, row, map[string]string{"cancel_requested": "true"})
+}
+
+// hFlowPause pauses one issue: the engine only waits on it (a live run
+// finishes, nothing new starts) until resumed.
+func (s *Service) hFlowPause(pause bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		row, _, ok := s.issueFor(w, r)
+		if !ok {
 			return
 		}
-		s.publishMeta(r.Context(), row)
-		_ = s.st.enqueue(r.Context(), row.ID, "flow:"+chi.URLParam(r, "key"))
-		s.Kick()
-		writeJSON(w, 200, map[string]any{"key": row.Key, "metadata": m, "accepted_by": r.Header.Get("X-User-ID")})
+		if settled(row.Status) {
+			writeErr(w, 409, "wrong_state", fmt.Sprintf("%s is already %s", row.Key, row.Status))
+			return
+		}
+		v := ""
+		if pause {
+			v = "true"
+		}
+		s.writeFlowMeta(w, r, row, map[string]string{"paused": v})
 	}
 }
 
