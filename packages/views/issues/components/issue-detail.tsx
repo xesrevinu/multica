@@ -322,7 +322,7 @@ function statusLabel(
   return status;
 }
 
-function formatActivity(
+export function formatActivity(
   entry: TimelineEntry,
   t: ActivityT,
   locale: string,
