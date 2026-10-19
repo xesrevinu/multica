@@ -66,6 +66,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@multica/ui/components/ui/dialog";
+import { useOrchPaletteItems } from "../orch/palette";
 import { useTheme } from "@multica/ui/components/common/theme-provider";
 import { copyText } from "@multica/ui/lib/clipboard";
 import {
@@ -421,6 +422,8 @@ export function SearchCommand() {
     enabled: !!currentIssueId,
   });
   const queryClient = useQueryClient();
+  // Orchestrator actions for the open issue chat and "needs you" jumps.
+  const orchItems = useOrchPaletteItems();
 
   const commands = useMemo<CommandItem[]>(() => {
     const activeThemeCheck = (value: ThemeValue) =>
@@ -560,15 +563,26 @@ export function SearchCommand() {
       },
     );
 
+    for (const o of orchItems) {
+      items.push({
+        ...o,
+        onSelect: () => {
+          setOpen(false);
+          o.onSelect();
+        },
+      });
+    }
+
     return items;
-  }, [currentIssue, currentIssueId, getShareableUrl, pathname, queryClient, setOpen, setTheme, theme, t]);
+  }, [currentIssue, currentIssueId, getShareableUrl, orchItems, pathname, queryClient, setOpen, setTheme, theme, t]);
 
   const filteredCommands = useMemo(() => {
     const q = query.trim().toLowerCase();
     // No query: only surface the primary creation action. Other commands
     // (theme switches, copy actions, New Project) are revealed as the user
     // types, leaving the empty-state space to Recent.
-    if (!q) return commands.filter((c) => c.key === "new-issue");
+    // Orchestrator items (issue actions, "needs you") are shown up front too.
+    if (!q) return commands.filter((c) => c.key === "new-issue" || c.key.startsWith("orch-")).slice(0, 10);
     return commands.filter((c) => matchesRow(c.label, c.keywords, q));
   }, [commands, query]);
 

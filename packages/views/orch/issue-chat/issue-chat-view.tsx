@@ -28,6 +28,7 @@ import { DetailsDrawer, type DrawerTab } from "./details-drawer";
 import { FlowStateCard } from "./flow-cards";
 import { PRCard } from "./pr-card";
 import { ComposerChips, StatusStrip } from "./status-strip";
+import { useIssueCommands } from "./use-issue-commands";
 import { ActivitiesFold, GitHubReviewMessage, TransitionDivider, WorkedForFold } from "./timeline-parts";
 
 const EMPTY_REPLIES: never[] = [];
@@ -107,6 +108,8 @@ export function IssueChatView({ issueId }: { issueId: string }) {
     if (tab) setDrawerTab(tab);
     setDrawerOpenRaw(open);
   }, []);
+  const openDrawerAt = useCallback((tab: DrawerTab) => setDrawerOpen(true, tab), [setDrawerOpen]);
+  useIssueCommands({ wsId, issueId: issue?.id ?? issueId, issueKey: key, timeline: orch, prCard, openDrawer: openDrawerAt });
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
@@ -272,7 +275,7 @@ export function IssueChatView({ issueId }: { issueId: string }) {
               type="button"
               onClick={() => setDrawerOpen(true, "details")}
               aria-label={t(($) => $.chat.details)}
-              title={t(($) => $.chat.details)}
+              title={t(($) => $.shortcuts.title)}
               className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
             >
               <PanelRight className="size-4" />
