@@ -134,7 +134,7 @@ func (p LocalWorktreeParams) owner() branchOwner {
 //
 // Two values, because they answer different questions. The key is what the
 // branch is CALLED — the issue identifier is preferred there because it is what
-// the user recognises in `git branch`, agent/j/mul-6881 rather than a uuid
+// the user recognises in `git branch`, agent/mul-6881 rather than a uuid
 // tail. The id is what the branch BELONGS to, and only it decides whether a
 // later task may continue that branch: identifiers are per-workspace and
 // human-chosen, so two workspaces can mint the same one for different issues.
@@ -552,6 +552,17 @@ func PrepareLocalWorktree(params LocalWorktreeParams, logger *slog.Logger) (*Loc
 	// time anything is committed. That also preserves a genuine agent edit to a
 	// tracked CLAUDE.md, which a blanket exclude would have swallowed.
 
+	// Mark the hold only after the tree is actually usable. A failure
+	// above rolls the directory back and must not leave an active claim that
+	// makes the next turn treat a deleted checkout as busy.
+	if wt.tracksState && worktrunkConfigPresent(gitRoot) {
+		if err := markWorktreeActive(gitRoot, worktreePath, actualBranch, wt.owner, params.HolderPID); err != nil && logger != nil {
+			// The run can still deliver on the branch. Without the hold the
+			// next turn cannot reuse this directory, and Finalize removes it.
+			logger.Warn("execenv: could not record the worktree hold", "branch", actualBranch, "error", err)
+		}
+	}
+
 	if logger != nil {
 		logger.Info("execenv: local worktree ready",
 			"git_root", gitRoot,
@@ -564,17 +575,6 @@ func PrepareLocalWorktree(params LocalWorktreeParams, logger *slog.Logger) (*Loc
 			"replay_conflicts", len(wt.ReplayConflicts),
 		)
 	}
-	// Mark the hold only after the tree is actually usable. A failure
-	// above rolls the directory back and must not leave an active claim that
-	// makes the next turn treat a deleted checkout as busy.
-	if wt.tracksState && worktrunkConfigPresent(gitRoot) {
-		if err := markWorktreeActive(gitRoot, worktreePath, actualBranch, wt.owner, params.HolderPID); err != nil && logger != nil {
-			// The run can still deliver on the branch. Without the hold the
-			// next turn cannot reuse this directory, and Finalize removes it.
-			logger.Warn("execenv: could not record the worktree hold", "branch", actualBranch, "error", err)
-		}
-	}
-
 	return wt, nil
 }
 
@@ -1286,7 +1286,7 @@ type taskBranchPlan struct {
 func (p taskBranchPlan) altName(taskID string) string {
 	if p.conversational {
 		// Task-scoped, and readable next to the conversation branch it forked
-		// from: agent/j/mul-6881-<task>.
+		// from: agent/mul-6881-<task>.
 		return p.name + "-" + taskKey(taskID)
 	}
 	// Already task-scoped, so only a re-run of the same task can collide here.
@@ -1305,22 +1305,22 @@ func (p taskBranchPlan) altName(taskID string) string {
 // onto the branch their conversation owns.
 //
 // Continuing a branch is decided by its recorded OWNER, never by its name.
-// `agent/j/mul-6881` is a name the user can type, another agent of the same
-// display name can produce, and a second workspace can mint for a different
-// issue; appending to any of those would silently mix two lines of work. So a
-// same-named branch we cannot prove is ours pushes this task onto
-// `agent/j/mul-6881-<fingerprint>` — stable for this exact conversation, so its
+// `agent/mul-6881` is a name the user can type, and a second workspace can mint
+// the same one for a different issue; appending to either would mix two lines
+// of work. So a same-named branch we cannot prove is ours pushes this task onto
+// `agent/mul-6881-<fingerprint>` — stable for this exact conversation, so its
 // own follow-ups continue it — and, if that is somehow taken too, onto a
 // task-scoped branch that continues nothing.
 func resolveTaskBranch(gitRoot string, params LocalWorktreeParams, headSHA string, logger *slog.Logger) taskBranchPlan {
-	agentSegment := sanitizeName(params.AgentName)
-	taskScoped := taskBranchPlan{name: fmt.Sprintf("agent/%s/%s", agentSegment, taskKey(params.TaskID)), base: headSHA}
+	taskScoped := taskBranchPlan{name: "agent/" + taskKey(params.TaskID), base: headSHA}
 
 	owner := params.owner()
 	if params.ConversationKey == "" || !owner.valid() {
 		return taskScoped
 	}
-	preferred := fmt.Sprintf("agent/%s/%s", agentSegment, sanitizeName(params.ConversationKey))
+	// Same shape as a hand-created worker branch, `agent/<task>`. The task is
+	// the issue identifier, the chat key, or — above — the task id.
+	preferred := "agent/" + sanitizeName(params.ConversationKey)
 	for _, name := range []string{preferred, preferred + "-" + owner.fingerprint()} {
 		plan, ok := planForConversationBranch(gitRoot, name, headSHA, owner, logger)
 		if ok {

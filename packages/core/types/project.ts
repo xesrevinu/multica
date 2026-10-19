@@ -89,9 +89,9 @@ export interface GithubRepoResourceRef {
  * - `worktree`: each task gets its own git worktree of that repo inside the
  *   runtime's workspace, so tasks run concurrently and deliver their work as a
  *   branch instead of touching the working copy. Every task of one conversation
- *   shares that branch — `agent/<agent>/<issue>` — so a follow-up continues the
+ *   shares that branch — `agent/<issue>` — so a follow-up continues the
  *   previous turn's work; a task with no conversation behind it gets
- *   `agent/<agent>/<task>`. Continuation is decided by an ownership record in
+ *   `agent/<task>`. Continuation is decided by an ownership record in
  *   the repo, not by the branch name, so a same-named branch the user made is
  *   never adopted.
  *

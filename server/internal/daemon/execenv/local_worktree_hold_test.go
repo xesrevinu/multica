@@ -106,7 +106,7 @@ func TestParkedWorktreeIsReusedWithoutStartingAgain(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(first.Path, "node_modules", "keep.txt"), "cached\n")
 	writeFile(t, filepath.Join(first.WorkDir, "turn-one.txt"), "from turn one\n")
-	if outcome := finalizeOK(t, first); outcome.Branch != "agent/j/mul-6881" {
+	if outcome := finalizeOK(t, first); outcome.Branch != "agent/mul-6881" {
 		t.Fatalf("branch = %q", outcome.Branch)
 	}
 	if _, err := os.Stat(first.Path); err != nil {
