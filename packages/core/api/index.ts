@@ -45,3 +45,9 @@ export const api = new Proxy({} as ApiClientType, {
     return typeof value === "function" ? value.bind(_api) : value;
   },
 });
+export type {
+  OrchestratorDecision,
+  OrchestratorFlow,
+  OrchestratorTeam,
+  OrchestratorTransition,
+} from "./client";

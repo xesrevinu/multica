@@ -1748,5 +1748,26 @@
         }
       }
     }
+  },
+  "orchestrator": {
+    "section": "Flow",
+    "current": "Current",
+    "next": "Next",
+    "waiting": "Waiting",
+    "blocked": "Blocked because",
+    "paused": "Paused",
+    "failures": "Engine failures",
+    "attempts": "Attempts",
+    "impl": "impl",
+    "review": "review",
+    "infra": "infra",
+    "recent": "Transitions",
+    "acceptance": "Awaiting your acceptance",
+    "teams": "Orchestrator teams",
+    "pause": "Pause",
+    "resume": "Resume",
+    "no_teams": "No orchestrated projects in this workspace.",
+    "phase": "Phase",
+    "accept": "Accept"
   }
 }

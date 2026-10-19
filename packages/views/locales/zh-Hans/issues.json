@@ -1683,5 +1683,26 @@
         }
       }
     }
+  },
+  "orchestrator": {
+    "section": "流程",
+    "current": "当前",
+    "next": "下一步",
+    "waiting": "等待中",
+    "blocked": "阻塞原因",
+    "paused": "已暂停",
+    "failures": "引擎失败",
+    "attempts": "尝试次数",
+    "impl": "实现",
+    "review": "评审",
+    "infra": "基础设施",
+    "recent": "状态迁移",
+    "acceptance": "等待你验收",
+    "teams": "编排团队",
+    "pause": "暂停",
+    "resume": "恢复",
+    "no_teams": "此工作区没有编排项目。",
+    "phase": "阶段",
+    "accept": "验收通过"
   }
 }

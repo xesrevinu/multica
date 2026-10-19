@@ -1683,5 +1683,26 @@
         }
       }
     }
+  },
+  "orchestrator": {
+    "section": "フロー",
+    "current": "現在",
+    "next": "次",
+    "waiting": "待機中",
+    "blocked": "ブロック理由",
+    "paused": "一時停止中",
+    "failures": "エンジン失敗",
+    "attempts": "試行回数",
+    "impl": "実装",
+    "review": "レビュー",
+    "infra": "インフラ",
+    "recent": "遷移",
+    "acceptance": "受け入れ待ち",
+    "teams": "オーケストレーターチーム",
+    "pause": "一時停止",
+    "resume": "再開",
+    "no_teams": "オーケストレーション対象のプロジェクトはありません。",
+    "phase": "フェーズ",
+    "accept": "受け入れる"
   }
 }

@@ -1404,6 +1404,28 @@ export class ApiClient {
     await this.fetch(`/api/issues/${encodeURIComponent(issueId)}/wakeups/${encodeURIComponent(wakeupId)}/disable`, { method: "POST" });
   }
 
+  // In-app orchestrator (server/internal/orchestrator). Returns null when the
+  // issue is not in an orchestrated project (server answers 409).
+  async getOrchestratorFlow(key: string): Promise<OrchestratorFlow | null> {
+    try {
+      return await this.fetch<OrchestratorFlow>(`/api/orchestrator/flow/${encodeURIComponent(key)}`);
+    } catch {
+      return null;
+    }
+  }
+
+  async acceptOrchestratorFlow(key: string): Promise<unknown> {
+    return this.fetch<unknown>(`/api/orchestrator/flow/${encodeURIComponent(key)}/accept`, { method: "POST", body: "{}" });
+  }
+
+  async listOrchestratorTeams(): Promise<{ teams: OrchestratorTeam[] }> {
+    return this.fetch<{ teams: OrchestratorTeam[] }>(`/api/orchestrator/teams`);
+  }
+
+  async setOrchestratorTeamPaused(project: string, paused: boolean): Promise<unknown> {
+    return this.fetch<unknown>(`/api/orchestrator/teams/${encodeURIComponent(project)}/${paused ? "pause" : "resume"}`, { method: "POST" });
+  }
+
   async getIssue(id: string, options?: { signal?: AbortSignal }): Promise<Issue> {
     const raw = await this.fetch<unknown>(
       `/api/issues/${encodeURIComponent(id)}`,
@@ -5377,4 +5399,46 @@ export class ApiClient {
       { endpoint: "POST /api/telegram/binding/redeem" },
     );
   }
+}
+
+export interface OrchestratorDecision {
+  tid: string;
+  status?: string;
+  assignee?: string;
+  why?: string;
+  wait?: string;
+}
+
+export interface OrchestratorTransition {
+  id: number;
+  tid: string;
+  state: string;
+  error?: string;
+  source: string;
+  decision: OrchestratorDecision | null;
+  created_at: string;
+}
+
+export interface OrchestratorFlow {
+  key: string;
+  status: string;
+  metadata: Record<string, string> | null;
+  labels: string[] | null;
+  needs_acceptance: boolean;
+  paused: string;
+  next: OrchestratorDecision | null;
+  failures: number;
+  backoff_until: string | null;
+  last_error: string;
+  waiting: string;
+  recent: OrchestratorTransition[] | null;
+}
+
+export interface OrchestratorTeam {
+  project_id: string;
+  paused: boolean;
+  paused_reason: string;
+  human_user_id: string;
+  spec: { preset?: string; roles?: Record<string, unknown>; limits?: Record<string, number> } & Record<string, unknown>;
+  updated_at: string;
 }
