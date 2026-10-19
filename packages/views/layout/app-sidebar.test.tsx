@@ -103,11 +103,15 @@ vi.mock("@multica/ui/components/ui/collapsible", () => ({
   CollapsibleContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   CollapsibleTrigger: () => <button type="button" />,
 }));
-vi.mock("@multica/ui/components/ui/tooltip", () => ({
+vi.mock("@multica/ui/components/ui/tooltip", async () => {
+  const React = await import("react");
+  return {
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <button type="button">{children}</button>,
-}));
+  TooltipTrigger: ({ children, render }: { children: React.ReactNode; render?: React.ReactElement }) =>
+    render ? React.cloneElement(render, undefined, children) : <button type="button">{children}</button>,
+};
+});
 vi.mock("../common/use-app-foreground", () => ({
   useAppForeground: () => appForeground.current,
 }));
@@ -115,9 +119,20 @@ vi.mock("./help-launcher", () => ({ HelpLauncher: () => null }));
 vi.mock("../auth", () => ({ useLogout: () => vi.fn() }));
 vi.mock("../issues/components/status-icon", () => ({ StatusIcon: () => <span /> }));
 vi.mock("../navigation", () => ({
-  AppLink: ({ children, href }: { children: React.ReactNode; href: string }) => <a href={href}>{children}</a>,
-  useNavigation: () => ({ pathname: navigation.current.pathname, push: vi.fn() }),
+  AppLink: ({ children, href, ...rest }: { children?: React.ReactNode; href: string } & Record<string, unknown>) => (
+    <a href={href} {...(rest as React.AnchorHTMLAttributes<HTMLAnchorElement>)}>{children}</a>
+  ),
+  useNavigation: () => ({ pathname: navigation.current.pathname, push: vi.fn(), searchParams: new URLSearchParams() }),
 }));
+// The issue-centric sidebar sections have their own tests; here they only
+// expose the props AppSidebar hands them.
+vi.mock("../orch", () => ({
+  AgentDmSection: (props: { viewedSessionId: string | null; chatSessions: unknown[] }) => (
+    <div data-testid="dm-section" data-viewed={props.viewedSessionId ?? ""} data-sessions={props.chatSessions.length} />
+  ),
+  IssueAttentionList: () => <div data-testid="issue-list" />,
+}));
+vi.mock("@multica/core/orchestrator", () => ({ orchIssuesOptions: () => ({ queryKey: ["orch"] }) }));
 vi.mock("../projects/components/project-icon", () => ({ ProjectIcon: () => <span /> }));
 vi.mock("../workspace/workspace-avatar", () => ({ WorkspaceAvatar: () => <span /> }));
 vi.mock("@multica/ui/components/common/actor-avatar", () => ({ ActorAvatar: () => <span /> }));
@@ -242,7 +257,7 @@ describe("PinRow", () => {
     expect(screen.queryByText("MUL-123 Keep this pin")).not.toBeInTheDocument();
   });
 
-  it("does not also highlight the parent workspace nav for an active pin", async () => {
+  it("does not also highlight the board/list nav for an active pin", async () => {
     navigation.current.pathname = "/acme/issues/issue-1";
     detail.current = {
       isPending: false,
@@ -257,10 +272,10 @@ describe("PinRow", () => {
       "data-active",
       "true",
     );
-    expect(container.querySelector('button[data-href="/acme/issues"]')).not.toHaveAttribute("data-active");
+    expect(container.querySelector('a[href="/acme/issues"]')).not.toHaveAttribute("data-active");
   });
 
-  it("keeps the parent route active until a hidden pin is expanded", () => {
+  it("reveals hidden pins on demand", () => {
     const originalPins = pins.current;
     pins.current = Array.from({ length: 6 }, (_, index) => ({
       ...originalPins[0]!,
@@ -278,19 +293,13 @@ describe("PinRow", () => {
 
     try {
       const { container } = renderWithI18n(<AppSidebar />);
-      const parent = () => container.querySelector('button[data-href="/acme/issues"]');
       const lastPin = () => container.querySelector('button[data-href="/acme/issues/issue-6"]');
 
       expect(lastPin()).not.toBeInTheDocument();
-      expect(parent()).toHaveAttribute("data-active", "true");
-
       fireEvent.click(screen.getByRole("button", { name: "Show 1 more…" }));
       expect(lastPin()).toHaveAttribute("data-active", "true");
-      expect(parent()).not.toHaveAttribute("data-active");
-
       fireEvent.click(screen.getByRole("button", { name: "Show fewer" }));
       expect(lastPin()).not.toBeInTheDocument();
-      expect(parent()).toHaveAttribute("data-active", "true");
     } finally {
       pins.current = originalPins;
     }
@@ -368,8 +377,9 @@ describe("workspace-switcher dropdown per-workspace dot", () => {
   });
 
   // Row dots are brand dots WITHOUT the aggregate avatar dot's `ring-sidebar`.
+  // The footer Inbox dot (active workspace unread) is excluded too.
   const rowDots = (container: HTMLElement) =>
-    container.querySelectorAll("span.bg-brand:not(.ring-sidebar)");
+    container.querySelectorAll("span.bg-brand:not(.ring-sidebar):not([data-testid=inbox-unread-dot])");
 
   it("dots the specific other workspace that has unread", () => {
     summary.current = [{ workspace_id: "ws-2", count: 3 }];
@@ -394,119 +404,64 @@ describe("workspace-switcher dropdown per-workspace dot", () => {
   });
 });
 
-describe("navigation item presentation", () => {
-  it("keeps Analytics and Settings styled like the other nav items", () => {
-    const { container } = render(<AppSidebar />);
-    const referenceClassName = container.querySelector(
-      'button[data-href="/acme/issues"]',
-    )?.className;
+describe("secondary nav strip", () => {
+  beforeEach(() => {
+    summary.current = [];
+    navigation.current = { pathname: "/acme/issues" };
+  });
 
-    expect(referenceClassName).toBeTruthy();
-
-    // The footer pair carries the same nav styling and sits one type step
-    // smaller (FX-147 typography), which is the only difference allowed here.
-    for (const href of ["/acme/usage", "/acme/settings"]) {
-      expect(container.querySelector(`button[data-href="${href}"]`)?.className).toBe(
-        `${referenceClassName} text-caption`,
-      );
+  it("links every secondary surface from the footer strip", () => {
+    const { getByTestId } = render(<AppSidebar />);
+    const strip = getByTestId("orch-secondary-nav");
+    for (const href of ["/acme/inbox", "/acme/issues", "/acme/projects", "/acme/autopilots", "/acme/runtimes", "/acme/squads", "/acme/skills", "/acme/usage", "/acme/settings"]) {
+      expect(strip.querySelector(`a[href="${href}"]`)).not.toBeNull();
     }
+  });
+
+  it("dots Inbox when the active workspace has unread items", () => {
+    summary.current = [{ workspace_id: "ws-1", count: 2 }];
+    const { getByTestId } = render(<AppSidebar />);
+    expect(getByTestId("inbox-unread-dot")).toBeInTheDocument();
   });
 });
 
-describe("personal nav — Chat", () => {
+describe("agent DMs — viewed session", () => {
   beforeEach(() => {
     chatSessions.current = [];
-    summary.current = [];
     navigation.current = { pathname: "/acme/issues" };
     chatStore.current = { activeSessionId: null, isOpen: false };
     appForeground.current = true;
   });
 
-  // The mocked SidebarMenuButton exposes the AppLink target as `data-href`
-  // and renders the label + badge as its children.
-  const chatNav = (container: HTMLElement) =>
-    container.querySelector<HTMLElement>('button[data-href="/acme/chat"]');
-  const chatBadge = (container: HTMLElement) =>
-    chatNav(container)?.querySelector("number-flow-react") ?? null;
+  const viewed = (container: HTMLElement) => container.querySelector('[data-testid="dm-section"]')?.getAttribute("data-viewed");
 
-  it("keeps persistent Inbox and Chat counters static", () => {
-    summary.current = [{ workspace_id: "ws-1", count: 1 }];
-    chatSessions.current = [{ id: "chat-1", unread_count: 2 }];
+  it("passes the chat sessions to the DM section", () => {
+    chatSessions.current = [{ id: "a", unread_count: 1 }];
     const { container } = render(<AppSidebar />);
-    const inboxBadge = container
-      .querySelector<HTMLElement>('button[data-href="/acme/inbox"]')
-      ?.querySelector("number-flow-react") as (HTMLElement & { animated?: boolean }) | null;
-    const currentChatBadge = chatBadge(container) as (HTMLElement & { animated?: boolean }) | null;
-
-    expect(inboxBadge?.animated).toBe(false);
-    expect(currentChatBadge?.animated).toBe(false);
+    expect(container.querySelector('[data-testid="dm-section"]')).toHaveAttribute("data-sessions", "1");
   });
 
-  it("renders a Chat nav link to the workspace chat route", () => {
-    const { container } = render(<AppSidebar />);
-    expect(chatNav(container)).not.toBeNull();
-  });
-
-  it("badges the Chat nav with the summed unread_count of chat sessions", () => {
-    chatSessions.current = [{ id: "a", unread_count: 3 }, { id: "b", unread_count: 2 }, { id: "c", unread_count: 0 }];
-    const { container } = render(<AppSidebar />);
-    expect(chatBadge(container)).toHaveAttribute("aria-label", "5");
-  });
-
-  it("shows no Chat unread badge when every session is read", () => {
-    chatSessions.current = [{ id: "a", unread_count: 0 }, { id: "b" }];
-    const { container } = render(<AppSidebar />);
-    expect(chatBadge(container)).toBeNull();
-  });
-
-  it("excludes the session being viewed on the chat page from the badge", () => {
-    // The thread list zeroes the open session's row badge; the aggregate
-    // must follow, or a reply landing in the open conversation flashes a
-    // count with no matching row.
-    chatSessions.current = [{ id: "a", unread_count: 2 }, { id: "b", unread_count: 3 }];
+  it("marks the session read on the chat page as viewed", () => {
     navigation.current = { pathname: "/acme/chat" };
     chatStore.current = { activeSessionId: "a", isOpen: false };
-    const { container } = render(<AppSidebar />);
-    expect(chatBadge(container)).toHaveAttribute("aria-label", "3");
+    expect(viewed(render(<AppSidebar />).container)).toBe("a");
   });
 
-  it("excludes the viewed session when the floating chat window is open off-route", () => {
-    chatSessions.current = [{ id: "a", unread_count: 2 }, { id: "b", unread_count: 3 }];
-    navigation.current = { pathname: "/acme/issues" };
+  it("marks the floating window's session as viewed off-route", () => {
     chatStore.current = { activeSessionId: "a", isOpen: true };
-    const { container } = render(<AppSidebar />);
-    expect(chatBadge(container)).toHaveAttribute("aria-label", "3");
+    expect(viewed(render(<AppSidebar />).container)).toBe("a");
   });
 
-  it("still counts a remembered selection when no chat surface is showing it", () => {
-    // activeSessionId persists after the chat page closes; with both
-    // surfaces closed nothing will auto mark-read, so the badge must count.
-    chatSessions.current = [{ id: "a", unread_count: 2 }, { id: "b", unread_count: 3 }];
-    navigation.current = { pathname: "/acme/issues" };
+  it("does not treat a remembered selection as viewed", () => {
     chatStore.current = { activeSessionId: "a", isOpen: false };
-    const { container } = render(<AppSidebar />);
-    expect(chatBadge(container)).toHaveAttribute("aria-label", "5");
+    expect(viewed(render(<AppSidebar />).container)).toBe("");
   });
 
-  it("counts the active session while the floating window is open but the app is backgrounded", () => {
-    // A reply landing while the app is not in the foreground is NOT auto
-    // marked-read (MUL-4485), so its unread must still badge — otherwise the
-    // notification is silently eaten while the user is away.
-    chatSessions.current = [{ id: "a", unread_count: 2 }, { id: "b", unread_count: 3 }];
-    navigation.current = { pathname: "/acme/issues" };
-    chatStore.current = { activeSessionId: "a", isOpen: true };
-    appForeground.current = false;
-    const { container } = render(<AppSidebar />);
-    expect(chatBadge(container)).toHaveAttribute("aria-label", "5");
-  });
-
-  it("counts the active session on the chat route while the app is backgrounded", () => {
-    chatSessions.current = [{ id: "a", unread_count: 2 }, { id: "b", unread_count: 3 }];
+  it("does not treat a backgrounded app as viewing", () => {
     navigation.current = { pathname: "/acme/chat" };
     chatStore.current = { activeSessionId: "a", isOpen: false };
     appForeground.current = false;
-    const { container } = render(<AppSidebar />);
-    expect(chatBadge(container)).toHaveAttribute("aria-label", "5");
+    expect(viewed(render(<AppSidebar />).container)).toBe("");
   });
 });
 
@@ -553,19 +508,19 @@ describe("sidebar nav groups", () => {
 
   it("drops the standalone agents row and keeps agents under runtimes", () => {
     const { container } = render(<AppSidebar />);
-    expect(container.querySelector('button[data-href="/acme/agents"]')).toBeNull();
-    expect(container.querySelector('button[data-href="/acme/runtimes"]')).not.toBeNull();
-    expect(container.querySelector('button[data-href="/acme/autopilots"]')).not.toBeNull();
-    expect(container.querySelector('button[data-href="/acme/squads"]')).not.toBeNull();
-    expect(container.querySelector('button[data-href="/acme/usage"]')).not.toBeNull();
+    expect(container.querySelector('a[href="/acme/agents"]')).toBeNull();
+    expect(container.querySelector('a[href="/acme/runtimes"]')).not.toBeNull();
   });
 
   it("highlights runtimes while the merged agents surface is open", () => {
     navigation.current.pathname = "/acme/agents";
     const { container } = render(<AppSidebar />);
-    expect(container.querySelector('button[data-href="/acme/runtimes"]')).toHaveAttribute(
-      "data-active",
-      "true",
-    );
+    expect(container.querySelector('a[href="/acme/runtimes"]')).toHaveAttribute("data-active", "true");
+  });
+
+  it("renders the agent DMs and the issue list", () => {
+    const { getByTestId } = render(<AppSidebar />);
+    expect(getByTestId("dm-section")).toBeInTheDocument();
+    expect(getByTestId("issue-list")).toBeInTheDocument();
   });
 });

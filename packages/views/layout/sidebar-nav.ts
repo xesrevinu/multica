@@ -62,3 +62,18 @@ export const utilityNav: SidebarNavItem[] = [
   { key: "usage", labelKey: "usage" },
   { key: "settings", labelKey: "settings" },
 ];
+
+// Issue-centric layout (docs/orchestrator/ui-redesign.md): the sidebar body is
+// agent DMs + the attention-sorted issue list, so every other surface lives in
+// this footer icon strip. "issues" is the board/list/table views page.
+export const secondaryNav: SidebarNavItem[] = [
+  { key: "inbox", labelKey: "inbox" },
+  { key: "issues", labelKey: "issues" },
+  { key: "projects", labelKey: "projects" },
+  { key: "autopilots", labelKey: "autopilots" },
+  { key: "runtimes", labelKey: "runtimes" },
+  { key: "squads", labelKey: "squads" },
+  { key: "skills", labelKey: "skills" },
+  { key: "usage", labelKey: "usage" },
+  { key: "settings", labelKey: "settings" },
+];
