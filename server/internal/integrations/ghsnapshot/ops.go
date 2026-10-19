@@ -479,14 +479,21 @@ func (c *Client) SquashMerge(ctx context.Context, installationID int64, owner, r
 var htmlComment = regexp.MustCompile(`(?s)<!--.*?-->`)
 
 // SquashCommitMessage builds the squash commit: title = PR title, body = the
-// first paragraph of the PR description (HTML comments dropped, at most 400
-// characters), a "PR #n" reference and an optional trailer.
+// first paragraph of the PR description (HTML comments and markdown headings
+// dropped, at most 400 characters), a "PR #n" reference and an optional trailer.
 func SquashCommitMessage(prTitle, prBody string, number int, trailer string) (string, string) {
 	title := strings.TrimSpace(prTitle)
 	summary := ""
 	for _, para := range strings.Split(strings.ReplaceAll(htmlComment.ReplaceAllString(prBody, ""), "\r\n", "\n"), "\n\n") {
-		if p := strings.TrimSpace(para); p != "" {
-			summary = p
+		// Markdown headings ("## Why") are section labels, not a summary.
+		var keep []string
+		for _, l := range strings.Split(para, "\n") {
+			if t := strings.TrimSpace(l); t != "" && !strings.HasPrefix(t, "#") {
+				keep = append(keep, t)
+			}
+		}
+		if len(keep) > 0 {
+			summary = strings.Join(keep, "\n")
 			break
 		}
 	}

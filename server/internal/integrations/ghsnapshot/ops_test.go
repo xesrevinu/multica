@@ -173,6 +173,12 @@ func TestSquashCommitMessage(t *testing.T) {
 	if msg != want {
 		t.Fatalf("msg\n%q\nwant\n%q", msg, want)
 	}
+	if _, msg := SquashCommitMessage("x", "## Why\n\nCallers need eleven().\n\n## Test\nnpm test", 26, ""); msg != "Callers need eleven().\n\nPR #26" {
+		t.Fatalf("heading body msg %q", msg)
+	}
+	if _, msg := SquashCommitMessage("x", "## Summary\nAdds eleven().", 7, ""); msg != "Adds eleven().\n\nPR #7" {
+		t.Fatalf("heading+text paragraph msg %q", msg)
+	}
 	if _, msg := SquashCommitMessage("x", "", 3, ""); msg != "PR #3" {
 		t.Fatalf("empty body msg %q", msg)
 	}
