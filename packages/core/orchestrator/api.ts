@@ -39,8 +39,13 @@ export function parseOrchPRCard(raw: unknown): OrchPRCard | null {
   return parseWithFallback<OrchPRCard | null>(raw, OrchPRCardSchema, null, { endpoint: "GET /api/orchestrator/issues/:key/pr" });
 }
 
-export async function fetchOrchIssues(params?: { settledLimit?: number; project?: string }) {
-  return parseOrchIssues(await api.listOrchIssues(params));
+export type OrchIssueList = { issues: OrchIssue[]; settledTotal: number };
+
+export async function fetchOrchIssues(params?: { settledLimit?: number; project?: string }): Promise<OrchIssueList> {
+  const raw = await api.listOrchIssues(params);
+  const total = (raw as { settled_total?: unknown } | null)?.settled_total;
+  const issues = parseOrchIssues(raw);
+  return { issues, settledTotal: typeof total === "number" ? total : issues.filter((i) => i.attention.bucket === "settled").length };
 }
 
 export async function fetchOrchTimeline(key: string) {

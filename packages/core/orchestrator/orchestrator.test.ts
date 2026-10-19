@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { parseOrchIssues, parseOrchPRCard, parseOrchTimeline } from "./api";
-import { filterOrchIssues, groupOrchIssues } from "./tree";
+import { DEFAULT_ORCH_VIEW, applyOrchView, filterOrchIssues, groupOrchIssues } from "./tree";
 
 vi.mock("../api", () => ({ api: {} }));
 
@@ -84,5 +84,26 @@ describe("groupOrchIssues", () => {
     const issues = parseOrchIssues({ issues: [row(), row({ id: "i2", key: "ATT-2", title: "Fix login", project: { id: "pr", title: "web" } })] });
     expect(filterOrchIssues(issues, "login").map((i) => i.key)).toEqual(["ATT-2"]);
     expect(filterOrchIssues(issues, "", "pr").map((i) => i.key)).toEqual(["ATT-2"]);
+  });
+});
+
+describe("applyOrchView", () => {
+  const issues = parseOrchIssues({
+    issues: [
+      { id: "a", key: "ATT-1", title: "a", priority: "low", orchestrated: true, assignee: { type: "agent", id: "g", name: "dev" }, created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-03T00:00:00Z" },
+      { id: "b", key: "ATT-2", title: "b", priority: "urgent", assignee: { type: "member", id: "u1", name: "Ray" }, created_at: "2026-10-02T00:00:00Z", updated_at: "2026-10-02T00:00:00Z" },
+      { id: "c", key: "ATT-3", title: "c", created_at: "2026-10-03T00:00:00Z", updated_at: "2026-10-01T00:00:00Z" },
+    ],
+  });
+  it("keeps server order for attention and tolerates missing assignee/priority", () => {
+    expect(applyOrchView(issues, DEFAULT_ORCH_VIEW).map((i) => i.key)).toEqual(["ATT-1", "ATT-2", "ATT-3"]);
+  });
+  it("sorts and filters", () => {
+    expect(applyOrchView(issues, { ...DEFAULT_ORCH_VIEW, sort: "priority" }).map((i) => i.key)).toEqual(["ATT-2", "ATT-1", "ATT-3"]);
+    expect(applyOrchView(issues, { ...DEFAULT_ORCH_VIEW, sort: "created" }).map((i) => i.key)).toEqual(["ATT-3", "ATT-2", "ATT-1"]);
+    expect(applyOrchView(issues, { ...DEFAULT_ORCH_VIEW, assignee: "me" }, "u1").map((i) => i.key)).toEqual(["ATT-2"]);
+    expect(applyOrchView(issues, { ...DEFAULT_ORCH_VIEW, assignee: "unassigned" }).map((i) => i.key)).toEqual(["ATT-3"]);
+    expect(applyOrchView(issues, { ...DEFAULT_ORCH_VIEW, orchestratedOnly: true }).map((i) => i.key)).toEqual(["ATT-1"]);
+    expect(applyOrchView(issues, { ...DEFAULT_ORCH_VIEW, priorities: ["none"] }).map((i) => i.key)).toEqual(["ATT-3"]);
   });
 });
