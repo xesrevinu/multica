@@ -30,10 +30,10 @@ type Run struct {
 type Snapshot struct {
 	Now       time.Time
 	Issue     Issue
-	ActiveRun *Run // queued/dispatched/running task, if any
-	LastRun   *Run // newest finished task, if any
-	Head      string // current sha of the issue branch ("" = not pushed)
-	Siblings  []Issue // same project, for deps / stage barrier
+	ActiveRun *Run            // queued/dispatched/running task, if any
+	LastRun   *Run            // newest finished task, if any
+	Head      string          // current sha of the issue branch ("" = not pushed)
+	Siblings  []Issue         // same project, for deps / stage barrier
 	Busy      map[string]bool // owner agents with todo/in_progress work across the workspace
 	FreeGB    int
 }
@@ -82,7 +82,7 @@ var phaseStatus = map[string][]string{
 	PhCancelled:        {StCancelled},
 }
 
-func num(s string) int { n, _ := strconv.Atoi(strings.TrimSpace(s)); return n }
+func num(s string) int  { n, _ := strconv.Atoi(strings.TrimSpace(s)); return n }
 func itoa(n int) string { return strconv.Itoa(n) }
 
 // NeedsAcceptance reports whether the issue is gated on a human acceptance.

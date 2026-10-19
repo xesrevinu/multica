@@ -104,7 +104,9 @@ func TestPrecheckConflictAndMergeConflict(t *testing.T) {
 	s = snap(StInReview, map[string]string{"phase": PhReviewing, "owner": "a", "verdict": "approve", "reviewed_sha": "h"})
 	s.Head = "h"
 	want(t, sp.Decide(s, fail("checks_red")), "T3_rework", StTodo, "a")
-	pend := func(*Snapshot, bool) ProbeResult { return ProbeResult{Pending: true, Kind: "pending", Detail: "test=PENDING"} }
+	pend := func(*Snapshot, bool) ProbeResult {
+		return ProbeResult{Pending: true, Kind: "pending", Detail: "test=PENDING"}
+	}
 	if d := sp.Decide(s, pend); d.Tid != "" || d.Wait == "" {
 		t.Fatal(d)
 	}
@@ -208,7 +210,10 @@ func TestAcceptanceGate(t *testing.T) {
 	s.Head = "h"
 	s.Issue.Labels = []string{"needs-GUI-Master"}
 	merged := false
-	pr := func(_ *Snapshot, m bool) ProbeResult { merged = merged || m; return ProbeResult{OK: true, Kind: "dry", SHA: "m"} }
+	pr := func(_ *Snapshot, m bool) ProbeResult {
+		merged = merged || m
+		return ProbeResult{OK: true, Kind: "dry", SHA: "m"}
+	}
 	d := sp.Decide(s, pr)
 	want(t, d, "T10_await_acceptance", "", "@human")
 	if merged || d.Notify == "" || d.StartsRun() {

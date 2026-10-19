@@ -78,7 +78,7 @@ const issueFrom = ` FROM issue i JOIN workspace w ON w.id=i.workspace_id LEFT JO
 
 type issueRow struct {
 	Issue
-	Revision            int64
+	Revision             int64
 	ProjectID, Workspace string
 }
 

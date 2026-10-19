@@ -18,9 +18,10 @@ import (
 // into a bare remote; GitHub mode gates on the PR (App snapshot when fresh,
 // `gh` otherwise) and merges with `gh pr merge --squash --match-head-commit`.
 type repoOps struct {
-	svc  *Service
-	mu   sync.Map // per-project integration lock (serial merge)
-	work string
+	svc     *Service
+	retried sync.Map // head sha → CI already re-run once
+	mu      sync.Map // per-project integration lock (serial merge)
+	work    string
 }
 
 type shOut struct {
@@ -141,6 +142,8 @@ func (r *repoOps) integrate(ctx context.Context, t *Team, s *Snapshot, push bool
 	if sp.Repo.Hub != "" {
 		run(ctx, sp.Repo.Hub, "git", "pull", "-q", "--ff-only")
 	}
+	// cleanup: the merged branch is done; drop it from the bare remote.
+	run(ctx, sp.Repo.Bare, "git", "update-ref", "-d", "refs/heads/"+branchOf(sp, s.Issue.Key))
 	return ProbeResult{OK: true, Kind: "merged", SHA: strings.TrimSpace(run(ctx, w, "git", "rev-parse", "HEAD").out)}
 }
 
@@ -252,6 +255,13 @@ func (r *repoOps) gate(ctx context.Context, t *Team, s *Snapshot, merge bool) Pr
 	}
 	switch {
 	case len(red) > 0:
+		// babysit rule: a red CI head earns exactly one fresh re-run of its
+		// failed workflow runs before it goes back to the owner; an identical
+		// second failure is real.
+		if r.retryCI(ctx, sp, s.Head) {
+			res.Kind, res.Pending, res.Detail = "pending", true, "re-running failed CI once: "+strings.Join(red, ",")
+			return res
+		}
 		res.Kind, res.Detail = "checks_red", strings.Join(red, ",")
 		return res
 	case v.Mergeable == "CONFLICTING":
@@ -268,7 +278,7 @@ func (r *repoOps) gate(ctx context.Context, t *Team, s *Snapshot, merge bool) Pr
 		return res
 	}
 	defer r.lock(t.ProjectID)()
-	if _, err := r.gh(ctx, sp, "pr", "merge", n, "--squash", "--match-head-commit", s.Head); err != nil {
+	if _, err := r.gh(ctx, sp, "pr", "merge", n, "--squash", "--delete-branch", "--match-head-commit", s.Head); err != nil {
 		res.Kind, res.Detail = "push_failed", err.Error()
 		return res
 	}
@@ -336,4 +346,31 @@ func (s *Service) prSnapshot(ctx context.Context, sp *Spec, num string) *prSnap 
 		return nil
 	}
 	return p
+}
+
+func (r *repoOps) retryCI(ctx context.Context, sp *Spec, head string) bool {
+	if head == "" {
+		return false
+	}
+	if _, done := r.retried.LoadOrStore(head, true); done {
+		return false
+	}
+	out, err := r.gh(ctx, sp, "run", "list", "--commit", head, "--json", "databaseId,conclusion")
+	if err != nil {
+		return false
+	}
+	var runs []struct {
+		ID         int64  `json:"databaseId"`
+		Conclusion string `json:"conclusion"`
+	}
+	_ = json.Unmarshal([]byte(out), &runs)
+	n := 0
+	for _, x := range runs {
+		if x.Conclusion == "failure" || x.Conclusion == "timed_out" || x.Conclusion == "cancelled" {
+			if _, err := r.gh(ctx, sp, "run", "rerun", fmt.Sprint(x.ID), "--failed"); err == nil {
+				n++
+			}
+		}
+	}
+	return n > 0
 }
