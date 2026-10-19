@@ -103,3 +103,9 @@ Reference implementation: /Users/kee/Workspace/ai-stack/multica-e2e/teamctl (kep
 - Owner answers every important finding.
 - Engine: the reviewer sets metadata risk=high, which forces human acceptance (T10). The guard validates risk values. The round-cap block reason now tells the lead to reconsider the approach.
 - New scenarios: REVIEW-risk-high-gates and REVIEW-risk-high-acceptance.
+
+## Step: PocketJS patch refresh (2026-10-19)
+- Rebuilt multica-orchestrator.patch against the real pocketjs .multica/project.yaml at 0344e315.
+- Per-role pstack and preset skills added to the agents. yielded-reviewer now follows the review practices.
+- New .multica/REVIEW.md: failure modes and risk tiers. workflow.md gains review and pstack sections.
+- `git apply --check` is OK for both patches. Both orchestrator specs validate with `preset render -f`. Nothing was applied to pocketjs.

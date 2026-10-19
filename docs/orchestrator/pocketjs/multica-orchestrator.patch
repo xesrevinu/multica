@@ -1,6 +1,33 @@
-diff -ruN a/.multica/project.yaml b/.multica/project.yaml
---- a/.multica/project.yaml	2026-10-19 17:03:13
-+++ b/.multica/project.yaml	2026-10-19 17:03:13
+diff --git a/.multica/REVIEW.md b/.multica/REVIEW.md
+new file mode 100644
+index 0000000..cb8448a
+--- /dev/null
++++ b/.multica/REVIEW.md
+@@ -0,0 +1,20 @@
++# REVIEW.md — what review means in PocketJS
++
++Read by the reviewer on every orchestrated review. Short on purpose.
++
++## What failure looks like here
++- **Host**: a window, CAMetalLayer or AppKit object created outside `crates/host-apple`; a DrawList or retained-tree change that renders differently on macos-app vs web-gpu; a frame-time regression without a number (`principle-explain-the-number`).
++- **Compiler / framework**: Solid, Vue Vapor and Octane no longer compiling to the same retained tree; a test that only asserts the implementation shape.
++- **Studio**: studio/app or studio/control-plane editing the runtime host instead of filing an OX contract issue; a screen change with no screenshot in `.build/validation/`.
++- **Docs**: they lie (describe behavior the code does not have). **Config**: it misroutes.
++
++## Risk (metadata `risk`, set by the reviewer from the change, not the author)
++- **high** (forces Ray's acceptance): `crates/host-*` unsafe/FFI, `.github/workflows/**`, release and bundle scripts, installers/updaters, `studio/control-plane` license certificates, update channel or analytics/PII, `flake.nix` / `.envrc` toolchain, anything that sets a pattern other areas will copy.
++- **medium**: ordinary feature or bug fix in one area.
++- **low**: docs, tests only, internal tooling, additive change behind a flag.
++
++## Findings
++- Each finding: file:line, a concrete failing case, the minimal fix, and its bug class.
++- Tags: `important` blocks; `nit` at most 3 and never blocks; `pre-existing` never blocks (note it for the lead).
++- Skip: `.build/`, generated bindings, lockfiles (unless a dependency was added), snapshot files the PR regenerated on purpose.
++- Start the review comment with the count ("1 important, 0 nit, 2 pre-existing") or "nothing to fix".
+diff --git a/.multica/project.yaml b/.multica/project.yaml
+index 3aa3ffb..3e98584 100644
+--- a/.multica/project.yaml
++++ b/.multica/project.yaml
 @@ -1,6 +1,10 @@
  # Multica declaration. One file, two workspaces.
  
@@ -12,9 +39,19 @@ diff -ruN a/.multica/project.yaml b/.multica/project.yaml
    - name: rust-best-practices
      bind: listed
      description: Idiomatic Rust for the host. Does not choose the build command.
-@@ -33,11 +37,11 @@
+@@ -32,12 +36,21 @@ agents:
+     max_concurrent_tasks: 3
      skills:
        - improve-codebase-architecture
++      - plan-split
++      - blocked-report
++      - figure-it-out
++      - sharpen
++      - in-your-own-words
++      - principle-sequence-verifiable-units
++      - principle-separate-before-serializing-shared-state
++      - recall
++      - reflect
      instructions: |
 -      Do not edit, commit, push, merge, or mark an issue done. Do not split.
 +      Do not edit, commit, push, merge, or mark an issue done.
@@ -27,7 +64,78 @@ diff -ruN a/.multica/project.yaml b/.multica/project.yaml
  
    - name: yielded-researcher
      runtime: mac-studio:yielded
-@@ -181,9 +185,37 @@
+@@ -90,6 +103,21 @@ agents:
+       - webgpu-specs
+       - diagnosing-bugs
+       - m10-performance
++      - open-pr
++      - handoff-metadata
++      - rebase-conflict
++      - blocked-report
++      - pocket-checks
++      - tdd
++      - principle-prove-it-works
++      - principle-subtract-before-you-add
++      - principle-fix-root-causes
++      - principle-laziness-protocol
++      - blast-radius
++      - unslop
++      - no-comments
++      - architect
++      - typescript-best-practices
+     instructions: |
+       You take the hardest part of the issue and do that part yourself, in this checkout. The repository's rules decide how to build. Skills do not override them.
+ 
+@@ -112,6 +140,17 @@ agents:
+       - apple-appkit
+       - webgpu-specs
+       - diagnosing-bugs
++      - verify-gates
++      - review-verdict
++      - blocked-report
++      - pocket-checks
++      - interrogate
++      - blast-radius
++      - principle-prove-it-works
++      - principle-test-behavior-not-implementation
++      - principle-fix-root-causes
++      - swarm
++      - typescript-best-practices
+     instructions: |
+       Read only. Do not modify files or change git state.
+ 
+@@ -119,6 +158,8 @@ agents:
+ 
+       It passes when both are true and a check covers the risky behavior. It does not pass when the ask is missing or wrong, unasked behavior was added, an invariant is broken, or you cannot tell. Name the file and the issue line or the rule for each finding. Lead with blocking findings. If nothing blocks, say what you checked.
+ 
++      In orchestrated projects (Pocket, Studio Parts) follow the preset reviewer role and skill `review-verdict`: read `.multica/REVIEW.md`; find with several lenses (`interrogate`), keep only findings you reproduced or pinned to file:line; tag each `important` (blocks), `nit` (at most 3, never blocks) or `pre-existing` (note for the lead); start the comment with the count or "nothing to fix"; on re-review look only at the diff since the last `reviewed_sha` and do not repeat findings; set metadata `risk` (low|medium|high) from REVIEW.md's high-risk paths. The verdict goes into metadata, not issue status.
++
+       Judge the branch named in the implementer's comment. Your own checkout is another branch and does not contain their commits. Post one comment with no @mention. Do not change the issue status. You may `delegate` one bounded read of the diff. Do not open issues, assign anyone, or start another run.
+ 
+ workspaces:
+@@ -138,6 +179,21 @@ workspaces:
+           - webgpu-specs
+           - diagnosing-bugs
+           - m10-performance
++          - open-pr
++          - handoff-metadata
++          - rebase-conflict
++          - blocked-report
++          - pocket-checks
++          - tdd
++          - principle-prove-it-works
++          - principle-subtract-before-you-add
++          - principle-fix-root-causes
++          - principle-laziness-protocol
++          - blast-radius
++          - unslop
++          - no-comments
++          - typescript-best-practices
++          - benchmark-checklist
+         instructions: |
+           Work only in this checkout. You own framework, compiler, CLI, apps, and the Rust host. Do not edit studio/ unless the issue says a runtime contract has to change.
+ 
+@@ -181,9 +237,37 @@ workspaces:
              runtime: mac-studio:yielded
              execution_mode: worktree
              label: pocketjs
@@ -40,7 +148,7 @@ diff -ruN a/.multica/project.yaml b/.multica/project.yaml
 +            lead: yielded-lead
 +            reviewer: yielded-reviewer
 +            owners: [heavy-engineer, gbot]
-+            # proposed engine extension (see docs plan): area labels route to owners
++            # roles.routes: first matching area label picks the owner pool
 +            routes:
 +              - { labels: [area:hard, area:cross-cutting], owners: [gbot] }
 +              - { labels: [area:host, area:compiler, area:framework, area:cli, area:apps], owners: [heavy-engineer, gbot] }
@@ -63,11 +171,57 @@ diff -ruN a/.multica/project.yaml b/.multica/project.yaml
 +            stuck_min: 60        # cold Rust builds are long
 +            idle_min: 15         # one cargo step can be silent for minutes
 +            min_free_gb: 40      # every worktree has its own target/
-+            slots: { cargo: 2 }  # proposed: at most 2 issues labelled needs:cargo run at once (10 cores / 32 GB)
++            slots: { cargo: 2 }  # at most 2 issues labelled needs:cargo run at once (10 cores / 32 GB)
  
      squads:
        - name: OX Squad
-@@ -248,9 +280,28 @@
+@@ -215,6 +299,23 @@ workspaces:
+         max_concurrent_tasks: 3
+         skills:
+           - diagnosing-bugs
++          - open-pr
++          - handoff-metadata
++          - rebase-conflict
++          - blocked-report
++          - pocket-checks
++          - tdd
++          - principle-prove-it-works
++          - principle-subtract-before-you-add
++          - principle-fix-root-causes
++          - principle-laziness-protocol
++          - blast-radius
++          - unslop
++          - no-comments
++          - typescript-best-practices
++          - create-verification-skill
++          - maintain-verification-skill
++          - principle-experience-first
+         instructions: |
+           You own studio/app. Do not edit studio/control-plane or the runtime host. If the screen needs a runtime contract, stop and say so.
+ 
+@@ -230,6 +331,21 @@ workspaces:
+         skills:
+           - improve-codebase-architecture
+           - diagnosing-bugs
++          - open-pr
++          - handoff-metadata
++          - rebase-conflict
++          - blocked-report
++          - pocket-checks
++          - tdd
++          - principle-prove-it-works
++          - principle-subtract-before-you-add
++          - principle-fix-root-causes
++          - principle-laziness-protocol
++          - blast-radius
++          - unslop
++          - no-comments
++          - typescript-best-practices
++          - principle-make-operations-idempotent
+         instructions: |
+           You own studio/control-plane and the studio packages it imports. Do not edit studio/app or the PocketJS host. If the change needs a runtime contract, stop and say so.
+ 
+@@ -248,9 +364,28 @@ workspaces:
              runtime: mac-studio:yielded
              execution_mode: worktree
              label: pocketjs
@@ -98,9 +252,11 @@ diff -ruN a/.multica/project.yaml b/.multica/project.yaml
  
      squads:
        - name: Studio Squad
-diff -ruN a/.multica/skills/pocket-checks/SKILL.md b/.multica/skills/pocket-checks/SKILL.md
---- a/.multica/skills/pocket-checks/SKILL.md	1970-01-01 08:00:00
-+++ b/.multica/skills/pocket-checks/SKILL.md	2026-10-19 17:03:13
+diff --git a/.multica/skills/pocket-checks/SKILL.md b/.multica/skills/pocket-checks/SKILL.md
+new file mode 100644
+index 0000000..d931083
+--- /dev/null
++++ b/.multica/skills/pocket-checks/SKILL.md
 @@ -0,0 +1,23 @@
 +---
 +name: pocket-checks
@@ -125,18 +281,19 @@ diff -ruN a/.multica/skills/pocket-checks/SKILL.md b/.multica/skills/pocket-chec
 +
 +3. Put each command and the tail of its output in the result comment. A check you could not run is reported as not verified, with the reason.
 +4. Screenshots and logs stay in ignored `.build/validation/`; never commit them.
-diff -ruN a/.multica/workflow.md b/.multica/workflow.md
---- a/.multica/workflow.md	2026-10-19 17:03:13
-+++ b/.multica/workflow.md	2026-10-19 17:03:13
-@@ -1,49 +1,47 @@
+diff --git a/.multica/workflow.md b/.multica/workflow.md
+index a51e4b5..24dccab 100644
+--- a/.multica/workflow.md
++++ b/.multica/workflow.md
+@@ -1,49 +1,58 @@
 -# Multica 流程
 +# Multica 流程（编排器版）
  
 -## 框架（OX）
+-
+-范围是 framework、compiler、Rust host、CLI、apps。不进 `studio/`。实现者是 `grok-engineer`，研究和审查仍是 yielded。
 +两个项目（Pocket / Studio Parts）由 Multica 内置编排器驱动：状态和指派只由引擎写，agent 通过 metadata 交接。人仍然是最后一关：GUI 改动和需要签字的改动停在验收门，Ray 用 Flow 卡片或 `multica flow accept|reject` 决定，引擎在同一个 head 上合并。
  
--范围是 framework、compiler、Rust host、CLI、apps。不进 `studio/`。实现者是 `grok-engineer`，研究和审查仍是 yielded。
--
  ```mermaid
  flowchart TD
 -  in["人在 OX 建 backlog issue，不指派"] --> gate{"人把 issue 交给 OX Squad"}
@@ -212,6 +369,17 @@ diff -ruN a/.multica/workflow.md b/.multica/workflow.md
 -  rv --> review["审查通过后 leader 设 in_review"]
 -  review --> ray["Ray 合并，并标 done"]
 -```
++## 评审规则（`.multica/REVIEW.md`）
++- reviewer 多视角找问题（`interrogate`），只保留复现过或能指到 file:line 的 finding；标 `important`（阻塞）/ `nit`（≤3，不阻塞）/ `pre-existing`（不怪作者，记给 lead）。评论第一行写数量或"nothing to fix"。
++- 复审只看上次 `reviewed_sha` 之后的 diff，不重复旧 finding；owner 在交接评论里逐条回应 important（已修在哪 / 反驳理由）。
++- reviewer 按改动写 `risk`：`high`（host FFI、CI workflow、发布/安装、license 证书、toolchain 等）一律进 Ray 验收门。
++- 三轮仍不收敛（`limits.impl`）→ blocked 给 lead，换思路或拆分，不再打补丁。
++
++## pstack 技能
++- 角色技能来自编排器预设（`multica team preset export` 后 `multica skill create`），已按角色写进 project.yaml 各 agent 的 skills。
++- 契约：只在本 worktree 内读写（临时文件放 `.orch-scratch/`）；交接写 issue metadata/评论；不问人，卡住用 blocked-report；不 rebase、不 force-push，冲突 merge origin/main；合并、开/删 worktree 由引擎做。
++- frontend-engineer 可用 `create-verification-skill` 在 `.multica/skills/verify-studio/` 写界面验证配方，reviewer 和 Ray 验收时复用。
++
 +## 不变的规则
 +- 一条 issue 一个 wt worktree，`wt` 选目录；不 clone GitHub，不改主 checkout。
 +- agent 不合并、不标 done；合并由引擎在 review + CI（+ 验收）全绿后做。

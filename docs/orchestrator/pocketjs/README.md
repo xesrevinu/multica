@@ -3,7 +3,17 @@
 | 文件 | 内容 |
 |---|---|
 | `multica-orchestrator.patch` | 改 pocketjs 的 `.multica/`：project.yaml 两个项目（Pocket / Studio Parts）加 `orchestrator:` 段并去掉 `github_repo` 资源；lead 指令改成只做规划和 blocked 处理；workflow.md 重写为引擎流程 + 区域/owner/检查表；新 skill `pocket-checks` |
+| （同一 patch）`.multica/REVIEW.md` | PocketJS 的评审规则：各区域"失败长什么样"、`risk` 分级（high 进 Ray 验收门）、finding 格式与跳过路径 |
 | `envrc-sccache.patch` | `.envrc`：有 sccache 时设置 `RUSTC_WRAPPER`、共享 `SCCACHE_DIR`、40G 上限 |
+
+基线：pocketjs `0344e315` 的真实 `.multica/project.yaml`（271 行），两个 patch 均 `git apply --check` 通过（2026-10-19），两段 `orchestrator:` 已单独用 `multica team preset render -f` 校验通过。
+
+## 本轮更新（pstack + 评审实践）
+- 各 agent 的 `skills:` 按角色加上 preset 技能和 pstack 技能：lead 10 个（plan-split、blocked-report、figure-it-out、sharpen、recall、reflect…），owner（gbot / heavy / frontend / control-plane）加 open-pr、handoff-metadata、rebase-conflict（内容是 merge）、tdd、prove-it-works、blast-radius、unslop 等，frontend 另加 create/maintain-verification-skill，reviewer 加 verify-gates、review-verdict、interrogate、swarm 等。researcher / yielded-engineer / code-auditor 不在编排器角色里，没改。
+- yielded-reviewer 指令加一段：读 REVIEW.md、先找再核实、important/nit/pre-existing、数量开头、复审只看增量 diff、写 `risk`。
+- workflow.md 加"评审规则"和"pstack 技能"两节（workspace 范围、metadata 交接、不 rebase/force-push、三轮不收敛交给 lead）。
+- 删掉了已实现功能上过时的"proposed"注释。
+- 前提：pstack 技能要先进 workspace（`multica team preset export <dir>` 后 `multica skill create`），否则 project.yaml 里引用的名字不存在。
 
 应用：在 pocketjs 根目录 `git apply docs/.../multica-orchestrator.patch`（已 `git apply --check` 通过）。两段 `orchestrator:` 已用 `multica team preset render -f` 解析和校验通过（route owner 自动并入 owners、reviewer 不在 owner 池）。
 
