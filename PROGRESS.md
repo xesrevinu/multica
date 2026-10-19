@@ -88,3 +88,11 @@ Reference implementation: /Users/kee/Workspace/ai-stack/multica-e2e/teamctl (kep
   - Local wiring: github-app.env (600) is loaded by run-api.sh, the installation row is bound to the e2e workspace, and the ghrelay poller replays App deliveries for the sandbox repo, signed.
   - Verified: local github_pull_request snapshots and issue_pull_request links for #18–#23, including the lowercase branches.
 - INCIDENT: the App private key was printed in the session output by a `cut` over a multi-line PEM. Recommend rotating it.
+
+## Step: pstack import (2026-10-19)
+- All 55 skills, 2 agents and LICENSE are vendored verbatim under preset/impl-review-merge/pstack/.
+- manifest.yaml: 34 keep, 15 adapt, 3 operator (bro, teach, poteto-help), 3 drop (setup-pstack, automate-me, make-bot-ui).
+- CONTRACT.md is appended to every exported SKILL.md.
+- Role sizes: lead 23, owner 33, reviewer 20, acceptance 4. RenderPreset attaches them; export applies the adaptations.
+- A test enforces full coverage and a reason for every non-keep entry.
+- Mapping table: docs/orchestrator/pstack.md.

@@ -37,6 +37,10 @@ func RenderPreset(sp *Spec, workspace string) ([]PresetRole, error) {
 	if err != nil {
 		return nil, fmt.Errorf("preset %q not found", name)
 	}
+	ps, _, err := loadPstack(base)
+	if err != nil {
+		return nil, err
+	}
 	repl := strings.NewReplacer("{{MAIN}}", sp.Repo.Main, "{{CHECK_CMD}}", orDefault(sp.Repo.CheckCmd, "the repo's tests"),
 		"{{REPO}}", repoLabel(sp), "{{WORKSPACE}}", workspace, "{{KEY}}", "KEY")
 	role := func(r, agent string) (PresetRole, error) {
@@ -44,7 +48,11 @@ func RenderPreset(sp *Spec, workspace string) ([]PresetRole, error) {
 		if err != nil {
 			return PresetRole{}, err
 		}
-		return PresetRole{Role: r, Agent: agent, Skills: presetSkills[r], Instructions: repl.Replace(string(b) + "\n" + string(team))}, nil
+		skills := append([]string{}, presetSkills[r]...)
+		if ps != nil {
+			skills = append(skills, ps.roleSkills(r)...)
+		}
+		return PresetRole{Role: r, Agent: agent, Skills: skills, Instructions: repl.Replace(string(b) + "\n" + string(team))}, nil
 	}
 	var out []PresetRole
 	add := func(r, agent string) error {
@@ -77,13 +85,24 @@ func PresetFiles(name string) (map[string]string, error) {
 		name = "impl-review-merge"
 	}
 	base := path.Join("preset", name)
+	ps, contract, err := loadPstack(base)
+	if err != nil {
+		return nil, err
+	}
 	out := map[string]string{}
-	err := fs.WalkDir(presetFS, base, func(p string, d fs.DirEntry, err error) error {
+	err = fs.WalkDir(presetFS, base, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
 		b, err := fs.ReadFile(presetFS, p)
-		out[strings.TrimPrefix(p, base+"/")] = string(b)
+		rel, body := strings.TrimPrefix(p, base+"/"), string(b)
+		if ps != nil {
+			var ok bool
+			if body, ok = ps.adaptFile(rel, body, contract); !ok {
+				return err
+			}
+		}
+		out[rel] = body
 		return err
 	})
 	return out, err
