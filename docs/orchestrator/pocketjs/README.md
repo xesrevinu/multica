@@ -29,7 +29,7 @@
 
 - reviewer：yielded-reviewer（两个项目共用，独立于所有 owner）。lead：yielded-lead。
 - 验收门：`needs-GUI-Master` / `needs-acceptance` / `needs-Ray-signoff`，Studio 另有 `acceptance.default_for_labels: [area:studio-app]`。Ray 在 Flow 卡片或 `multica flow accept|reject` 决定，引擎在同一 head 上合并。
-- CI：required_checks 用 ci.yml 的 job 名 test / rust / bundle / lint + review-verdict。matrix job 在 GitHub 上的 check 名可能带 os 后缀，第一次 PR 时要核对，再改 spec。
+- CI：Ray 暂停了 CI（Rust 编译慢，ci.yml 只剩 workflow_dispatch），所以 required_checks 目前只有 `review-verdict`（引擎以 App 发布）。目标集合是 6 个真实 check 名（vitest、cargo test (ubuntu-24.04)、cargo test (macos-latest)、note bundle (macos-app)、note bundle (linux-app)、format, types and clippy），在 `project.yaml.proposed` 里以注释保留；CI 恢复 pull_request 触发后再取消注释。
 
 ## 构建资源
 - `limits.slots.cargo: 2`：带 `needs:cargo` 的 issue 在本项目里同时最多 2 条处于 todo/in_progress，其余在 T1 等待（`waiting: cargo slots 2/2`）。计数范围是同一个项目；OX 和 Studio 若同时大量跑 Rust，总数最多 4，必要时把 Studio 设为 1。
@@ -45,7 +45,7 @@
 | 校验 | route 必须有 labels 和 owners；slot 必须为正；route owner 不能是 reviewer | `TestValidateSettings` |
 
 ## 待 Ray 定
-- 核对 required_checks 实际名称。
+- CI 恢复后在两个项目里取消注释 6 个 check 名（名称已从真实 check run 核对）。
 - gbot 既是 owner 又拆分：拆分后父单写 `phase=planned`（引擎不再启动它），子单建成 todo 由引擎派（backlog = 未计划，引擎不碰）。
 - 两个项目共用一个 hub 和仓库，worktree 都在 `~/.cursor/worktrees/pocketjs/agent-<key>`。
 - 分支命名：`agent/<key>`（worktree `agent-<key>`）只给编排器用；herdr worker 用 `herdr/<task>`，不要用 `agent/<task>`，否则会占住编排分支，issue 被 `[branch_occupied]` 阻塞。

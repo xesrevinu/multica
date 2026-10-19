@@ -16,9 +16,8 @@
 #
 # Caveats found while reading the repo:
 # - ci.yml is paused (`on: workflow_dispatch` only) on local main; PRs get no
-#   CI checks until pull_request is restored. While paused, requiring the CI
-#   names would block every merge, so required_checks below is the
-#   "CI enabled" set and `required_checks_while_ci_paused` is what to apply now.
+#   CI checks until pull_request is restored. Requiring the CI names now
+#   would block every merge (MISSING), so they are commented out below.
 # - Branch protection / rulesets cannot be read: the repo is private on a free
 #   plan (GitHub 403 "Upgrade to GitHub Pro"), so there are no server-side
 #   required checks; the orchestrator's required_checks is the only gate.
@@ -28,6 +27,10 @@
 #   The check names were therefore read with Ray's gh login (read-only GET).
 # - The last push-triggered CI runs (Oct 17) were all red; fix main before
 #   turning the gate on, or every PR goes back as ci_failure.
+# - Ray disabled CI (2026-10-19, slow Rust compile): required_checks is
+#   review-verdict only; the six CI names stay commented as the target set.
+#   When CI returns, uncomment them in both projects (the engine waits on
+#   MISSING checks, so do it only after ci.yml runs on pull_request again).
 
 pocket:   # project "Pocket" (OX Squad)
   orchestrator:
@@ -51,15 +54,17 @@ pocket:   # project "Pocket" (OX Squad)
       hub: /Users/kee/Workspace/boom/pocketjs
       main: main
       branch_prefix: agent/
+      # CI is paused (ci.yml on: workflow_dispatch; Rust compile is slow), so
+      # only the engine's own gate is required for now. Target set once CI is
+      # back on pull_request (uncomment these six):
+      #   - vitest
+      #   - cargo test (ubuntu-24.04)
+      #   - cargo test (macos-latest)
+      #   - note bundle (macos-app)
+      #   - note bundle (linux-app)
+      #   - format, types and clippy
       required_checks:
-        - vitest
-        - cargo test (ubuntu-24.04)
-        - cargo test (macos-latest)
-        - note bundle (macos-app)
-        - note bundle (linux-app)
-        - format, types and clippy
         - review-verdict                  # published by the engine as the App
-      # required_checks_while_ci_paused: [review-verdict]
       disk_path: /Users/kee/.cursor/worktrees
     acceptance:
       # issues that need Ray's acceptance before merge
@@ -92,15 +97,16 @@ studio:   # project "Studio Parts" (Studio Squad)
       hub: /Users/kee/Workspace/boom/pocketjs
       main: main
       branch_prefix: agent/
-      # studio is TS; the Rust/bundle jobs still run on every PR (no path
-      # filters in ci.yml), so require the full set to keep main green.
+      # CI paused: review-verdict only for now. Target set once CI is back
+      # (studio is TS, but the Rust/bundle jobs run on every PR - no path
+      # filters in ci.yml - so require all six to keep main green):
+      #   - vitest
+      #   - cargo test (ubuntu-24.04)
+      #   - cargo test (macos-latest)
+      #   - note bundle (macos-app)
+      #   - note bundle (linux-app)
+      #   - format, types and clippy
       required_checks:
-        - vitest
-        - cargo test (ubuntu-24.04)
-        - cargo test (macos-latest)
-        - note bundle (macos-app)
-        - note bundle (linux-app)
-        - format, types and clippy
         - review-verdict
       disk_path: /Users/kee/.cursor/worktrees
     acceptance:

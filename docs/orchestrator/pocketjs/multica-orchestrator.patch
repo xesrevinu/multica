@@ -160,7 +160,7 @@ index 3aa3ffb..3e98584 100644
 +            hub: /Users/kee/Workspace/boom/pocketjs   # wt switch from here; .config/wt.toml hooks run
 +            main: main
 +            branch_prefix: agent/
-+            required_checks: [test, rust, bundle, lint, review-verdict]
++            required_checks: [review-verdict]   # CI paused; target set: docs project.yaml.proposed
 +            disk_path: /Users/kee/.cursor/worktrees
 +          acceptance:
 +            labels: [needs-acceptance, needs-GUI-Master, needs-Ray-signoff]
@@ -243,7 +243,7 @@ index 3aa3ffb..3e98584 100644
 +            hub: /Users/kee/Workspace/boom/pocketjs
 +            main: main
 +            branch_prefix: agent/
-+            required_checks: [test, lint, review-verdict]
++            required_checks: [review-verdict]   # CI paused; target set: docs project.yaml.proposed
 +            disk_path: /Users/kee/.cursor/worktrees
 +          acceptance:
 +            labels: [needs-acceptance, needs-GUI-Master, needs-Ray-signoff]
@@ -316,9 +316,9 @@ index a51e4b5..24dccab 100644
 +  own --> wt["daemon 在 hub 上 wt switch agent/<key>（hooks：direnv、bun 依赖、zvec）"]
 +  wt --> code["最小改动；pocket dev / pocket check / bun check / bun run test --project <area>"]
 +  code --> pr["push agent/<KEY>，开一个 ready PR（open-pr）"]
-+  pr --> rv["引擎 T2 → yielded-reviewer：在真实 sha 上重跑 gate（verify-gates），verdict + review-verdict 状态"]
++  pr --> rv["引擎 T2 → yielded-reviewer：在真实 sha 上重跑 gate（verify-gates），verdict（review-verdict 状态由引擎以 App 发布）"]
 +  rv -->|changes| own
-+  rv -->|approve| ci{"CI：test / rust / bundle / lint + review-verdict"}
++  rv -->|approve| ci{"CI（暂停中，只要 review-verdict；恢复后加 6 个检查）"}
 +  ci -->|红，第一次| rerun["引擎重跑一次失败的 workflow"]
 +  rerun --> ci
 +  ci -->|冲突或二次红| own
