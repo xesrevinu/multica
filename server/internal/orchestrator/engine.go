@@ -410,6 +410,9 @@ func (sp *Spec) merge(s *Snapshot, probe Prober) *Decision {
 func (sp *Spec) decideBacklog(s *Snapshot) *Decision {
 	i := &s.Issue
 	m := i.Meta
+	if m["phase"] == PhPlanned {
+		return &Decision{Wait: "planned epic: its sub-issues carry the work"}
+	}
 	doneish := func(st string) bool { return st == StDone || st == StCancelled }
 	by := map[string]Issue{}
 	for _, x := range s.Siblings {

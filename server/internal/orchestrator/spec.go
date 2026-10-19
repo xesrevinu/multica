@@ -38,6 +38,7 @@ const (
 	PhBlocked          = "blocked"         // agent- or engine-written
 	PhUnblocked        = "unblocked"       // lead/member-written
 	PhCancelProposed   = "cancel_proposed" // lead/member-written
+	PhPlanned          = "planned"         // lead-written on an epic it split; the engine never starts it
 	PhMerged           = "merged"
 	PhCancelled        = "cancelled"
 )

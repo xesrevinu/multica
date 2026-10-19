@@ -104,3 +104,11 @@ func TestFailedReviewerRunCountsAsInfra(t *testing.T) {
 		t.Fatalf("want block after infra limit: %+v", d)
 	}
 }
+
+func TestPlannedEpicNeverStarts(t *testing.T) {
+	sp := spec(t)
+	d := sp.Decide(snap(StBacklog, map[string]string{"phase": PhPlanned}), ok(false))
+	if d == nil || d.Tid != "" || d.Wait == "" {
+		t.Fatalf("planned epic must wait, got %+v", d)
+	}
+}
