@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/github/app"
 )
 
 func newTestClient(t *testing.T, apiBase string) *Client {
@@ -21,14 +23,11 @@ func newTestClient(t *testing.T, apiBase string) *Client {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Client{
-		appID:      "123",
-		privateKey: key,
-		apiBase:    apiBase,
-		httpClient: &http.Client{Timeout: 5 * time.Second},
-		now:        time.Now,
-		tokens:     map[int64]cachedToken{},
+	a, err := app.New(app.Config{AppID: "123", PrivateKey: key, APIBase: apiBase, HTTPClient: &http.Client{Timeout: 5 * time.Second}})
+	if err != nil {
+		t.Fatal(err)
 	}
+	return NewClient(a)
 }
 
 // TestInstallationTokenCaches proves the token is minted once and reused within

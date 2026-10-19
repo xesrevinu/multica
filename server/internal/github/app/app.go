@@ -14,6 +14,8 @@ package app
 import (
 	"context"
 	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -136,15 +138,25 @@ func FromEnv() (*Client, error) {
 }
 
 var (
-	sharedOnce sync.Once
-	shared     *Client
-	sharedErr  error
+	sharedMu  sync.Mutex
+	sharedFP  string
+	shared    *Client
+	sharedErr error
 )
 
 // Shared returns the process-wide Client built from the environment, so every
-// server component uses one token cache and one rate-limit view.
+// server component uses one token cache and one rate-limit view. It is
+// rebuilt only when the App environment changes (tests).
 func Shared() (*Client, error) {
-	sharedOnce.Do(func() { shared, sharedErr = FromEnv() })
+	fp := sha256.Sum256([]byte(os.Getenv("GITHUB_APP_ID") + "\x00" + os.Getenv("GITHUB_APP_PRIVATE_KEY") + "\x00" +
+		os.Getenv("GITHUB_APP_SLUG") + "\x00" + os.Getenv("GITHUB_API_URL")))
+	key := hex.EncodeToString(fp[:])
+	sharedMu.Lock()
+	defer sharedMu.Unlock()
+	if key != sharedFP {
+		sharedFP = key
+		shared, sharedErr = FromEnv()
+	}
 	return shared, sharedErr
 }
 

@@ -65,7 +65,19 @@ func fakeGitHub(t *testing.T) (*httptest.Server, *[]string) {
 			_, _ = w.Write([]byte(`{"workflow_runs":[{"id":11,"status":"completed","conclusion":"failure"},{"id":12,"status":"completed","conclusion":"success"},{"id":13,"status":"in_progress"}]}`))
 		case p == "/repos/o/r/actions/runs/11/rerun-failed-jobs":
 			w.WriteHeader(http.StatusCreated)
+		case p == "/app":
+			_, _ = w.Write([]byte(`{"slug":"orch-app"}`))
+		case p == "/users/orch-app[bot]":
+			_, _ = w.Write([]byte(`{"id":99}`))
 		case p == "/repos/o/r/pulls/7/merge":
+			var b map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&b)
+			msg, _ := b["commit_message"].(string)
+			if b["merge_method"] != "squash" || b["commit_title"] != "t" || b["sha"] != "abc" ||
+				!strings.Contains(msg, "PR #7") || !strings.Contains(msg, "Co-authored-by: orch-app[bot] <99+orch-app[bot]@users.noreply.github.com>") ||
+				strings.Contains(msg, "Merge pull request") {
+				t.Errorf("merge body %v", b)
+			}
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			_, _ = w.Write([]byte(`{"message":"Pull Request is not mergeable"}`))
 		default:
@@ -148,5 +160,20 @@ func TestOpsDisabledClient(t *testing.T) {
 	}
 	if ab := AbilitiesFrom(nil); ab.Merge || ab.Rerun || ab.UpdateBranch || ab.ReadChecks {
 		t.Fatalf("nil perms %+v", ab)
+	}
+}
+
+func TestSquashCommitMessage(t *testing.T) {
+	body := "<!-- template -->\r\nAdds ten() to src/ops.js with a test.\r\n\r\n## Checklist\r\n- [x] tests"
+	title, msg := SquashCommitMessage(" feat(ops): add ten() ", body, 25, "Co-authored-by: b[bot] <1+b[bot]@users.noreply.github.com>")
+	if title != "feat(ops): add ten()" {
+		t.Fatalf("title %q", title)
+	}
+	want := "Adds ten() to src/ops.js with a test.\n\nPR #25\n\nCo-authored-by: b[bot] <1+b[bot]@users.noreply.github.com>"
+	if msg != want {
+		t.Fatalf("msg\n%q\nwant\n%q", msg, want)
+	}
+	if _, msg := SquashCommitMessage("x", "", 3, ""); msg != "PR #3" {
+		t.Fatalf("empty body msg %q", msg)
 	}
 }

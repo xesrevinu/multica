@@ -1,14 +1,12 @@
 package ghsnapshot
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -18,81 +16,22 @@ import (
 // GitHub's "message" field at most; never request or response bodies with
 // credentials.
 
-// APIError is a non-2xx REST response.
-type APIError struct {
-	Status  int
-	Message string
-}
-
-func (e *APIError) Error() string { return fmt.Sprintf("github: %d %s", e.Status, e.Message) }
-
 // Permissions returns the permissions granted to the installation token
 // (minting one if needed).
 func (c *Client) Permissions(ctx context.Context, installationID int64) (map[string]string, error) {
 	if !c.Enabled() {
 		return nil, errors.New("github app not configured")
 	}
-	if _, err := c.installationToken(ctx, installationID); err != nil {
-		return nil, err
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := map[string]string{}
-	for k, v := range c.tokens[installationID].permissions {
-		out[k] = v
-	}
-	return out, nil
+	return c.app.Permissions(ctx, installationID)
 }
 
-// REST performs one REST call as the installation. out may be nil.
+// REST performs one REST call as the installation (conditional GETs and
+// rate-limit tracking happen in the shared App client). out may be nil.
 func (c *Client) REST(ctx context.Context, installationID int64, method, path string, body, out any) error {
 	if !c.Enabled() {
 		return errors.New("github app not configured")
 	}
-	token, err := c.installationToken(ctx, installationID)
-	if err != nil {
-		return err
-	}
-	var rd io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
-		rd = bytes.NewReader(b)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(c.apiBase, "/")+path, rd)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("Authorization", "Bearer "+token)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if resp.StatusCode == http.StatusTooManyRequests || (resp.StatusCode == http.StatusForbidden && resp.Header.Get("X-RateLimit-Remaining") == "0") {
-		return rateLimitFromResponse(resp, c.now())
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		var m struct {
-			Message string `json:"message"`
-		}
-		_ = json.Unmarshal(raw, &m)
-		return &APIError{Status: resp.StatusCode, Message: m.Message}
-	}
-	if out != nil && len(raw) > 0 {
-		if err := json.Unmarshal(raw, out); err != nil {
-			return errors.New("github: malformed response")
-		}
-	}
-	return nil
+	return c.app.Do(ctx, installationID, method, path, body, out)
 }
 
 // PRCommit is one commit of a PR.
@@ -501,9 +440,29 @@ func (c *Client) RerunFailedChecks(ctx context.Context, installationID int64, ow
 	return n, nil
 }
 
-// SquashMerge squash-merges the PR, guarded by the expected head sha.
+// SquashMerge squash-merges the PR, guarded by the expected head sha. The
+// commit title is the PR title (no "Merge pull request #n"), the body a short
+// summary from the PR description plus the App bot's Co-authored-by trailer.
 func (c *Client) SquashMerge(ctx context.Context, installationID int64, owner, repo string, number int, headSHA string) (string, error) {
-	body := map[string]any{"merge_method": "squash"}
+	var pr struct {
+		Title string `json:"title"`
+		Body  string `json:"body"`
+		Head  struct {
+			SHA string `json:"sha"`
+		} `json:"head"`
+	}
+	if err := c.REST(ctx, installationID, http.MethodGet, fmt.Sprintf("%s/pulls/%d", repoPath(owner, repo), number), nil, &pr); err != nil {
+		return "", err
+	}
+	if headSHA == "" {
+		headSHA = pr.Head.SHA
+	}
+	trailer := ""
+	if b, err := c.app.Bot(ctx, installationID); err == nil {
+		trailer = b.CoAuthoredBy()
+	}
+	title, msg := SquashCommitMessage(pr.Title, pr.Body, number, trailer)
+	body := map[string]any{"merge_method": "squash", "commit_title": title, "commit_message": msg}
 	if headSHA != "" {
 		body["sha"] = headSHA
 	}
@@ -515,6 +474,35 @@ func (c *Client) SquashMerge(ctx context.Context, installationID int64, owner, r
 		return "", err
 	}
 	return out.SHA, nil
+}
+
+var htmlComment = regexp.MustCompile(`(?s)<!--.*?-->`)
+
+// SquashCommitMessage builds the squash commit: title = PR title, body = the
+// first paragraph of the PR description (HTML comments dropped, at most 400
+// characters), a "PR #n" reference and an optional trailer.
+func SquashCommitMessage(prTitle, prBody string, number int, trailer string) (string, string) {
+	title := strings.TrimSpace(prTitle)
+	summary := ""
+	for _, para := range strings.Split(strings.ReplaceAll(htmlComment.ReplaceAllString(prBody, ""), "\r\n", "\n"), "\n\n") {
+		if p := strings.TrimSpace(para); p != "" {
+			summary = p
+			break
+		}
+	}
+	if r := []rune(summary); len(r) > 400 {
+		summary = strings.TrimSpace(string(r[:400])) + "…"
+	}
+	var parts []string
+	if summary != "" {
+		parts = append(parts, summary)
+	}
+	parts = append(parts, fmt.Sprintf("PR #%d", number))
+	msg := strings.Join(parts, "\n\n")
+	if trailer != "" && !strings.Contains(msg, trailer) {
+		msg += "\n\n" + trailer
+	}
+	return title, msg
 }
 
 // PRAbilities derives which PR card actions the installation may perform.

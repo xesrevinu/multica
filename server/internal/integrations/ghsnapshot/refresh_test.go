@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/dbreader"
+	"github.com/multica-ai/multica/server/internal/github/app"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -49,7 +50,11 @@ func enabledClient(t *testing.T) *Client {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Client{appID: "1", privateKey: key, tokens: map[int64]cachedToken{}, now: time.Now}
+	a, err := app.New(app.Config{AppID: "1", PrivateKey: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewClient(a)
 }
 
 func TestListGitHubPRRowsByAddressUsesConfiguredReplica(t *testing.T) {
