@@ -9,13 +9,16 @@ function HoverCard({ ...props }: PreviewCardPrimitive.Root.Props) {
 }
 
 function HoverCardTrigger({
-  nativeButton,
+  // base-ui 1.3 triggers have no `nativeButton` prop: forwarding it lands
+  // on the DOM node as an unknown attribute (React warns on every page).
+  // Accepted and dropped so existing call sites keep compiling.
+  nativeButton: _nativeButton,
   ...props
 }: PreviewCardPrimitive.Trigger.Props & { nativeButton?: boolean }) {
   return (
     <PreviewCardPrimitive.Trigger
       data-slot="hover-card-trigger"
-      {...({ ...props, nativeButton } as PreviewCardPrimitive.Trigger.Props)}
+      {...props}
     />
   )
 }
