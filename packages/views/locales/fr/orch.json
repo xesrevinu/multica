@@ -110,7 +110,13 @@
     "failed_short": "Échec après {{duration}}",
     "cancelled_short": "Annulé après {{duration}}",
     "queued_short": "En file",
-    "description_by": "Ouvert par {{who}}"
+    "description_by": "Ouvert par {{who}}",
+    "handoff_title": "Renvoyé : {{kind}}",
+    "handoff_attempt": "tentative {{n}}",
+    "handoff_review": "Remarques de revue",
+    "handoff_checks": "Vérifications en échec",
+    "handoff_prev_run": "Exécution précédente",
+    "handoff_diff": "Diff précédent"
   },
   "actions": {
     "accept": "Valider",

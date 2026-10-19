@@ -110,7 +110,13 @@
     "failed_short": "{{duration}} 后失败",
     "cancelled_short": "{{duration}} 后取消",
     "queued_short": "排队中",
-    "description_by": "由 {{who}} 创建"
+    "description_by": "由 {{who}} 创建",
+    "handoff_title": "退回：{{kind}}",
+    "handoff_attempt": "第 {{n}} 次",
+    "handoff_review": "评审意见",
+    "handoff_checks": "失败的检查",
+    "handoff_prev_run": "上一次运行",
+    "handoff_diff": "上一版改动"
   },
   "actions": {
     "accept": "验收通过",

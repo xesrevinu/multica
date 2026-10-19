@@ -110,7 +110,13 @@
     "failed_short": "{{duration}} 後に失敗",
     "cancelled_short": "{{duration}} 後にキャンセル",
     "queued_short": "待機中",
-    "description_by": "{{who}} が作成"
+    "description_by": "{{who}} が作成",
+    "handoff_title": "差し戻し: {{kind}}",
+    "handoff_attempt": "{{n}} 回目",
+    "handoff_review": "レビュー指摘",
+    "handoff_checks": "失敗したチェック",
+    "handoff_prev_run": "前回の実行",
+    "handoff_diff": "前回の差分"
   },
   "actions": {
     "accept": "承認",

@@ -110,7 +110,13 @@
     "failed_short": "Failed after {{duration}}",
     "cancelled_short": "Cancelled after {{duration}}",
     "queued_short": "Queued",
-    "description_by": "Opened by {{who}}"
+    "description_by": "Opened by {{who}}",
+    "handoff_title": "Sent back: {{kind}}",
+    "handoff_attempt": "attempt {{n}}",
+    "handoff_review": "Review findings",
+    "handoff_checks": "Failing checks",
+    "handoff_prev_run": "Previous run",
+    "handoff_diff": "Previous diff"
   },
   "actions": {
     "accept": "Accept",

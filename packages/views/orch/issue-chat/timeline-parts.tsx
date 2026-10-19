@@ -23,7 +23,92 @@ export function useStatusText() {
 
 // TransitionDivider: an orchestrator transition as a centered system label
 // between two hairlines (t3code TimelineSystemDivider).
+// Handoff mirrors orchestrator.Handoff: the structured send-back context the
+// next run received (review findings, failing checks, failure class, attempts).
+export type OrchHandoff = {
+  kind: string;
+  summary?: string;
+  failure_reason?: string;
+  to?: string;
+  role?: string;
+  attempt?: number;
+  prev_head?: string;
+  pr?: string;
+  diff_summary?: string;
+  prev_run?: { id: string; status: string; error?: string };
+  review_comments?: { source: string; author?: string; path?: string; line?: number; body: string }[];
+  checks?: { name: string; conclusion: string; url?: string; annotations?: string[]; log_excerpt?: string }[];
+};
+
+export function HandoffCard({ handoff: h }: { handoff: OrchHandoff }) {
+  const { t } = useT("orch");
+  return (
+    <div className="mx-auto my-1 w-full max-w-[92%] rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-caption" data-testid="orch-handoff">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+        <span className="font-medium text-foreground">{t(($) => $.chat.handoff_title, { kind: h.kind.replace(/_/g, " ") })}</span>
+        {h.to && <span className="text-muted-foreground">→ {h.to}</span>}
+        {typeof h.attempt === "number" && h.attempt > 0 && <span className="text-muted-foreground">· {t(($) => $.chat.handoff_attempt, { n: h.attempt })}</span>}
+        {h.prev_head && <span className="font-mono text-faint-foreground">· {h.prev_head.slice(0, 8)}</span>}
+        {h.failure_reason && <span className="font-mono text-faint-foreground">· {h.failure_reason}</span>}
+      </div>
+      {h.summary && <p className="mt-1 break-words text-muted-foreground">{h.summary}</p>}
+      {h.diff_summary && <p className="mt-1 break-words text-faint-foreground">{t(($) => $.chat.handoff_diff)}: {h.diff_summary}</p>}
+      {!!h.review_comments?.length && (
+        <div className="mt-1.5">
+          <div className="font-medium text-foreground">{t(($) => $.chat.handoff_review)}</div>
+          <ul className="mt-0.5 space-y-0.5">
+            {h.review_comments.map((c, i) => (
+              <li key={i} className="break-words text-muted-foreground">
+                {c.path && <span className="font-mono text-faint-foreground">{c.path}{c.line ? `:${c.line}` : ""} </span>}
+                <span className="line-clamp-3">{c.body}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {!!h.checks?.length && (
+        <div className="mt-1.5">
+          <div className="font-medium text-foreground">{t(($) => $.chat.handoff_checks)}</div>
+          <ul className="mt-0.5 space-y-0.5">
+            {h.checks.map((c) => (
+              <li key={c.name} className="break-words text-muted-foreground">
+                {c.url ? (
+                  <a href={c.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:text-foreground">
+                    {c.name} <ExternalLink className="size-3" />
+                  </a>
+                ) : (
+                  c.name
+                )}{" "}
+                <span className="text-faint-foreground">{c.conclusion}</span>
+                {c.annotations?.slice(0, 3).map((a, i) => (
+                  <div key={i} className="truncate font-mono text-micro text-faint-foreground">{a}</div>
+                ))}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {h.prev_run?.error && (
+        <details className="mt-1.5">
+          <summary className="cursor-pointer text-muted-foreground">{t(($) => $.chat.handoff_prev_run)} ({h.prev_run.status})</summary>
+          <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap font-mono text-micro text-faint-foreground">{h.prev_run.error}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
 export function TransitionDivider({ entry }: { entry: TimelineEntry }) {
+  const handoff = (entry.details as { handoff?: OrchHandoff } | undefined)?.handoff;
+  return (
+    <>
+      <TransitionLine entry={entry} />
+      {handoff && typeof handoff === "object" && handoff.kind && <HandoffCard handoff={handoff} />}
+    </>
+  );
+}
+
+function TransitionLine({ entry }: { entry: TimelineEntry }) {
   const { t } = useT("orch");
   const statusText = useStatusText();
   const timeAgo = useTimeAgo();

@@ -110,7 +110,13 @@
     "failed_short": "{{duration}} 후 실패",
     "cancelled_short": "{{duration}} 후 취소",
     "queued_short": "대기 중",
-    "description_by": "{{who}} 님이 생성"
+    "description_by": "{{who}} 님이 생성",
+    "handoff_title": "반려: {{kind}}",
+    "handoff_attempt": "{{n}}번째 시도",
+    "handoff_review": "리뷰 지적",
+    "handoff_checks": "실패한 검사",
+    "handoff_prev_run": "이전 실행",
+    "handoff_diff": "이전 변경"
   },
   "actions": {
     "accept": "승인",
