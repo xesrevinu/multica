@@ -1,0 +1,28 @@
+# Example orchestrator team. Apply: multica team apply <project> -f team.yaml
+orchestrator:
+  preset: impl-review-merge
+  roles:
+    lead: at-lead
+    reviewer: at-reviewer
+    owners: [at-dev-a, at-dev-b]
+    # human: ray@example.com   # default: the member who applies
+  repo:
+    mode: github
+    slug: xesrevinu/autoteam-sandbox
+    url: git@github.com:xesrevinu/autoteam-sandbox.git
+    main: main
+    branch_prefix: agent/
+    check_cmd: npm test && npm run lint
+    required_checks: [test, lint, review-verdict]
+  limits:
+    impl: 3
+    review: 3
+    infra: 2
+    stuck_min: 20
+    min_free_gb: 20
+    blocked_remind_min: 60
+    dead_letter_after: 5
+  acceptance:
+    labels: [needs-acceptance, needs-GUI-Master, needs-Ray-signoff]
+  merge:
+    method: squash
