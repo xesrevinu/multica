@@ -782,7 +782,6 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
               return (
                 <Tooltip key={item.key}>
                   <TooltipTrigger
-                    nativeButton={false}
                     render={
                       <AppLink
                         href={href}
