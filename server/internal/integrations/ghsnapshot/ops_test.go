@@ -108,6 +108,9 @@ func TestPRDetailAndOps(t *testing.T) {
 		t.Fatalf("abilities %+v", ab)
 	}
 
+	if h, err := c.FetchPRHead(ctx, 1, "o", "r", 7); err != nil || h != "abc" {
+		t.Fatalf("FetchPRHead = %q, %v", h, err)
+	}
 	if err := c.UpdateBranch(ctx, 1, "o", "r", 7, "abc"); err != nil {
 		t.Fatal(err)
 	}
