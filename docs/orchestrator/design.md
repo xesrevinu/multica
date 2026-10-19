@@ -116,3 +116,6 @@ PR 自动完成（`pr_merge_status`）对被编排 project 视为 `none`：合�
 - 多副本部署：worker 没有选主；同时跑两个 server 时两个都会评估。idem_key 防止重复执行同一转移，但 `gh pr merge` 这类外部动作可能被尝试两次（GitHub 侧幂等）。需要上线前加 advisory lock 选主。
 - patch-id 复用 verdict（rebase 后 diff 不变免重审）未实现。
 - spec 的 `transitions` 只做校验和展示，引擎只实现 preset。
+
+## Verdict carry-over (T3c)
+When the reviewer approved `reviewed_sha` and the branch head moved afterwards (the owner merged/rebased main, or a rebase-conflict fix that only replays the same change), the engine compares `git patch-id --stable` of each commit's diff against its merge-base with main. If they are equal, T3c_carry_verdict moves the verdict to the new head (`verdict_carried_from` records the old sha) and the flow goes on to the gate/merge without another review round. Any doubt (force-pushed-away object, fetch failure, different patch) falls back to T3b re-review. The CI gate still runs on the new head.

@@ -117,6 +117,7 @@ func PresetTransitions() []Transition {
 		{ID: "A1_in_progress", Actor: "agent", From: []string{StTodo}, To: []string{StInProgress}, Label: "owner starts"},
 		{ID: "T2_review", Actor: "engine", From: []string{StTodo, StInProgress}, To: []string{StInReview}, Label: "phase=review_requested, branch pushed, no active run → reviewer"},
 		{ID: "T3_rework", Actor: "engine", From: []string{StInReview, StTodo, StInProgress}, To: []string{StTodo}, Label: "changes | checks red | conflict | acceptance rejected → owner"},
+		{ID: "T3c_carry_verdict", Actor: "engine", From: []string{StInReview}, To: []string{StInReview}, Label: "approved patch unchanged by rebase → keep verdict"},
 		{ID: "T3b_rereview", Actor: "engine", From: []string{StInReview}, To: []string{StInReview}, Label: "no/stale verdict → reviewer again"},
 		{ID: "T4_done", Actor: "engine", From: []string{StInReview}, To: []string{StDone}, Label: "approve@head, checks green, mergeable, accepted → merge"},
 		{ID: "T5_rerun", Actor: "engine", From: []string{StTodo, StInProgress}, To: []string{StTodo, StInProgress}, Label: "run ended without hand-over → rerun (attempt++)"},

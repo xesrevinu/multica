@@ -39,6 +39,10 @@ type Snapshot struct {
 	Siblings  []Issue         // same project, for deps / stage barrier
 	Busy      map[string]bool // owner agents with todo/in_progress work across the workspace
 	FreeGB    int
+	// SamePatch reports whether two commits carry the same change (git
+	// patch-id of each commit's diff against its merge-base with main). nil
+	// or false = unknown; the engine then falls back to a fresh review.
+	SamePatch func(a, b string) bool
 }
 
 // ProbeResult is the outcome of a side-effecting gate (pre-check or merge).
@@ -276,6 +280,9 @@ func (sp *Spec) Decide(s *Snapshot, probe Prober) *Decision {
 			return sp.rework(s, why, map[string]string{"acceptance": ""})
 		}
 		if head != "" && m["reviewed_sha"] != head {
+			if d := sp.carry(s, head); d != nil {
+				return d
+			}
 			return sp.rereview(s, head, "head moved during acceptance")
 		}
 		return &Decision{Wait: "awaiting human acceptance"}
@@ -289,6 +296,9 @@ func (sp *Spec) Decide(s *Snapshot, probe Prober) *Decision {
 		return &Decision{Tid: "T3b_rereview", Rerun: true, Meta: map[string]string{"attempt_review": itoa(n)}, Why: "reviewer run ended without verdict"}
 	}
 	if v == "approve" && (head == "" || m["reviewed_sha"] != head) {
+		if d := sp.carry(s, head); d != nil {
+			return d
+		}
 		return sp.rereview(s, head, "reviewed_sha != head")
 	}
 	if v != "approve" {
@@ -310,6 +320,18 @@ func (sp *Spec) Decide(s *Snapshot, probe Prober) *Decision {
 			Notify: fmt.Sprintf("%s (%s) is approved at %s and waits for your acceptance: `multica flow accept %s` or `multica flow reject %s --reason ...`", i.Key, i.Title, short(head, 12), i.Key, i.Key)}
 	}
 	return sp.merge(s, probe)
+}
+
+// carry keeps an approve verdict across a pure rebase / main merge: when the
+// new head carries exactly the reviewed change (same patch-id), the verdict
+// moves to the new head instead of spending another review round.
+func (sp *Spec) carry(s *Snapshot, head string) *Decision {
+	old := s.Issue.Meta["reviewed_sha"]
+	if head == "" || old == "" || s.SamePatch == nil || !s.SamePatch(old, head) {
+		return nil
+	}
+	return &Decision{Tid: "T3c_carry_verdict", Meta: map[string]string{"reviewed_sha": head, "head_sha": head, "verdict_carried_from": old},
+		Why: fmt.Sprintf("same patch-id as reviewed %s (pure rebase)", short(old, 12))}
 }
 
 func (sp *Spec) rereview(s *Snapshot, head, why string) *Decision {

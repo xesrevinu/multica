@@ -276,3 +276,23 @@ func TestIdle(t *testing.T) {
 		t.Fatal("negative idle_min disables", d)
 	}
 }
+
+func TestCarryVerdict(t *testing.T) {
+	sp := spec(t)
+	s := snap(StInReview, map[string]string{"phase": PhReviewing, "verdict": "approve", "reviewed_sha": "aaaaaaa"})
+	s.Issue.AssigneeType, s.Issue.Assignee = "agent", sp.Roles.Reviewer
+	s.Head = "bbbbbbb"
+	s.SamePatch = func(a, b string) bool { return a == "aaaaaaa" && b == "bbbbbbb" }
+	d := sp.Decide(s, nil)
+	if d == nil || d.Tid != "T3c_carry_verdict" || d.Meta["reviewed_sha"] != "bbbbbbb" || d.Rerun {
+		t.Fatal(d)
+	}
+	s.SamePatch = func(a, b string) bool { return false }
+	if d := sp.Decide(s, nil); d == nil || d.Tid != "T3b_rereview" {
+		t.Fatal("changed patch must re-review", d)
+	}
+	s.SamePatch = nil
+	if d := sp.Decide(s, nil); d == nil || d.Tid != "T3b_rereview" {
+		t.Fatal("unknown must re-review", d)
+	}
+}

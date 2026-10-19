@@ -326,6 +326,7 @@ func (s *Service) snapshot(ctx context.Context, t *Team, rows []issueRow, row *i
 			if sn.Head, err = s.repo.head(ctx, t.Spec, row.Key); err != nil {
 				return nil, err
 			}
+			sn.SamePatch = func(a, b string) bool { return s.repo.samePatch(ctx, t, a, b) }
 		}
 	}
 	return sn, nil

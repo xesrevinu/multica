@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -379,4 +380,34 @@ func (r *repoOps) retryCI(ctx context.Context, sp *Spec, head string) bool {
 		}
 	}
 	return n > 0
+}
+
+var hexSHA = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
+
+// samePatch compares the stable patch-id of a and b, each diffed against its
+// merge-base with main. Any failure (unknown object, force-pushed away,
+// empty diff) answers false so the engine asks for a fresh review.
+func (r *repoOps) samePatch(ctx context.Context, t *Team, a, b string) bool {
+	if !hexSHA.MatchString(a) || !hexSHA.MatchString(b) {
+		return false
+	}
+	sp := t.Spec
+	dir, main := sp.Repo.Bare, "refs/heads/"+sp.Repo.Main
+	if sp.Repo.Mode == "github" {
+		dir, main = filepath.Join(r.work, "integ-"+t.ProjectID), "origin/"+sp.Repo.Main
+		if _, err := os.Stat(dir); err != nil {
+			return false
+		}
+		run(ctx, dir, "git", "fetch", "-q", "origin", sp.Repo.Main, a, b)
+	}
+	pid := func(x string) string {
+		o := run(ctx, dir, "sh", "-c", fmt.Sprintf(`git diff "$(git merge-base %s %s)" %s | git patch-id --stable`, main, x, x))
+		f := strings.Fields(o.out)
+		if o.code != 0 || len(f) == 0 {
+			return ""
+		}
+		return f[0]
+	}
+	pa := pid(a)
+	return pa != "" && pa == pid(b)
 }
