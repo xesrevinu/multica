@@ -1,62 +1,83 @@
 # action: keep (verbatim + contract) | adapt (keep + note overrides upstream text)
 #         | operator (humans only, never attached to agents) | drop (not exported to agents)
-# roles:  lead | owner | reviewer | acceptance  (attached skills; others stay a library)
+# keep/adapt skills are exported as a library under pstack/skills/; only the
+# per-role lists under `roles:` are attached (mounted) to an agent. Each role
+# has an explicit context budget in bytes: rendered role instructions + team
+# contract + every attached SKILL.md as exported (adaptation + CONTRACT).
+# TestRoleContextBudget enforces it; raise a budget only with a reason.
 skills:
-  architect: {action: keep, roles: [lead, owner]}
-  arena: {action: adapt, roles: [owner], note: "Candidates live in .orch-scratch/arena/<n> inside the worktree, not /tmp or new worktrees. Only the winner is committed to the issue branch. Without subagents, skip arena and say so."}
+  architect: {action: keep}
+  arena: {action: adapt, note: "Candidates live in .orch-scratch/arena/<n> inside the worktree, not /tmp or new worktrees. Only the winner is committed to the issue branch. Without subagents, skip arena and say so."}
   automate-me: {action: drop, note: "Mines ~/.cursor transcripts and writes .cursor/skills via AskQuestion: violates workspace scope and no-human-mid-run. Lessons are encoded with `correct` instead."}
-  benchmark-checklist: {action: keep, roles: [owner, reviewer]}
-  blast-radius: {action: keep, roles: [owner, reviewer]}
+  benchmark-checklist: {action: keep}
+  blast-radius: {action: keep}
   bro: {action: operator, note: "Conversational tone skill for a live human."}
-  correct: {action: adapt, roles: [lead], note: "The 'agent instruction file' is the repo's AGENTS.md/.multica docs on a normal issue branch; propose the change as its own issue, never edit role instructions in place."}
-  create-formal-verification-skill: {action: adapt, roles: [owner], note: "Only when the issue asks for it. Output goes into the repo (e.g. .multica/skills/verify-*), committed on the issue branch."}
-  create-verification-skill: {action: adapt, roles: [owner], note: "Write the skill under the repo's .multica/skills/verify-<app>/ (not .cursor/skills) on the issue branch; it becomes the reviewer/acceptance evidence recipe."}
-  figure-it-out: {action: keep, roles: [lead]}
-  how: {action: adapt, roles: [lead, owner, reviewer], note: "Explainer subagents optional (contract 6)."}
-  in-your-own-words: {action: adapt, roles: [lead], note: "Restate the issue as the plan comment before splitting; no live confirmation, unclear premises go to blocked-report."}
-  interrogate: {action: adapt, roles: [reviewer], note: "This is the multi-reviewer pass behind review-verdict. Reviewer subagents optional; map findings to review-verdict severities and record them in the verdict comment."}
-  ketchup: {action: adapt, roles: [acceptance], note: "Produce the catch-up as an issue comment for the human accepter, from issue history and activity, not transcripts."}
-  maintain-verification-skill: {action: keep, roles: [owner, reviewer]}
+  correct: {action: adapt, note: "The 'agent instruction file' is the repo's AGENTS.md/.multica docs on a normal issue branch; propose the change as its own issue, never edit role instructions in place."}
+  create-formal-verification-skill: {action: adapt, note: "Only when the issue asks for it. Output goes into the repo (e.g. .multica/skills/verify-*), committed on the issue branch."}
+  create-verification-skill: {action: adapt, note: "Write the skill under the repo's .multica/skills/verify-<app>/ (not .cursor/skills) on the issue branch; it becomes the reviewer/acceptance evidence recipe."}
+  figure-it-out: {action: keep}
+  how: {action: adapt, note: "Explainer subagents optional (contract 6)."}
+  in-your-own-words: {action: adapt, note: "Restate the issue as the plan comment before splitting; no live confirmation, unclear premises go to blocked-report."}
+  interrogate: {action: adapt, note: "This is the multi-reviewer pass behind review-verdict. Reviewer subagents optional; map findings to review-verdict severities and record them in the verdict comment."}
+  ketchup: {action: adapt, note: "Produce the catch-up as an issue comment for the human accepter, from issue history and activity, not transcripts."}
+  maintain-verification-skill: {action: keep}
   make-bot-ui: {action: drop, note: "Grok Bot webhook UI plus Tailscale exposure: unrelated to multica runs and conflicts with the no-exposure rule."}
-  no-comments: {action: keep, roles: [owner, reviewer]}
+  no-comments: {action: keep}
   poteto-help: {action: operator, note: "Help menu for a human reading pstack; reads ~/.cursor."}
-  poteto-mode: {action: adapt, roles: [owner, reviewer, lead], note: "Playbooks babysit, shipping, autopilot-full, autopilot-stack, orchestrate, worktree-cleanup, session-pickup and pause-safely describe the engine's job (contract 5): read them for intent only. 'Rebase into small ordered commits' in feature/refactoring/opening-a-pr = commit small ordered steps (contract 4). Swarm screenshots go in .orch-scratch/, not /tmp."}
-  principle-attack-the-premise: {action: keep, roles: [lead]}
-  principle-boundary-discipline: {action: keep, roles: [owner]}
-  principle-build-the-lever: {action: keep, roles: [lead]}
-  principle-encode-lessons-in-structure: {action: keep, roles: [lead]}
-  principle-exhaust-the-design-space: {action: keep, roles: [lead]}
-  principle-experience-first: {action: keep, roles: [owner, acceptance]}
-  principle-explain-the-number: {action: keep, roles: [owner, reviewer]}
-  principle-fix-root-causes: {action: keep, roles: [owner, reviewer]}
-  principle-foundational-thinking: {action: keep, roles: [lead, owner]}
-  principle-guard-the-context-window: {action: keep, roles: [lead, owner, reviewer]}
-  principle-laziness-protocol: {action: keep, roles: [owner]}
-  principle-make-operations-idempotent: {action: keep, roles: [owner]}
-  principle-migrate-callers-then-delete-legacy-apis: {action: keep, roles: [lead, owner]}
-  principle-minimize-reader-load: {action: keep, roles: [owner, reviewer]}
-  principle-model-the-domain: {action: keep, roles: [owner]}
-  principle-never-block-on-the-human: {action: adapt, roles: [lead, owner, reviewer], note: "Irreversible or out-of-scope decisions still go to blocked-report (contract 3)."}
-  principle-outcome-oriented-execution: {action: keep, roles: [lead]}
-  principle-prove-it-works: {action: keep, roles: [owner, reviewer, acceptance]}
-  principle-redesign-from-first-principles: {action: keep, roles: [lead]}
-  principle-separate-before-serializing-shared-state: {action: keep, roles: [lead]}
-  principle-sequence-verifiable-units: {action: keep, roles: [lead, owner]}
-  principle-subtract-before-you-add: {action: keep, roles: [owner, reviewer]}
-  principle-test-behavior-not-implementation: {action: keep, roles: [owner, reviewer]}
-  principle-type-system-discipline: {action: keep, roles: [owner]}
-  recall: {action: adapt, roles: [lead], note: "Recall from issue comments, activity and git log via the multica CLI; never read ~/.cursor transcripts."}
-  reflect: {action: adapt, roles: [lead], note: "Post-mortem over a finished issue's comments/activity; accepted items become new issues, not edits to rules files."}
+  poteto-mode: {action: adapt, note: "Playbooks babysit, shipping, autopilot-full, autopilot-stack, orchestrate, worktree-cleanup, session-pickup and pause-safely describe the engine's job (contract 5): read them for intent only. 'Rebase into small ordered commits' in feature/refactoring/opening-a-pr = commit small ordered steps (contract 4). Swarm screenshots go in .orch-scratch/, not /tmp."}
+  principle-attack-the-premise: {action: keep}
+  principle-boundary-discipline: {action: keep}
+  principle-build-the-lever: {action: keep}
+  principle-encode-lessons-in-structure: {action: keep}
+  principle-exhaust-the-design-space: {action: keep}
+  principle-experience-first: {action: keep}
+  principle-explain-the-number: {action: keep}
+  principle-fix-root-causes: {action: keep}
+  principle-foundational-thinking: {action: keep}
+  principle-guard-the-context-window: {action: keep}
+  principle-laziness-protocol: {action: keep}
+  principle-make-operations-idempotent: {action: keep}
+  principle-migrate-callers-then-delete-legacy-apis: {action: keep}
+  principle-minimize-reader-load: {action: keep}
+  principle-model-the-domain: {action: keep}
+  principle-never-block-on-the-human: {action: adapt, note: "Irreversible or out-of-scope decisions still go to blocked-report (contract 3)."}
+  principle-outcome-oriented-execution: {action: keep}
+  principle-prove-it-works: {action: keep}
+  principle-redesign-from-first-principles: {action: keep}
+  principle-separate-before-serializing-shared-state: {action: keep}
+  principle-sequence-verifiable-units: {action: keep}
+  principle-subtract-before-you-add: {action: keep}
+  principle-test-behavior-not-implementation: {action: keep}
+  principle-type-system-discipline: {action: keep}
+  recall: {action: adapt, note: "Recall from issue comments, activity and git log via the multica CLI; never read ~/.cursor transcripts."}
+  reflect: {action: adapt, note: "Post-mortem over a finished issue's comments/activity; accepted items become new issues, not edits to rules files."}
   setup-pstack: {action: drop, note: "Writes ~/.cursor/rules/pstack-models.mdc (outside workspace). Model choice is the multica agent's runtime config."}
-  sharpen: {action: keep, roles: [lead]}
-  show-me-your-work: {action: adapt, roles: [owner, reviewer], note: "The work log is the handoff comment on the issue."}
-  swarm: {action: adapt, roles: [reviewer, acceptance], note: "Verification workers optional (contract 6); evidence files in .orch-scratch/, summarized in the verdict comment."}
-  tdd: {action: keep, roles: [owner]}
+  sharpen: {action: keep}
+  show-me-your-work: {action: adapt, note: "The work log is the handoff comment on the issue."}
+  swarm: {action: adapt, note: "Verification workers optional (contract 6); evidence files in .orch-scratch/, summarized in the verdict comment."}
+  tdd: {action: keep}
   teach: {action: operator, note: "Interactive tutoring for a live human."}
-  technical-writing: {action: keep, roles: [owner, lead]}
-  typescript-best-practices: {action: keep, roles: [owner, reviewer]}
-  unslop: {action: keep, roles: [owner, reviewer]}
-  why: {action: adapt, roles: [lead, owner, reviewer], note: "Source-digging subagents optional (contract 6); external sources (Datadog, Slack) only if the runtime already has access."}
+  technical-writing: {action: keep}
+  typescript-best-practices: {action: keep}
+  unslop: {action: keep}
+  why: {action: adapt, note: "Source-digging subagents optional (contract 6); external sources (Datadog, Slack) only if the runtime already has access."}
 agents:
-  comment-sicko: {action: adapt, roles: [reviewer], note: "Use as a reviewer lens (comment hygiene) inside interrogate, not a separate agent."}
+  comment-sicko: {action: adapt, note: "Use as a reviewer lens (comment hygiene) inside interrogate, not a separate agent."}
   poteto-agent: {action: operator, note: "Cursor subagent definition; multica roles replace it."}
+roles:
+  lead:
+    budget_bytes: 32000
+    max_skills: 7
+    skills: [in-your-own-words, figure-it-out, principle-attack-the-premise, principle-sequence-verifiable-units, principle-outcome-oriented-execution, sharpen, principle-guard-the-context-window]
+  owner:
+    budget_bytes: 46500
+    max_skills: 8
+    skills: [tdd, principle-prove-it-works, principle-fix-root-causes, principle-subtract-before-you-add, principle-test-behavior-not-implementation, blast-radius, principle-boundary-discipline, typescript-best-practices]
+  reviewer:
+    budget_bytes: 38500
+    max_skills: 5
+    skills: [interrogate, blast-radius, principle-prove-it-works, principle-test-behavior-not-implementation, no-comments]
+  acceptance:
+    budget_bytes: 11000
+    max_skills: 2
+    skills: [principle-experience-first, principle-prove-it-works]

@@ -18,13 +18,19 @@ scratch worktree from `verify-gates`, and remove it before you finish.
    and regressions (each finding needs a concrete failure scenario and an exact
    file:line); tests prove the behavior; scope (nothing unrelated); safety.
    Style alone is not a reason for `changes`. Do not invent findings.
-   Find, then verify: run several independent lenses (skill `interrogate`:
-   correctness, security, tests, scope; comment hygiene via the comment-sicko
-   lens) and keep a finding only if you can reproduce it or point to the exact
-   line that breaks. Drop style/cleanup-only findings. Tag each kept finding
-   `important` (blocks), `nit` (max 3, never blocks) or `pre-existing` (not this
-   PR's fault: note it for the lead, never block on it). Name the bug class so
-   the owner fixes every instance.
+   Multi-dimension review (skill `interrogate`): run four independent lenses
+   in parallel (subagents if your runtime has them, otherwise four separate
+   passes that do not share notes): **correctness** (logic, edge cases,
+   regressions), **security** (input trust, authz, secrets, injection, unsafe
+   fs/process use), **tests** (do they prove the behavior and fail without the
+   change), **API design** (names, contracts, breaking changes, error shapes).
+   Each finding records lens, severity (`important` | `nit` | `pre-existing`),
+   confidence (high | medium | low), file:line and a concrete failure scenario.
+   Keep only **high-confidence** findings: reproduced, or pinned to the exact
+   line that breaks with the input that breaks it. Drop medium/low ones and
+   style/cleanup-only findings; never pad. `nit` max 3, never blocks;
+   `pre-existing` is a note for the lead, never blocks. Name the bug class so
+   the owner fixes every instance. Comment hygiene via the comment-sicko lens.
    Re-reviews (attempt_impl > 1): review only the diff since metadata
    `last_reviewed_sha` (`git diff <last_reviewed_sha>..$SHA`; the engine sets
    it when it clears `reviewed_sha`), check every previous finding is answered (fixed or rebutted
@@ -37,9 +43,10 @@ scratch worktree from `verify-gates`, and remove it before you finish.
    `review-verdict` commit status: the orchestrator ignores agent-posted
    statuses and publishes it itself for the approved `reviewed_sha`.
 6. One comment that starts with the count ("2 important, 1 nit, 0
-   pre-existing" or plainly "nothing to fix"), then verdict, sha, risk, the gates
-   you ran with the command and result, and each finding with file:line, a
-   concrete failure scenario and the minimal fix. Stop.
+   pre-existing" or plainly "nothing to fix"), then verdict, sha, risk, the
+   lenses you ran, the gates you ran with the command and result, and each
+   finding as `[severity][lens] file:line — failure scenario — minimal fix`.
+   The engine hands this comment to the owner's next run verbatim. Stop.
 
 ## Never
 Edit, commit, push or merge. Approve a sha you did not test. Request changes

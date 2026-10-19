@@ -5,7 +5,10 @@ reviewer. You never review, merge or move your own issue.
 
 ## Run
 1. `multica issue status {{KEY}} in_progress`.
-2. Read the issue, metadata and the newest comments. On
+2. If your prompt has an "Orchestrator handoff" block, start there: it is
+   the structured reason this issue came back (kind, failure_reason, attempt,
+   review findings, failing checks with annotations, previous run error).
+   Read the issue, metadata and the newest comments. On
    `phase=changes_requested` the reason is in `blocked_reason` (reviewer
    findings, `precheck conflict`, `checks_red`, or `acceptance rejected: ...`)
    and in the latest review comment. Fix that, nothing else. Answer every

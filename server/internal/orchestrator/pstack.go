@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
-	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -13,13 +12,21 @@ import (
 // pstackEntry is one vendored pstack skill/agent and how the orchestrator uses it.
 type pstackEntry struct {
 	Action string   `yaml:"action"` // keep | adapt | operator | drop
-	Roles  []string `yaml:"roles"`
+	Roles  []string `yaml:"roles"`  // agents only: the role whose lens it is
 	Note   string   `yaml:"note"`
+}
+
+// pstackRole is one role's mounted skill set and its context budget.
+type pstackRole struct {
+	BudgetBytes int      `yaml:"budget_bytes"`
+	MaxSkills   int      `yaml:"max_skills"`
+	Skills      []string `yaml:"skills"`
 }
 
 type pstackManifest struct {
 	Skills map[string]pstackEntry `yaml:"skills"`
 	Agents map[string]pstackEntry `yaml:"agents"`
+	Roles  map[string]pstackRole  `yaml:"roles"`
 }
 
 func loadPstack(base string) (*pstackManifest, string, error) {
@@ -35,20 +42,15 @@ func loadPstack(base string) (*pstackManifest, string, error) {
 	return &m, string(c), err
 }
 
-// pstackRoleSkills: skills attached to a role (agents act as reviewer lenses, not skills).
+// roleSkills: the pstack skills mounted for a role (manifest `roles:`), in
+// manifest order. Everything else stays an unattached library.
 func (m *pstackManifest) roleSkills(role string) []string {
 	var out []string
-	for n, e := range m.Skills {
-		if e.Action == "drop" || e.Action == "operator" {
-			continue
-		}
-		for _, r := range e.Roles {
-			if r == role {
-				out = append(out, n)
-			}
+	for _, n := range m.Roles[role].Skills {
+		if e := m.Skills[n]; e.Action == "keep" || e.Action == "adapt" {
+			out = append(out, n)
 		}
 	}
-	sort.Strings(out)
 	return out
 }
 
@@ -86,4 +88,33 @@ func (m *pstackManifest) adaptFile(rel, body, contract string) (string, bool) {
 	}
 	b.WriteString("\n" + contract)
 	return b.String(), true
+}
+
+// RoleContextBytes is a role's prompt/context footprint when every mounted
+// skill is loaded: role file + team contract + each attached preset and
+// pstack SKILL.md as exported. The manifest's budget_bytes caps it.
+func RoleContextBytes(preset, role string) (bytes int, skills []string, budget pstackRole, err error) {
+	if preset == "" {
+		preset = "impl-review-merge"
+	}
+	base := path.Join("preset", preset)
+	files, err := PresetFiles(preset)
+	if err != nil {
+		return 0, nil, budget, err
+	}
+	m, _, err := loadPstack(base)
+	if err != nil || m == nil {
+		return 0, nil, budget, err
+	}
+	budget = m.Roles[role]
+	bytes = len(files[role+".md"]) + len(files["team.md"])
+	for _, n := range presetSkills[role] {
+		bytes += len(files["skills/"+n+"/SKILL.md"])
+		skills = append(skills, n)
+	}
+	for _, n := range m.roleSkills(role) {
+		bytes += len(files["pstack/skills/"+n+"/SKILL.md"])
+		skills = append(skills, n)
+	}
+	return bytes, skills, budget, nil
 }
