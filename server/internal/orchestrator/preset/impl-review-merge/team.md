@@ -10,7 +10,7 @@ working. Do not retry, do not route around it, hand over through metadata.
 |---|---|
 | status, assignee, attempt_*, owner, pr, pr_number, merged_sha, acceptance*, review_started_sha | orchestrator only |
 | `in_progress` at the start of an owner run | owner (the one status an agent sets) |
-| phase=review_requested, head_sha, branch agent/{{KEY}} | owner |
+| phase=review_requested, head_sha, branch agent/<key> | owner |
 | verdict, reviewed_sha, PR review + `review-verdict` commit status | reviewer |
 | sub-issues, phase=planned / unblocked / cancel_proposed | lead |
 | done, cancel, acceptance ok/reject | humans (and the engine after a green gate) |
@@ -31,7 +31,8 @@ working. Do not retry, do not route around it, hand over through metadata.
   `$HOME`, `/`, `/Users` or parent directories. What you need about the issue
   is in the issue, its comments, metadata and `flow show`. If it is not there,
   report blocked.
-- Git: write only `agent/{{KEY}}` and only as the owner. Never push `{{MAIN}}`,
+- Branch name: `agent/<key>` where `<key>` is the issue key lowercased with non-alphanumerics as `-` (ATT-62 → `agent/att-62`). It is the branch your worktree is already on; push that same name, never an uppercase variant. The uppercase key goes in the PR title, e.g. `fix(api): handle empty list (ATT-62)`, which links the PR to the issue.
+- Git: write only `agent/<key>` and only as the owner. Never push `{{MAIN}}`,
   never merge, never force anyone else's branch, never delete branches.
 - Repo: origin is {{REPO}}, main is `{{MAIN}}`, checks are `{{CHECK_CMD}}`.
   `git fetch origin` before you look at anything.

@@ -97,14 +97,53 @@ func (sp *Spec) NeedsAcceptance(i *Issue) bool {
 	if v := i.Meta["acceptance_required"]; v == "true" || v == "1" || v == "yes" {
 		return true
 	}
-	for _, l := range i.Labels {
-		for _, a := range sp.Acceptance.Labels {
+	return hasLabel(i.Labels, sp.Acceptance.Labels) || hasLabel(i.Labels, sp.Acceptance.DefaultForLabels)
+}
+
+func hasLabel(have, want []string) bool {
+	for _, l := range have {
+		for _, a := range want {
 			if strings.EqualFold(l, a) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// OwnerPool is the owner list for the issue: the first route whose labels
+// match, else roles.owners.
+func (sp *Spec) OwnerPool(i *Issue) []string {
+	for _, r := range sp.Roles.Routes {
+		if hasLabel(i.Labels, r.Labels) {
+			return r.Owners
+		}
+	}
+	return sp.Roles.Owners
+}
+
+// slotWait returns a wait reason when a needs:<slot> resource is full.
+func (sp *Spec) slotWait(s *Snapshot) string {
+	for _, l := range s.Issue.Labels {
+		name, ok := strings.CutPrefix(strings.ToLower(l), "needs:")
+		if !ok {
+			continue
+		}
+		limit, ok := sp.Limits.Slots[name]
+		if !ok {
+			continue
+		}
+		used := 0
+		for _, x := range s.Siblings {
+			if x.Key != s.Issue.Key && (x.Status == StTodo || x.Status == StInProgress) && hasLabel(x.Labels, []string{"needs:" + name}) {
+				used++
+			}
+		}
+		if used >= limit {
+			return fmt.Sprintf("%s slots %d/%d", name, used, limit)
+		}
+	}
+	return ""
 }
 
 func (sp *Spec) isOwner(name string) bool {
@@ -185,7 +224,7 @@ func (sp *Spec) Decide(s *Snapshot, probe Prober) *Decision {
 		case PhUnblocked:
 			owner := m["owner"]
 			if owner == "" {
-				owner = sp.Roles.Owners[0]
+				owner = sp.OwnerPool(i)[0]
 			}
 			return &Decision{Tid: "T7_unblock", Status: StTodo, AssigneeKind: "agent", Assignee: owner,
 				Meta: map[string]string{"phase": PhImplementing, "attempt_impl": "1", "attempt_review": "0", "attempt_infra": "0", "blocked_reason": "", "verdict": "", "acceptance": ""}}
@@ -382,6 +421,9 @@ func (sp *Spec) decideBacklog(s *Snapshot) *Decision {
 	if s.FreeGB >= 0 && s.FreeGB < sp.Limits.MinFreeGB {
 		return &Decision{Wait: fmt.Sprintf("disk guard: %dGB free < %dGB", s.FreeGB, sp.Limits.MinFreeGB)}
 	}
+	if w := sp.slotWait(s); w != "" {
+		return &Decision{Wait: "waiting: " + w}
+	}
 	owner := ""
 	if o := m["owner"]; o != "" {
 		if s.Busy[o] {
@@ -389,7 +431,7 @@ func (sp *Spec) decideBacklog(s *Snapshot) *Decision {
 		}
 		owner = o
 	} else {
-		for _, o := range sp.Roles.Owners {
+		for _, o := range sp.OwnerPool(i) {
 			if !s.Busy[o] {
 				owner = o
 				break

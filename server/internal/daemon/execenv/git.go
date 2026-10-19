@@ -2,6 +2,7 @@ package execenv
 
 import (
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/util"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -228,16 +229,4 @@ func shortID(uuid string) string {
 var nonAlphanumeric = regexp.MustCompile(`[^a-z0-9]+`)
 
 // sanitizeName produces a git-branch-safe name from a human-readable string.
-func sanitizeName(name string) string {
-	s := strings.ToLower(strings.TrimSpace(name))
-	s = nonAlphanumeric.ReplaceAllString(s, "-")
-	s = strings.Trim(s, "-")
-	if len(s) > 30 {
-		s = s[:30]
-		s = strings.TrimRight(s, "-")
-	}
-	if s == "" {
-		s = "agent"
-	}
-	return s
-}
+func sanitizeName(name string) string { return util.BranchSlug(name) }

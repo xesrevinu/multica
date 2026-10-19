@@ -48,7 +48,7 @@ backlog ─T1→ todo(owner) ─agent→ in_progress ─T2→ in_review(reviewer
 | 谁 | 写什么 | 结果 |
 |---|---|---|
 | 人 | 建 issue，status=backlog | 依赖完成、stage 放行、磁盘够、有空闲 owner 时 T1 分配 |
-| owner | push `agent/<KEY>`，`phase=review_requested`、`head_sha`、`pr` | 预检（合并+check_cmd/PR 状态），通过则 T2 给 reviewer；失败 T3 退回 |
+| owner | push `agent/<key>`，`phase=review_requested`、`head_sha`、`pr` | 预检（合并+check_cmd/PR 状态），通过则 T2 给 reviewer；失败 T3 退回 |
 | reviewer | `verdict=approve|changes`，`reviewed_sha=<跑过的 sha>` | approve 且 sha==head 且 CI 绿 → T4 合并；否则退回或重审 |
 | 任何 agent | `phase=blocked`、`blocked_reason` | T6 给 lead，通知你 |
 

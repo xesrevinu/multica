@@ -2,6 +2,7 @@ package util
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -173,4 +174,23 @@ func sanitizePostgresJSONMapKeys(values map[string]any) map[string]string {
 		used[candidate] = struct{}{}
 	}
 	return mapped
+}
+
+var branchSlugRe = regexp.MustCompile(`[^a-z0-9]+`)
+
+// BranchSlug is the one branch-name form for an issue key or conversation
+// key: lowercase, non-alphanumerics collapsed to "-", at most 30 chars.
+// The daemon names worktree branches agent/<slug>, and the orchestrator
+// looks up, pushes and merges the same name (no remapping).
+func BranchSlug(name string) string {
+	s := strings.ToLower(strings.TrimSpace(name))
+	s = branchSlugRe.ReplaceAllString(s, "-")
+	s = strings.Trim(s, "-")
+	if len(s) > 30 {
+		s = strings.TrimRight(s[:30], "-")
+	}
+	if s == "" {
+		s = "agent"
+	}
+	return s
 }

@@ -26,7 +26,7 @@ multica issue metadata set KEY --key phase --value review_requested
 ## Rules
 
 - Quote shas as JSON strings so a numeric-looking sha stays a string.
-- `head_sha` must equal the sha on `origin/agent/KEY` (`git rev-parse origin/agent/KEY` after the push).
+- `head_sha` must equal the sha on `origin/agent/<key>` (`git rev-parse origin/agent/<key>` after the push).
 - Never write `owner`, `attempt_*`, `pr`, `pr_number`, `merged_sha`, `acceptance*`, `review_started_sha`; never `issue status` except `in_progress`; never `--assignee`. The server refuses with `orchestrator_owned` — that is the contract, do not retry or route around it.
 - One result comment per run, after the metadata. `blocked_reason` tells you why the issue came back.
 

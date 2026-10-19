@@ -61,6 +61,15 @@ type Roles struct {
 	// Human is the member (email, name or user id) who receives the acceptance
 	// gate and notifications. Empty = the team's applier.
 	Human string `json:"human,omitempty" yaml:"human,omitempty"`
+	// Routes pick the owner pool by issue label (first match wins); an issue
+	// matching no route uses Owners. Route owners are added to Owners.
+	Routes []Route `json:"routes,omitempty" yaml:"routes,omitempty"`
+}
+
+// Route maps issue labels (any match, case-insensitive) to an owner pool.
+type Route struct {
+	Labels []string `json:"labels" yaml:"labels"`
+	Owners []string `json:"owners" yaml:"owners"`
 }
 
 type RepoSpec struct {
@@ -91,12 +100,19 @@ type Limits struct {
 	MinFreeGB        int `json:"min_free_gb" yaml:"min_free_gb"`
 	BlockedRemindMin int `json:"blocked_remind_min" yaml:"blocked_remind_min"`
 	Failures         int `json:"dead_letter_after" yaml:"dead_letter_after"`
+	// Slots caps concurrently implementing issues per resource: an issue
+	// labelled "needs:<name>" starts only while fewer than Slots[name]
+	// project issues with that label are todo/in_progress.
+	Slots map[string]int `json:"slots,omitempty" yaml:"slots,omitempty"`
 }
 
 // Acceptance flags issues that need a human acceptance gate before merge
 // (macOS GUI / simulator evidence, sign-off).
 type Acceptance struct {
 	Labels []string `json:"labels" yaml:"labels"`
+	// DefaultForLabels gates issues carrying any of these labels too (e.g.
+	// area:studio-app = every screen change waits for the human).
+	DefaultForLabels []string `json:"default_for_labels,omitempty" yaml:"default_for_labels,omitempty"`
 }
 
 type MergeSpec struct {
@@ -169,6 +185,13 @@ func (s *Spec) Defaults() {
 	if s.Acceptance.Labels == nil {
 		s.Acceptance.Labels = []string{"needs-acceptance", "needs-GUI-Master", "needs-Ray-signoff"}
 	}
+	for _, r := range s.Roles.Routes {
+		for _, o := range r.Owners {
+			if !contains(s.Roles.Owners, o) {
+				s.Roles.Owners = append(s.Roles.Owners, o)
+			}
+		}
+	}
 	if len(s.Transitions) == 0 {
 		s.Transitions = PresetTransitions()
 	}
@@ -183,6 +206,16 @@ func (s *Spec) Validate() error {
 	}
 	if s.Roles.Reviewer == "" || s.Roles.Lead == "" || len(s.Roles.Owners) == 0 {
 		return fmt.Errorf("roles.lead, roles.reviewer and at least one roles.owners entry are required")
+	}
+	for _, r := range s.Roles.Routes {
+		if len(r.Labels) == 0 || len(r.Owners) == 0 {
+			return fmt.Errorf("roles.routes entries need labels and owners")
+		}
+	}
+	for k, v := range s.Limits.Slots {
+		if k == "" || v <= 0 {
+			return fmt.Errorf("limits.slots.%s must be a positive count", k)
+		}
 	}
 	for _, o := range s.Roles.Owners {
 		if o == s.Roles.Reviewer {

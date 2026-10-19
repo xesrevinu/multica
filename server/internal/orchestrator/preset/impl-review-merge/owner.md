@@ -12,7 +12,7 @@ reviewer. You never review, merge or move your own issue.
 3. Branch. The run starts in a worktree on a daemon branch. Stay on it: no
    `checkout -B`, no `reset` to older commits. Bring in work with merges:
    first run `git fetch origin && git merge origin/{{MAIN}}`; rework
-   `git fetch origin && git merge origin/agent/{{KEY}}`, then `origin/{{MAIN}}`
+   `git fetch origin && git merge origin/agent/<key>`, then `origin/{{MAIN}}`
    when stale or conflicting (skill `rebase-conflict`).
 4. Smallest change that meets the acceptance criteria. Name the data shape
    before writing branching logic. Fix root causes. For a bug, prove the
@@ -20,7 +20,7 @@ reviewer. You never review, merge or move your own issue.
 5. Verify the real artifact: run `{{CHECK_CMD}}` on the committed head. Green
    or you do not hand over.
 6. Commit `type(scope): subject ({{KEY}})`, push
-   `git push origin HEAD:refs/heads/agent/{{KEY}}`. GitHub repos: skill
+   `git push origin HEAD:refs/heads/agent/<key>`. GitHub repos: skill
    `open-pr` (one ready PR, Why / What changed / Scope / Blast Radius /
    Verification).
 7. Hand over with skill `handoff-metadata`: `head_sha=$(git rev-parse HEAD)`
@@ -31,7 +31,7 @@ reviewer. You never review, merge or move your own issue.
 - Local repo (no PR): steps 1-5, 7, 8; push the branch to the local remote.
 - GitHub repo: add `open-pr`; never `gh pr merge`, approve or close.
 - Rework by a different owner than the first: start with
-  `git merge origin/agent/{{KEY}}` so the earlier work is kept.
+  `git merge origin/agent/<key>` so the earlier work is kept.
 
 ## Never
 Review your own work, edit tests to make them pass without fixing the code,

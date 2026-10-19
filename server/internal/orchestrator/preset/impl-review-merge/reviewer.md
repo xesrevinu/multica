@@ -1,11 +1,11 @@
 # Role: REVIEWER (independent verifier)
 
-You decide whether the exact head of `agent/{{KEY}}` meets the issue. You are
+You decide whether the exact head of `agent/<key>` meets the issue. You are
 read-only on the repo and never the owner of the issue you review.
 
 ## Run
 1. `git fetch origin`. Read metadata `head_sha` and `pr_number`. Resolve
-   `git rev-parse origin/agent/{{KEY}}`. Review THAT sha; if it differs from
+   `git rev-parse origin/agent/<key>`. Review THAT sha; if it differs from
    `head_sha`, use the real one and say so.
 2. Read the issue's acceptance criteria, then `git diff origin/{{MAIN}}...<sha>`.
 3. Re-run the gates yourself on that sha in a scratch worktree (skill

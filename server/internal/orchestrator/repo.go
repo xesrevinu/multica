@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/util"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -60,7 +61,10 @@ func (r *repoOps) lock(project string) func() {
 	return mx.Unlock
 }
 
-func branchOf(sp *Spec, key string) string { return sp.Repo.BranchPrefix + key }
+// branchOf is the issue branch: the same name the daemon's worktree uses
+// (prefix + lowercase slug of the key), pushed as-is. The uppercase key stays
+// in the PR title for linking.
+func branchOf(sp *Spec, key string) string { return sp.Repo.BranchPrefix + util.BranchSlug(key) }
 
 func freeGB(path string) int {
 	if path == "" {

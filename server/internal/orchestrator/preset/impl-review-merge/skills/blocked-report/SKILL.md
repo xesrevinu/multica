@@ -10,7 +10,7 @@ metadata:
 # Blocked report
 
 1. Classify: missing input (credentials, decision, spec), environment broken, product/platform limitation, or a defect outside this issue.
-2. Push any useful partial work to `agent/KEY` (never `main`).
+2. Push any useful partial work to `agent/<key>` (never `main`).
 3. `multica issue metadata set KEY --key blocked_reason --value "<one line: what is missing, who can give it, what you tried>"`
 4. `multica issue metadata set KEY --key phase --value blocked` (last).
 5. One result comment with the details (commands, errors, partial sha). Stop.

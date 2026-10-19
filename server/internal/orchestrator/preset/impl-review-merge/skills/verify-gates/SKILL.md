@@ -9,7 +9,7 @@ metadata:
 
 # Verify gates
 
-1. `git fetch origin` and pick the sha: `git rev-parse origin/agent/KEY`.
+1. `git fetch origin` and pick the sha: `git rev-parse origin/agent/<key>`.
 2. Scratch checkout inside your working directory, never in the owner's:
    `git worktree add --detach .rv-KEY <sha>`.
 3. Install only what the checks need, then run the project's check command
