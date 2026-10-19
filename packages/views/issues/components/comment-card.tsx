@@ -1497,7 +1497,7 @@ function CommentCardImpl({
               {threadRows.map(renderThreadRow)}
 
               {/* Reply input */}
-              <div className="border-t border-border/50 px-4 max-md:px-3 py-2.5">
+              <div data-comment-reply-input className="border-t border-border/50 px-4 max-md:px-3 py-2.5">
                 <ReplyInput
                   issueId={issueId}
                   parentId={replyTargetId}
