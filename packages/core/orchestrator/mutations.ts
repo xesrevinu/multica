@@ -30,3 +30,12 @@ export function useOrchPROp(wsId: string, key: string) {
     onSettled: invalidate,
   });
 }
+
+// Risk is plain issue metadata (low | medium | high; null clears it).
+export function useOrchSetRisk(wsId: string, issueId: string) {
+  const invalidate = useInvalidateOrch(wsId);
+  return useMutation({
+    mutationFn: (risk: "low" | "medium" | "high" | null) => api.setIssueMetadataKey(issueId, "risk", risk),
+    onSettled: invalidate,
+  });
+}

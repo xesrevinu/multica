@@ -1443,6 +1443,17 @@ export class ApiClient {
     return this.fetch<unknown>(`/api/orchestrator/flow/${encodeURIComponent(key)}/${action}`, { method: "POST", body: JSON.stringify(body ?? {}) });
   }
 
+  // PUT/DELETE /api/issues/{id}/metadata/{key} (the write guard validates
+  // engine-owned keys and values such as risk).
+  async setIssueMetadataKey(issueId: string, key: string, value: string | null): Promise<void> {
+    const path = `/api/issues/${encodeURIComponent(issueId)}/metadata/${encodeURIComponent(key)}`;
+    if (value === null) {
+      await this.fetch(path, { method: "DELETE" });
+      return;
+    }
+    await this.fetch(path, { method: "PUT", body: JSON.stringify({ value }) });
+  }
+
   async orchPROp(key: string, op: "update-branch" | "rerun-checks" | "merge"): Promise<unknown> {
     return this.fetch<unknown>(`/api/orchestrator/issues/${encodeURIComponent(key)}/pr/${op}`, { method: "POST", body: "{}" });
   }
