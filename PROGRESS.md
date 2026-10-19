@@ -110,7 +110,7 @@ Reference implementation: /Users/kee/Workspace/ai-stack/multica-e2e/teamctl (kep
 - New .multica/REVIEW.md: failure modes and risk tiers. workflow.md gains review and pstack sections.
 - `git apply --check` is OK for both patches. Both orchestrator specs validate with `preset render -f`. Nothing was applied to pocketjs.
 
-## Step: Web UI redesign (2026-10-19, in progress)
+## Step: Web UI redesign (2026-10-19, phases 1-5 done)
 Plan: docs/orchestrator/ui-redesign.md. Prototype: .orch-dev/proto/index.html. Resume from the first unchecked phase.
 - [x] Design doc committed.
 - [x] Phase 1 backend:
@@ -120,8 +120,10 @@ Plan: docs/orchestrator/ui-redesign.md. Prototype: .orch-dev/proto/index.html. R
   - wt: repo.disk_path optional; default = static root of wt `worktree-path` (repo .config/wt.toml, then user config).
   - Tests: TestAttentionAndSort, TestWtRootAndDiskPath, TestPRDetailAndOps (httptest fake GitHub), TestIntegrationIssueViewsAndMemberActions. Verified live on e2e (18899) incl. PR #22 via the App.
   - Priority/risk use existing APIs (PUT /api/issues/{id}, PUT /api/issues/{id}/metadata/risk).
-- [ ] Phase 2 sidebar + DMs
-- [ ] Phase 3 issue chat view
-- [ ] Phase 4 drawer, tabs, secondary nav
-- [ ] Phase 5 mobile PWA
+- [x] Phase 2 sidebar + DMs: agent DMs on top (latest session, unread, busy dot), pinned kept, attention-grouped issue list (needs you / in progress / up next / settled collapsed; sub-issues expand; filter + project), secondary surfaces as a footer icon strip. New `orch` i18n namespace (5 locales). core `@multica/core/orchestrator` (schemas, queries, mutations, grouping, realtime).
+- [x] Phase 3 issue chat view (`/issues/:id`; `?view=classic` or a `#comment-` deep link keeps the document page): oldest→newest timeline with thread replies, agent runs folded ("worked for"), orchestrator transitions as dividers, activities folded; acceptance / blocked / cancel-proposed card pinned above the composer; live PR card (checks, commits, behind/conflict, update-branch/rerun/merge gated by App permissions; engine merges orchestrated issues); status strip (phase, attempts, waiting, risk, worktree, priority, pause/resume/cancel); title opens the details drawer (read-only, sheet on desktop, bottom sheet on mobile).
+- [x] Phase 4 tabs + landing: issues/sub-issues open as session tabs (sidebar hover button, drawer); fixed web never mounting SessionTabsProvider (session tabs were off on web); workspace root / post-auth / switcher land on /chat; board/list/table etc. stay in the footer strip.
+- [x] Phase 5 compact: chat list doubles as phone home with the attention list; issue view back link; drawer as bottom sheet; manifest unchanged (start_url /inbox, since "chat" is not a legacy/reserved segment).
+Screenshots: .orch-dev/shots/ui-p2-*, ui-p3-*, ui-p4-*, ui-p5-m-* (box /workspace/ui/).
+Known: React "nativeButton" unknown-prop warning on every page (pre-existing, not from orch code); drawer is read-only (edit via classic page); sidebar sort is attention-only; core vitest has localStorage failures under Node 26 (env, untouched files).
 Helpers (git-excluded): `.orch-dev/api.mjs` (authenticated API calls; needs DEV_CODE from api.env's MULTICA_DEV_VERIFICATION_CODE, never print), `.orch-dev/shots.mjs`.
