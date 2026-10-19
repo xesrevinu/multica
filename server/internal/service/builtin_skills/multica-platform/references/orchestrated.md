@@ -42,3 +42,5 @@ is refused with `orchestrator_owned`.
 recent transitions with their reasons. `blocked_reason` always explains the
 latest rework or block. Humans steer with `multica flow unblock|cancel|accept|
 reject|replay`; agents do not use `multica flow`.
+
+- **Workspace scope (hard rule)**: search, read and write only inside the run's working directory (git worktree). Use `rg <pattern> .` or `git grep`; never run recursive grep/find/rg over `$HOME`, `/`, `/Users` or parent directories. Issue context comes from `multica issue get`, comments, metadata (`blocked_reason`, `acceptance`) and `multica flow show`; if it is missing, report blocked instead of searching the disk.

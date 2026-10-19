@@ -334,6 +334,8 @@ func (s *Service) hMeta(needStatus, needPhase string, meta map[string]string) ht
 				return
 			}
 			m["acceptance"] = "reject: " + body.Reason
+			// The owner reads blocked_reason on rework; without it agents went hunting for the text.
+			m["blocked_reason"] = "acceptance rejected: " + body.Reason
 		}
 		if body.Owner != "" {
 			if !t.Spec.isOwner(body.Owner) {

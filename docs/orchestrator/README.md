@@ -84,3 +84,5 @@ refused by the orchestrator (code orchestrator_owned): ...
 
 都进原生 inbox，类型 `orchestrator_alert`：blocked、dead-letter（连续失败 5 次）、待验收、
 blocked 超过 `blocked_remind_min`（默认 60 分钟）的提醒。
+
+- **工作区范围（硬规则）**：所有搜索/读写只在本次 run 的工作目录（git worktree）里。用 `rg <pattern> .` 或 `git grep`，禁止对 `$HOME`、`/`、`/Users` 或父目录做递归 grep/find/rg。issue 需要的信息只从 `multica issue get`、评论、metadata（`blocked_reason`、`acceptance`）和 `multica flow show` 获取；找不到就 blocked，不要在磁盘上翻找。

@@ -16,3 +16,5 @@ metadata:
 5. One result comment with the details (commands, errors, partial sha). Stop.
 
 The orchestrator moves the issue to the lead and notifies the human. Do not change status or assignee yourself. Lead: resolve, then `phase=unblocked` (or `phase=cancel_proposed`).
+
+- **Workspace scope (hard rule)**: search, read and write only inside the run's working directory (git worktree). Use `rg <pattern> .` or `git grep`; never run recursive grep/find/rg over `$HOME`, `/`, `/Users` or parent directories. Issue context comes from `multica issue get`, comments, metadata (`blocked_reason`, `acceptance`) and `multica flow show`; if it is missing, report blocked instead of searching the disk.
