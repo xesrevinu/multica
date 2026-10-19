@@ -155,14 +155,14 @@ func (s *store) busyOwners(ctx context.Context, workspaceID string) (map[string]
 var terminalTask = []string{"completed", "failed", "cancelled"}
 
 func (s *store) runs(ctx context.Context, issueID string) (active, last *Run, err error) {
-	rows, err := s.pool.Query(ctx, `SELECT q.id::text, q.status, q.started_at, (SELECT max(m.created_at) FROM task_message m WHERE m.task_id=q.id) FROM agent_task_queue q WHERE q.issue_id=$1 ORDER BY q.created_at DESC LIMIT 20`, issueID)
+	rows, err := s.pool.Query(ctx, `SELECT q.id::text, q.status, q.started_at, (SELECT max(m.created_at) FROM task_message m WHERE m.task_id=q.id), COALESCE(q.failure_reason, ''), q.created_at, q.completed_at, COALESCE((SELECT lower(rt.provider) FROM agent_runtime rt WHERE rt.id=q.runtime_id), ''), COALESCE(q.error, '') FROM agent_task_queue q WHERE q.issue_id=$1 ORDER BY q.created_at DESC LIMIT 20`, issueID)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		r := &Run{}
-		if err := rows.Scan(&r.ID, &r.Status, &r.StartedAt, &r.LastActivity); err != nil {
+		if err := rows.Scan(&r.ID, &r.Status, &r.StartedAt, &r.LastActivity, &r.Reason, &r.CreatedAt, &r.EndedAt, &r.Backend, &r.Error); err != nil {
 			return nil, nil, err
 		}
 		if contains(terminalTask, r.Status) {

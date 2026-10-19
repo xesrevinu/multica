@@ -1,7 +1,12 @@
-name: lead answers - wrong phase waits with a hint, cancel_proposed cancels; planned epic never starts
+name: lead answers - wrong phase waits with a hint; cancel_proposed waits for a member's confirmation
 issue: {key: ATT-3, status: blocked, meta: {phase: blocked, blocked_reason: x}}
 steps:
   - do: {meta: {phase: review_requested}}
     expect: {wait: phase=unblocked}
-  - do: {meta: {phase: cancel_proposed}}
+  - note: the lead proposes; the human is asked, nothing is cancelled yet
+    do: {meta: {phase: cancel_proposed}}
+    expect: {tid: T8a_cancel_proposed, assignee: "@human", meta: {cancel_notified: "true"}}
+  - expect: {wait: waiting for a member to confirm}
+  - note: 确认取消 / multica flow cancel (member-only key)
+    do: {meta: {cancel_confirmed: "true"}}
     expect: {tid: T8_cancel, status: cancelled}

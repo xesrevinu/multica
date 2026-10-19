@@ -46,5 +46,5 @@
 
 ## 待 Ray 定
 - 核对 required_checks 实际名称。
-- gbot 既是 owner 又拆分：拆分后父单写 `phase=planned`（引擎不再启动它），子单回 backlog 由引擎派。
+- gbot 既是 owner 又拆分：拆分后父单写 `phase=planned`（引擎不再启动它），子单建成 todo 由引擎派（backlog = 未计划，引擎不碰）。
 - 两个项目共用一个 hub 和仓库，worktree 都在 `~/.cursor/worktrees/pocketjs/agent-<key>`。

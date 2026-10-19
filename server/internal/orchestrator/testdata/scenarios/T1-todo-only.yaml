@@ -1,0 +1,15 @@
+name: T1 starts todo issues only; backlog (not planned) is never touched, not even reconciled
+issue: {key: ATT-85, status: backlog}
+steps:
+  - note: backlog = not planned
+    expect: {tid: none}
+  - note: a member moves it to todo (planned) - T1 picks it up
+    do: {status: todo}
+    expect: {tid: T1_start, status: todo, assignee: a, meta: {phase: implementing, owner: a}}
+  - do: {run: running}
+    expect: {tid: none}
+  - note: a member parks it back in backlog mid-run - the engine leaves it alone (no T9)
+    do: {status: backlog, run: completed}
+    expect: {tid: none}
+  - do: {status: todo, head: h1, meta: {phase: review_requested, head_sha: h1}}
+    expect: {tid: T2_review}

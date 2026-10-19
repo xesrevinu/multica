@@ -26,7 +26,7 @@ orchestrator:
     main: main
     check_cmd: npm test && npm run lint   # 送审前的本地预检（可选）
     required_checks: [test, lint]
-  limits: { impl: 3, review: 3, infra: 2, stuck_min: 20, idle_min: 8, min_free_gb: 20,
+  limits: { impl: 3, review: 3, infra: 2, stuck_min: 20, idle_min: 8, idle_min_by_backend: { gbot: -1 }, queued_min: 15, unblocks: 2, min_free_gb: 20,
             slots: { cargo: 2 } }    # 可选：带 needs:cargo 的 issue 同时最多 2 条 todo/in_progress
   acceptance:
     labels: [needs-acceptance, needs-GUI-Master, needs-Ray-signoff]
@@ -45,7 +45,7 @@ multica team status                                     # 心跳、teams
 ## 2. 一条 issue 怎么走
 
 ```
-backlog ─T1→ todo(owner) ─agent→ in_progress ─T2→ in_review(reviewer) ─T4→ done（合并）
+todo ─T1→ todo(owner) ─agent→ in_progress ─T2→ in_review(reviewer) ─T4→ done（合并）
                 ↑                                      │
                 └──────────── T3 rework ───────────────┘  verdict=changes / CI 红 / 冲突 / 验收拒绝
 任何状态 ─T6→ blocked(lead) ─T7→ todo   或 ─T8→ cancelled
@@ -53,7 +53,7 @@ backlog ─T1→ todo(owner) ─agent→ in_progress ─T2→ in_review(reviewer
 
 | 谁 | 写什么 | 结果 |
 |---|---|---|
-| 人 | 建 issue，status=backlog | 依赖完成、stage 放行、磁盘够、有空闲 owner 时 T1 分配 |
+| 人 | 建 issue，status=todo（backlog = 未计划，引擎不碰） | 依赖完成、stage 放行、磁盘够、有空闲 owner 时 T1 分配 |
 | owner | push `agent/<key>`，`phase=review_requested`、`head_sha`、`pr` | 预检（合并+check_cmd/PR 状态），通过则 T2 给 reviewer；失败 T3 退回 |
 | reviewer | `verdict=approve|changes`，`reviewed_sha=<跑过的 sha>` | approve 且 sha==head 且 CI 绿 → T4 合并；否则退回或重审 |
 | 任何 agent | `phase=blocked`、`blocked_reason` | T6 给 lead，通知你 |
@@ -70,7 +70,7 @@ multica flow log <KEY>             # 完整转移日志
 multica flow accept <KEY>          # 验收通过 → 合并 → done
 multica flow reject <KEY> --reason "按钮错位"   # 退回 owner，原因写进 blocked_reason
 multica flow unblock <KEY> [--owner at-dev-b] [--reason ...]
-multica flow cancel <KEY>          # blocked → cancelled
+multica flow cancel <KEY>          # blocked → cancelled（确认 lead 的 cancel_proposed；UI「确认取消」同一个接口）
 multica flow replay <KEY>          # 清 backoff，立即重新评估
 multica team pause <project> --reason ...   # 急停
 multica team resume <project>

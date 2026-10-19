@@ -38,6 +38,9 @@ func addWorktrunkWorktree(gitRoot string, plan taskBranchPlan, taskID string, lo
 	if err != nil {
 		return "", "", false, err
 	}
+	if checkedOut && plan.exclusive {
+		return "", "", false, branchOccupied(gitRoot, plan.name, "")
+	}
 	if checkedOut {
 		if logger != nil {
 			logger.Info("execenv: conversation branch is already checked out; forking a task branch",
@@ -52,6 +55,9 @@ func addWorktrunkWorktree(gitRoot string, plan taskBranchPlan, taskID string, lo
 	}
 	if plan.continues || plan.reset {
 		path, err = switchWorktrunk(gitRoot, plan.name, "", false, logger)
+		if err != nil && branchUnavailable(err.Error()) && plan.exclusive {
+			return "", "", false, branchOccupied(gitRoot, plan.name, err.Error())
+		}
 		if err != nil && branchUnavailable(err.Error()) {
 			return createWorktrunkBranch(gitRoot, plan.altName(taskID), plan.base, logger)
 		}
@@ -61,6 +67,9 @@ func addWorktrunkWorktree(gitRoot string, plan taskBranchPlan, taskID string, lo
 		return path, plan.name, !plan.continues, nil
 	}
 	path, err = switchWorktrunk(gitRoot, plan.name, plan.base, true, logger)
+	if err != nil && branchUnavailable(err.Error()) && plan.exclusive {
+		return "", "", false, branchOccupied(gitRoot, plan.name, err.Error())
+	}
 	if err != nil && branchUnavailable(err.Error()) {
 		return createWorktrunkBranch(gitRoot, plan.altName(taskID), plan.base, logger)
 	}

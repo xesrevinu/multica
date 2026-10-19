@@ -1,0 +1,24 @@
+name: a lead run on a blocked issue gets idle detection; a run queued past queued_min is stuck
+spec:
+  roles: {lead: lead, reviewer: rev, owners: [a, b]}
+  repo: {mode: github, slug: x/y}
+  limits: {idle_min: 5, queued_min: 10}
+issue: {key: ATT-82}
+steps:
+  - expect: {tid: T1_start}
+  - note: the run never leaves the queue
+    do: {run: queued}
+    expect: {tid: none}
+  - do: {advance: 9m}
+    expect: {tid: none}
+  - do: {advance: 2m}
+    expect: {tid: T5b_cancel_stuck}
+  - expect: {tid: T5_rerun, meta: {attempt_infra: "1"}}
+  - do: {run: failed, reason: agent_error.provider_auth_or_access}
+    expect: {tid: T6_block, status: blocked, assignee: lead}
+  - note: the lead's triage run goes silent
+    do: {run: running}
+    expect: {wait: phase=unblocked}
+  - do: {advance: 6m}
+    expect: {tid: T5b_cancel_stuck}
+  - expect: {wait: phase=unblocked}

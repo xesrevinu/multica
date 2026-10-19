@@ -675,6 +675,7 @@ func init() {
 	issueAssignCmd.Flags().String("to-id", "", "Assignee UUID — member, agent, or squad (mutually exclusive with --to)")
 	issueAssignCmd.Flags().Bool("unassign", false, "Remove current assignee")
 	issueAssignCmd.Flags().Bool("no-start", false, "Assign ownership without starting an agent run")
+	issueAssignCmd.Flags().Bool("force", false, "Override the orchestrator on an orchestrated project (members only; the reconciler may still converge the issue)")
 	issueAssignCmd.Flags().String("output", "json", "Output format: table or json")
 
 	// issue comment list
@@ -1878,6 +1879,10 @@ func runIssueAssign(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	if force, _ := cmd.Flags().GetBool("force"); force {
+		client.ExtraHeaders = map[string]string{"X-Orchestrator-Override": "1"}
+	}
+
 	ctx, cancel := cli.APIContext(context.Background())
 	defer cancel()
 
@@ -1908,6 +1913,12 @@ func runIssueAssign(cmd *cobra.Command, args []string) error {
 
 	var result map[string]any
 	if err := client.PutJSON(ctx, "/api/issues/"+issueRef.ID, body, &result); err != nil {
+		if orchestratorOwned(err) {
+			return cli.WithUserMessage(err.Error()+
+				"\nhint: this issue is in an orchestrated project, so the orchestrator owns its assignee; --no-start only skips the agent run and does not change that."+
+				"\n      a member can override once with `multica issue assign "+args[0]+" ... --force`, or pause the team with `multica team pause`.",
+				fmt.Errorf("assign issue: %w", err))
+		}
 		return fmt.Errorf("assign issue: %w", err)
 	}
 
@@ -3587,4 +3598,11 @@ func compactComments(comments []map[string]any) {
 			}
 		}
 	}
+}
+
+// orchestratorOwned reports whether err is the server refusing a write that
+// the orchestrator owns (403, code orchestrator_owned).
+func orchestratorOwned(err error) bool {
+	var he *cli.HTTPError
+	return errors.As(err, &he) && strings.Contains(he.Body, `"orchestrator_owned"`)
 }

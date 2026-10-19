@@ -3358,6 +3358,10 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 
 	// Determine creator identity: agent (via X-Agent-ID header) or member.
 	creatorType, actualCreatorID := h.resolveActor(r, creatorID, workspaceID)
+	if msg := h.orchestratorCreateLabelsGuard(r, creatorType, creatorID, wsUUID, projectID, labelIDs); msg != "" {
+		writeErrorCode(w, http.StatusForbidden, orchestrator.ErrCodeOwned, msg)
+		return
+	}
 
 	// Optional origin stamping (quick-create / autopilot). Only the
 	// allowed origin types are accepted; anything else is rejected so a

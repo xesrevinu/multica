@@ -1,0 +1,29 @@
+name: idle_min_by_backend - gbot reports nothing until it ends, so the preset turns idle detection off for it
+spec:
+  roles: {lead: lead, reviewer: rev, owners: [a, b]}
+  repo: {mode: github, slug: x/y}
+  limits: {idle_min: 5, idle_min_by_backend: {Claude: 3}}
+issue: {key: ATT-87}
+steps:
+  - expect: {tid: T1_start}
+  - note: a gbot run is silent for 15m - not idle (preset gbot -1); stuck_min still bounds it
+    do: {run: running, backend: gbot}
+    expect: {tid: none}
+  - do: {advance: 15m}
+    expect: {tid: none}
+  - do: {advance: 6m}
+    expect: {tid: T5b_cancel_stuck}
+  - expect: {tid: T5_rerun, meta: {attempt_infra: "1"}}
+  - note: a claude run uses its own override (3m), case-insensitive
+    do: {run: running, backend: claude}
+    expect: {tid: none}
+  - do: {advance: 4m}
+    expect: {tid: T5b_cancel_stuck}
+  - expect: {tid: T5_rerun, meta: {attempt_infra: "2"}}
+  - note: an unlisted backend falls back to idle_min (5m)
+    do: {run: running, backend: codex}
+    expect: {tid: none}
+  - do: {advance: 4m}
+    expect: {tid: none}
+  - do: {advance: 2m}
+    expect: {tid: T5b_cancel_stuck}

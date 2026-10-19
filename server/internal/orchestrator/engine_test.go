@@ -19,6 +19,13 @@ func spec(t *testing.T) *Spec {
 
 var now = time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
 
+// fresh is a todo issue nobody started or holds yet: the T1 input.
+func fresh() *Snapshot {
+	s := snap(StTodo, map[string]string{})
+	s.Issue.AssigneeType, s.Issue.Assignee = "", ""
+	return s
+}
+
 func snap(st string, meta map[string]string) *Snapshot {
 	return &Snapshot{Now: now, Issue: Issue{ID: "1", Key: "ATT-1", Status: st, Meta: meta, AssigneeType: "agent", Assignee: "a"}, Busy: map[string]bool{}, FreeGB: 100}
 }
@@ -42,7 +49,7 @@ func want(t *testing.T, d *Decision, tid, status, assignee string) {
 
 func TestHappyPath(t *testing.T) {
 	sp := spec(t)
-	s := snap(StBacklog, map[string]string{})
+	s := snap(StTodo, map[string]string{})
 	s.Issue.AssigneeType, s.Issue.Assignee = "", ""
 	d := sp.Decide(s, nil)
 	want(t, d, "T1_start", StTodo, "a")
@@ -146,7 +153,7 @@ func TestStuck(t *testing.T) {
 
 func TestBacklogGuards(t *testing.T) {
 	sp := spec(t)
-	s := snap(StBacklog, map[string]string{})
+	s := fresh()
 	s.FreeGB = 5
 	if d := sp.Decide(s, nil); d.Tid != "" || !strings.Contains(d.Wait, "disk") {
 		t.Fatal(d)
@@ -183,6 +190,13 @@ func TestBlockedUnblockCancelAndAgentBlock(t *testing.T) {
 		t.Fatal(d)
 	}
 	s.Issue.Meta["phase"] = PhCancelProposed
+	// a lead proposal waits for a member; only the flow API's confirmation cancels
+	want(t, sp.Decide(s, nil), "T8a_cancel_proposed", "", "@human")
+	s.Issue.Meta["cancel_notified"] = "true"
+	if d := sp.Decide(s, nil); d == nil || d.Tid != "" || !strings.Contains(d.Wait, "cancel proposed") {
+		t.Fatal(d)
+	}
+	s.Issue.Meta["cancel_confirmed"] = "true"
 	want(t, sp.Decide(s, nil), "T8_cancel", StCancelled, "")
 	s = snap(StInProgress, map[string]string{"phase": PhBlocked, "blocked_reason": "need creds"})
 	d = sp.Decide(s, nil)
@@ -270,7 +284,12 @@ func TestIdle(t *testing.T) {
 	if d := sp.Decide(s, nil); d != nil {
 		t.Fatal("active run must not be cancelled", d)
 	}
-	sp.Limits.IdleMin = -1
+	// through ParseSpec/Defaults, as the server loads it
+	neg, err := ParseSpec([]byte("roles: {lead: l, reviewer: r, owners: [a]}\nrepo: {mode: github, slug: x/y}\nlimits: {idle_min: -1}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp = neg
 	act = now.Add(-11 * time.Minute)
 	if d := sp.Decide(s, nil); d != nil {
 		t.Fatal("negative idle_min disables", d)

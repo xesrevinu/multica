@@ -1,0 +1,29 @@
+name: provider quota / rate-limit failures retry with backoff and count no attempt
+spec:
+  roles: {lead: lead, reviewer: rev, owners: [a, b]}
+  repo: {mode: github, slug: x/y}
+  limits: {infra: 1}
+issue: {key: ATT-80}
+steps:
+  - expect: {tid: T1_start}
+  - do: {run: running}
+    expect: {tid: none}
+  - note: quota failure - first retry after 1m, no attempt counted
+    do: {advance: 1m, run: failed, reason: agent_error.provider_quota_limit}
+    expect: {wait: "provider limit"}
+  - do: {advance: 61s}
+    expect: {tid: T5q_provider_limit, meta: {attempt_quota: "1"}}
+  - do: {run: running}
+    expect: {tid: none}
+  - note: rate limit - backoff doubles to 2m
+    do: {advance: 1m, run: failed, reason: agent_error.provider_capacity_or_rate_limit}
+    expect: {wait: "retry 2 in 2m0s"}
+  - do: {advance: 1m}
+    expect: {wait: "retry 2 in 1m0s"}
+  - do: {advance: 61s}
+    expect: {tid: T5q_provider_limit, meta: {attempt_quota: "2"}}
+  - note: an ordinary failure still counts as infra - and it is the first one (quota retries counted none)
+    do: {run: failed}
+    expect: {tid: T5_rerun, meta: {attempt_infra: "1"}}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
+    expect: {tid: T2_review, meta: {attempt_quota: ""}}

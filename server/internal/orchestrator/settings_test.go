@@ -26,12 +26,12 @@ func TestRoutesPickOwnerByLabel(t *testing.T) {
 	if !sp.isOwner("gbot") || !sp.isOwner("front") {
 		t.Fatal("route owners must join roles.owners")
 	}
-	s := snap(StBacklog, map[string]string{})
+	s := fresh()
 	s.Issue.Labels = []string{"Area:Hard"}
 	want(t, sp.Decide(s, ok(false)), "T1_start", StTodo, "gbot")
-	s = snap(StBacklog, map[string]string{})
+	s = fresh()
 	want(t, sp.Decide(s, ok(false)), "T1_start", StTodo, "heavy")
-	s = snap(StBacklog, map[string]string{})
+	s = fresh()
 	s.Issue.Labels = []string{"area:hard"}
 	s.Busy["gbot"] = true
 	if d := sp.Decide(s, ok(false)); d == nil || d.Wait != "all owners busy" {
@@ -45,15 +45,20 @@ func TestRoutesPickOwnerByLabel(t *testing.T) {
 func TestCargoSlots(t *testing.T) {
 	sp := pocketSpec(t)
 	busy := func(k, st string, l ...string) Issue { return Issue{Key: k, Status: st, Labels: l} }
-	s := snap(StBacklog, map[string]string{})
+	s := fresh()
 	s.Issue.Labels = []string{"needs:cargo"}
 	s.Siblings = []Issue{busy("A", StTodo, "needs:cargo"), busy("B", StInProgress, "needs:cargo"), busy("C", StInProgress)}
+	s.Siblings[0].Meta = map[string]string{"phase": PhImplementing} // started by T1
 	if d := sp.Decide(s, ok(false)); d == nil || d.Wait != "waiting: cargo slots 2/2" {
 		t.Fatalf("want slot wait, got %+v", d)
 	}
 	s.Siblings[1].Status = StInReview
 	want(t, sp.Decide(s, ok(false)), "T1_start", StTodo, "heavy")
-	s = snap(StBacklog, map[string]string{})
+	// a todo sibling the engine has not started yet holds no slot
+	s.Siblings[1].Status = StInProgress
+	s.Siblings[0].Meta = nil
+	want(t, sp.Decide(s, ok(false)), "T1_start", StTodo, "heavy")
+	s = fresh()
 	s.Siblings = []Issue{busy("A", StTodo, "needs:cargo"), busy("B", StTodo, "needs:cargo")}
 	want(t, sp.Decide(s, ok(false)), "T1_start", StTodo, "heavy") // unlabelled ignores slots
 }
@@ -66,7 +71,7 @@ func TestDefaultAcceptanceLabels(t *testing.T) {
 	if sp.NeedsAcceptance(&Issue{Labels: []string{"area:host"}}) {
 		t.Fatal("ungated label")
 	}
-	if sp.Limits.MinFreeGB != 40 {
+	if sp.Limits.FreeGB() != 40 {
 		t.Fatal("min_free_gb")
 	}
 }

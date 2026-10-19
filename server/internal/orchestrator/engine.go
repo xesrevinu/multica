@@ -27,6 +27,15 @@ type Run struct {
 	// LastActivity is the newest task_message time (nil if none yet). A run whose
 	// agent is stuck inside one tool call (e.g. an rg over $HOME) emits nothing.
 	LastActivity *time.Time
+	// Reason is agent_task_queue.failure_reason (pkg/taskfailure), "" if none.
+	Reason    string
+	CreatedAt *time.Time
+	EndedAt   *time.Time
+	// Backend is the agent runtime's provider (gbot, claude, codex, ...),
+	// "" if unknown; it selects limits.idle_min_by_backend.
+	Backend string
+	// Error is agent_task_queue.error of a finished run ("" if none).
+	Error string
 }
 
 // Snapshot is everything Decide may look at. Collected by the runtime.
@@ -140,7 +149,8 @@ func (sp *Spec) slotWait(s *Snapshot) string {
 		}
 		used := 0
 		for _, x := range s.Siblings {
-			if x.Key != s.Issue.Key && (x.Status == StTodo || x.Status == StInProgress) && hasLabel(x.Labels, []string{"needs:" + name}) {
+			started := x.Status == StInProgress || (x.Status == StTodo && x.Meta["phase"] != "" && x.Meta["phase"] != PhPlanned)
+			if x.Key != s.Issue.Key && started && hasLabel(x.Labels, []string{"needs:" + name}) {
 				used++
 			}
 		}
@@ -219,6 +229,29 @@ func (sp *Spec) Decide(s *Snapshot, probe Prober) *Decision {
 	if m["paused"] == "true" {
 		return &Decision{Wait: "paused by a member (resume to continue)"}
 	}
+	// Blocked takes precedence over T9: a blocked issue leaves only through
+	// the lead's phase=unblocked / cancel_proposed (T7/T8) or a member's flow
+	// action, never because some agent rewrote phase (e.g. implementing).
+	if st == StBlocked {
+		return sp.decideBlocked(s)
+	}
+	// Backlog = not planned. The engine never starts, reconciles or otherwise
+	// touches a backlog issue (a member moving work back to backlog parks it);
+	// T1 picks up todo issues only.
+	if st == StBacklog {
+		if m["phase"] == PhPlanned {
+			return &Decision{Wait: "planned epic: its sub-issues carry the work"}
+		}
+		return nil
+	}
+	if StartsHere(st, m) {
+		return sp.decideStart(s)
+	}
+	// T1 commits its metadata before the assignee PUT; a crash in between
+	// leaves a started todo issue with nobody on it.
+	if st == StTodo && i.Assignee == "" && m["owner"] != "" && (m["phase"] == PhImplementing || m["phase"] == PhChangesRequested) {
+		return &Decision{Tid: "T9_reconcile", Status: StTodo, AssigneeKind: "agent", Assignee: m["owner"], Why: "phase " + m["phase"] + " but unassigned (crash after the metadata commit?)"}
+	}
 	// T9: converge status to the engine-owned phase.
 	if ok, has := phaseStatus[m["phase"]]; has && !contains(ok, st) {
 		target := ok[0]
@@ -233,38 +266,9 @@ func (sp *Spec) Decide(s *Snapshot, probe Prober) *Decision {
 		}
 		return d
 	}
-	switch st {
-	case StBacklog:
-		return sp.decideBacklog(s)
-	case StBlocked:
-		switch m["phase"] {
-		case PhUnblocked:
-			owner := m["owner"]
-			if owner == "" {
-				owner = sp.OwnerPool(i)[0]
-			}
-			return &Decision{Tid: "T7_unblock", Status: StTodo, AssigneeKind: "agent", Assignee: owner,
-				Meta: map[string]string{"phase": PhImplementing, "attempt_impl": "1", "attempt_review": "0", "attempt_infra": "0", "blocked_reason": "", "verdict": "", "acceptance": ""}}
-		case PhCancelProposed:
-			return &Decision{Tid: "T8_cancel", Status: StCancelled, Meta: map[string]string{"phase": PhCancelled}}
-		}
-		return &Decision{Wait: "blocked: waiting for phase=unblocked or phase=cancel_proposed (lead) or multica flow unblock"}
-	}
 	// todo / in_progress / in_review
 	if s.ActiveRun != nil {
-		if r := s.ActiveRun; r.StartedAt != nil && s.Now.Sub(*r.StartedAt) > time.Duration(sp.Limits.StuckMin)*time.Minute {
-			return &Decision{Tid: "T5b_cancel_stuck", CancelRun: r.ID, Why: fmt.Sprintf("run %s running %dm > %dm", r.ID[:min(8, len(r.ID))], int(s.Now.Sub(*r.StartedAt).Minutes()), sp.Limits.StuckMin)}
-		}
-		if r := s.ActiveRun; r.Status == "running" && r.StartedAt != nil && sp.Limits.IdleMin > 0 {
-			last := *r.StartedAt
-			if r.LastActivity != nil && r.LastActivity.After(last) {
-				last = *r.LastActivity
-			}
-			if idle := s.Now.Sub(last); idle > time.Duration(sp.Limits.IdleMin)*time.Minute {
-				return &Decision{Tid: "T5b_cancel_stuck", CancelRun: r.ID, Why: fmt.Sprintf("run %s no tool output for %dm > idle_min %dm", r.ID[:min(8, len(r.ID))], int(idle.Minutes()), sp.Limits.IdleMin)}
-			}
-		}
-		return nil
+		return sp.stuck(s)
 	}
 	if m["phase"] == PhBlocked {
 		why := m["blocked_reason"]
@@ -286,6 +290,9 @@ func (sp *Spec) Decide(s *Snapshot, probe Prober) *Decision {
 			extra := map[string]string{}
 			if probe != nil {
 				pc := probe(s, false)
+				if d := waitStale(pc); d != nil {
+					return d
+				}
 				if !pc.OK && pc.Kind != "push_failed" && !pc.Pending {
 					why := "precheck " + pc.Kind + ": " + short(pc.Detail, 200)
 					return sp.rework(s, why, map[string]string{"head_sha": head})
@@ -294,7 +301,10 @@ func (sp *Spec) Decide(s *Snapshot, probe Prober) *Decision {
 					extra["pr"], extra["pr_number"] = pc.PR, pc.PRNum
 				}
 			}
-			meta := map[string]string{"phase": PhReviewing, "head_sha": head, "review_started_sha": head, "verdict": "", "reviewed_sha": "", "attempt_review": itoa(num(m["attempt_review"]) + 1)}
+			meta := map[string]string{"phase": PhReviewing, "head_sha": head, "review_started_sha": head, "verdict": "", "reviewed_sha": "", "attempt_review": itoa(num(m["attempt_review"]) + 1), "attempt_quota": ""}
+			if prev := m["reviewed_sha"]; prev != "" {
+				meta["last_reviewed_sha"] = prev // the reviewer diffs only since here
+			}
 			for k, v := range extra {
 				meta[k] = v
 			}
@@ -302,6 +312,12 @@ func (sp *Spec) Decide(s *Snapshot, probe Prober) *Decision {
 		}
 		if i.AssigneeType != "agent" || !sp.isOwner(i.Assignee) {
 			return nil // not ours to drive (e.g. a member picked it up)
+		}
+		if d := sp.branchOccupied(s); d != nil {
+			return d
+		}
+		if d := sp.providerFailure(s); d != nil {
+			return d
 		}
 		failed := s.LastRun != nil && (s.LastRun.Status == "failed" || s.LastRun.Status == "cancelled")
 		impl, infra := num(m["attempt_impl"]), num(m["attempt_infra"])
@@ -343,10 +359,20 @@ func (sp *Spec) Decide(s *Snapshot, probe Prober) *Decision {
 		}
 		return &Decision{Wait: "awaiting human acceptance"}
 	}
-	v := m["verdict"]
+	// Reviewer and lead runs are read-only: while phase=reviewing no owner run
+	// is active, so the branch must stay at review_started_sha. A pure rebase
+	// or main merge (same patch-id) is tolerated; any other move is blocked
+	// and named instead of silently re-reviewing someone else's push.
+	if rs := m["review_started_sha"]; m["phase"] == PhReviewing && head != "" && rs != "" && head != rs && (s.SamePatch == nil || !s.SamePatch(rs, head)) {
+		return sp.block(s, fmt.Sprintf("branch moved during review (%s -> %s) with no owner run active: reviewer/lead runs are read-only and only the owner may push; check who pushed, then `multica flow unblock %s`", short(rs, 12), short(head, 12), i.Key), nil)
+	}
+	v := strings.ToLower(strings.TrimSpace(m["verdict"]))
 	if v == "" {
 		// A reviewer run that failed or was cancelled (e.g. the daemon could
 		// not prepare its worktree) is an infra attempt, not a review attempt.
+		if d := sp.providerFailure(s); d != nil {
+			return d
+		}
 		if r := s.LastRun; r != nil && (r.Status == "failed" || r.Status == "cancelled") {
 			n := num(m["attempt_infra"]) + 1
 			if n > sp.Limits.Infra {
@@ -366,17 +392,26 @@ func (sp *Spec) Decide(s *Snapshot, probe Prober) *Decision {
 		}
 		return sp.rereview(s, head, "reviewed_sha != head")
 	}
+	if v == "changes" {
+		return sp.rework(s, "reviewer verdict=changes", nil)
+	}
 	if v != "approve" {
-		return sp.rework(s, "reviewer verdict="+v, nil)
+		// not a verdict the engine understands (the guard refuses new ones,
+		// legacy values remain): ask the reviewer again rather than sending a
+		// possibly-approved change back to the owner.
+		return sp.rereview(s, head, fmt.Sprintf("unknown verdict %q (want approve or changes)", m["verdict"]))
 	}
 	if sp.NeedsAcceptance(i) {
 		// gate after checks/mergeability are green so the human sees a mergeable PR.
 		if probe != nil {
 			pc := probe(s, false)
+			if d := waitStale(pc); d != nil {
+				return d
+			}
 			if pc.Pending {
 				return &Decision{Wait: pc.Detail}
 			}
-			if !pc.OK && pc.Kind != "push_failed" && pc.Kind != "stale" {
+			if !pc.OK && pc.Kind != "push_failed" {
 				return sp.rework(s, pc.Kind+": "+short(pc.Detail, 200), nil)
 			}
 		}
@@ -404,8 +439,22 @@ func (sp *Spec) rereview(s *Snapshot, head, why string) *Decision {
 	if n > sp.Limits.Review {
 		return sp.block(s, "review attempts exhausted (stale)", nil)
 	}
+	meta := map[string]string{"phase": PhReviewing, "verdict": "", "reviewed_sha": "", "review_started_sha": head, "head_sha": head, "attempt_review": itoa(n)}
+	if prev := s.Issue.Meta["reviewed_sha"]; prev != "" {
+		meta["last_reviewed_sha"] = prev
+	}
 	return &Decision{Tid: "T3b_rereview", AssigneeKind: "agent", Assignee: sp.Roles.Reviewer, Status: StInReview, Rerun: s.Issue.Assignee == sp.Roles.Reviewer,
-		Meta: map[string]string{"phase": PhReviewing, "verdict": "", "reviewed_sha": "", "review_started_sha": head, "head_sha": head, "attempt_review": itoa(n)}, Why: why}
+		Meta: meta, Why: why}
+}
+
+// waitStale: a stale probe (the PR / snapshot head lags the branch head) is
+// the same everywhere - T2 pre-check, T10 pre-check and merge wait for
+// GitHub to catch up; none of them reworks or reviews a sha GitHub has not seen.
+func waitStale(r ProbeResult) *Decision {
+	if r.Kind != "stale" {
+		return nil
+	}
+	return &Decision{Wait: "stale: " + r.Detail}
 }
 
 func (sp *Spec) merge(s *Snapshot, probe Prober) *Decision {
@@ -414,9 +463,11 @@ func (sp *Spec) merge(s *Snapshot, probe Prober) *Decision {
 	}
 	r := probe(s, true)
 	switch {
+	case waitStale(r) != nil:
+		return waitStale(r)
 	case r.Pending:
 		return &Decision{Wait: r.Detail}
-	case r.Kind == "stale" || r.Kind == "push_failed":
+	case r.Kind == "push_failed":
 		return &Decision{Wait: r.Kind + ": " + r.Detail}
 	case r.OK:
 		return &Decision{Tid: "T4_done", Status: StDone, Meta: map[string]string{"phase": PhMerged, "merged_sha": r.SHA}}
@@ -424,7 +475,166 @@ func (sp *Spec) merge(s *Snapshot, probe Prober) *Decision {
 	return sp.rework(s, r.Kind+": "+short(r.Detail, 200), nil)
 }
 
-func (sp *Spec) decideBacklog(s *Snapshot) *Decision {
+// stuck cancels an active run that ran past stuck_min, went silent past
+// idle_min, or sat queued/dispatched (never started) past queued_min.
+// nil = the run is healthy.
+func (sp *Spec) stuck(s *Snapshot) *Decision {
+	r := s.ActiveRun
+	if r == nil {
+		return nil
+	}
+	id := r.ID[:min(8, len(r.ID))]
+	if r.StartedAt == nil {
+		if q := sp.Limits.Queued(); q > 0 && r.CreatedAt != nil && s.Now.Sub(*r.CreatedAt) > time.Duration(q)*time.Minute {
+			return &Decision{Tid: "T5b_cancel_stuck", CancelRun: r.ID, Why: fmt.Sprintf("run %s %s for %dm > queued_min %dm (runtime offline or saturated?)", id, r.Status, int(s.Now.Sub(*r.CreatedAt).Minutes()), q)}
+		}
+		return nil
+	}
+	if s.Now.Sub(*r.StartedAt) > time.Duration(sp.Limits.StuckMin)*time.Minute {
+		return &Decision{Tid: "T5b_cancel_stuck", CancelRun: r.ID, Why: fmt.Sprintf("run %s running %dm > %dm", id, int(s.Now.Sub(*r.StartedAt).Minutes()), sp.Limits.StuckMin)}
+	}
+	if idleMin := sp.Limits.IdleFor(r.Backend); r.Status == "running" && idleMin > 0 {
+		last := *r.StartedAt
+		if r.LastActivity != nil && r.LastActivity.After(last) {
+			last = *r.LastActivity
+		}
+		if idle := s.Now.Sub(last); idle > time.Duration(idleMin)*time.Minute {
+			return &Decision{Tid: "T5b_cancel_stuck", CancelRun: r.ID, Why: fmt.Sprintf("run %s no tool output for %dm > idle_min %dm", id, int(idle.Minutes()), idleMin)}
+		}
+	}
+	return nil
+}
+
+// Provider failure classes from pkg/taskfailure reasons.
+func failureClass(reason string) string {
+	switch {
+	case strings.HasPrefix(reason, "agent_error.provider_quota_limit"), strings.HasPrefix(reason, "agent_error.provider_capacity_or_rate_limit"):
+		return "limit"
+	case strings.HasPrefix(reason, "agent_error.provider_auth_or_access"), reason == "runtime_access_denied":
+		return "auth"
+	}
+	return ""
+}
+
+// providerFailure handles a failed last run whose failure_reason says the
+// same retry cannot help yet: quota / rate limits retry with exponential
+// backoff (1m, 2m, 4m … capped at 30m) and count no attempt; auth/access
+// failures block at once with the reason. nil = an ordinary failure.
+func (sp *Spec) providerFailure(s *Snapshot) *Decision {
+	r := s.LastRun
+	if r == nil || r.Status != "failed" {
+		return nil
+	}
+	switch failureClass(r.Reason) {
+	case "auth":
+		return sp.block(s, "provider auth/access failure ("+r.Reason+"): fix the agent's provider credentials or runtime access, then `multica flow unblock "+s.Issue.Key+"`", nil)
+	case "limit":
+		n := num(s.Issue.Meta["attempt_quota"])
+		wait := time.Minute << min(n, 5)
+		if wait > 30*time.Minute {
+			wait = 30 * time.Minute
+		}
+		if r.EndedAt != nil {
+			if left := wait - s.Now.Sub(*r.EndedAt); left > 0 {
+				return &Decision{Wait: fmt.Sprintf("provider limit (%s): retry %d in %s, no attempt counted", r.Reason, n+1, left.Round(time.Second))}
+			}
+		}
+		d := &Decision{Tid: "T5q_provider_limit", Rerun: true, Meta: map[string]string{"attempt_quota": itoa(n + 1)},
+			Why: fmt.Sprintf("last run hit a provider limit (%s): retry %d after %s backoff, no attempt counted", r.Reason, n+1, wait)}
+		if n+1 == 3 {
+			d.Notify = fmt.Sprintf("%s keeps hitting a provider limit (%s); the engine keeps retrying with backoff up to 30m", s.Issue.Key, r.Reason)
+		}
+		return d
+	}
+	return nil
+}
+
+// BranchOccupiedMarker mirrors execenv.BranchOccupiedMarker: the daemon
+// starts a task's error with it when the issue's agent/<key> branch (or the
+// path wt derives from it) is held by another worktree.
+const BranchOccupiedMarker = "[branch_occupied]"
+
+// branchOccupied: the owner's run could not get agent/<key> because another
+// worktree holds it. Retrying cannot help and the daemon never forks or
+// steals the branch, so block with the occupying path for a human to free.
+func (sp *Spec) branchOccupied(s *Snapshot) *Decision {
+	r := s.LastRun
+	if r == nil || r.Status != "failed" {
+		return nil
+	}
+	i := strings.Index(r.Error, BranchOccupiedMarker)
+	if i < 0 {
+		return nil
+	}
+	msg := r.Error[i+len(BranchOccupiedMarker):]
+	path := "(unknown)"
+	if _, after, ok := strings.Cut(msg, " is held by the worktree at "); ok {
+		path, _, _ = strings.Cut(after, ";")
+	}
+	br := branchOf(sp, s.Issue.Key)
+	return sp.block(s, fmt.Sprintf("%s is checked out by another worktree at %s: the orchestrator owns this branch and never forks or takes it over; free it (finish or remove that worktree, and do not use the agent/ prefix or an agent-<key> path for other work), then `multica flow unblock %s`", br, strings.TrimSpace(path), s.Issue.Key), nil)
+}
+
+// decideBlocked handles a blocked issue: the lead's answer (unblocked /
+// cancel_proposed) or a member's flow action. Member-only confirmations live
+// in engine-owned keys (unblock_confirmed, cancel_confirmed) that only the
+// /api/orchestrator flow endpoints write.
+func (sp *Spec) decideBlocked(s *Snapshot) *Decision {
+	i := &s.Issue
+	m := i.Meta
+	// the lead's run on a blocked issue gets the same stuck/idle/queued
+	// detection as any other run (it used to run unbounded).
+	if d := sp.stuck(s); d != nil {
+		d.Notify = fmt.Sprintf("%s: the lead's run on this blocked issue was cancelled: %s", i.Key, d.Why)
+		return d
+	}
+	switch m["phase"] {
+	case PhUnblocked:
+		member := m["unblock_confirmed"] == "true"
+		n := num(m["unblock_count"])
+		if !member && n >= sp.Limits.MaxUnblocks() {
+			if m["unblock_escalated"] == "true" {
+				return &Decision{Wait: fmt.Sprintf("lead unblock limit %d reached: waiting for a member (multica flow unblock %s)", sp.Limits.MaxUnblocks(), i.Key)}
+			}
+			why := fmt.Sprintf("lead unblocked %d times (limit %d); a member decides now", n, sp.Limits.MaxUnblocks())
+			return &Decision{Tid: "T7b_unblock_escalate", AssigneeKind: "member", Assignee: "@human", Why: why,
+				Meta:   map[string]string{"phase": PhBlocked, "unblock_escalated": "true", "blocked_reason": why + " (last reason: " + short(m["blocked_reason"], 200) + ")"},
+				Notify: fmt.Sprintf("%s: %s. `multica flow unblock %s` or `multica flow cancel %s`", i.Key, why, i.Key, i.Key)}
+		}
+		owner := m["owner"]
+		if owner == "" {
+			owner = sp.OwnerPool(i)[0]
+		}
+		count := itoa(n + 1)
+		if member {
+			count = "0" // a person's unblock is a fresh start
+		}
+		return &Decision{Tid: "T7_unblock", Status: StTodo, AssigneeKind: "agent", Assignee: owner,
+			Meta: map[string]string{"phase": PhImplementing, "attempt_impl": "1", "attempt_review": "0", "attempt_infra": "0", "blocked_reason": "", "verdict": "", "acceptance": "",
+				"unblock_count": count, "unblock_confirmed": "", "unblock_escalated": "", "cancel_notified": "", "attempt_quota": ""}}
+	case PhCancelProposed:
+		if m["cancel_confirmed"] == "true" {
+			return &Decision{Tid: "T8_cancel", Status: StCancelled, Meta: map[string]string{"phase": PhCancelled, "cancel_confirmed": ""}}
+		}
+		if m["cancel_notified"] != "true" {
+			return &Decision{Tid: "T8a_cancel_proposed", AssigneeKind: "member", Assignee: "@human", Why: "lead proposed cancel; waiting for a member to confirm",
+				Meta:   map[string]string{"cancel_notified": "true"},
+				Notify: fmt.Sprintf("%s: the lead proposes to cancel it (%s). Confirm with `multica flow cancel %s` (确认取消) or `multica flow unblock %s`", i.Key, short(m["blocked_reason"], 200), i.Key, i.Key)}
+		}
+		return &Decision{Wait: "cancel proposed: waiting for a member to confirm (multica flow cancel " + i.Key + ") or unblock"}
+	}
+	return &Decision{Wait: "blocked: waiting for phase=unblocked or phase=cancel_proposed (lead) or multica flow unblock"}
+}
+
+// StartsHere reports whether an issue is a T1 candidate: todo and not yet
+// started by the engine (no phase). The runtime gathers busy owners, fresh
+// siblings and free disk only for these.
+func StartsHere(status string, meta map[string]string) bool {
+	return status == StTodo && (meta["phase"] == "" || meta["phase"] == PhPlanned)
+}
+
+// decideStart is T1: a todo issue the engine has not started yet.
+func (sp *Spec) decideStart(s *Snapshot) *Decision {
 	i := &s.Issue
 	m := i.Meta
 	if m["phase"] == PhPlanned {
@@ -447,11 +657,22 @@ func (sp *Spec) decideBacklog(s *Snapshot) *Decision {
 			}
 		}
 	}
-	if s.FreeGB >= 0 && s.FreeGB < sp.Limits.MinFreeGB {
-		return &Decision{Wait: fmt.Sprintf("disk guard: %dGB free < %dGB", s.FreeGB, sp.Limits.MinFreeGB)}
+	if g := sp.Limits.FreeGB(); g > 0 && s.FreeGB >= 0 && s.FreeGB < g {
+		return &Decision{Wait: fmt.Sprintf("disk guard: %dGB free < %dGB", s.FreeGB, g)}
 	}
 	if w := sp.slotWait(s); w != "" {
 		return &Decision{Wait: "waiting: " + w}
+	}
+	// Someone else already holds it: a member, or an agent outside the owner
+	// pool. Not ours to start.
+	held := i.Assignee != "" && i.AssigneeType == "agent" && sp.isOwner(i.Assignee)
+	if i.Assignee != "" && !held {
+		return nil
+	}
+	if held && s.ActiveRun != nil {
+		// assigning an owner in todo already started its run: adopt it.
+		return &Decision{Tid: "T1_start", Meta: map[string]string{"owner": i.Assignee, "phase": PhImplementing, "attempt_impl": "1", "attempt_review": "0", "attempt_infra": "0"},
+			Why: "adopted the run that assigning " + i.Assignee + " started"}
 	}
 	owner := ""
 	if o := m["owner"]; o != "" {
@@ -459,6 +680,11 @@ func (sp *Spec) decideBacklog(s *Snapshot) *Decision {
 			return &Decision{Wait: "owner " + o + " busy"}
 		}
 		owner = o
+	} else if held {
+		if s.Busy[i.Assignee] {
+			return &Decision{Wait: "owner " + i.Assignee + " busy"}
+		}
+		owner = i.Assignee
 	} else {
 		for _, o := range sp.OwnerPool(i) {
 			if !s.Busy[o] {
@@ -471,7 +697,9 @@ func (sp *Spec) decideBacklog(s *Snapshot) *Decision {
 		return &Decision{Wait: "all owners busy"}
 	}
 	return &Decision{Tid: "T1_start", Status: StTodo, AssigneeKind: "agent", Assignee: owner,
-		Meta: map[string]string{"owner": owner, "phase": PhImplementing, "attempt_impl": "1", "attempt_review": "0", "attempt_infra": "0"}}
+		// the same assignee does not dispatch a run by itself
+		Rerun: i.AssigneeType == "agent" && i.Assignee == owner,
+		Meta:  map[string]string{"owner": owner, "phase": PhImplementing, "attempt_impl": "1", "attempt_review": "0", "attempt_infra": "0"}}
 }
 
 func contains(xs []string, x string) bool {

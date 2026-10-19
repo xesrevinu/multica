@@ -329,8 +329,7 @@ func (s *Service) snapshot(ctx context.Context, t *Team, rows []issueRow, row *i
 	if sn.ActiveRun, sn.LastRun, err = s.st.runs(ctx, row.ID); err != nil {
 		return nil, err
 	}
-	switch row.Status {
-	case StBacklog:
+	if StartsHere(row.Status, row.Meta) {
 		if sn.Busy, err = s.st.busyOwners(ctx, t.WorkspaceID); err != nil {
 			return nil, err
 		}
@@ -345,6 +344,8 @@ func (s *Service) snapshot(ctx context.Context, t *Team, rows []issueRow, row *i
 			sn.Siblings = append(sn.Siblings, r.Issue)
 		}
 		sn.FreeGB = freeGB(diskPath(t.Spec))
+	}
+	switch row.Status {
 	case StTodo, StInProgress, StInReview:
 		if sn.ActiveRun == nil {
 			if sn.Head, err = s.repo.head(ctx, t.Spec, row.Key); err != nil {
@@ -364,7 +365,7 @@ func (s *Service) process(ctx context.Context, t *Team, rows []issueRow, row *is
 	if !s.st.backoffOK(ctx, row.ID, now) {
 		return
 	}
-	if row.Status == StBacklog {
+	if StartsHere(row.Status, row.Meta) {
 		// owner selection reads workspace-wide busy state: serialize T1 per workspace
 		defer s.lockKey("w:" + t.WorkspaceID)()
 	}

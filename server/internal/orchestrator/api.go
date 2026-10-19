@@ -27,7 +27,7 @@ func (s *Service) Routes() http.Handler {
 	r.Delete("/teams/{project}", s.hDetach)
 	r.Get("/flow/{key}", s.hShow)
 	r.Get("/flow/{key}/log", s.hLog)
-	r.Post("/flow/{key}/unblock", s.hMeta(StBlocked, "", map[string]string{"phase": PhUnblocked}))
+	r.Post("/flow/{key}/unblock", s.hMeta(StBlocked, "", map[string]string{"phase": PhUnblocked, "unblock_confirmed": "true"}))
 	r.Post("/flow/{key}/cancel", s.hCancel)
 	r.Post("/flow/{key}/pause", s.hFlowPause(true))
 	r.Post("/flow/{key}/resume", s.hFlowPause(false))
@@ -381,7 +381,8 @@ func (s *Service) writeFlowMeta(w http.ResponseWriter, r *http.Request, row *iss
 
 func settled(status string) bool { return status == StDone || status == StCancelled }
 
-// hCancel: a blocked issue goes through the lead's cancel proposal (T8);
+// hCancel: on a blocked issue it confirms the lead's cancel proposal (T8,
+// the "确认取消" card action) or proposes-and-confirms in one step;
 // any other open issue is cancelled at once (T8b), stopping its live run.
 func (s *Service) hCancel(w http.ResponseWriter, r *http.Request) {
 	row, _, ok := s.issueFor(w, r)
@@ -393,7 +394,8 @@ func (s *Service) hCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if row.Status == StBlocked {
-		s.writeFlowMeta(w, r, row, map[string]string{"phase": PhCancelProposed})
+		// a member's cancel confirms (or directly makes) the proposal: T8 runs.
+		s.writeFlowMeta(w, r, row, map[string]string{"phase": PhCancelProposed, "cancel_confirmed": "true"})
 		return
 	}
 	s.writeFlowMeta(w, r, row, map[string]string{"cancel_requested": "true"})

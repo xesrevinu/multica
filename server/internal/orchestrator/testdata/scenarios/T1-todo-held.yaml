@@ -1,0 +1,9 @@
+name: T1 adopts the run that assigning an owner in todo already started
+issue: {key: ATT-86, status: todo}
+steps:
+  - note: a member creates the issue in todo assigned to owner b; the platform starts b's run
+    do: {assignee: b, run: running}
+    expect: {tid: T1_start, meta: {owner: b, phase: implementing, attempt_impl: "1"}}
+  - expect: {tid: none}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
+    expect: {tid: T2_review}

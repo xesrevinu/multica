@@ -43,7 +43,10 @@ func (p *probeSpec) result() ProbeResult {
 type worldChange struct {
 	Meta      map[string]string `yaml:"meta"`       // agent/member metadata write ("" deletes)
 	Head      *string           `yaml:"head"`       // branch head on the remote
-	Run       string            `yaml:"run"`        // running | completed | failed | cancelled
+	Run       string            `yaml:"run"`        // queued | running | completed | failed | cancelled
+	Reason    string            `yaml:"reason"`     // failure_reason of a failed run
+	Backend   string            `yaml:"backend"`    // runtime provider of the run (gbot, claude, ...)
+	Error     string            `yaml:"error"`      // agent_task_queue.error of a finished run
 	Activity  bool              `yaml:"activity"`   // the running run emitted a message now
 	Status    string            `yaml:"status"`     // out-of-band status edit
 	Assignee  string            `yaml:"assignee"`   // out-of-band assignee edit (agent name)
@@ -126,7 +129,7 @@ func newWorld(t *testing.T, sc *scenario) *world {
 		i.ID = i.Key
 	}
 	if i.Status == "" {
-		i.Status = StBacklog
+		i.Status = StTodo
 	}
 	if i.Meta == nil {
 		i.Meta = map[string]string{}
@@ -156,12 +159,20 @@ func (w *world) change(t *testing.T, c *worldChange) {
 	}
 	switch c.Run {
 	case "":
+	case "queued":
+		at := s.Now
+		s.ActiveRun = &Run{ID: "run-" + at.Format("150405"), Status: "queued", CreatedAt: &at}
 	case "running":
 		at := s.Now
-		s.ActiveRun = &Run{ID: "run-" + at.Format("150405"), Status: "running", StartedAt: &at}
+		created := at
+		if s.ActiveRun != nil && s.ActiveRun.CreatedAt != nil {
+			created = *s.ActiveRun.CreatedAt
+		}
+		s.ActiveRun = &Run{ID: "run-" + at.Format("150405"), Status: "running", StartedAt: &at, CreatedAt: &created, Backend: c.Backend}
 	default:
+		at := s.Now
 		s.ActiveRun = nil
-		s.LastRun = &Run{ID: "run-done", Status: c.Run}
+		s.LastRun = &Run{ID: "run-done", Status: c.Run, Reason: c.Reason, EndedAt: &at, Error: c.Error}
 	}
 	if c.Activity && s.ActiveRun != nil {
 		at := s.Now

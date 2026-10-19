@@ -34,11 +34,13 @@ SELECT count(*) FROM orchestrator_event WHERE processed_at IS NULL;   -- 堆积 
 - `waiting: disk guard` —— 清理磁盘（worktree-cleanup），或调 `limits.min_free_gb`。
 - `waiting: re-running failed CI once` / `test=PENDING` —— 等 CI。
 - `failures > 0` —— 看 `last_error`，修好后 `flow replay`。
-- `next` 为空、状态 todo/in_progress、有活动 run —— agent 在干活；超过 stuck_min 会被取消重跑。
+- `next` 为空、状态 todo/in_progress、有活动 run —— agent 在干活；超过 stuck_min、idle_min 内没有输出、或排队超过 queued_min 都会被取消重跑。blocked 上 lead 的 run 也一样。
+
+**blocked：`agent/<key> is checked out by another worktree at <path>`。** 有别的 worktree（常见是 herdr worker 或手工 `wt switch`）占着 orchestrator 的分支，daemon 拒绝 fork。到该路径确认没在用的工作 → `wt remove`/`git worktree remove <path>`（有未提交改动先处理）→ `flow unblock KEY`。以后别的工作用 `herdr/<task>` 之类的分支名。
 
 **DEAD-LETTER 通知。** 同一 issue 连续 5 次转移失败（API 拒绝、gh 失败、git 失败）。issue 已 blocked 给 lead。修原因 → `flow unblock`。
 
-**blocked 提醒。** blocked 超过 `blocked_remind_min` 每隔同样时间提醒一次。处理：`flow unblock [--owner]` 或 `flow cancel`。
+**blocked 提醒。** blocked 超过 `blocked_remind_min` 每隔同样时间提醒一次。处理：`flow unblock [--owner]` 或 `flow cancel`。lead 写 `cancel_proposed` 只会通知你，取消要你确认（`flow cancel` 或 UI「确认取消」）；lead 自己解除超过 `limits.unblocks` 次后交给你，只有 `flow unblock` 能继续。
 
 **有人用 --force 改了状态。** 下次事件/对账 T9 会按 phase 收回；想保留人工结果就先 `team pause`。
 
@@ -49,7 +51,7 @@ SELECT count(*) FROM orchestrator_event WHERE processed_at IS NULL;   -- 堆积 
 ### agent 跑出工作区（如 rg 扫整个 $HOME）
 现象：run 长时间 running，`ps` 里能看到 daemon → agent → `rg/grep ... /Users/<you>`。
 处理：先 `ps -o pid,ppid,command` 确认父进程是 daemon 下的 agent，只 kill 那个子进程；`multica team pause <team>` 防止 T5 立刻重跑；`multica issue cancel-task <run>`；修指令（WORKSPACE SCOPE 规则）后 `team resume`，engine 会重跑（记 infra attempt）。
-兜底：T5b 在 `limits.stuck_min`（默认 20）后取消卡住的 run；另外 `limits.idle_min`（默认 8，负数关闭）内 run 没有任何 task_message（工具输出/消息）也会提前取消，专门抓“卡在一个工具调用里”的情况。案例：ATT-40 被验收拒绝后，owner 想找拒绝理由的原文，在 $HOME 下跑了 rg（理由当时只写在 metadata.acceptance 里）。现在 reject 也会写 `blocked_reason`。
+兜底：T5b 在 `limits.stuck_min`（默认 20）后取消卡住的 run；另外 `limits.idle_min`（默认 8，负数关闭）内 run 没有任何 task_message（工具输出/消息）也会提前取消，专门抓“卡在一个工具调用里”的情况。`limits.idle_min_by_backend` 按 runtime 的 provider 覆盖 idle_min（0/负数关闭）；预设对 gbot 关闭（spec 里写了 gbot 就以 spec 为准）：gbot 后端在 run 结束前只上报开头那条 prompt，idle 检测会把每个超过 idle_min 的 gbot run 误杀，这类 run 只由 stuck_min 兜底。根治要靠 grok-bot-cli 在 `--json` 模式下边跑边输出进度事件（工具调用、文本片段，每行一个 JSON），daemon 把它们转成 task_message；之后可以把 gbot 的覆盖删掉。案例：ATT-40 被验收拒绝后，owner 想找拒绝理由的原文，在 $HOME 下跑了 rg（理由当时只写在 metadata.acceptance 里）。现在 reject 也会写 `blocked_reason`。
 
 ## 改 team
 
@@ -67,4 +69,4 @@ multica team apply <project> -f spec.yaml
 `MULTICA_ORCHESTRATOR_FAULT=<tid>:<n>`：对该转移的前 n 次在 metadata 已写、状态未写时注入失败（`*` 匹配全部）。用来验证 T9 收敛、backoff 和 dead-letter。
 
 ## daemon 重启
-用当前登录 shell 的环境启动（先 unset `MULTICA_*`，再叠加 daemon.env），**不要 `env -i`**：provider key（`*_API_KEY`）丢了以后，每个 run 几秒内以 "Connection error." 失败，引擎按 infra 次数把 issue 转成 blocked。恢复：修好环境后 `multica flow unblock <KEY>`。
+用当前登录 shell 的环境启动（先 unset `MULTICA_*`，再叠加 daemon.env），**不要 `env -i`**：provider key（`*_API_KEY`）丢了以后，每个 run 几秒内以 "Connection error." 失败，引擎按 infra 次数把 issue 转成 blocked。恢复：修好环境后 `multica flow unblock <KEY>`。现在引擎读 `failure_reason`：provider 认证/权限失败直接 blocked 并写明原因；配额/限流按退避重跑，不计次数（`waiting: provider limit ...`）。

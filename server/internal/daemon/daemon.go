@@ -8246,6 +8246,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			prepParams.LocalWorktree = &execenv.LocalWorktreeParams{
 				LocalPath:         localAssignment.AbsPath,
 				CoAuthorStatePath: coAuthorStatePath(d.repoCache, task.WorkspaceID),
+				ExclusiveBranch:   task.ExclusiveBranch,
 				// The prepare helper exits before the agent runs. Record this
 				// process so an idle reap can tell a live run from a dead one.
 				HolderPID: os.Getpid(),

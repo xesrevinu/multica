@@ -182,13 +182,9 @@ func (h *Handler) SetIssueMetadataKey(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if h.Orchestrator != nil {
-		if callerType, _ := h.resolveActor(r, userID, uuidToString(issue.WorkspaceID)); callerType == "agent" {
-			if msg := h.Orchestrator.CheckAgentMeta(uuidToString(issue.ProjectID), key, string(req.Value)); msg != "" {
-				writeErrorCode(w, http.StatusForbidden, orchestrator.ErrCodeOwned, msg)
-				return
-			}
-		}
+	if msg := h.orchestratorMetaGuard(r, userID, issue, key, req.Value, false); msg != "" {
+		writeErrorCode(w, http.StatusForbidden, orchestrator.ErrCodeOwned, msg)
+		return
 	}
 
 	// Enforce the key-count cap in the handler. The DB only guards size,
@@ -273,6 +269,10 @@ func (h *Handler) DeleteIssueMetadataKey(w http.ResponseWriter, r *http.Request)
 	}
 	userID, ok := requireUserID(w, r)
 	if !ok {
+		return
+	}
+	if msg := h.orchestratorMetaGuard(r, userID, issue, key, nil, true); msg != "" {
+		writeErrorCode(w, http.StatusForbidden, orchestrator.ErrCodeOwned, msg)
 		return
 	}
 

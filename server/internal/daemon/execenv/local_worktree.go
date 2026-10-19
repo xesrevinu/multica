@@ -117,6 +117,13 @@ type LocalWorktreeParams struct {
 	// ungated, which is the same "no setting published yet" default as a
 	// bare-cache checkout.
 	CoAuthorStatePath string
+	// ExclusiveBranch is the branch the orchestrator owns for this issue
+	// (agent/<key>), "" when the issue is not orchestrated. When the task's
+	// plan lands on it, a branch or path held by another worktree is an
+	// error naming the occupant instead of a fork onto a task branch: the
+	// orchestrator only ever reads agent/<key>, so a fork would strand the
+	// owner's work where nobody looks.
+	ExclusiveBranch string
 	// HolderPID is the daemon process that runs the agent after prepare
 	// returns. The prepare helper's own pid is already dead by then, so an
 	// active hold records this one. Zero means there is no separate holder;
@@ -1280,6 +1287,9 @@ type taskBranchPlan struct {
 	tracksState bool
 	// owner is the identity the branch is recorded under.
 	owner branchOwner
+	// exclusive: name is the orchestrator's branch (ExclusiveBranch); never
+	// fall back to altName for it.
+	exclusive bool
 }
 
 // altName disambiguates a branch a live sibling already holds.
@@ -1312,6 +1322,12 @@ func (p taskBranchPlan) altName(taskID string) string {
 // own follow-ups continue it — and, if that is somehow taken too, onto a
 // task-scoped branch that continues nothing.
 func resolveTaskBranch(gitRoot string, params LocalWorktreeParams, headSHA string, logger *slog.Logger) taskBranchPlan {
+	plan := resolveTaskBranchPlan(gitRoot, params, headSHA, logger)
+	plan.exclusive = params.ExclusiveBranch != "" && plan.name == params.ExclusiveBranch
+	return plan
+}
+
+func resolveTaskBranchPlan(gitRoot string, params LocalWorktreeParams, headSHA string, logger *slog.Logger) taskBranchPlan {
 	taskScoped := taskBranchPlan{name: "agent/" + taskKey(params.TaskID), base: headSHA}
 
 	owner := params.owner()
@@ -1427,6 +1443,9 @@ func addLocalWorktree(gitRoot, worktreePath string, plan taskBranchPlan, taskID 
 	}
 	if !branchUnavailable(out) {
 		return "", false, fmt.Errorf("execenv: git worktree add: %s: %w", strings.TrimSpace(out), err)
+	}
+	if plan.exclusive {
+		return "", false, branchOccupied(gitRoot, plan.name, out)
 	}
 	alt := plan.altName(taskID)
 	if out, err := runGit(gitRoot, "worktree", "add", "-b", alt, worktreePath, plan.base); err != nil {

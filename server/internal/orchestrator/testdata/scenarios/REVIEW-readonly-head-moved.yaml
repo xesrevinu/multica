@@ -1,0 +1,12 @@
+name: reviewer/lead runs are read-only - the branch moving during review blocks; a pure rebase is tolerated
+issue: {key: ATT-83}
+steps:
+  - expect: {tid: T1_start}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
+    expect: {tid: T2_review, meta: {review_started_sha: h1}}
+  - note: main merged into the branch during review (same patch) - not a reviewer push
+    do: {run: running, head: h1m, same_patch: [[h1, h1m]]}
+    expect: {tid: none}
+  - note: the reviewer pushed a fix of its own and approved it
+    do: {run: completed, head: h2, meta: {verdict: approve, reviewed_sha: h2}}
+    expect: {tid: T6_block, status: blocked, assignee: lead, meta: {blocked_reason: "branch moved during review (h1 -> h2) with no owner run active: reviewer/lead runs are read-only and only the owner may push; check who pushed, then `multica flow unblock ATT-83`"}}

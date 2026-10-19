@@ -27,8 +27,8 @@ steps:
   - expect: {tid: T6_block, status: blocked, assignee: lead, meta: {blocked_reason: "infra attempts exhausted (2/2)"}}
   - expect: {wait: phase=unblocked}
   - note: multica flow unblock
-    do: {meta: {phase: unblocked}}
-    expect: {tid: T7_unblock, status: todo, assignee: a, meta: {attempt_infra: "0"}}
+    do: {meta: {phase: unblocked, unblock_confirmed: "true"}}
+    expect: {tid: T7_unblock, status: todo, assignee: a, meta: {attempt_infra: "0", unblock_count: "0"}}
   - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
     expect: {tid: T2_review}
   - do: {run: completed, meta: {verdict: approve, reviewed_sha: h1}}

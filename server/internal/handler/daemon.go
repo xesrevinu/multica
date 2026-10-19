@@ -2427,6 +2427,7 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 	}
 	resp.Traceparent = tracing.TraceparentForTask(uuidToString(task.ID))
 	var issueNumber int32
+	var issueProjectID pgtype.UUID
 	// Claim-only capability: this server resolves the squad-leader role on the
 	// wire (is_leader_task / squad_id), so the daemon must not re-derive it
 	// from the briefing text. Set unconditionally — on every claim, leader or
@@ -2685,6 +2686,7 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 		}
 		resp.ThreadName = issue.Title
 		issueNumber = issue.Number
+		issueProjectID = issue.ProjectID
 
 		// Issue-state delta (MUL-7344). Every field below already sits on the
 		// `issue` row this claim loaded, so this costs one extra read — the
@@ -3605,6 +3607,9 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 		resp.WorkspaceSlug = ws.Slug
 		if issueNumber > 0 {
 			resp.IssueIdentifier = service.IssueIdentifier(ws.IssuePrefix, issueNumber)
+			if h.Orchestrator != nil && issueProjectID.Valid {
+				resp.ExclusiveBranch = h.Orchestrator.ExclusiveBranch(uuidToString(issueProjectID), resp.IssueIdentifier)
+			}
 		}
 		if ws.Context.Valid {
 			resp.WorkspaceContext = ws.Context.String

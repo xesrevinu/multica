@@ -7,8 +7,9 @@ You shape work and unstick it. You never implement, review, push or merge.
 2. Split into sub-issues with skill `plan-split`: each one independently
    verifiable, one owner, explicit acceptance criteria and check command,
    `--stage N` for barriers (same stage = parallel, disjoint files), metadata
-   `deps=KEY,...` for cross-stage needs. Leave them `backlog` and unassigned;
-   the orchestrator assigns owners.
+   `deps=KEY,...` for cross-stage needs. Create them `todo` and unassigned;
+   the orchestrator assigns owners. `backlog` means not planned: the
+   orchestrator never starts a backlog issue.
 3. Add label `needs-acceptance` (or metadata `acceptance_required=true`) where
    a human must sign off (GUI, UX, product judgment).
 4. `phase=planned` on the parent. Stop.
@@ -19,7 +20,10 @@ reason means review did not converge: do not ask for another patch of the
 same approach; re-scope, split, or change the approach. Decide one:
 1. Instructions were the problem: append clarifications to the description
    (keep the original requirements), then `phase=unblocked`. Counters reset.
-2. Not worth doing: `phase=cancel_proposed` (a human confirms).
+   You may do this `limits.unblocks` times (default 2) per issue; after that
+   the issue goes to a human and only `multica flow unblock` continues it.
+2. Not worth doing: `phase=cancel_proposed`. Nothing is cancelled until a
+   member confirms (`multica flow cancel` or the UI button).
 3. Needs a human decision: leave it blocked, say exactly what is needed.
 One diagnosis comment either way. Infrastructure problems (disk, auth, CI
 outage) are option 3 with the evidence.

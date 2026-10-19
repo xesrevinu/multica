@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -3857,6 +3858,7 @@ func newIssueAssignTestCmd() *cobra.Command {
 	cmd.Flags().String("to-id", "", "")
 	cmd.Flags().Bool("unassign", false, "")
 	cmd.Flags().Bool("no-start", false, "")
+	cmd.Flags().Bool("force", false, "")
 	cmd.Flags().String("output", "json", "")
 	return cmd
 }
@@ -4160,6 +4162,70 @@ func TestRunIssueAssignNoStartSendsSuppressRun(t *testing.T) {
 	}
 	if got := body["suppress_run"]; got != true {
 		t.Fatalf("suppress_run = %#v, want true", got)
+	}
+}
+
+// In an orchestrated project the orchestrator owns the assignee, so the server
+// keeps refusing `issue assign --no-start` with 403 orchestrator_owned; the CLI
+// says why and how to override, and --force sends the override header.
+func TestRunIssueAssignOrchestratorOwnedHintAndForce(t *testing.T) {
+	const agentID = "5fb87ac7-23b5-4a7a-81fa-ed295a54545d"
+	var override string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/issues/MUL-1":
+			json.NewEncoder(w).Encode(map[string]any{"id": "issue-1", "identifier": "MUL-1", "status": "todo"})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/workspaces/ws-1/members":
+			json.NewEncoder(w).Encode([]map[string]any{})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/agents":
+			json.NewEncoder(w).Encode([]map[string]any{{"id": agentID, "name": "CodeBot"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/squads":
+			json.NewEncoder(w).Encode([]map[string]any{})
+		case r.Method == http.MethodPut && r.URL.Path == "/api/issues/issue-1":
+			override = r.Header.Get("X-Orchestrator-Override")
+			if override != "1" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				json.NewEncoder(w).Encode(map[string]any{"code": "orchestrator_owned", "error": "this project is run by the orchestrator, which owns status and assignee (refused: assignee change)."})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"id": "issue-1", "identifier": "MUL-1", "status": "todo"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	setCLITestServerEnv(t, srv.URL)
+	t.Setenv("MULTICA_TASK_CONFIG_ROOT", t.TempDir())
+	t.Setenv("MULTICA_TOKEN", "mat_test-token")
+
+	cmd := newIssueAssignTestCmd()
+	_ = cmd.Flags().Set("to-id", agentID)
+	_ = cmd.Flags().Set("no-start", "true")
+	err := runIssueAssign(cmd, []string{"MUL-1"})
+	if err == nil {
+		t.Fatal("want the orchestrator refusal")
+	}
+	var he *cli.HTTPError
+	if !errors.As(err, &he) || he.StatusCode != http.StatusForbidden {
+		t.Fatalf("want a 403 HTTPError underneath, got %v", err)
+	}
+	msg := cli.FormatError(err, false)
+	for _, want := range []string{"orchestrator_owned", "refused: assignee change", "--no-start only skips the agent run", "--force"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message %q misses %q", msg, want)
+		}
+	}
+
+	cmd = newIssueAssignTestCmd()
+	_ = cmd.Flags().Set("to-id", agentID)
+	_ = cmd.Flags().Set("no-start", "true")
+	_ = cmd.Flags().Set("force", "true")
+	if err := runIssueAssign(cmd, []string{"MUL-1"}); err != nil {
+		t.Fatalf("--force: %v", err)
+	}
+	if override != "1" {
+		t.Fatalf("--force must send X-Orchestrator-Override: 1, got %q", override)
 	}
 }
 

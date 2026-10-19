@@ -11,7 +11,8 @@ working. Do not retry, do not route around it, hand over through metadata.
 | status, assignee, attempt_*, owner, pr, pr_number, merged_sha, acceptance*, review_started_sha | orchestrator only |
 | `in_progress` at the start of an owner run | owner (the one status an agent sets) |
 | phase=review_requested, head_sha, branch agent/<key> | owner |
-| verdict, reviewed_sha, PR review + `review-verdict` commit status | reviewer |
+| verdict, reviewed_sha (only while in_review), PR review comment | reviewer |
+| `review-verdict` commit status (derived from verdict + reviewed_sha) | orchestrator only |
 | sub-issues, phase=planned / unblocked / cancel_proposed | lead |
 | done, cancel, acceptance ok/reject | humans (and the engine after a green gate) |
 

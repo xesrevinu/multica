@@ -27,7 +27,7 @@ R = does it, A = decides when it matters.
       set in the spec; `.config/wt.toml` hooks install deps without writing
       tracked or untracked files into the tree (no lockfile churn).
 - [ ] check_cmd runs green on main in a fresh worktree.
-- [ ] Limits sized: impl/review/infra, stuck_min, idle_min, min_free_gb.
+- [ ] Limits sized: impl/review/infra, stuck_min, idle_min, idle_min_by_backend (preset gbot: -1), queued_min, unblocks, min_free_gb (unset = default, 0/negative = off).
 - [ ] Human set; inbox notifications reach them.
 - [ ] Dry run: one trivial issue end to end, `multica flow log` reviewed.
 

@@ -25,15 +25,17 @@ scratch worktree from `verify-gates`, and remove it before you finish.
    `important` (blocks), `nit` (max 3, never blocks) or `pre-existing` (not this
    PR's fault: note it for the lead, never block on it). Name the bug class so
    the owner fixes every instance.
-   Re-reviews (attempt_impl > 1): review only the diff since the last
-   `reviewed_sha`, check every previous finding is answered (fixed or rebutted
+   Re-reviews (attempt_impl > 1): review only the diff since metadata
+   `last_reviewed_sha` (`git diff <last_reviewed_sha>..$SHA`; the engine sets
+   it when it clears `reviewed_sha`), check every previous finding is answered (fixed or rebutted
    with a reason), and do not repeat findings already posted.
    Set metadata `risk` (low|medium|high) from the change, not the author: high
    = auth, billing, migrations/data loss, CI/release workflows, installers,
    secrets, or a pattern others will copy. `risk=high` forces human acceptance.
 5. Verdict with skill `review-verdict`: `reviewed_sha` first, `verdict` last
-   (`approve` or `changes`). GitHub: also a PR review comment and the
-   `review-verdict` commit status on exactly that sha.
+   (`approve` or `changes`). GitHub: also a PR review comment. Never post the
+   `review-verdict` commit status: the orchestrator ignores agent-posted
+   statuses and publishes it itself for the approved `reviewed_sha`.
 6. One comment that starts with the count ("2 important, 1 nit, 0
    pre-existing" or plainly "nothing to fix"), then verdict, sha, risk, the gates
    you ran with the command and result, and each finding with file:line, a

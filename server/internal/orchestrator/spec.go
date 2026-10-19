@@ -99,14 +99,33 @@ type RepoSpec struct {
 }
 
 type Limits struct {
-	Impl             int `json:"impl" yaml:"impl"`
-	Review           int `json:"review" yaml:"review"`
-	Infra            int `json:"infra" yaml:"infra"`
-	StuckMin         int `json:"stuck_min" yaml:"stuck_min"`
-	IdleMin          int `json:"idle_min" yaml:"idle_min"` // no task_message for this long → cancel; default 8, negative disables
-	MinFreeGB        int `json:"min_free_gb" yaml:"min_free_gb"`
-	BlockedRemindMin int `json:"blocked_remind_min" yaml:"blocked_remind_min"`
-	Failures         int `json:"dead_letter_after" yaml:"dead_letter_after"`
+	Impl     int `json:"impl" yaml:"impl"`
+	Review   int `json:"review" yaml:"review"`
+	Infra    int `json:"infra" yaml:"infra"`
+	StuckMin int `json:"stuck_min" yaml:"stuck_min"`
+	// IdleMin, MinFreeGB, QueuedMin and Unblocks are pointers so an unset
+	// value (nil → preset default) differs from an explicit 0 or negative.
+	// IdleMin: a running run with no task_message for this long is cancelled;
+	// default 8, 0 or negative disables.
+	IdleMin *int `json:"idle_min,omitempty" yaml:"idle_min,omitempty"`
+	// IdleMinByBackend overrides idle_min per agent backend (the runtime's
+	// provider, e.g. gbot, claude, codex); 0 or negative disables idle
+	// detection for that backend. Backends that report no output while they
+	// work (gbot buffers its whole run) would otherwise be killed as idle.
+	// The preset adds gbot: -1 unless the spec names gbot itself.
+	IdleMinByBackend map[string]int `json:"idle_min_by_backend,omitempty" yaml:"idle_min_by_backend,omitempty"`
+	// MinFreeGB: T1 waits while the worktree disk has less free space;
+	// default 20, 0 or negative disables the disk guard.
+	MinFreeGB *int `json:"min_free_gb,omitempty" yaml:"min_free_gb,omitempty"`
+	// QueuedMin: a run still queued/dispatched (never started) after this
+	// long is cancelled as stuck; default 15, 0 or negative disables.
+	QueuedMin *int `json:"queued_min,omitempty" yaml:"queued_min,omitempty"`
+	// Unblocks: how many times the lead's phase=unblocked may reset the
+	// counters; past it the issue stays blocked and escalates to the human
+	// (only `multica flow unblock` resets). Default 2; 0 = the lead never may.
+	Unblocks         *int `json:"unblocks,omitempty" yaml:"unblocks,omitempty"`
+	BlockedRemindMin int  `json:"blocked_remind_min" yaml:"blocked_remind_min"`
+	Failures         int  `json:"dead_letter_after" yaml:"dead_letter_after"`
 	// Slots caps concurrently implementing issues per resource: an issue
 	// labelled "needs:<name>" starts only while fewer than Slots[name]
 	// project issues with that label are todo/in_progress.
@@ -142,7 +161,7 @@ var builtinStatuses = map[string]bool{StBacklog: true, StTodo: true, StInProgres
 func PresetTransitions() []Transition {
 	all := []string{StBacklog, StTodo, StInProgress, StInReview, StBlocked}
 	return []Transition{
-		{ID: "T1_start", Actor: "engine", From: []string{StBacklog}, To: []string{StTodo}, Label: "deps done, stage open, disk ok, owner free → owner"},
+		{ID: "T1_start", Actor: "engine", From: []string{StTodo}, To: []string{StTodo}, Label: "todo (never backlog), deps done, stage open, disk ok, owner free → owner"},
 		{ID: "A1_in_progress", Actor: "agent", From: []string{StTodo}, To: []string{StInProgress}, Label: "owner starts"},
 		{ID: "T2_review", Actor: "engine", From: []string{StTodo, StInProgress}, To: []string{StInReview}, Label: "phase=review_requested, branch pushed, no active run → reviewer"},
 		{ID: "T3_rework", Actor: "engine", From: []string{StInReview, StTodo, StInProgress}, To: []string{StTodo}, Label: "changes | checks red | conflict | acceptance rejected → owner"},
@@ -150,14 +169,44 @@ func PresetTransitions() []Transition {
 		{ID: "T3b_rereview", Actor: "engine", From: []string{StInReview}, To: []string{StInReview}, Label: "no/stale verdict → reviewer again"},
 		{ID: "T4_done", Actor: "engine", From: []string{StInReview}, To: []string{StDone}, Label: "approve@head, checks green, mergeable, accepted → merge"},
 		{ID: "T5_rerun", Actor: "engine", From: []string{StTodo, StInProgress}, To: []string{StTodo, StInProgress}, Label: "run ended without hand-over → rerun (attempt++)"},
-		{ID: "T5b_cancel_stuck", Actor: "engine", From: []string{StTodo, StInProgress, StInReview}, To: []string{StTodo, StInProgress, StInReview}, Label: "run older than stuck_min → cancel"},
+		{ID: "T5b_cancel_stuck", Actor: "engine", From: []string{StTodo, StInProgress, StInReview, StBlocked}, To: []string{StTodo, StInProgress, StInReview, StBlocked}, Label: "run past stuck_min / idle_min, or queued past queued_min → cancel"},
+		{ID: "T5q_provider_limit", Actor: "engine", From: []string{StTodo, StInProgress, StInReview}, To: []string{StTodo, StInProgress, StInReview}, Label: "provider quota/rate limit → rerun after backoff, no attempt counted"},
 		{ID: "T6_block", Actor: "engine", From: all, To: []string{StBlocked}, Label: "attempts exhausted | phase=blocked | dead-letter → lead"},
-		{ID: "T7_unblock", Actor: "engine", From: []string{StBlocked}, To: []string{StTodo}, Label: "phase=unblocked → owner, counters reset"},
-		{ID: "T8_cancel", Actor: "engine", From: []string{StBlocked}, To: []string{StCancelled}, Label: "phase=cancel_proposed"},
+		{ID: "T7_unblock", Actor: "engine", From: []string{StBlocked}, To: []string{StTodo}, Label: "phase=unblocked (lead within limits.unblocks, or a member) → owner, counters reset"},
+		{ID: "T7b_unblock_escalate", Actor: "engine", From: []string{StBlocked}, To: []string{StBlocked}, Label: "lead unblock past limits.unblocks → human"},
+		{ID: "T8a_cancel_proposed", Actor: "engine", From: []string{StBlocked}, To: []string{StBlocked}, Label: "lead phase=cancel_proposed → human confirms"},
+		{ID: "T8_cancel", Actor: "engine", From: []string{StBlocked}, To: []string{StCancelled}, Label: "cancel confirmed by a member (flow cancel)"},
 		{ID: "T9_reconcile", Actor: "engine", From: all, To: []string{StTodo, StInReview, StDone, StCancelled, StBlocked}, Label: "status inconsistent with engine phase (crash / out-of-band) → converge"},
 		{ID: "T10_await_acceptance", Actor: "engine", From: []string{StInReview}, To: []string{StInReview}, Label: "gated issue approved & green → human acceptance"},
 	}
 }
+
+func intOr(p *int, v int) int {
+	if p == nil {
+		return v
+	}
+	return *p
+}
+
+// Idle is the idle_min limit in minutes (<= 0 = disabled).
+func (l Limits) Idle() int { return intOr(l.IdleMin, 8) }
+
+// IdleFor is the idle limit for a run of the given backend (<= 0 = disabled).
+func (l Limits) IdleFor(backend string) int {
+	if v, ok := l.IdleMinByBackend[strings.ToLower(strings.TrimSpace(backend))]; ok && backend != "" {
+		return v
+	}
+	return l.Idle()
+}
+
+// FreeGB is the min_free_gb disk guard (<= 0 = disabled).
+func (l Limits) FreeGB() int { return intOr(l.MinFreeGB, 20) }
+
+// Queued is the queued_min limit in minutes (<= 0 = disabled).
+func (l Limits) Queued() int { return intOr(l.QueuedMin, 15) }
+
+// MaxUnblocks is how many lead unblocks may reset the counters.
+func (l Limits) MaxUnblocks() int { return max(0, intOr(l.Unblocks, 2)) }
 
 // Defaults fills unset fields from the preset.
 func (s *Spec) Defaults() {
@@ -173,8 +222,29 @@ func (s *Spec) Defaults() {
 	d(&s.Limits.Review, 3)
 	d(&s.Limits.Infra, 2)
 	d(&s.Limits.StuckMin, 20)
-	d(&s.Limits.IdleMin, 8)
-	d(&s.Limits.MinFreeGB, 20)
+	// only a missing value gets the default; 0 and negatives are kept.
+	dp := func(p **int, v int) {
+		if *p == nil {
+			*p = &v
+		}
+	}
+	dp(&s.Limits.IdleMin, 8)
+	dp(&s.Limits.MinFreeGB, 20)
+	dp(&s.Limits.QueuedMin, 15)
+	dp(&s.Limits.Unblocks, 2)
+	// gbot emits no task messages until its run ends; idle detection would
+	// cancel every gbot run longer than idle_min.
+	if s.Limits.IdleMinByBackend == nil {
+		s.Limits.IdleMinByBackend = map[string]int{}
+	}
+	norm := map[string]int{}
+	for k, v := range s.Limits.IdleMinByBackend {
+		norm[strings.ToLower(strings.TrimSpace(k))] = v
+	}
+	if _, ok := norm["gbot"]; !ok {
+		norm["gbot"] = -1
+	}
+	s.Limits.IdleMinByBackend = norm
 	d(&s.Limits.BlockedRemindMin, 60)
 	d(&s.Limits.Failures, 5)
 	if s.Repo.Mode == "" {
@@ -293,7 +363,7 @@ func (s *Spec) Mermaid(current string) string {
 	for _, t := range s.Transitions {
 		for _, f := range t.From {
 			for _, to := range t.To {
-				if f == to && t.ID != "T3b_rereview" && t.ID != "T10_await_acceptance" {
+				if f == to && t.ID != "T1_start" && t.ID != "T3b_rereview" && t.ID != "T10_await_acceptance" && t.ID != "T7b_unblock_escalate" && t.ID != "T8a_cancel_proposed" {
 					continue
 				}
 				suffix := ""

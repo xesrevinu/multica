@@ -240,7 +240,7 @@ func newFixture(t *testing.T, specYAML string) *fixture {
 func (f *fixture) issue(title string, labels ...string) (id, key string) {
 	var n int
 	if err := f.pool.QueryRow(f.ctx, `INSERT INTO issue (workspace_id, project_id, title, status, creator_type, creator_id, number)
-		VALUES ($1,$2,$3,'backlog','member',$4, COALESCE((SELECT max(number) FROM issue WHERE workspace_id=$1),0)+1) RETURNING id::text, number`,
+		VALUES ($1,$2,$3,'todo','member',$4, COALESCE((SELECT max(number) FROM issue WHERE workspace_id=$1),0)+1) RETURNING id::text, number`,
 		f.ws, f.proj, title, f.human).Scan(&id, &n); err != nil {
 		f.t.Fatal(err)
 	}
@@ -421,7 +421,7 @@ func TestIntegrationShadowChangesNothing(t *testing.T) {
 	f.drive(3)
 	wantSeq(t, f.tids(id), "T1_start(shadow)")
 	st, who, m := f.state(id)
-	if st != StBacklog || who != "" || len(m) != 0 || f.runs != 0 {
+	if st != StTodo || who != "" || len(m) != 0 || f.runs != 0 {
 		t.Fatalf("shadow mutated: %s %q %v runs=%d", st, who, m, f.runs)
 	}
 	if f.svc.Owns(f.proj) {

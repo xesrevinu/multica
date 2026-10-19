@@ -66,6 +66,20 @@ func (r *repoOps) lock(project string) func() {
 // in the PR title for linking.
 func branchOf(sp *Spec, key string) string { return sp.Repo.BranchPrefix + util.BranchSlug(key) }
 
+// ExclusiveBranch is the branch the daemon must use for an issue of an
+// orchestrated project (or fail with the occupant, never fork): "" when the
+// project is not orchestrated right now (no team, paused, shadow).
+func (s *Service) ExclusiveBranch(projectID, issueKey string) string {
+	if !s.Owns(projectID) || issueKey == "" {
+		return ""
+	}
+	t := s.Team(projectID)
+	if t == nil || t.Spec == nil {
+		return ""
+	}
+	return branchOf(t.Spec, issueKey)
+}
+
 func freeGB(path string) int {
 	if path == "" {
 		path = "/"
@@ -198,12 +212,14 @@ func (r *repoOps) gate(ctx context.Context, t *Team, s *Snapshot, merge bool) Pr
 	res := ProbeResult{PR: url, PRNum: n}
 	if !merge {
 		// Prefer the webhook-fed App snapshot; accept an older one when the
-		// installation's REST budget runs low.
+		// installation's REST budget runs low. A red rollup is not taken
+		// from the snapshot: the live read below applies the review-verdict
+		// rule (engine metadata, never a posted status).
 		age := 2 * time.Minute
 		if g.lowBudget() {
 			age = 15 * time.Minute
 		}
-		if snap := r.svc.prSnapshot(ctx, sp, n, age); snap != nil {
+		if snap := r.svc.prSnapshot(ctx, sp, n, age); snap != nil && snap.conclusive() {
 			return snap.apply(res, s.Head, sp.Repo.RequiredChecks)
 		}
 	}
@@ -233,26 +249,8 @@ func (r *repoOps) gate(ctx context.Context, t *Team, s *Snapshot, merge bool) Pr
 			return res
 		}
 	}
-	state := func(name string) string {
-		if st, ok := checks[name]; ok {
-			return st
-		}
-		return "MISSING"
-	}
 	mergeable := v.mergeable()
-	var red, all []string
-	pending := false
-	for _, rc := range sp.Repo.RequiredChecks {
-		x := state(rc)
-		all = append(all, rc+"="+x)
-		switch x {
-		case "FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED":
-			red = append(red, rc+"="+x)
-		case "SUCCESS":
-		default:
-			pending = true
-		}
-	}
+	red, all, pending := requiredChecks(checks, sp.Repo.RequiredChecks, s)
 	switch {
 	case len(red) > 0:
 		// babysit rule: a red CI head earns exactly one fresh re-run of its
@@ -278,6 +276,15 @@ func (r *repoOps) gate(ctx context.Context, t *Team, s *Snapshot, merge bool) Pr
 		return res
 	}
 	defer r.lock(t.ProjectID)()
+	if contains(sp.Repo.RequiredChecks, ReviewVerdictCheck) {
+		// the engine, not the reviewer, publishes review-verdict - with the
+		// GitHub App installation token, so its creator is the App - and only
+		// for the head its own metadata says was approved (requiredChecks).
+		if err := r.svc.publishReviewVerdict(ctx, sp, n, s); err != nil {
+			res.Kind, res.Pending, res.Detail = "push_failed", true, "publish review-verdict status: "+short(err.Error(), 300)
+			return res
+		}
+	}
 	num := v.Number
 	sha, err := g.c.SquashMerge(ctx, g.inst, g.owner, g.name, num, s.Head)
 	if err != nil {
@@ -318,6 +325,15 @@ func (r *repoOps) prober(ctx context.Context, t *Team) Prober {
 type prSnap struct {
 	headSHA, rollup, mergeable string
 	fetched                    time.Time
+}
+
+// conclusive: a red rollup cannot be used as is. It aggregates every status
+// context, including a review-verdict anyone with repo access can post (a
+// forged failure used to send the issue back to the owner), so a red
+// snapshot falls back to the per-check evaluation (requiredChecks), which
+// reads only required checks and takes review-verdict from the App alone.
+func (p *prSnap) conclusive() bool {
+	return !strings.EqualFold(p.rollup, "failure") && !strings.EqualFold(p.rollup, "error")
 }
 
 func (p *prSnap) apply(res ProbeResult, head string, _ []string) ProbeResult {
@@ -432,4 +448,41 @@ func (r *repoOps) refreshHub(ctx context.Context, sp *Spec, force bool) {
 	if o := run(ctx, hub, "git", "merge", "-q", "--ff-only", "origin/"+sp.Repo.Main); o.code != 0 {
 		slog.Warn("orchestrator: hub fast-forward", "hub", hub, "err", short(o.err, 200))
 	}
+}
+
+// ReviewVerdictCheck is the required check that carries the review verdict.
+const ReviewVerdictCheck = "review-verdict"
+
+// requiredChecks evaluates the required checks from the head's check states
+// (check runs + commit statuses, see ghRepo.checkStates). review-verdict is
+// never read from GitHub: it carries no creator, and any agent holding the
+// user's gh login can post a commit status. It is derived from engine state
+// (verdict=approve and reviewed_sha equal to the head); the engine publishes
+// it with the GitHub App right before merging (publishReviewVerdict), and only
+// an App-created review-verdict status is ever trusted (appVerdict).
+func requiredChecks(checks map[string]string, required []string, s *Snapshot) (red, all []string, pending bool) {
+	state := func(name string) string {
+		if name == ReviewVerdictCheck {
+			if strings.EqualFold(s.Issue.Meta["verdict"], "approve") && s.Head != "" && s.Issue.Meta["reviewed_sha"] == s.Head {
+				return "SUCCESS"
+			}
+			return "PENDING"
+		}
+		if st, ok := checks[name]; ok {
+			return st
+		}
+		return "MISSING"
+	}
+	for _, rc := range required {
+		x := state(rc)
+		all = append(all, rc+"="+x)
+		switch x {
+		case "FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED":
+			red = append(red, rc+"="+x)
+		case "SUCCESS":
+		default:
+			pending = true
+		}
+	}
+	return red, all, pending
 }
