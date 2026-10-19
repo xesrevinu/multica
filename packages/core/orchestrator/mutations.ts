@@ -26,8 +26,8 @@ export function useOrchFlowAction(wsId: string, key: string) {
 export function useOrchPROp(wsId: string, key: string) {
   const invalidate = useInvalidateOrch(wsId);
   return useMutation({
-    mutationFn: (v: OrchPROp | { op: OrchPROp; number?: number }) =>
-      typeof v === "string" ? api.orchPROp(key, v) : api.orchPROp(key, v.op, v.number),
+    mutationFn: (v: OrchPROp | { op: OrchPROp; number?: number; headSha?: string }) =>
+      typeof v === "string" ? api.orchPROp(key, v) : api.orchPROp(key, v.op, v.number, v.headSha),
     onSettled: invalidate,
   });
 }

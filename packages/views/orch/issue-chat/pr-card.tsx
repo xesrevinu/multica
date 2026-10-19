@@ -107,7 +107,7 @@ function PRCardBody({ wsId, issueKey, data, number }: { wsId: string; issueKey: 
   const pendingOp = op.isPending ? (typeof op.variables === "string" ? op.variables : op.variables?.op) : undefined;
   const run = (o: OrchPROp) =>
     op
-      .mutateAsync(number ? { op: o, number } : o)
+      .mutateAsync({ op: o, number, headSha: pr?.head_sha || undefined })
       .then(() => o === "delete-branch" && toast.success(t(($) => $.pr.branch_deleted)))
       .catch((err: unknown) => toast.error(t(($) => $.actions.failed, { error: err instanceof Error ? err.message : String(err) })));
   const stateText =

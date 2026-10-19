@@ -127,7 +127,7 @@ export function useIssueCommands({
     const pr = prCard?.pr;
     const prOpen = pr && !pr.merged_at && pr.state === "open";
     const doOp = (op: "update-branch" | "rerun-checks") =>
-      prOp.mutateAsync(op).catch((err: unknown) => toast.error(t(($) => $.actions.failed, { error: err instanceof Error ? err.message : String(err) })));
+      prOp.mutateAsync({ op, headSha: pr?.head_sha || undefined }).catch((err: unknown) => toast.error(t(($) => $.actions.failed, { error: err instanceof Error ? err.message : String(err) })));
     if (prOpen && prCard?.can.update_branch) add("update-branch", t(($) => $.palette.update_branch), RefreshCw, ["update", "branch", "merge", "rebase", "sync"], () => void doOp("update-branch"));
     if (prOpen && prCard?.can.rerun) add("rerun", t(($) => $.palette.rerun), RotateCcw, ["rerun", "retry", "checks", "ci"], () => void doOp("rerun-checks"));
     if (v?.pr?.url) add("open-pr", t(($) => $.palette.open_pr), ExternalLink, ["pr", "github", "pull"], () => window.open(v.pr!.url, "_blank", "noopener"));

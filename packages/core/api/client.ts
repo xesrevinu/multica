@@ -1459,9 +1459,14 @@ export class ApiClient {
     key: string,
     op: "update-branch" | "rerun-checks" | "merge" | "sync-labels" | "delete-branch",
     number?: number,
+    headSha?: string,
   ): Promise<unknown> {
     const q = number ? `?number=${number}` : "";
-    return this.fetch<unknown>(`/api/orchestrator/issues/${encodeURIComponent(key)}/pr/${op}${q}`, { method: "POST", body: "{}" });
+    // head_sha: the head the member saw, so GitHub refuses a stale action.
+    return this.fetch<unknown>(`/api/orchestrator/issues/${encodeURIComponent(key)}/pr/${op}${q}`, {
+      method: "POST",
+      body: JSON.stringify(headSha ? { head_sha: headSha } : {}),
+    });
   }
 
   async listOrchIssuePRs(key: string): Promise<unknown> {
