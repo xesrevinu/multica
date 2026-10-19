@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -369,6 +370,7 @@ func (r *repoOps) retryCI(ctx context.Context, sp *Spec, head string) bool {
 		if x.Conclusion == "failure" || x.Conclusion == "timed_out" || x.Conclusion == "cancelled" {
 			if _, err := r.gh(ctx, sp, "run", "rerun", fmt.Sprint(x.ID), "--failed"); err == nil {
 				n++
+				slog.Info("orchestrator: CI re-run (one per red head)", "head", head, "run", x.ID, "conclusion", x.Conclusion)
 			}
 		}
 	}
