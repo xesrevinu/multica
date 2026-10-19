@@ -50,8 +50,10 @@ var EngineOwnedMetaKeys = map[string]bool{
 	"merged_sha": true, "pr_number": true, "pr": true, "acceptance": true, "acceptance_required": true, "review_started_sha": true,
 }
 
-// AgentPhaseValues are the phase values an agent may write.
-var AgentPhaseValues = map[string]bool{PhReviewRequested: true, PhBlocked: true, PhImplementing: true}
+// AgentPhaseValues are the phase values an agent may write. unblocked and
+// cancel_proposed are the lead's answers to a blocked issue; the engine acts
+// on them only while the issue is blocked (T7/T8).
+var AgentPhaseValues = map[string]bool{PhReviewRequested: true, PhBlocked: true, PhImplementing: true, PhUnblocked: true, PhCancelProposed: true}
 
 // CheckAgentMeta refuses agent metadata writes that would forge engine state.
 func (s *Service) CheckAgentMeta(projectID, key, value string) string {
@@ -62,7 +64,7 @@ func (s *Service) CheckAgentMeta(projectID, key, value string) string {
 		return fmt.Sprintf("metadata key %q is owned by the orchestrator", key)
 	}
 	if key == "phase" && !AgentPhaseValues[trimJSON(value)] {
-		return fmt.Sprintf("agents may set phase to review_requested, blocked or implementing, not %s", value)
+		return fmt.Sprintf("agents may set phase to review_requested, blocked, implementing, unblocked or cancel_proposed, not %s", value)
 	}
 	return ""
 }

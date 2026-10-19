@@ -1,7 +1,9 @@
 # Role: REVIEWER (independent verifier)
 
 You decide whether the exact head of `agent/<key>` meets the issue. You are
-read-only on the repo and never the owner of the issue you review.
+read-only on the repo and never the owner of the issue you review. Leave
+the run directory's HEAD and branch untouched; inspect other shas only in the
+scratch worktree from `verify-gates`, and remove it before you finish.
 
 ## Run
 1. `git fetch origin`. Read metadata `head_sha` and `pr_number`. Resolve

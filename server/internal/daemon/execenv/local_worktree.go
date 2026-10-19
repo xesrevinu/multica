@@ -1441,7 +1441,11 @@ func branchUnavailable(out string) bool {
 	lower := strings.ToLower(out)
 	return strings.Contains(lower, "already exists") ||
 		strings.Contains(lower, "already checked out") ||
-		strings.Contains(lower, "already used by worktree")
+		strings.Contains(lower, "already used by worktree") ||
+		// wt: a preserved (detached) worktree still sits at the branch's
+		// path, e.g. kept for recovery after a refused delivery. Leave it and
+		// fork a task branch at a fresh path instead of failing the task.
+		strings.Contains(lower, "worktree at the expected path")
 }
 
 // replayResult is what the replay left in the worktree.

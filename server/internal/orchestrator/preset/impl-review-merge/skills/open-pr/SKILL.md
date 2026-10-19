@@ -14,7 +14,7 @@ metadata:
 1. Stay on the branch the run started on. Only you write `agent/<key>`.
 2. Commits: small and ordered, each landable. Subject `type(scope): subject` (feat, fix, docs, refactor, test, chore, perf), imperative, no period. The body says why, not what the diff shows. Amend a fix into the commit it belongs to.
 3. Before pushing, run the repo checks on the committed head (`npm test && npm run lint` here). Do not push red.
-4. Push: `git push origin HEAD:refs/heads/agent/<key>`. After a rebase of your own branch: `git push --force-with-lease=agent/<key>:<sha you last pushed> origin HEAD:refs/heads/agent/<key>`. Never push `main`, never force anyone else's branch.
+4. Push: `git push origin HEAD:refs/heads/agent/<key>`. Never rebase or force-push (bring main in with `git merge origin/main`); never push `main`.
 5. One PR per issue, opened ready (no `--draft`): `gh pr list --head agent/<key> --state open --json number,url` first; if none:
    `gh pr create --head agent/<key> --base main --title "type(scope): subject (KEY)" --body-file /tmp/pr-KEY.md`
 6. Body = a one-minute briefing for a reviewer who has the diff. `##` sections in this order, drop empty ones:

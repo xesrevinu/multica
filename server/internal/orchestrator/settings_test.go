@@ -89,3 +89,18 @@ func TestBranchOfMatchesDaemonSlug(t *testing.T) {
 		t.Fatalf("branchOf = %q", got)
 	}
 }
+
+func TestFailedReviewerRunCountsAsInfra(t *testing.T) {
+	sp := spec(t)
+	s := snap(StInReview, map[string]string{"phase": PhReviewing, "attempt_review": "3"})
+	s.Issue.Assignee = "rev"
+	s.LastRun = &Run{ID: "r", Status: "failed"}
+	d := sp.Decide(s, nil)
+	if d == nil || d.Tid != "T3b_rereview" || d.Meta["attempt_infra"] != "1" || d.Meta["attempt_review"] != "" {
+		t.Fatalf("failed reviewer run must not burn review attempts: %+v", d)
+	}
+	s.Issue.Meta["attempt_infra"] = "2"
+	if d := sp.Decide(s, nil); d == nil || d.Tid != "T6_block" {
+		t.Fatalf("want block after infra limit: %+v", d)
+	}
+}

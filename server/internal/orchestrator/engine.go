@@ -231,7 +231,7 @@ func (sp *Spec) Decide(s *Snapshot, probe Prober) *Decision {
 		case PhCancelProposed:
 			return &Decision{Tid: "T8_cancel", Status: StCancelled, Meta: map[string]string{"phase": PhCancelled}}
 		}
-		return nil
+		return &Decision{Wait: "blocked: waiting for phase=unblocked or phase=cancel_proposed (lead) or multica flow unblock"}
 	}
 	// todo / in_progress / in_review
 	if s.ActiveRun != nil {
@@ -328,6 +328,15 @@ func (sp *Spec) Decide(s *Snapshot, probe Prober) *Decision {
 	}
 	v := m["verdict"]
 	if v == "" {
+		// A reviewer run that failed or was cancelled (e.g. the daemon could
+		// not prepare its worktree) is an infra attempt, not a review attempt.
+		if r := s.LastRun; r != nil && (r.Status == "failed" || r.Status == "cancelled") {
+			n := num(m["attempt_infra"]) + 1
+			if n > sp.Limits.Infra {
+				return sp.block(s, fmt.Sprintf("infra attempts exhausted on review (%d/%d)", n-1, sp.Limits.Infra), nil)
+			}
+			return &Decision{Tid: "T3b_rereview", Rerun: true, Meta: map[string]string{"attempt_infra": itoa(n)}, Why: "reviewer run " + r.Status + " (infra)"}
+		}
 		n := num(m["attempt_review"]) + 1
 		if n > sp.Limits.Review {
 			return sp.block(s, "review attempts exhausted (no verdict)", nil)

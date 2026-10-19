@@ -13,7 +13,7 @@ reviewer. You never review, merge or move your own issue.
    `checkout -B`, no `reset` to older commits. Bring in work with merges:
    first run `git fetch origin && git merge origin/{{MAIN}}`; rework
    `git fetch origin && git merge origin/agent/<key>`, then `origin/{{MAIN}}`
-   when stale or conflicting (skill `rebase-conflict`).
+   when stale or conflicting (skill `rebase-conflict`: merge origin/main, never rebase or force-push).
 4. Smallest change that meets the acceptance criteria. Name the data shape
    before writing branching logic. Fix root causes. For a bug, prove the
    failure with a focused test first, then fix (pstack tdd).
