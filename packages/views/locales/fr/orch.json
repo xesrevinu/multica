@@ -25,7 +25,40 @@
       "review": "Revue",
       "paused": "En pause"
     },
-    "open_in_tab": "Ouvrir dans un nouvel onglet"
+    "open_in_tab": "Ouvrir dans un nouvel onglet",
+    "working": "En cours {{duration}}",
+    "queued_short": "En attente",
+    "settled_footer": "Terminées ({{count}})",
+    "load_more": "Afficher plus",
+    "pin": "Épingler",
+    "unpin": "Désépingler",
+    "view_options": "Options d'affichage",
+    "sort_label": "Trier",
+    "sort": {
+      "attention": "Attention requise",
+      "updated": "Dernière mise à jour",
+      "created": "Plus récentes",
+      "priority": "Priorité"
+    },
+    "assignee_label": "Assigné",
+    "assignee": {
+      "any": "Tout le monde",
+      "me": "Moi",
+      "agents": "Agents",
+      "unassigned": "Non assignées"
+    },
+    "priority_label": "Priorité",
+    "project_label": "Projet",
+    "orchestrated_only": "Orchestrées uniquement",
+    "show_sub_issues": "Imbriquer les sous-tickets",
+    "reset_view": "Réinitialiser",
+    "paused_short": "En pause",
+    "pr_state": {
+      "open": "Ouverte",
+      "merged": "Fusionnée",
+      "closed": "Fermée",
+      "draft": "Brouillon"
+    }
   },
   "phase": {
     "implementing": "Implémentation",

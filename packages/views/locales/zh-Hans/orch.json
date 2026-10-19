@@ -25,7 +25,40 @@
       "review": "待评审",
       "paused": "已暂停"
     },
-    "open_in_tab": "在新标签页打开"
+    "open_in_tab": "在新标签页打开",
+    "working": "运行中 {{duration}}",
+    "queued_short": "排队中",
+    "settled_footer": "已完结（{{count}}）",
+    "load_more": "显示更多",
+    "pin": "置顶",
+    "unpin": "取消置顶",
+    "view_options": "视图选项",
+    "sort_label": "排序",
+    "sort": {
+      "attention": "按关注度",
+      "updated": "最近更新",
+      "created": "最新创建",
+      "priority": "优先级"
+    },
+    "assignee_label": "负责人",
+    "assignee": {
+      "any": "所有人",
+      "me": "我",
+      "agents": "Agent",
+      "unassigned": "未分配"
+    },
+    "priority_label": "优先级",
+    "project_label": "项目",
+    "orchestrated_only": "仅编排中的",
+    "show_sub_issues": "嵌套子 issue",
+    "reset_view": "重置",
+    "paused_short": "已暂停",
+    "pr_state": {
+      "open": "开启",
+      "merged": "已合并",
+      "closed": "已关闭",
+      "draft": "草稿"
+    }
   },
   "phase": {
     "implementing": "实现中",

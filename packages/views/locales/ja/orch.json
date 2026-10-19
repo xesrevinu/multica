@@ -25,7 +25,40 @@
       "review": "レビュー",
       "paused": "一時停止"
     },
-    "open_in_tab": "新しいタブで開く"
+    "open_in_tab": "新しいタブで開く",
+    "working": "作業中 {{duration}}",
+    "queued_short": "待機中",
+    "settled_footer": "完了（{{count}}）",
+    "load_more": "さらに表示",
+    "pin": "ピン留め",
+    "unpin": "ピン留め解除",
+    "view_options": "表示オプション",
+    "sort_label": "並び替え",
+    "sort": {
+      "attention": "要対応順",
+      "updated": "更新日時",
+      "created": "作成日時",
+      "priority": "優先度"
+    },
+    "assignee_label": "担当者",
+    "assignee": {
+      "any": "すべて",
+      "me": "自分",
+      "agents": "エージェント",
+      "unassigned": "未割り当て"
+    },
+    "priority_label": "優先度",
+    "project_label": "プロジェクト",
+    "orchestrated_only": "オーケストレーション対象のみ",
+    "show_sub_issues": "サブ課題をネスト",
+    "reset_view": "リセット",
+    "paused_short": "一時停止",
+    "pr_state": {
+      "open": "オープン",
+      "merged": "マージ済み",
+      "closed": "クローズ",
+      "draft": "下書き"
+    }
   },
   "phase": {
     "implementing": "実装中",

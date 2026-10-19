@@ -25,7 +25,40 @@
       "review": "리뷰",
       "paused": "일시 정지"
     },
-    "open_in_tab": "새 탭에서 열기"
+    "open_in_tab": "새 탭에서 열기",
+    "working": "작업 중 {{duration}}",
+    "queued_short": "대기 중",
+    "settled_footer": "완료 ({{count}})",
+    "load_more": "더 보기",
+    "pin": "고정",
+    "unpin": "고정 해제",
+    "view_options": "보기 옵션",
+    "sort_label": "정렬",
+    "sort": {
+      "attention": "주의 필요 순",
+      "updated": "최근 업데이트",
+      "created": "최신 생성",
+      "priority": "우선순위"
+    },
+    "assignee_label": "담당자",
+    "assignee": {
+      "any": "모두",
+      "me": "나",
+      "agents": "에이전트",
+      "unassigned": "미지정"
+    },
+    "priority_label": "우선순위",
+    "project_label": "프로젝트",
+    "orchestrated_only": "오케스트레이션만",
+    "show_sub_issues": "하위 이슈 중첩",
+    "reset_view": "초기화",
+    "paused_short": "일시 중지",
+    "pr_state": {
+      "open": "열림",
+      "merged": "병합됨",
+      "closed": "닫힘",
+      "draft": "초안"
+    }
   },
   "phase": {
     "implementing": "구현 중",

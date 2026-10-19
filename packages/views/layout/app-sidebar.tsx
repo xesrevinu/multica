@@ -422,7 +422,8 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
     appForeground && (floatingChatOpen || isNavActive(pathname, chatHref))
       ? activeChatSessionId
       : null;
-  const { data: orchIssues } = useQuery({ ...orchIssuesOptions(wsId ?? ""), enabled: !!wsId });
+  const { data: orchList } = useQuery({ ...orchIssuesOptions(wsId ?? ""), enabled: !!wsId });
+  const orchIssues = orchList?.issues;
   const busyAgentIds = React.useMemo(
     () => new Set((orchIssues ?? []).flatMap((i) => (i.running ? [i.running.agent_id] : []))),
     [orchIssues],

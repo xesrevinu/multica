@@ -36,7 +36,8 @@ export function DetailsDrawer({ open, onOpenChange, wsId, issue, timeline }: { o
   const timeAgo = useTimeAgo();
   const phaseLabel = usePhaseLabel();
   const statusText = useStatusText();
-  const { data: all } = useQuery({ ...orchIssuesOptions(wsId), enabled: open });
+  const { data: list } = useQuery({ ...orchIssuesOptions(wsId), enabled: open });
+  const all = list?.issues;
   const v = timeline?.issue;
   const kids = (all ?? []).filter((i) => i.parent_id === issue.id);
   const parent = issue.parent_issue_id ? (all ?? []).find((i) => i.id === issue.parent_issue_id) : undefined;

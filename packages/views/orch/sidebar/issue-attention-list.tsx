@@ -2,24 +2,44 @@
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, GitPullRequest, Pause, Search } from "lucide-react";
+import { ChevronRight, GitBranch, Pause, Pin, PinOff, Search, SlidersHorizontal } from "lucide-react";
+import { useAuthStore } from "@multica/core/auth";
 import {
+  applyOrchView,
+  DEFAULT_ORCH_VIEW,
+  diffOf,
   filterOrchIssues,
   groupOrchIssues,
   orchIssuesOptions,
   useOrchRealtime,
   type OrchAttentionBucket,
   type OrchIssueNode,
+  type OrchSort,
+  type OrchAssigneeFilter,
 } from "@multica/core/orchestrator";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@multica/ui/components/ui/collapsible";
-import { SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarMenu } from "@multica/ui/components/ui/sidebar";
+import { pinListOptions, useCreatePin, useDeletePin } from "@multica/core/pins";
+import { projectListOptions } from "@multica/core/projects/queries";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@multica/ui/components/ui/dropdown-menu";
+import { SidebarGroup, SidebarGroupContent, SidebarGroupLabel } from "@multica/ui/components/ui/sidebar";
 import { cn } from "@multica/ui/lib/utils";
 import { AppLink } from "../../navigation";
 import { useT } from "../../i18n";
-import { StatusIcon } from "../../issues/components/status-icon";
-import { checksTone, formatDuration, since, TONE_DOT } from "../format";
+import { formatDuration, shortAgo, since } from "../format";
 import { usePhaseLabel } from "../labels";
 import { OpenTabButton } from "../open-tab";
+import { DiffStat, PRChip, ProjectBadge, WorkingLabel } from "../parts/chips";
+import { useOrchViewOptions } from "./view-options";
 
 export type IssueAttentionListProps = {
   wsId: string;
@@ -27,189 +47,362 @@ export type IssueAttentionListProps = {
   issueHref: (key: string) => string;
 };
 
-const BUCKET_TONE: Record<OrchAttentionBucket, string> = {
-  needs_you: "text-amber-600 dark:text-amber-400",
-  running: "text-emerald-600 dark:text-emerald-400",
-  queued: "text-muted-foreground",
-  settled: "text-muted-foreground",
+const PRIORITIES = ["urgent", "high", "medium", "low", "none"] as const;
+const SORTS: OrchSort[] = ["attention", "updated", "created", "priority"];
+const ASSIGNEES: OrchAssigneeFilter[] = ["any", "me", "agents", "unassigned"];
+
+type RowCtx = {
+  pathname: string;
+  issueHref: (key: string) => string;
+  projectIcon: (id?: string) => string | null | undefined;
+  pinned: Set<string>;
+  togglePin: (id: string, pinned: boolean) => void;
+  nest: boolean;
 };
 
-// The attention-sorted issue list (server order within buckets). Settled is
-// collapsed by default; sub-issues expand under their parent.
+// The attention-sorted issue list, t3code style: two-line rows with a
+// project badge, live status on the right and PR / diff chips underneath.
+// Settled issues fold into a "Settled (n)" footer.
 export function IssueAttentionList({ wsId, pathname, issueHref }: IssueAttentionListProps) {
   const { t } = useT("orch");
   useOrchRealtime(wsId);
-  const { data: issues, isLoading } = useQuery(orchIssuesOptions(wsId));
+  const userId = useAuthStore((s) => s.user?.id ?? "");
+  const [settledLimit, setSettledLimit] = useState(30);
+  const [showSettled, setShowSettled] = useState(false);
+  const { data, isLoading } = useQuery(orchIssuesOptions(wsId, showSettled ? settledLimit : 30));
+  const issues = data?.issues;
+  const { view, update, reset } = useOrchViewOptions(wsId);
   const [query, setQuery] = useState("");
-  const [project, setProject] = useState<string>("");
+  const { data: projectList = [] } = useQuery(projectListOptions(wsId));
+  const { data: pins = [] } = useQuery({ ...pinListOptions(wsId, userId), enabled: !!userId });
+  const createPin = useCreatePin();
+  const deletePin = useDeletePin();
+  const pinned = useMemo(() => new Set(pins.filter((p) => p.item_type === "issue").map((p) => p.item_id)), [pins]);
+
   const projects = useMemo(() => {
     const m = new Map<string, string>();
     for (const i of issues ?? []) if (i.project) m.set(i.project.id, i.project.title);
     return [...m.entries()].sort((a, b) => a[1].localeCompare(b[1]));
   }, [issues]);
-  const groups = useMemo(() => groupOrchIssues(filterOrchIssues(issues ?? [], query, project || null)), [issues, query, project]);
+  const iconById = useMemo(() => new Map(projectList.map((p) => [p.id, p.icon])), [projectList]);
+
+  const groups = useMemo(() => {
+    const filtered = applyOrchView(filterOrchIssues(issues ?? [], query, view.project || null), view, userId);
+    const flat = view.showSubIssues ? filtered : filtered.map((i) => ({ ...i, parent_id: undefined }));
+    return groupOrchIssues(flat);
+  }, [issues, query, view, userId]);
+  const open = groups.filter((g) => g.bucket !== "settled");
+  const settled = groups.find((g) => g.bucket === "settled");
+  const settledTotal = Math.max(data?.settledTotal ?? 0, settled?.count ?? 0);
+  const customized = JSON.stringify({ ...view, project: undefined }) !== JSON.stringify({ ...DEFAULT_ORCH_VIEW, project: undefined }) || !!view.project;
+
+  const ctx: RowCtx = {
+    pathname,
+    issueHref,
+    projectIcon: (id) => (id ? iconById.get(id) : undefined),
+    pinned,
+    togglePin: (id, isPinned) =>
+      isPinned ? deletePin.mutate({ itemType: "issue", itemId: id }) : createPin.mutate({ item_type: "issue", item_id: id }),
+    nest: view.showSubIssues,
+  };
 
   return (
     <SidebarGroup className="pt-0" data-testid="orch-issue-list">
       <SidebarGroupLabel>{t(($) => $.sidebar.issues)}</SidebarGroupLabel>
       <div className="mb-1 flex items-center gap-1 px-1">
-        <label className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md border border-sidebar-border/70 bg-background/40 px-2 py-1 focus-within:border-ring">
+        <label className="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md border border-sidebar-border bg-background/60 px-2 focus-within:border-ring">
           <Search className="size-3 shrink-0 text-muted-foreground" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t(($) => $.sidebar.filter_placeholder)}
             aria-label={t(($) => $.sidebar.filter_placeholder)}
-            className="min-w-0 flex-1 bg-transparent text-caption outline-none placeholder:text-muted-foreground"
+            className="min-w-0 flex-1 bg-transparent text-caption outline-none placeholder:text-faint-foreground"
           />
         </label>
-        {projects.length > 1 && (
-          <select
-            value={project}
-            onChange={(e) => setProject(e.target.value)}
-            aria-label={t(($) => $.sidebar.all_projects)}
-            className="max-w-24 truncate rounded-md border border-sidebar-border/70 bg-background/40 px-1 py-1 text-caption text-muted-foreground outline-none"
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            aria-label={t(($) => $.sidebar.view_options)}
+            title={t(($) => $.sidebar.view_options)}
+            data-testid="orch-view-options"
+            className={cn(
+              "relative inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-sidebar-border bg-background/60 text-muted-foreground hover:text-foreground",
+              customized && "text-foreground",
+            )}
           >
-            <option value="">{t(($) => $.sidebar.all_projects)}</option>
-            {projects.map(([id, title]) => (
-              <option key={id} value={id}>
-                {title}
-              </option>
-            ))}
-          </select>
-        )}
+            <SlidersHorizontal className="size-3.5" />
+            {customized && <span className="absolute top-1 right-1 size-1.5 rounded-full bg-brand" />}
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>{t(($) => $.sidebar.sort_label)}</DropdownMenuLabel>
+              <DropdownMenuRadioGroup value={view.sort} onValueChange={(v) => update({ sort: v as OrchSort })}>
+                {SORTS.map((s) => (
+                  <DropdownMenuRadioItem key={s} value={s}>
+                    {t(($) => $.sidebar.sort[s])}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>{t(($) => $.sidebar.assignee_label)}</DropdownMenuLabel>
+              <DropdownMenuRadioGroup value={view.assignee} onValueChange={(v) => update({ assignee: v as OrchAssigneeFilter })}>
+                {ASSIGNEES.map((a) => (
+                  <DropdownMenuRadioItem key={a} value={a}>
+                    {t(($) => $.sidebar.assignee[a])}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>{t(($) => $.sidebar.priority_label)}</DropdownMenuLabel>
+              {PRIORITIES.map((p) => (
+                <DropdownMenuCheckboxItem
+                  key={p}
+                  checked={view.priorities.includes(p)}
+                  onCheckedChange={(on) =>
+                    update({ priorities: on ? [...view.priorities, p] : view.priorities.filter((x) => x !== p) })
+                  }
+                >
+                  <PriorityLabel value={p} />
+                </DropdownMenuCheckboxItem>
+              ))}
+            </DropdownMenuGroup>
+            {projects.length > 0 && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel>{t(($) => $.sidebar.project_label)}</DropdownMenuLabel>
+                  <DropdownMenuRadioGroup value={view.project} onValueChange={(v) => update({ project: v as string })}>
+                    <DropdownMenuRadioItem value="">{t(($) => $.sidebar.all_projects)}</DropdownMenuRadioItem>
+                    {projects.map(([id, title]) => (
+                      <DropdownMenuRadioItem key={id} value={id}>
+                        <ProjectBadge title={title} icon={iconById.get(id)} />
+                        <span className="truncate">{title}</span>
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuGroup>
+              </>
+            )}
+            <DropdownMenuSeparator />
+            <DropdownMenuCheckboxItem checked={view.orchestratedOnly} onCheckedChange={(on) => update({ orchestratedOnly: !!on })}>
+              {t(($) => $.sidebar.orchestrated_only)}
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuCheckboxItem checked={view.showSubIssues} onCheckedChange={(on) => update({ showSubIssues: !!on })}>
+              {t(($) => $.sidebar.show_sub_issues)}
+            </DropdownMenuCheckboxItem>
+            {customized && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={reset}>{t(($) => $.sidebar.reset_view)}</DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
-      <SidebarGroupContent>
-        {isLoading && <p className="px-2 py-1 text-caption text-muted-foreground">{t(($) => $.sidebar.loading)}</p>}
+      <SidebarGroupContent className="flex flex-col">
+        {isLoading && <p className="px-2.5 py-1 text-caption text-muted-foreground">{t(($) => $.sidebar.loading)}</p>}
         {!isLoading && groups.every((g) => g.count === 0) && (
-          <p className="px-2 py-1 text-caption text-muted-foreground">{t(($) => $.sidebar.empty)}</p>
+          <p className="px-2.5 py-1 text-caption text-muted-foreground">{t(($) => $.sidebar.empty)}</p>
         )}
-        {groups
+        {open
           .filter((g) => g.count > 0)
           .map((g) => (
-            <Collapsible key={g.bucket} defaultOpen={g.bucket !== "settled"}>
-              <CollapsibleTrigger
-                className="group/trigger flex w-full items-center gap-1 rounded-md px-2 pt-2 pb-1 text-micro font-medium uppercase tracking-wide text-muted-foreground hover:text-foreground"
-                data-testid={`orch-bucket-${g.bucket}`}
-              >
-                <ChevronRight className="size-3 stroke-[2.5] transition-transform duration-200 group-data-[panel-open]/trigger:rotate-90" />
-                <span className={BUCKET_TONE[g.bucket]}>{t(($) => $.sidebar.bucket[g.bucket])}</span>
-                <span className="ml-auto tabular-nums">{g.count}</span>
-              </CollapsibleTrigger>
-              <CollapsibleContent>
-                <SidebarMenu className="gap-px">
-                  {g.nodes.map((n) => (
-                    <IssueRow key={`${g.bucket}-${n.id}`} node={n} depth={0} pathname={pathname} issueHref={issueHref} />
-                  ))}
-                </SidebarMenu>
-              </CollapsibleContent>
-            </Collapsible>
+            <section key={g.bucket} data-testid={`orch-bucket-${g.bucket}`} className="flex flex-col">
+              <BucketHeader bucket={g.bucket} count={g.count} />
+              <ul className="flex flex-col gap-px">
+                {g.nodes.map((n) => (
+                  <IssueRow key={`${g.bucket}-${n.id}`} node={n} depth={0} ctx={ctx} />
+                ))}
+              </ul>
+            </section>
           ))}
+        {settledTotal > 0 && (
+          <section data-testid="orch-bucket-settled" className="mt-1 flex flex-col">
+            <button
+              type="button"
+              onClick={() => setShowSettled((v) => !v)}
+              aria-expanded={showSettled}
+              className="flex h-8 w-full items-center gap-1.5 rounded-md px-2.5 text-left text-label text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground"
+            >
+              <ChevronRight className={cn("size-3.5 transition-transform", showSettled && "rotate-90")} />
+              {t(($) => $.sidebar.settled_footer, { count: settledTotal })}
+            </button>
+            {showSettled && settled && (
+              <ul className="flex flex-col gap-px">
+                {settled.nodes.map((n) => (
+                  <IssueRow key={`s-${n.id}`} node={n} depth={0} ctx={ctx} />
+                ))}
+                {settledTotal > settled.count && settledLimit < 500 && (
+                  <li>
+                    <button
+                      type="button"
+                      onClick={() => setSettledLimit((n) => Math.min(500, n + 50))}
+                      className="w-full rounded-md px-2.5 py-1 text-left text-caption text-muted-foreground hover:text-foreground"
+                    >
+                      {t(($) => $.sidebar.load_more)}
+                    </button>
+                  </li>
+                )}
+              </ul>
+            )}
+          </section>
+        )}
       </SidebarGroupContent>
     </SidebarGroup>
   );
 }
 
-function IssueRow({ node, depth, pathname, issueHref }: { node: OrchIssueNode; depth: number; pathname: string; issueHref: (key: string) => string }) {
+function PriorityLabel({ value }: { value: (typeof PRIORITIES)[number] }) {
+  const { t } = useT("issues");
+  return <span>{t(($) => $.priority[value])}</span>;
+}
+
+const BUCKET_DOT: Record<OrchAttentionBucket, string> = {
+  needs_you: "bg-amber-500",
+  running: "bg-sky-500",
+  queued: "bg-border",
+  settled: "bg-border",
+};
+
+function BucketHeader({ bucket, count }: { bucket: OrchAttentionBucket; count: number }) {
+  const { t } = useT("orch");
+  return (
+    <div className="flex h-7 items-center gap-1.5 px-2.5 pt-1 text-caption font-medium text-muted-foreground">
+      <span className={cn("size-1.5 rounded-full", BUCKET_DOT[bucket])} />
+      <span>{t(($) => $.sidebar.bucket[bucket])}</span>
+      <span className="ml-auto tabular-nums text-faint-foreground">{count}</span>
+    </div>
+  );
+}
+
+const REASONS = { acceptance: 1, blocked: 1, cancel_proposed: 1, review: 1, paused: 1 } as const;
+
+function IssueRow({ node, depth, ctx }: { node: OrchIssueNode; depth: number; ctx: RowCtx }) {
   const { t } = useT("orch");
   const phaseLabel = usePhaseLabel();
   const [open, setOpen] = useState(false);
-  const href = issueHref(node.key);
-  const active = pathname === href || pathname === issueHref(node.id);
+  const href = ctx.issueHref(node.key);
+  const active = ctx.pathname === href || ctx.pathname === ctx.issueHref(node.id);
   const settled = node.attention.bucket === "settled";
   const reason = node.attention.reason as keyof typeof REASONS | undefined;
-  const hasKids = node.subIssues.length > 0;
-  const meta: React.ReactNode[] = [];
-  if (node.running) {
-    meta.push(
-      <span key="run" className="inline-flex items-center gap-1 truncate">
-        <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-emerald-500" />
-        {node.running.agent} · {formatDuration(since(node.running.started_at ?? node.running.created_at))}
-      </span>,
+  const hasKids = ctx.nest && node.subIssues.length > 0;
+  const isPinned = ctx.pinned.has(node.id);
+  const diff = diffOf(node);
+  const branch = node.worktree?.branch ?? node.pr?.branch;
+
+  let status: React.ReactNode;
+  if (node.attention.bucket === "needs_you" && reason && REASONS[reason]) {
+    status = (
+      <span className="rounded-[4px] bg-amber-500/15 px-1 text-micro font-medium text-amber-700 dark:text-amber-300">
+        {t(($) => $.sidebar.reason[reason])}
+      </span>
     );
-  } else if (node.phase && !settled && node.attention.bucket !== "needs_you") {
-    meta.push(
-      <span key="phase" className="truncate">
-        {phaseLabel(node.phase)}
-      </span>,
+  } else if (node.running) {
+    status = (
+      <WorkingLabel
+        label={t(($) => $.sidebar.working, { duration: formatDuration(since(node.running.started_at ?? node.running.created_at)) })}
+      />
     );
+  } else if (node.paused) {
+    status = (
+      <span className="inline-flex items-center gap-1 text-muted-foreground">
+        <Pause className="size-3" />
+        {t(($) => $.sidebar.paused_short)}
+      </span>
+    );
+  } else {
+    status = <span className="tabular-nums text-faint-foreground">{shortAgo(node.updated_at)}</span>;
   }
-  if (node.pr) {
-    const tone = node.pr.state === "merged" ? "ok" : checksTone(node.pr.checks);
-    meta.push(
-      <span key="pr" className="inline-flex shrink-0 items-center gap-0.5 tabular-nums">
-        <GitPullRequest className="size-3" />#{node.pr.number}
-        <span className={cn("size-1.5 rounded-full", TONE_DOT[tone])} />
-      </span>,
-    );
-  }
-  if (node.children.total > 0) {
-    meta.push(
-      <span key="kids" className="shrink-0 tabular-nums">
-        {node.children.done}/{node.children.total}
-      </span>,
-    );
-  }
+
   return (
     <li className="list-none">
       <div
+        data-active={active || undefined}
         className={cn(
-          "group/row relative flex items-start gap-1.5 rounded-md py-1 pr-1.5 text-body transition-colors duration-75",
-          active ? "bg-sidebar-accent text-sidebar-accent-foreground" : "text-muted-foreground hover:bg-sidebar-accent/70",
+          "group/row relative rounded-md transition-colors duration-75",
+          active ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/60",
         )}
-        style={{ paddingLeft: 6 + depth * 14 }}
+        style={{ paddingLeft: depth * 12 }}
       >
-        {hasKids ? (
+        <AppLink
+          href={href}
+          className="flex min-w-0 flex-col gap-0.5 px-2.5 py-1.5"
+          data-testid="orch-issue-row"
+          data-key={node.key}
+        >
+          <span className="flex h-5 min-w-0 items-center gap-1.5">
+            <ProjectBadge title={node.project?.title} icon={ctx.projectIcon(node.project?.id)} className={cn(settled && !active && "opacity-50 grayscale")} />
+            <span className={cn("min-w-0 flex-1 truncate text-label font-medium", settled ? "text-muted-foreground" : "text-foreground")}>
+              {node.title || node.key}
+            </span>
+            {isPinned && <Pin className="size-3 shrink-0 text-faint-foreground" />}
+            <span className="flex shrink-0 items-center text-caption transition-opacity group-hover/row:opacity-0">{status}</span>
+          </span>
+          {!settled || active ? (
+            <span className="flex h-4 min-w-0 items-center gap-1.5 pl-[22px] text-caption text-muted-foreground">
+              <span className="shrink-0 font-mono text-micro">{node.key}</span>
+              {branch ? (
+                <span className="flex min-w-0 flex-1 items-center gap-1 text-faint-foreground">
+                  <GitBranch className="size-3 shrink-0" />
+                  <span className="truncate font-mono text-micro">{branch}</span>
+                </span>
+              ) : node.phase && !node.running && node.attention.bucket !== "needs_you" ? (
+                <span className="min-w-0 flex-1 truncate text-faint-foreground">{phaseLabel(node.phase)}</span>
+              ) : (
+                <span className="flex-1" />
+              )}
+              {node.pr && <PRChip number={node.pr.number} state={node.pr.state} />}
+              <DiffStat additions={diff.additions} deletions={diff.deletions} className="text-micro" />
+              {node.children.total > 0 && (
+                <span className="shrink-0 tabular-nums">
+                  {node.children.done}/{node.children.total}
+                </span>
+              )}
+            </span>
+          ) : null}
+        </AppLink>
+        <span className="absolute top-1.5 right-1.5 hidden items-center gap-0.5 rounded-md bg-sidebar-accent group-hover/row:flex">
+          <button
+            type="button"
+            aria-label={isPinned ? t(($) => $.sidebar.unpin) : t(($) => $.sidebar.pin)}
+            title={isPinned ? t(($) => $.sidebar.unpin) : t(($) => $.sidebar.pin)}
+            data-testid="orch-pin"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              ctx.togglePin(node.id, isPinned);
+            }}
+            className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            {isPinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
+          </button>
+          <OpenTabButton issueKey={node.key} title={node.title} />
+        </span>
+        {hasKids && (
           <button
             type="button"
             onClick={() => setOpen((v) => !v)}
             aria-label={t(($) => $.sidebar.toggle_sub_issues)}
             aria-expanded={open}
-            className="mt-0.5 -ml-0.5 shrink-0 rounded-sm p-0.5 hover:bg-sidebar-accent"
+            data-testid="orch-toggle-sub"
+            className="absolute top-[26px] left-1 rounded-sm p-0.5 text-faint-foreground hover:bg-muted hover:text-foreground"
+            style={{ left: depth * 12 + 4 }}
           >
             <ChevronRight className={cn("size-3 transition-transform", open && "rotate-90")} />
           </button>
-        ) : (
-          <span className="w-4 shrink-0" />
         )}
-        <AppLink href={href} className="flex min-w-0 flex-1 flex-col gap-0.5" data-testid="orch-issue-row" data-key={node.key}>
-          <span className="flex min-w-0 items-center gap-1.5">
-            <StatusIcon status={node.status} className="size-3.5 shrink-0" />
-            <span className={cn("truncate", !settled && "text-foreground", active && "text-foreground")}>{node.title || node.key}</span>
-            {node.paused && <Pause className="size-3 shrink-0 text-muted-foreground" />}
-            {reason && REASONS[reason] && node.attention.bucket === "needs_you" && (
-              <span className="ml-auto shrink-0 rounded-sm bg-amber-500/15 px-1 text-micro font-medium text-amber-700 dark:text-amber-300">
-                {t(($) => $.sidebar.reason[reason])}
-              </span>
-            )}
-          </span>
-          {!settled && (
-            <span className="flex min-w-0 items-center gap-1.5 pl-5 text-micro text-muted-foreground">
-              <span className="shrink-0 font-mono">{node.key}</span>
-              {meta.map((m, i) => (
-                <span key={i} className="flex min-w-0 items-center gap-1.5">
-                  <span className="text-faint-foreground">·</span>
-                  {m}
-                </span>
-              ))}
-            </span>
-          )}
-        </AppLink>
-        <OpenTabButton
-          issueKey={node.key}
-          title={node.title}
-          className="absolute top-1 right-1 hidden bg-sidebar group-hover/row:block"
-        />
       </div>
       {hasKids && open && (
         <ul className="flex flex-col gap-px">
           {node.subIssues.map((c) => (
-            <IssueRow key={c.id} node={c} depth={depth + 1} pathname={pathname} issueHref={issueHref} />
+            <IssueRow key={c.id} node={c} depth={depth + 1} ctx={ctx} />
           ))}
         </ul>
       )}
     </li>
   );
 }
-
-const REASONS = { acceptance: 1, blocked: 1, cancel_proposed: 1, review: 1, paused: 1 } as const;
