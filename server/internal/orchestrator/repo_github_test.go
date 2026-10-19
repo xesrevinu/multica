@@ -27,6 +27,10 @@ type fakeRepoGitHub struct {
 	merged    bool
 	noPR      bool
 	mergeBody map[string]any
+	// combined overrides the /status body; statuses the /statuses list
+	// (default: one success posted by a user). Posted status bodies are kept.
+	combined, statuses string
+	posted             []map[string]any
 }
 
 func (f *fakeRepoGitHub) handler(t *testing.T) http.HandlerFunc {
@@ -78,15 +82,24 @@ func (f *fakeRepoGitHub) handler(t *testing.T) http.HandlerFunc {
 			}
 			fmt.Fprintf(w, `{"check_runs":[{"name":"test","status":%q,"conclusion":%q}]}`, st, f.checkConc)
 		case p == "/repos/o/r/commits/h1/status":
+			if f.combined != "" {
+				_, _ = w.Write([]byte(f.combined))
+				return
+			}
 			_, _ = w.Write([]byte(`{"statuses":[{"context":"multica/review","state":"success"}]}`))
 		case p == "/repos/o/r/commits/h1/statuses":
+			if f.statuses != "" {
+				_, _ = w.Write([]byte(f.statuses))
+				return
+			}
 			_, _ = w.Write([]byte(`[{"context":"review-verdict","state":"success","creator":{"login":"someone","type":"User"}}]`))
 		case p == "/repos/o/r/statuses/h1":
 			var b map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&b)
-			if b["context"] != "review-verdict" || b["state"] != "success" {
+			if b["context"] != "review-verdict" {
 				t.Errorf("status body %v", b)
 			}
+			f.posted = append(f.posted, b)
 			w.WriteHeader(http.StatusCreated)
 		case p == "/repos/o/r/actions/runs":
 			_, _ = w.Write([]byte(`{"workflow_runs":[{"id":3,"status":"completed","conclusion":"failure"}]}`))
@@ -247,5 +260,66 @@ func TestGitHubGatePublishesReviewVerdictAsApp(t *testing.T) {
 	post, merge := strings.Index(got, "POST /repos/o/r/statuses/h1"), strings.Index(got, "PUT /repos/o/r/pulls/9/merge")
 	if post < 0 || merge < 0 || post > merge {
 		t.Fatalf("verdict must be posted before the merge: %s", got)
+	}
+}
+
+// The reviewer agent posts review-verdict itself (it holds the user's gh
+// login). The gate keeps ignoring it, and the App posts the engine's state
+// over it: pending while there is no approve at the head, success once there
+// is. An App-created newest status is left alone.
+func TestGitHubGateOverridesAgentPostedReviewVerdict(t *testing.T) {
+	ctx := context.Background()
+	forged := `{"statuses":[{"context":"review-verdict","state":"failure"}]}`
+	byAgent := `[{"context":"review-verdict","state":"failure","creator":{"login":"ray","type":"User"}}]`
+	f := &fakeRepoGitHub{mergeable: "true", checkConc: "success", combined: forged, statuses: byAgent}
+	r, team := newGitHubRepoOps(t, f)
+	team.Spec.Repo.RequiredChecks = []string{"test", ReviewVerdictCheck}
+	t.Setenv("GITHUB_APP_SLUG", "orch")
+
+	res := r.gate(ctx, team, ghSnap("h1"), true)
+	if res.Kind != "pending" || !strings.Contains(res.Detail, "review-verdict=PENDING") {
+		t.Fatalf("forged failure must not send the issue back: %+v", res)
+	}
+	if len(f.posted) != 1 || f.posted[0]["state"] != "pending" {
+		t.Fatalf("App must post pending over the agent's failure: %v", f.posted)
+	}
+
+	// The App's own status is newest: nothing more to do.
+	f.posted = nil
+	f.statuses = `[{"context":"review-verdict","state":"pending","creator":{"login":"orch[bot]","type":"Bot"}},` + byAgent[1:]
+	f.combined = `{"statuses":[{"context":"review-verdict","state":"failure"}]}`
+	_ = r.gate(ctx, team, ghSnap("h1"), false)
+	if len(f.posted) != 0 {
+		t.Fatalf("App status is newest; posted %v", f.posted)
+	}
+
+	// Combined state already matches the engine: no statuses read, no post.
+	f.combined = `{"statuses":[{"context":"review-verdict","state":"pending"}]}`
+	f.statuses = byAgent
+	_ = r.gate(ctx, team, ghSnap("h1"), false)
+	if len(f.posted) != 0 {
+		t.Fatalf("matching state; posted %v", f.posted)
+	}
+}
+
+func TestForeignVerdict(t *testing.T) {
+	list := []ghStatus{
+		{Context: "ci", State: "success"},
+		{Context: ReviewVerdictCheck, State: "failure", Creator: &struct {
+			Login string `json:"login"`
+			Type  string `json:"type"`
+		}{"ray", "User"}},
+	}
+	if got := foreignVerdict(list, "orch[bot]"); got != "ray" {
+		t.Fatalf("foreign = %q", got)
+	}
+	if got := foreignVerdict(list[:1], "orch[bot]"); got != "" {
+		t.Fatalf("none = %q", got)
+	}
+	if got := engineVerdictState(&Snapshot{Head: "h", Issue: Issue{Meta: map[string]string{"verdict": "approve", "reviewed_sha": "h"}}}); got != "success" {
+		t.Fatalf("engine state = %q", got)
+	}
+	if got := engineVerdictState(&Snapshot{Head: "h2", Issue: Issue{Meta: map[string]string{"verdict": "approve", "reviewed_sha": "h"}}}); got != "pending" {
+		t.Fatalf("engine state at a new head = %q", got)
 	}
 }

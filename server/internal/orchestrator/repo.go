@@ -249,6 +249,16 @@ func (r *repoOps) gate(ctx context.Context, t *Team, s *Snapshot, merge bool) Pr
 			return res
 		}
 	}
+	if seen, ok := checks[ReviewVerdictCheck]; ok && contains(sp.Repo.RequiredChecks, ReviewVerdictCheck) {
+		// Somebody (in practice the reviewer agent, with the user's gh login)
+		// posted review-verdict. Ignored by requiredChecks; the App puts the
+		// engine's state back on the PR so humans see the real verdict.
+		if who, err := r.svc.reassertReviewVerdict(ctx, sp, n, s, seen); err != nil {
+			slog.Warn("orchestrator: re-assert review-verdict", "issue", s.Issue.Key, "pr", n, "err", err)
+		} else if who != "" {
+			slog.Warn("orchestrator: overrode a review-verdict status not posted by the App", "issue", s.Issue.Key, "pr", n, "creator", who, "state", seen)
+		}
+	}
 	mergeable := v.mergeable()
 	red, all, pending := requiredChecks(checks, sp.Repo.RequiredChecks, s)
 	switch {
@@ -463,10 +473,7 @@ const ReviewVerdictCheck = "review-verdict"
 func requiredChecks(checks map[string]string, required []string, s *Snapshot) (red, all []string, pending bool) {
 	state := func(name string) string {
 		if name == ReviewVerdictCheck {
-			if strings.EqualFold(s.Issue.Meta["verdict"], "approve") && s.Head != "" && s.Issue.Meta["reviewed_sha"] == s.Head {
-				return "SUCCESS"
-			}
-			return "PENDING"
+			return strings.ToUpper(engineVerdictState(s))
 		}
 		if st, ok := checks[name]; ok {
 			return st
