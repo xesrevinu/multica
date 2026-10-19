@@ -1,0 +1,14 @@
+name: S1 happy path (local repo)
+recorded: ATT-37
+issue: {key: ATT-37}
+steps:
+  - note: backlog, owner free
+    expect: {tid: T1_start, status: todo, assignee: a, meta: {phase: implementing, owner: a}}
+  - note: owner pushes and hands over
+    do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
+    expect: {tid: T2_review, status: in_review, assignee: rev, meta: {review_started_sha: h1}}
+  - note: reviewer approves h1
+    do: {run: completed, meta: {verdict: approve, reviewed_sha: h1}}
+    expect: {tid: T4_done, status: done, meta: {phase: merged}}
+  - note: done is terminal
+    expect: {tid: none}

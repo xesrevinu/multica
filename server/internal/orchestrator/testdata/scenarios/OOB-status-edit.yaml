@@ -1,0 +1,11 @@
+name: OOB someone marks a reviewing issue done by hand; the engine converges it back
+recorded: ATT-43
+issue: {key: ATT-43}
+steps:
+  - expect: {tid: T1_start}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
+    expect: {tid: T2_review}
+  - do: {status: todo}
+    expect: {tid: T9_reconcile, status: in_review}
+  - do: {run: completed, meta: {verdict: approve, reviewed_sha: h1}}
+    expect: {tid: T4_done}

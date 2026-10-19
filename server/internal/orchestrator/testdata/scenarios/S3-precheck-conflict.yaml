@@ -1,0 +1,13 @@
+name: S3 pre-check finds a conflict; owner run ends without hand-over once, then delivers
+recorded: ATT-50
+issue: {key: ATT-50}
+steps:
+  - expect: {tid: T1_start}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}, precheck: {ok: false, kind: conflict, detail: "Merge conflict in src/ops.js"}}
+    expect: {tid: T3_rework, assignee: a, meta: {blocked_reason: "precheck conflict: Merge conflict in src/ops.js"}}
+  - do: {run: completed, precheck: {ok: true, kind: dry}}
+    expect: {tid: T5_rerun, meta: {attempt_impl: "3"}}
+  - do: {run: completed, head: h2, meta: {phase: review_requested, head_sha: h2}}
+    expect: {tid: T2_review}
+  - do: {run: completed, meta: {verdict: approve, reviewed_sha: h2}}
+    expect: {tid: T4_done}

@@ -1,0 +1,10 @@
+name: a routed pool that is busy waits instead of falling back to other owners
+spec:
+  roles: {lead: lead, reviewer: rev, owners: [heavy], routes: [{labels: [area:hard], owners: [gbot]}]}
+  repo: {mode: github, slug: x/y}
+issue: {key: ATT-7, labels: [area:hard]}
+steps:
+  - do: {busy: {gbot: true}}
+    expect: {wait: all owners busy}
+  - do: {busy: {gbot: false}}
+    expect: {tid: T1_start, assignee: gbot}

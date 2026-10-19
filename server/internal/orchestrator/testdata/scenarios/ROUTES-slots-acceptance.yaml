@@ -1,0 +1,25 @@
+name: PocketJS keys - route by area, cargo slots, default acceptance by label
+spec:
+  roles:
+    lead: lead
+    reviewer: rev
+    owners: [heavy]
+    routes:
+      - {labels: [area:hard], owners: [gbot]}
+      - {labels: [area:studio-app], owners: [front]}
+  repo: {mode: github, slug: x/y}
+  limits: {slots: {cargo: 1}}
+  acceptance: {default_for_labels: [area:studio-app]}
+issue: {key: ATT-5, labels: [area:studio-app, needs:cargo]}
+steps:
+  - note: one cargo issue already building
+    do: {siblings: [{key: ATT-6, status: in_progress, labels: [needs:cargo]}]}
+    expect: {wait: cargo slots 1/1}
+  - note: it went to review; slot free
+    do: {siblings: [{key: ATT-6, status: in_review, labels: [needs:cargo]}]}
+    expect: {tid: T1_start, assignee: front}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
+    expect: {tid: T2_review}
+  - note: area:studio-app is gated by default
+    do: {run: completed, meta: {verdict: approve, reviewed_sha: h1}}
+    expect: {tid: T10_await_acceptance}

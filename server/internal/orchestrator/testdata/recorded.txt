@@ -1,0 +1,32 @@
+# Transition sequences per issue, exported from the e2e database (orchestrator_transition, 2026-10-19).
+# (failed)/(shadow) entries were not applied as engine decisions.
+ATT-37 T1_start T2_review T4_done
+ATT-38 T1_start T2_review T4_done
+ATT-39 T1_start T2_review T3_rework T2_review T4_done
+ATT-40 T1_start T2_review T10_await_acceptance T3_rework T5b_cancel_stuck T5_rerun T5_rerun T5_rerun T2_review T10_await_acceptance T4_done
+ATT-41 T1_start T2_review T3_rework T2_review T4_done
+ATT-42 T1_start T2_review T4_done
+ATT-43 T1_start T2_review T9_reconcile T4_done
+ATT-44 T8_cancel(failed) T9_reconcile
+ATT-45 T1_start(failed) T9_reconcile T2_review T4_done
+ATT-46 T8_cancel(failed) T9_reconcile(failed) T6_block
+ATT-47 T1_start T2_review T4_done
+ATT-49 T1_start T2_review T4_done
+ATT-50 T1_start T3_rework T5_rerun T2_review T4_done
+ATT-51 T1_start T2_review T4_done
+ATT-52 T1_start T2_review T4_done
+ATT-53 T1_start T2_review T3_rework T2_review T4_done
+ATT-55 T1_start T2_review T4_done
+ATT-56 T1_start T2_review T4_done
+ATT-57 T1_start T2_review T4_done
+ATT-58 T1_start T5b_cancel_stuck T5_rerun T5b_cancel_stuck T5_rerun T5b_cancel_stuck T6_block T7_unblock T2_review T4_done
+ATT-59 T1_start T2_review T4_done
+ATT-60 T1_start T2_review T10_await_acceptance T3c_carry_verdict T3_rework T2_review T10_await_acceptance
+ATT-61 T1_start T2_review T4_done
+ATT-62 T1_start T2_review T4_done
+ATT-63 T1_start T2_review T4_done
+ATT-64 T1_start T2_review T3_rework T2_review T3b_rereview T6_block T8_cancel
+ATT-65 T1_start T5_rerun T5_rerun T6_block T7_unblock T2_review T4_done
+ATT-66 T1_start T2_review T4_done
+ATT-67 T1_start T5_rerun T5_rerun T6_block T7_unblock T3_rework T5_rerun T2_review T4_done
+ATT-68 T1_start(shadow)

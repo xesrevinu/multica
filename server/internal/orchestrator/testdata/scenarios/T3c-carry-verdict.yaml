@@ -1,0 +1,19 @@
+name: T3c approved PR merged with main (same patch-id) keeps its verdict; then rejected and redone
+recorded: ATT-60
+issue: {key: ATT-60, labels: [needs-acceptance]}
+steps:
+  - expect: {tid: T1_start}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
+    expect: {tid: T2_review}
+  - do: {run: completed, meta: {verdict: approve, reviewed_sha: h1}}
+    expect: {tid: T10_await_acceptance}
+  - note: main merged into the branch, change unchanged
+    do: {head: h1m, same_patch: [[h1, h1m]]}
+    expect: {tid: T3c_carry_verdict, meta: {reviewed_sha: h1m, verdict_carried_from: h1}}
+  - expect: {wait: awaiting human acceptance}
+  - do: {meta: {acceptance: "reject: wrong color"}}
+    expect: {tid: T3_rework}
+  - do: {run: completed, head: h2, meta: {phase: review_requested, head_sha: h2}}
+    expect: {tid: T2_review}
+  - do: {run: completed, meta: {verdict: approve, reviewed_sha: h2}}
+    expect: {tid: T10_await_acceptance}

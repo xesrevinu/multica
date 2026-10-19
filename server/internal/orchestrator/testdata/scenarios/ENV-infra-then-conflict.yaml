@@ -1,0 +1,21 @@
+name: ATT-67 infra block, unblock, pre-check conflict, owner merges main, merged
+recorded: ATT-67
+issue: {key: ATT-67}
+steps:
+  - expect: {tid: T1_start}
+  - do: {run: failed}
+    expect: {tid: T5_rerun}
+  - do: {run: failed}
+    expect: {tid: T5_rerun}
+  - do: {run: failed}
+    expect: {tid: T6_block}
+  - do: {meta: {phase: unblocked}}
+    expect: {tid: T7_unblock}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}, precheck: {ok: false, kind: conflict, detail: "Merge conflict in src/ops.js"}}
+    expect: {tid: T3_rework}
+  - do: {run: completed, precheck: {ok: true, kind: dry}}
+    expect: {tid: T5_rerun}
+  - do: {run: completed, head: h2, meta: {phase: review_requested, head_sha: h2}}
+    expect: {tid: T2_review}
+  - do: {run: completed, meta: {verdict: approve, reviewed_sha: h2}}
+    expect: {tid: T4_done}

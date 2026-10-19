@@ -1,0 +1,13 @@
+name: S2 / PR-S2 reviewer asks for changes, owner reworks on the same branch
+recorded: ATT-39
+issue: {key: ATT-39}
+steps:
+  - expect: {tid: T1_start, assignee: a}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
+    expect: {tid: T2_review}
+  - do: {run: completed, meta: {verdict: changes, reviewed_sha: h1}}
+    expect: {tid: T3_rework, status: todo, assignee: a, meta: {phase: changes_requested, attempt_impl: "2"}}
+  - do: {run: completed, head: h2, meta: {phase: review_requested, head_sha: h2}}
+    expect: {tid: T2_review, meta: {attempt_review: "2"}}
+  - do: {run: completed, meta: {verdict: approve, reviewed_sha: h2}}
+    expect: {tid: T4_done}

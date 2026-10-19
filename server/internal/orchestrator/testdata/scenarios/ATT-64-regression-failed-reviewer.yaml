@@ -1,0 +1,12 @@
+name: ATT-64 regression - failed reviewer runs (worktree prepare) count as infra, not review
+issue: {key: ATT-64}
+steps:
+  - expect: {tid: T1_start}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
+    expect: {tid: T2_review, meta: {attempt_review: "1"}}
+  - do: {run: failed}
+    expect: {tid: T3b_rereview, meta: {attempt_infra: "1"}}
+  - do: {run: failed}
+    expect: {tid: T3b_rereview, meta: {attempt_infra: "2"}}
+  - do: {run: completed, meta: {verdict: approve, reviewed_sha: h1}}
+    expect: {tid: T4_done}

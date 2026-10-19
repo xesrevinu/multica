@@ -1,0 +1,35 @@
+name: PR-S4 silent run cancelled by idle_min three times, blocked, unblocked by a member
+recorded: ATT-58
+spec:
+  roles: {lead: lead, reviewer: rev, owners: [a, b]}
+  repo: {mode: github, slug: x/y}
+  limits: {idle_min: 1}
+issue: {key: ATT-58}
+steps:
+  - expect: {tid: T1_start}
+  - do: {run: running}
+    expect: {tid: none}
+  - note: output 30s in keeps it alive
+    do: {advance: 30s, activity: true}
+    expect: {tid: none}
+  - do: {advance: 2m}
+    expect: {tid: T5b_cancel_stuck}
+  - expect: {tid: T5_rerun, meta: {attempt_infra: "1"}}
+  - do: {run: running}
+    expect: {tid: none}
+  - do: {advance: 2m}
+    expect: {tid: T5b_cancel_stuck}
+  - expect: {tid: T5_rerun, meta: {attempt_infra: "2"}}
+  - do: {run: running}
+    expect: {tid: none}
+  - do: {advance: 2m}
+    expect: {tid: T5b_cancel_stuck}
+  - expect: {tid: T6_block, status: blocked, assignee: lead, meta: {blocked_reason: "infra attempts exhausted (2/2)"}}
+  - expect: {wait: phase=unblocked}
+  - note: multica flow unblock
+    do: {meta: {phase: unblocked}}
+    expect: {tid: T7_unblock, status: todo, assignee: a, meta: {attempt_infra: "0"}}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
+    expect: {tid: T2_review}
+  - do: {run: completed, meta: {verdict: approve, reviewed_sha: h1}}
+    expect: {tid: T4_done}

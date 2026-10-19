@@ -1,0 +1,32 @@
+name: GA human gate - reject with reason, stuck run cancelled, re-review, accept
+recorded: ATT-40
+issue: {key: ATT-40, labels: [needs-GUI-Master]}
+steps:
+  - expect: {tid: T1_start}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
+    expect: {tid: T2_review}
+  - do: {run: completed, meta: {verdict: approve, reviewed_sha: h1}}
+    expect: {tid: T10_await_acceptance, assignee: "@human", meta: {phase: awaiting_acceptance}}
+  - note: nothing to do while the human looks
+    expect: {wait: awaiting human acceptance}
+  - note: flow reject --reason
+    do: {meta: {acceptance: "reject: button overlaps the title"}}
+    expect: {tid: T3_rework, assignee: a, meta: {blocked_reason: "acceptance rejected: button overlaps the title"}}
+  - note: owner run hangs past stuck_min
+    do: {run: running}
+    expect: {tid: none}
+  - do: {advance: 21m}
+    expect: {tid: T5b_cancel_stuck}
+  - note: cancelled run = infra attempt 1
+    expect: {tid: T5_rerun, meta: {attempt_infra: "1"}}
+  - do: {run: failed}
+    expect: {tid: T5_rerun, meta: {attempt_infra: "2"}}
+  - do: {run: completed}
+    expect: {tid: T5_rerun, meta: {attempt_impl: "3"}}
+  - do: {run: completed, head: h2, meta: {phase: review_requested, head_sha: h2}}
+    expect: {tid: T2_review}
+  - do: {run: completed, meta: {verdict: approve, reviewed_sha: h2}}
+    expect: {tid: T10_await_acceptance}
+  - note: flow accept
+    do: {meta: {acceptance: ok}}
+    expect: {tid: T4_done}

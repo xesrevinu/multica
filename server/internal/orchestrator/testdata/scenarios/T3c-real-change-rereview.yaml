@@ -1,0 +1,8 @@
+name: T3c negative - the head moved with a different patch, so the verdict is void
+issue: {key: ATT-2}
+steps:
+  - expect: {tid: T1_start}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
+    expect: {tid: T2_review}
+  - do: {run: completed, meta: {verdict: approve, reviewed_sha: h1}, head: h2}
+    expect: {tid: T3b_rereview, assignee: rev, meta: {review_started_sha: h2}}

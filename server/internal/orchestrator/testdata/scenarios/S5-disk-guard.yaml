@@ -1,0 +1,12 @@
+name: S5 disk guard holds T1 until space is back
+recorded: ATT-47
+issue: {key: ATT-47}
+steps:
+  - do: {free_gb: 5}
+    expect: {wait: disk guard}
+  - do: {free_gb: 80}
+    expect: {tid: T1_start}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
+    expect: {tid: T2_review}
+  - do: {run: completed, meta: {verdict: approve, reviewed_sha: h1}}
+    expect: {tid: T4_done}

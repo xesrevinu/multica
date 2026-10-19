@@ -47,11 +47,20 @@ type Options struct {
 	BackoffBase, BackoffCap time.Duration
 }
 
+// repoBackend is everything the runtime needs from git/GitHub. repoOps is the
+// real one; integration tests plug in a fake GitHub.
+type repoBackend interface {
+	head(ctx context.Context, sp *Spec, key string) (string, error)
+	samePatch(ctx context.Context, t *Team, a, b string) bool
+	prober(ctx context.Context, t *Team) Prober
+	refreshHub(ctx context.Context, sp *Spec, force bool)
+}
+
 // Service runs the engine in-process.
 type Service struct {
 	opt    Options
 	st     *store
-	repo   *repoOps
+	repo   repoBackend
 	router http.Handler
 
 	mu        sync.RWMutex
@@ -319,6 +328,16 @@ func (s *Service) snapshot(ctx context.Context, t *Team, rows []issueRow, row *i
 	case StBacklog:
 		if sn.Busy, err = s.st.busyOwners(ctx, t.WorkspaceID); err != nil {
 			return nil, err
+		}
+		// T1 decisions in one pass must see the issues started earlier in the
+		// same pass (resource slots), so re-read the siblings here.
+		fresh, ferr := s.st.projectIssues(ctx, t.ProjectID)
+		if ferr != nil {
+			return nil, ferr
+		}
+		sn.Siblings = sn.Siblings[:0]
+		for _, r := range fresh {
+			sn.Siblings = append(sn.Siblings, r.Issue)
 		}
 		sn.FreeGB = freeGB(t.Spec.Repo.DiskPath)
 	case StTodo, StInProgress, StInReview:
