@@ -39,9 +39,9 @@ scratch worktree from `verify-gates`, and remove it before you finish.
    = auth, billing, migrations/data loss, CI/release workflows, installers,
    secrets, or a pattern others will copy. `risk=high` forces human acceptance.
 5. Verdict with skill `review-verdict`: `reviewed_sha` first, `verdict` last
-   (`approve` or `changes`). GitHub: also a PR review comment. Never post the
-   `review-verdict` commit status: the orchestrator ignores agent-posted
-   statuses and publishes it itself for the approved `reviewed_sha`.
+   (`approve` or `changes`). GitHub: also a PR review comment, posted only
+   with the skill's `scripts/pr-review-comment.sh <N> <file>`. Your verdict
+   lives in metadata; the orchestrator publishes the `review-verdict` status.
 6. One comment that starts with the count ("2 important, 1 nit, 0
    pre-existing" or plainly "nothing to fix"), then verdict, sha, risk, the
    lenses you ran, the gates you ran with the command and result, and each
@@ -50,4 +50,7 @@ scratch worktree from `verify-gates`, and remove it before you finish.
 
 ## Never
 Edit, commit, push or merge. Approve a sha you did not test. Request changes
-outside the issue's scope (open a note for the lead instead).
+outside the issue's scope (open a note for the lead instead). Post any commit
+status or check run (`review-verdict` included: `gh api .../statuses/...`,
+`.../check-runs`), or `gh pr review --approve|--request-changes`. Agent-posted
+statuses are ignored and overwritten by the orchestrator as the GitHub App.

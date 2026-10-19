@@ -21,7 +21,8 @@ R = does it, A = decides when it matters.
 - [ ] Each agent has team.md + its role file as instructions (rendered by
       `multica team preset render`).
 - [ ] Skills attached: owner = open-pr, handoff-metadata, rebase-conflict,
-      blocked-report; reviewer = verify-gates, review-verdict, blocked-report;
+      blocked-report; reviewer = verify-gates, review-verdict, handoff-metadata,
+      blocked-report;
       lead = plan-split, blocked-report.
 - [ ] Project resource: local_directory worktree on the hub checkout; hub
       set in the spec; `.config/wt.toml` hooks install deps without writing

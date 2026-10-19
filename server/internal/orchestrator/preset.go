@@ -21,7 +21,7 @@ type PresetRole struct {
 // presetSkills: which preset skills each role gets attached.
 var presetSkills = map[string][]string{
 	"owner":    {"open-pr", "handoff-metadata", "rebase-conflict", "blocked-report"},
-	"reviewer": {"verify-gates", "review-verdict", "blocked-report"},
+	"reviewer": {"verify-gates", "review-verdict", "handoff-metadata", "blocked-report"}, // review-verdict step 8 writes metadata via handoff-metadata
 	"lead":     {"plan-split", "blocked-report"},
 }
 

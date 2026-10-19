@@ -74,7 +74,7 @@ roles:
     max_skills: 8
     skills: [tdd, principle-prove-it-works, principle-fix-root-causes, principle-subtract-before-you-add, principle-test-behavior-not-implementation, blast-radius, principle-boundary-discipline, typescript-best-practices]
   reviewer:
-    budget_bytes: 38500
+    budget_bytes: 40500   # + handoff-metadata (2 KB) the verdict step needs
     max_skills: 5
     skills: [interrogate, blast-radius, principle-prove-it-works, principle-test-behavior-not-implementation, no-comments]
   acceptance:
