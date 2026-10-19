@@ -86,3 +86,7 @@ refused by the orchestrator (code orchestrator_owned): ...
 blocked 超过 `blocked_remind_min`（默认 60 分钟）的提醒。
 
 - **工作区范围（硬规则）**：所有搜索/读写只在本次 run 的工作目录（git worktree）里。用 `rg <pattern> .` 或 `git grep`，禁止对 `$HOME`、`/`、`/Users` 或父目录做递归 grep/find/rg。issue 需要的信息只从 `multica issue get`、评论、metadata（`blocked_reason`、`acceptance`）和 `multica flow show` 获取；找不到就 blocked，不要在磁盘上翻找。
+
+## 5. Web 界面
+- **Issue 详情侧栏 · 流程卡片**（只在编排项目里显示）：状态轨道 backlog › todo › in progress › in review ›（需要验收时）等待验收 › done，当前节点高亮，blocked/cancelled 用红色标记；phase、尝试次数（impl/review/infra）、引擎失败次数、阻塞原因、暂停原因、等待条件、engine 的下一步（dry-run 决策）；展开可看最近 10 条迁移。处于等待验收时有「验收通过」按钮（拒绝仍走 `multica flow reject --reason`，必须写理由）。每 5 秒刷新。
+- **项目详情 · 编排团队**：preset、角色、limits，暂停/恢复按钮。修改 spec 仍然用 YAML（`multica team apply` 或 multica-config sync）。
