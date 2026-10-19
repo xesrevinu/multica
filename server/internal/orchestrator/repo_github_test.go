@@ -79,6 +79,15 @@ func (f *fakeRepoGitHub) handler(t *testing.T) http.HandlerFunc {
 			fmt.Fprintf(w, `{"check_runs":[{"name":"test","status":%q,"conclusion":%q}]}`, st, f.checkConc)
 		case p == "/repos/o/r/commits/h1/status":
 			_, _ = w.Write([]byte(`{"statuses":[{"context":"multica/review","state":"success"}]}`))
+		case p == "/repos/o/r/commits/h1/statuses":
+			_, _ = w.Write([]byte(`[{"context":"review-verdict","state":"success","creator":{"login":"someone","type":"User"}}]`))
+		case p == "/repos/o/r/statuses/h1":
+			var b map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&b)
+			if b["context"] != "review-verdict" || b["state"] != "success" {
+				t.Errorf("status body %v", b)
+			}
+			w.WriteHeader(http.StatusCreated)
 		case p == "/repos/o/r/actions/runs":
 			_, _ = w.Write([]byte(`{"workflow_runs":[{"id":3,"status":"completed","conclusion":"failure"}]}`))
 		case p == "/repos/o/r/actions/runs/3/rerun-failed-jobs":
@@ -214,5 +223,29 @@ func TestGitHubGateWithoutApp(t *testing.T) {
 	res := (&repoOps{svc: svc}).gate(context.Background(), &Team{Spec: sp}, ghSnap("h1"), true)
 	if res.Kind != "push_failed" || !strings.Contains(res.Detail, "GitHub App not configured") {
 		t.Fatalf("gate = %+v", res)
+	}
+}
+
+// With review-verdict required, the gate trusts engine metadata (approve at
+// the head), ignores a status posted by a user, posts the verdict as the App
+// and only then squash-merges.
+func TestGitHubGatePublishesReviewVerdictAsApp(t *testing.T) {
+	f := &fakeRepoGitHub{mergeable: "true", checkConc: "success"}
+	r, team := newGitHubRepoOps(t, f)
+	team.Spec.Repo.RequiredChecks = []string{"test", ReviewVerdictCheck}
+	t.Setenv("GITHUB_APP_SLUG", "")
+	sn := ghSnap("h1")
+	if res := r.gate(context.Background(), team, sn, true); res.Kind != "pending" || !strings.Contains(res.Detail, "review-verdict=PENDING") {
+		t.Fatalf("without approve = %+v", res)
+	}
+	sn.Issue.Meta = map[string]string{"verdict": "approve", "reviewed_sha": "h1"}
+	res := r.gate(context.Background(), team, sn, true)
+	if !res.OK || res.Kind != "merged" {
+		t.Fatalf("gate = %+v", res)
+	}
+	got := strings.Join(f.writes, ",")
+	post, merge := strings.Index(got, "POST /repos/o/r/statuses/h1"), strings.Index(got, "PUT /repos/o/r/pulls/9/merge")
+	if post < 0 || merge < 0 || post > merge {
+		t.Fatalf("verdict must be posted before the merge: %s", got)
 	}
 }

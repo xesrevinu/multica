@@ -54,6 +54,9 @@ func (s *Service) installationFor(ctx context.Context, sp *Spec, num string) (in
 	if len(parts) != 2 {
 		return 0, fmt.Errorf("repo.slug %q is not owner/name", sp.Repo.Slug)
 	}
+	if s.opt.Pool == nil {
+		return 0, errors.New("no database")
+	}
 	var id int64
 	err := s.opt.Pool.QueryRow(ctx, `SELECT installation_id FROM github_pull_request
 		WHERE lower(repo_owner)=lower($1) AND lower(repo_name)=lower($2) AND installation_id IS NOT NULL
@@ -75,7 +78,13 @@ func (s *Service) publishReviewVerdict(ctx context.Context, sp *Spec, num string
 	}
 	inst, err := s.installationFor(ctx, sp, num)
 	if err != nil {
-		return err
+		// No PR row from the webhook yet: ask GitHub as the App (cached).
+		owner, name, _ := strings.Cut(sp.Repo.Slug, "/")
+		id, aerr := gh.App().InstallationFor(ctx, owner, name)
+		if aerr != nil {
+			return err
+		}
+		inst = id
 	}
 	login := appBotLogin()
 	if login == "" {
