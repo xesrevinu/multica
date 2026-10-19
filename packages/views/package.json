@@ -56,8 +56,6 @@
     "./settings/lark-tab": "./settings/components/lark-tab.tsx",
     "./lark": "./lark/index.ts",
     "./slack": "./slack/index.ts",
-    "./dingtalk": "./dingtalk/index.ts",
-    "./wecom": "./wecom/index.ts",
     "./telegram": "./telegram/index.ts",
     "./invite": "./invite/index.ts",
     "./invitations": "./invitations/index.ts",
@@ -139,7 +137,7 @@
   },
   "devDependencies": {
     "@multica/eslint-config": "workspace:*",
-    "@multica/plugin-sdk": "workspace:*",
+
     "@multica/tsconfig": "workspace:*",
     "@testing-library/jest-dom": "catalog:",
     "@testing-library/react": "catalog:",

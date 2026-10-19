@@ -239,7 +239,7 @@ describe("CallbackPage", () => {
   });
 
   it.each([
-    ["Desktop", "platform:desktop"],
+
     ["CLI", "cli_callback:http://127.0.0.1:46233/callback,cli_state:test"],
   ])("uses the same localized error handling for the %s callback", async (_flow, state) => {
     const { api: mockedApi } = await import("@multica/core/api");
@@ -413,9 +413,9 @@ describe("CallbackPage", () => {
     });
   });
 
-  it("redirects to CLI callback even when state also contains platform:desktop", async () => {
-    // cli_callback takes precedence over platform:desktop — the CLI flow
-    // is a specific user intent that should not be derailed by desktop flag.
+  it("redirects to the CLI callback when state also contains a stale platform flag", async () => {
+    // cli_callback is the specific user intent. A leftover platform flag
+    // must not derail it.
     const { api: mockedApi } = await import("@multica/core/api");
     const mockGoogleLogin = mockedApi.googleLogin as ReturnType<typeof vi.fn>;
 

@@ -34,7 +34,7 @@ La `ref` d'une ressource définit la branche, le tag ou le commit que les checko
 
 ## Ajouter un répertoire local
 
-L'interface d'ajout d'un répertoire local n'existe que dans l'application de bureau, car les navigateurs ne peuvent pas sélectionner de dossiers sur votre ordinateur.
+Les navigateurs ne peuvent pas sélectionner un dossier sur votre ordinateur. Liez-en un avec le CLI, sous [Gérer les ressources avec le CLI](#gérer-les-ressources-avec-le-cli). Le daemon nommé doit être en ligne, et le chemin doit être absolu.
 
 <Callout type="warning">
 **C'est une solution de dernier recours, pas une option par défaut plus pratique.** `local_directory` existe pour les personnes qui n'ont pas d'autre choix — le cas typique est un projet de jeu dont le checkout pèse des dizaines de gigaoctets, et pour lequel recloner le dépôt à chaque exécution n'est tout simplement pas viable.
@@ -42,13 +42,6 @@ L'interface d'ajout d'un répertoire local n'existe que dans l'application de bu
 Si votre répertoire est un dépôt git ordinaire que vous pouvez cloner, **utilisez plutôt `github_repo`** : il utilise le mode worktree par défaut, ce qui permet un nombre illimité d'exécutions simultanées sur le même dépôt. Un `local_directory` traite **une exécution à la fois par défaut** ; si le répertoire est un dépôt git, vous pouvez activer le mode worktree pour retrouver le parallélisme (voir « Comment les exécutions partagent le répertoire »). Lisez « Quand le choisir » ci-dessous avant de vous engager.
 </Callout>
 
-
-1. Assurez-vous que le daemon local de l'application de bureau est en ligne.
-2. Ouvrez les **Ressources** du projet, ou l'onglet **Répertoire local** de la boîte de dialogue de création de projet — le même choix est disponible avant même que le projet existe.
-3. Choisissez « Ajouter un répertoire local », puis sélectionnez le dossier à utiliser.
-4. Choisissez comment les exécutions doivent l'utiliser — **Direct** ou **Parallèle**, décrits dans « Comment les exécutions partagent le répertoire ». L'application de bureau présélectionne **Parallèle** lorsque le dossier est un dépôt git que le runtime de cette machine peut isoler, et **Direct** sinon. Modifiez ce choix sur place, ou plus tard depuis **Ressources** avec le crayon à côté du répertoire.
-
-La présélection ne s'applique qu'au répertoire que vous rattachez maintenant. Un répertoire rattaché auparavant conserve le mode avec lequel il a été enregistré — une configuration existante n'est jamais modifiée à votre insu.
 
 Le répertoire doit être un chemin absolu, doit déjà exister et doit être accessible en lecture et en écriture par le daemon actuel. Les chemins suivants sont refusés : les racines système et les racines de lecteur (`/`, `C:\`), les répertoires personnels eux-mêmes et leurs répertoires parents (comme `/Users`, `/home`, `/root`), ainsi que les répertoires système comme `/etc`, `/var`, `/tmp`, `/usr` et `/opt`. Si le chemin choisi est un lien symbolique, il est d'abord résolu en son chemin réel, puis validé à nouveau selon les mêmes règles ; le verrou de sérialisation s'applique lui aussi au chemin réel.
 
@@ -62,7 +55,7 @@ En mode `in_place` (par défaut), un répertoire local n'est pas un environnemen
 
 ## Comment les exécutions partagent le répertoire
 
-Un répertoire local dispose de deux modes d'exécution, définis par ressource avec `execution_mode`. L'application de bureau les nomme **Direct** et **Parallèle** ; l'API, le CLI et le reste de cette page utilisent les identifiants.
+Un répertoire local dispose de deux modes d'exécution, définis par ressource avec `execution_mode`. Cette page les nomme aussi **Direct** et **Parallèle** ; l'API et le CLI utilisent les identifiants `in_place` et `worktree`.
 
 ### `in_place` (par défaut) — « Direct »
 

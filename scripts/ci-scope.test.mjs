@@ -20,7 +20,7 @@ for (const [name, files, selected] of [
   ["docs only", ["apps/docs/content/docs/guide.mdx"], ["quality"]],
   ["web changelog", ["apps/web/features/landing/i18n/en.ts"], ["frontend", "quality"]],
   ["UI Lab", ["apps/ui-lab/src/app.tsx"], ["frontend", "quality"]],
-  ["mobile UI", ["apps/mobile/app/index.tsx"], ["quality"]],
+
   ["migration only", ["server/migrations/999_example.up.sql"], ["backend", "sqlc"]],
   ["agent process code", ["server/pkg/agent/cursor_background.go"], ["backend", "runtime"]],
   ["daemon dependency", ["server/internal/skill/service.go"], ["backend", "runtime"]],
@@ -39,7 +39,7 @@ for (const [name, files, selected] of [
   ["cross-module runtime contract", ["packages/core/runtimes/cli-version.ts"], ["frontend", "backend", "runtime", "quality"]],
   ["lockfile", ["pnpm-lock.yaml"], ["frontend", "quality"]],
   ["workspace package patch", ["patches/example.patch"], ["frontend", "quality"]],
-  ["mobile package patch", ["apps/mobile/patches/example.patch"], ["quality"]],
+
   ["radius policy", ["scripts/check-ui-radius-tokens.mjs"], ["quality"]],
   ["shared quality action", [".github/actions/frontend-quality/action.yml"], ["frontend", "quality"]],
   ["new bitmap", ["apps/web/public/hero.png"], ["frontend", "quality", "images"]],

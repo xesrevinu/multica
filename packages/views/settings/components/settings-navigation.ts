@@ -2,8 +2,6 @@
 export const CHANNEL_INTEGRATIONS = [
   "lark",
   "slack",
-  "dingtalk",
-  "wecom",
   "telegram",
 ] as const;
 

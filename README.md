@@ -102,8 +102,8 @@ issue — so nobody reconstructs context, and nothing ships without a human sayi
 - **[Workspaces](https://multica.ai/docs/workspaces) →** Separate agents, issues, and settings per team.
 - **[Roles](https://multica.ai/docs/members-roles) and [access scopes](https://multica.ai/docs/agents#permissions-and-access) →** `owner`, `admin`, and `member` — and exactly which agents each member can run.
 - **[Security model](https://multica.ai/docs/security-model) →** What an agent can reach, and what it can't.
-- **[Slack, Feishu/Lark, DingTalk, WeCom, and Telegram](https://multica.ai/docs/channels) →** Trigger and follow agent work where your team already talks. New Feishu/Lark connections are open to mainland-China Feishu only for now; DingTalk, WeCom, and Telegram are [community-maintained](https://multica.ai/docs/community-maintained).
-- **Web, [desktop](https://multica.ai/docs/desktop-app), and [mobile](https://multica.ai/docs/mobile-app) →** The same workspace on macOS, Windows, Linux, iPhone, and iPad — the iOS app builds from source today, not yet on the App Store.
+- **[Slack, Feishu/Lark, and Telegram](https://multica.ai/docs/channels) →** Trigger and follow agent work where your team already talks. New Feishu/Lark connections are open to mainland-China Feishu only for now; Telegram is [community-maintained](https://multica.ai/docs/community-maintained).
+- **Web →** The same workspace in the browser on macOS, Windows, Linux, phones, and tablets. The web app is a responsive PWA.
 - **[CLI and API](https://multica.ai/docs/cli) →** Every surface is scriptable. Agents drive Multica through the same CLI you do.
 
 ---
@@ -111,8 +111,7 @@ issue — so nobody reconstructs context, and nothing ships without a human sayi
 ## Get started
 
 - **Cloud** — sign up at **[multica.ai](https://multica.ai)**. No terminal required.
-- **Desktop** — download **[Multica Desktop](https://multica.ai/download)** for macOS, Windows, or
-  Linux. It connects the computer it runs on as a runtime automatically.
+
 - **Self-host** — run the whole stack on your own infrastructure; see below.
 
 The one prerequisite: the machine that will run agents needs at least one
@@ -145,9 +144,8 @@ turn it off — [what's collected](SELF_HOSTING.md#anonymous-deployment-telemetr
 ### Your first agent in five minutes
 
 **1. Connect a computer.** A *runtime* is any machine agents can work on — your laptop, or a
-cloud box. Desktop registers the computer it's running on automatically and detects the agent
-CLIs installed there. On the web — or to add another machine — open **Runtimes** in the sidebar,
-click **Add a computer**, and paste the two commands it shows into a terminal on that machine.
+cloud box. Open **Runtimes** in the sidebar, click **Add a computer**, and paste the two
+commands it shows into a terminal on that machine.
 
 **2. Create an agent.** Open **Agents** in the sidebar and click **New agent**. Pick the runtime
 you just connected, pick a provider, and give it a name — or let **Build with AI** generate the
@@ -209,15 +207,16 @@ The docs are also available in [简体中文](https://multica.ai/docs/zh), [日�
 ## Architecture
 
 ```
-   Web (browser)        Desktop (Electron)        iPhone · iPad (Expo)
-         │                      │                          │
-         ▼                      │                          │
-  ┌──────────────┐              │                          │
-  │   Next.js    │              │                          │
-  │ pages + API  │              │                          │
-  │    proxy     │              │                          │
-  └──────┬───────┘              │  HTTPS + WebSocket       │
-         ▼                      ▼                          ▼
+   Web (browser, responsive PWA)
+         │
+         ▼
+  ┌──────────────┐
+  │   Next.js    │
+  │ pages + API  │
+  │    proxy     │
+  └──────┬───────┘
+         │  HTTPS + WebSocket
+         ▼
   ┌───────────────────────────────────────────────────────────┐   ┌───────────────┐
   │                Go backend  (Chi + WebSocket)              │──>│ PostgreSQL 17 │
   └─────────────────────────────┬─────────────────────────────┘   └───────────────┘
@@ -233,9 +232,7 @@ The docs are also available in [简体中文](https://multica.ai/docs/zh), [日�
 
 | Layer | Stack |
 | --- | --- |
-| Web | Next.js 16 (App Router) |
-| Desktop | Electron, sharing the web UI packages |
-| Mobile | Expo / React Native (iPhone and iPad) |
+| Web | Next.js 16 (App Router), responsive PWA |
 | Backend | Go (Chi router, sqlc, gorilla/websocket) |
 | Database | PostgreSQL 17 (`pgcrypto` + `pg_trgm`) |
 | Agent runtime | Local daemon executing any [supported agent CLI](#runtimes) |
@@ -260,8 +257,7 @@ make dev
 installs dependencies, sets up the database, runs migrations, and starts every service.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, worktree support, testing, and
-troubleshooting. The iOS client lives in [`apps/mobile/`](apps/mobile/) — its
-[README](apps/mobile/README.md) covers building it onto your own device.
+troubleshooting. The web app stays a responsive PWA (manifest and service worker).
 
 We release most weekdays, so `main` moves quickly — pull often.
 

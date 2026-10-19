@@ -8,7 +8,7 @@ Multica se compose d'un backend Go, de plusieurs clients et d'un daemon qui tour
 Cette page, centrée sur l'implémentation, emploie **task** pour désigner l'entité interne de l'ordonnanceur, de l'API et de la base de données qui se trouve derrière une **exécution** du produit. L'interface et la documentation produit parlent d'exécution ; les identifiants comme `TaskService` et `task_id` restent inchangés pour des raisons de compatibilité.
 
 ```text
-Web / Desktop / Mobile / CLI
+Web / CLI
              │
        HTTP + WebSocket
              │
@@ -27,36 +27,31 @@ Pour une explication orientée produit, consultez [Fonctionnement de Multica](/h
 | --- | --- | --- |
 | `server/` | API, authentification, ordonnancement des tasks, intégrations, CLI et daemon | Go, Chi, sqlc, gorilla/websocket |
 | `apps/web/` | Client navigateur et page d'accueil | Next.js App Router |
-| `apps/desktop/` | Client de bureau et gestion des processus locaux | Electron, electron-vite |
-| `apps/mobile/` | Client iOS autonome | Expo, React Native |
 | `apps/docs/` | Site de documentation multilingue | Next.js, Fumadocs |
 | `packages/core/` | Client API, types, queries, mutations et logique métier indépendante de la plateforme | TanStack Query, Zustand |
 | `packages/ui/` | UI de base sans logique métier | shadcn, Base UI |
-| `packages/views/` | Pages et composants métier partagés par Web et Desktop | React |
+| `packages/views/` | Pages et composants métier utilisés par l'application web | React |
 | `packages/tsconfig/`, `packages/eslint-config/` | Configuration d'outillage partagée | TypeScript, ESLint |
 
 Les packages partagés exportent directement des fichiers source `.ts` et `.tsx`, compilés par les applications qui les consomment. Le sens des dépendances est `views → core + ui` ; `core` et `ui` ne dépendent pas l'un de l'autre.
 
-## Partage de code entre Web et Desktop
+## Packages frontend partagés
 
-Web et Desktop partagent trois couches :
+L'application web est construite à partir de trois couches partagées :
 
 1. `packages/core` gère les API, le cache, les permissions et l'état indépendant de la plateforme.
 2. `packages/ui` fournit les composants de base.
 3. `packages/views` compose les pages métier.
 
-Les capacités propres à chaque plateforme, comme le routage, les cookies et l'IPC Electron, restent dans la couche applicative. Les pages partagées naviguent via `NavigationAdapter` et n'importent pas directement `next/*` ni `react-router-dom`.
+Le routage et les cookies restent dans la couche applicative. Les pages partagées naviguent via `NavigationAdapter` et n'importent pas directement `next/*`.
 
-Par exemple, une fonctionnalité liée aux tâches dont Web et Desktop ont tous deux besoin touche généralement :
+Une fonctionnalité liée aux tâches touche généralement :
 
 ```text
 packages/core/issues/      queries, mutations, mises à jour du cache
 packages/views/issues/     pages et composants métier
 apps/web/platform/         adaptateur de routage Next.js
-apps/desktop/.../platform/ adaptateur de routage Electron
 ```
-
-Mobile ne réutilise pas ces pages React. Il peut importer des types et des fonctions pures depuis `@multica/core`, mais il possède sa propre UI, ses propres clés de query, son état, ses abonnements temps réel et son processus de publication.
 
 ## État frontend
 
@@ -69,7 +64,7 @@ Les données serveur et l'état client sont gérés séparément :
 
 Les événements WebSocket doivent mettre à jour ou invalider le cache TanStack Query. Ne copiez pas les objets serveur dans Zustand. Les mutations qui entraînent une navigation, comme la création, la suppression ou le départ d'un espace de travail, doivent attendre la confirmation du serveur avant d'effacer l'état local.
 
-Les réponses de l'API sont analysées avec des schémas zod à la frontière `packages/core/api/`. Un client Desktop installé peut se connecter à un backend plus récent : le JSON reçu du réseau ne doit donc pas être directement converti en type TypeScript par une simple assertion.
+Les réponses de l'API sont analysées avec des schémas zod à la frontière `packages/core/api/`. Un client peut se connecter à un backend plus récent : le JSON reçu du réseau ne doit donc pas être directement converti en type TypeScript par une simple assertion.
 
 ## Couches du backend
 

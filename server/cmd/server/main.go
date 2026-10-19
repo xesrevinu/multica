@@ -22,7 +22,6 @@ import (
 	"github.com/multica-ai/multica/server/internal/dbstartup"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/handler"
-	"github.com/multica-ai/multica/server/internal/integrations/wecom"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/maintenance"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
@@ -51,26 +50,6 @@ func newNamedRedisClient(base *redis.UniversalOptions, suffix string) redis.Univ
 		opts.ClientName = redisClientName(opts.ClientName, suffix)
 	}
 	return redis.NewUniversalClient(&opts)
-}
-
-// newClaimRedisClient is a named client that honours its callers' context
-// deadlines.
-//
-// go-redis discards them by default (Options.ContextTimeoutEnabled): a command
-// is bounded by the socket timeout instead, so a caller's deadline reaches the
-// wire only as a suggestion. That is the right default for the relay's own
-// publish traffic, where nobody is holding a stopwatch, and the wrong one for
-// the WeCom claim store, whose callers spend budgets they have promised to
-// keep — DedupeStore.ClaimBudget is what sizes the dispatcher's outcome grace,
-// and a shutdown drain gives its whole sequence of round trips one DrainBudget.
-//
-// Hence a dedicated client rather than the flag on the shared relay client:
-// setting it there would change the timeout behaviour of every publish that
-// runs through it, which is a far wider blast radius than this store needs.
-func newClaimRedisClient(base *redis.UniversalOptions, suffix string) redis.UniversalClient {
-	opts := *base
-	opts.ContextTimeoutEnabled = true
-	return newNamedRedisClient(&opts, suffix)
 }
 
 func redisClientName(existing, suffix string) string {
@@ -439,17 +418,6 @@ func main() {
 		service.TaskWakeupNotifier
 		handler.RuntimeGoneNotifier
 	} = daemonHub
-	// Nil unless a Redis relay is running: without one there is only one
-	// replica, and it both publishes the completion and holds the socket.
-	var wecomRelay WecomRelay
-	// Built here rather than in the router because the relay's shard readers
-	// start before the router exists, and a deliverer registered after they
-	// start would miss the replay window they open with. The registry is a
-	// bare map with no dependencies, so it can be minted this early and handed
-	// down.
-	wecomSenders := wecom.NewSendersRegistry()
-	var wecomRelayOutbound *wecom.RelayOutbound
-
 	// MUL-1138: when REDIS_URL is set, route fanout through a Redis relay so
 	// multiple API nodes can deliver each other's events. Without it the hub
 	// is the sole broadcaster and the server stays single-node (legacy).
@@ -463,19 +431,13 @@ func main() {
 	var storeRedisPoolSize int
 	var channelLeaseRedis redis.UniversalClient
 	var relayWriteRedis redis.UniversalClient
-	var wecomClaimRedis redis.UniversalClient
 	var relayReadRedis redis.UniversalClient
 	var shardedReadRedis redis.UniversalClient
 	var legacyReadRedis redis.UniversalClient
 	var relay realtime.ManagedRelay
-	// stopRelay halts the relay readers and drains the WeCom dispatcher. It is
-	// called from the shutdown BODY, before the channel supervisor is torn
-	// down — the dispatcher's drain sends over the sockets the supervisor
-	// owns, and each supervised connection clears its sender on exit, so a
-	// drain that runs after that teardown finds ownsSocket false for every
-	// installation and discards everything it was built to save. The defer
-	// keeps a second call (idempotent via the Once) for the early-return
-	// paths that never reach the body's shutdown sequence.
+	// stopRelay halts the relay readers. The defer keeps a second call
+	// (idempotent via the Once) for the early-return paths that never reach
+	// the body's shutdown sequence.
 	var stopRelayOnce sync.Once
 	stopRelay := func() {
 		stopRelayOnce.Do(func() {
@@ -486,9 +448,6 @@ func main() {
 			if relay != nil {
 				relay.Wait()
 			}
-			// Join the dispatcher BEFORE its Redis clients go away, or the
-			// drain races the teardown it depends on.
-			wecomRelayOutbound.Wait()
 		})
 	}
 	defer func() {
@@ -496,7 +455,6 @@ func main() {
 		closeRedisClient("realtime-read-legacy", legacyReadRedis)
 		closeRedisClient("realtime-read-sharded", shardedReadRedis)
 		closeRedisClient("realtime-read", relayReadRedis)
-		closeRedisClient("wecom-claim", wecomClaimRedis)
 		closeRedisClient("realtime-write", relayWriteRedis)
 		closeRedisClient("channel-lease", channelLeaseRedis)
 		closeRedisClient("store", storeRedis)
@@ -541,7 +499,6 @@ func main() {
 				legacyReadRedis = newNamedRedisClient(opts, "realtime-read-legacy")
 				sharded := realtime.NewShardedStreamRelay(hub, relayWriteRedis, shardedReadRedis, relayConfig)
 				sharded.SetDaemonRuntimeDeliverer(daemonHub)
-				wecomRelay = sharded
 				legacy := realtime.NewRedisRelayWithClientsAndConfig(hub, relayWriteRedis, legacyReadRedis, relayConfig.RetentionConfig())
 				relay = realtime.NewMirroredRelay(sharded, legacy)
 				daemonWakeup = daemonws.NewRelayNotifier(daemonHub, sharded)
@@ -549,30 +506,8 @@ func main() {
 				relayReadRedis = newNamedRedisClient(opts, "realtime-read")
 				sharded := realtime.NewShardedStreamRelay(hub, relayWriteRedis, relayReadRedis, relayConfig)
 				sharded.SetDaemonRuntimeDeliverer(daemonHub)
-				wecomRelay = sharded
 				relay = sharded
 				daemonWakeup = daemonws.NewRelayNotifier(daemonHub, sharded)
-			}
-			if wecomRelay != nil {
-				// LeaseSettle comes from the supervisor's own knob rather than
-				// from a constant here: the re-offer chain exists to outlast a
-				// lease move, and how long that takes is the supervisor's poll
-				// interval, which a deployment can tune.
-				leaseSettle, err := channelLeasePollInterval()
-				if err != nil {
-					slog.Warn("wecom relay: unreadable lease poll interval, using the dispatcher default",
-						"error", err)
-					leaseSettle = 0
-				}
-				wecomClaimRedis = newClaimRedisClient(opts, "wecom-claim")
-				wecomRelayOutbound = wecom.NewRelayOutbound(wecomRelay,
-					wecom.NewRedisDedupe(wecomClaimRedis, 0, slog.Default()),
-					wecom.RelayConfig{
-						ReplayGrace: relayConfig.ReplayGrace,
-						LeaseSettle: leaseSettle,
-					}, slog.Default())
-				wecomRelay.SetWecomOutboundDeliverer(wecomRelayOutbound)
-				wecomRelayOutbound.Start(relayCtx)
 			}
 			// Every deliverer is registered by this point. The shard readers
 			// open on a replay window, so anything registered after Start
@@ -628,7 +563,6 @@ func main() {
 	var businessMetrics *obsmetrics.BusinessMetrics
 	var channelMediaMetrics *obsmetrics.ChannelMediaReconcilerMetrics
 	var channelLeaseMetrics *obsmetrics.ChannelLeaseMetrics
-	var wecomMetrics *obsmetrics.WecomMetrics
 	var dbRoutingMetrics *obsmetrics.DBRoutingMetrics
 	if metricsConfig.Enabled() {
 		metricsRegistry := obsmetrics.NewRegistry(obsmetrics.RegistryOptions{
@@ -643,7 +577,6 @@ func main() {
 		businessMetrics = metricsRegistry.Business
 		channelMediaMetrics = metricsRegistry.ChannelMedia
 		channelLeaseMetrics = metricsRegistry.ChannelLease
-		wecomMetrics = metricsRegistry.Wecom
 		dbRoutingMetrics = metricsRegistry.DBRouting
 		// Forward inbound daemon WS frames into the per-kind counter so
 		// dashboards can split heartbeat / unknown / invalid traffic.
@@ -690,11 +623,8 @@ func main() {
 		BusinessMetrics:     businessMetrics,
 		ChannelLeaseMetrics: channelLeaseMetrics,
 		ChannelLeaseRedis:   channelLeaseRedis,
-		WecomMetrics:        wecomMetrics,
 		DaemonHub:           daemonHub,
 		DaemonWakeup:        daemonWakeup,
-		WecomSenders:        wecomSenders,
-		WecomRelayOutbound:  wecomRelayOutbound,
 		FeatureFlags:        flags,
 		HeartbeatScheduler:  heartbeatScheduler,
 		LLMMaxRetries:       llmMaxRetries,
@@ -905,11 +835,9 @@ func main() {
 	slog.Info("shutting down server")
 
 	// The order below is the contract, and shutdown.go is where it is stated
-	// and pinned. The one that is not self-evident: the WeCom dispatcher must
-	// be drained BEFORE sweepCancel, not merely before the supervisor is
-	// joined — cancelling the sweeper context is already what makes every
-	// supervised connection clear its sender, and a drain past that point
-	// finds no socket to deliver over.
+	// and pinned. Stop the outbound relay before cancelling workers: the
+	// relay drain still needs the supervised sockets, and cancelling the
+	// sweeper context is what starts tearing those sockets down.
 	shutdownSequence{
 		StopAutopilot: autopilotCancel,
 		DrainMaintenance: func() {

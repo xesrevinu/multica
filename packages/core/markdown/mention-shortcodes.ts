@@ -4,12 +4,9 @@
  *
  * These shortcodes exist in older database records from a previous mention
  * serialization format. This function normalises them so downstream parsers
- * (Tiptap @tiptap/markdown on web/desktop, the mobile renderer in
- * apps/mobile/lib/markdown/) only need to handle one syntax.
+ * (Tiptap @tiptap/markdown) only need to handle one syntax.
  *
- * Single source of truth for all clients. Mobile imports this directly
- * because mobile is allowed to import pure functions from @multica/core/.
- * Web/desktop continue to access it via @multica/ui/markdown which now
+ * Single source of truth. Web accesses it via @multica/ui/markdown, which
  * re-exports from here, so existing import paths keep working.
  *
  * Pure regex transform — no IO, no global state. Idempotent: running it

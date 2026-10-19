@@ -25,14 +25,10 @@ body:
         maintainer directly; we route reports from here.
       options:
         - Web app
-        - Desktop app
-        - Mobile app (iOS)
         - CLI
         - Agents and runtimes
         - Issues, projects and workspaces
         - Chat integration — Feishu / Lark or Slack
-        - Chat integration — DingTalk (community-maintained)
-        - Chat integration — WeCom (community-maintained)
         - Chat integration — Telegram (community-maintained)
         - Self-hosting and deployment
         - Other / not sure

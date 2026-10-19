@@ -161,8 +161,7 @@ function isBackendAuthPath(pathname: string): boolean {
 // deliberate: the base is whatever prefix the backend is mounted under, so
 // HTTP (`<base>/api/**`) and realtime (`<base>/ws`) must share it or a
 // prefix-mounted deployment would break in one direction while working in the
-// other. `apps/desktop/src/shared/runtime-config.ts` derives it the same way,
-// so both clients read one configured value identically. The regression that
+// other, so HTTP and realtime read one configured value. The regression that
 // motivated MUL-5922 — `NEXT_PUBLIC_API_URL=https://host/api` deriving
 // `wss://host/api/ws` while the backend serves `/ws` at the root — is fixed
 // upstream in the base itself (see stripApiPathSuffix), not here.

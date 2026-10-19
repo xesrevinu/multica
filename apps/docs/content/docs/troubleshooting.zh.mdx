@@ -109,7 +109,7 @@ multica issue runs <issue-id>
 2. 无人值守的 Mac 请给新二进制授予完全磁盘访问权限。用 `realpath "$(command -v multica)"` 打印路径，然后在**系统设置 → 隐私与安全性 → 完全磁盘访问权限**中删除旧的 `multica` 条目并添加该路径（在文件选择器中按 ⌘⇧G 粘贴路径）。
 3. 按启动守护进程时的方式重启它：`multica daemon restart`；LaunchAgent 则用 `launchctl kickstart -k gui/$(id -u)/<label>`。
 
-每次升级 CLI 后都需要重复这些步骤。只有连接 Multica Cloud 的守护进程默认开启自动更新；用 `--no-auto-update` 启动守护进程后，只在你手动升级时更新。[桌面应用](/desktop-app)内置的 CLI 使用 Developer ID 签名，授权在升级后依然有效。
+每次升级 CLI 后都需要重复这些步骤。只有连接 Multica Cloud 的守护进程默认开启自动更新；用 `--no-auto-update` 启动守护进程后，只在你手动升级时更新。
 
 ## 实时更新失效
 
@@ -161,7 +161,7 @@ multica --debug login
 GODEBUG=tlsmlkem=0 multica --debug login
 ```
 
-如果这样能成功，请为运行 CLI 和守护进程的用户永久设置 `GODEBUG=tlsmlkem=0`——Windows 上执行 `[Environment]::SetEnvironmentVariable('GODEBUG', 'tlsmlkem=0', 'User')` 后重新打开终端——然后重启守护进程或桌面应用。调高 `MULTICA_HTTP_TIMEOUT` 无效，它不控制握手。根本解决需要在网络侧处理：升级或重新配置丢弃分包 TLS 握手的设备或软件。
+如果这样能成功，请为运行 CLI 和守护进程的用户永久设置 `GODEBUG=tlsmlkem=0`——Windows 上执行 `[Environment]::SetEnvironmentVariable('GODEBUG', 'tlsmlkem=0', 'User')` 后重新打开终端——然后重启守护进程。调高 `MULTICA_HTTP_TIMEOUT` 无效，它不控制握手。根本解决需要在网络侧处理：升级或重新配置丢弃分包 TLS 握手的设备或软件。
 
 ## 验证码与邀请邮件未送达
 

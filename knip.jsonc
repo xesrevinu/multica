@@ -13,10 +13,6 @@
   // reads as "unused" from inside its own workspace.
   "include": ["files", "dependencies", "unlisted"],
 
-  // Go, and a workspace with its own Expo toolchain, lint pipeline, and React
-  // version (see apps/mobile/CLAUDE.md). Neither is covered by this config.
-  "ignoreWorkspaces": ["apps/mobile"],
-
   "workspaces": {
     ".": {
       "entry": ["scripts/*.mjs"],
@@ -29,15 +25,6 @@
       // JSDoc annotation in postcss.config.mjs. Declaring it would add a
       // runtime dependency to satisfy a type comment.
       "ignoreDependencies": ["postcss-load-config"]
-    },
-
-    "apps/desktop": {
-      // window-state.node-test.mjs is run by hand (`node --test`, see its
-      // header) rather than by a package script, so nothing imports it.
-      "entry": ["eslint.config.mjs", "src/main/*.node-test.mjs"],
-      // Consumed by `extends` in tsconfig.node.json / tsconfig.web.json.
-      // knip follows `extends` from the default tsconfig.json only.
-      "ignoreDependencies": ["@multica/tsconfig"]
     },
 
     "apps/docs": {},

@@ -6,8 +6,8 @@
 // 2639 errors, because it validates every literal that appears anywhere inside
 // JSX (`isColVisible("status")`, `{ month: "short" }`, enum keys) and only ~10
 // of those are copy. So the two doors are pinned individually instead — the
-// same technique apps/desktop uses to guard shell.openExternal and
-// router.navigate.
+// same technique used to guard a small set of call sites instead of every
+// literal in JSX.
 //
 // Selectors live here rather than inline in eslint.config.mjs so
 // eslint-i18n-guard.test.ts can lint fixtures against the very same strings the

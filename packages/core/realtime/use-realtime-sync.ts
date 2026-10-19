@@ -29,8 +29,6 @@ import {
 import { githubKeys } from "../github/queries";
 import { larkKeys } from "../lark/queries";
 import { slackKeys } from "../slack/queries";
-import { dingtalkKeys } from "../dingtalk/queries";
-import { wecomKeys } from "../wecom/queries";
 import { telegramKeys } from "../telegram/queries";
 import {
   onIssueCreated,
@@ -928,17 +926,9 @@ export function useRealtimeSync(
         const wsId = getCurrentWsId();
         if (wsId) qc.invalidateQueries({ queryKey: slackKeys.installations(wsId) });
       },
-      dingtalk_installation: () => {
-        const wsId = getCurrentWsId();
-        if (wsId) qc.invalidateQueries({ queryKey: dingtalkKeys.installations(wsId) });
-      },
       vcs_connection: () => {
         const wsId = getCurrentWsId();
         if (wsId) qc.invalidateQueries({ queryKey: ["vcs", wsId] });
-      },
-      wecom_installation: () => {
-        const wsId = getCurrentWsId();
-        if (wsId) qc.invalidateQueries({ queryKey: wecomKeys.installations(wsId) });
       },
       telegram_installation: () => {
         const wsId = getCurrentWsId();

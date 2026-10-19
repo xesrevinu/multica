@@ -12,7 +12,7 @@ trap 'rm -rf "$tmp_dir"' EXIT
 
 export MULTICA_DEV_HOME="$tmp_dir/dev"
 export MULTICA_DEV_WORKSPACES_PARENT="$tmp_dir/workspaces-parent"
-export MULTICA_DEV_DESKTOP_APP_DATA="$tmp_dir/app-data"
+
 export MULTICA_DEV_PROFILES_HOME="$tmp_dir/profiles"
 
 fake_bin="$tmp_dir/bin"
@@ -64,8 +64,7 @@ DB_NAME=multica_dev_env_test_$offset
 DATABASE_URL=postgres://multica:multica@localhost:5432/multica_dev_env_test_$offset?sslmode=disable
 PROFILE=$profile
 WORKSPACES_ROOT=$(printf '%q' "$MULTICA_DEV_WORKSPACES_PARENT/multica_workspaces_$profile")
-DESKTOP_RENDERER_PORT=$((5174 + offset))
-DESKTOP_APP_SUFFIX=$name
+
 EOF
 }
 
@@ -139,7 +138,7 @@ assert_stop_handles_listener() {
     mkdir -p "$STATE_DIR"
     BACKEND_PORT=18080
     FRONTEND_PORT=13000
-    DESKTOP_RENDERER_PORT=5174
+
     local signals="$STATE_DIR/signals"
     [ -z "$recorded" ] || printf '%s\n' "$recorded" > "$(listener_pid_file web)"
     TEST_CASE=$case_name
@@ -231,7 +230,7 @@ node -e '
   const payload = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
   if (payload.name !== "probe-901") throw new Error("name = " + payload.name);
   if (payload.backend_port !== 18981) throw new Error("backend_port = " + payload.backend_port);
-  for (const key of ["api", "web", "daemon", "desktop"]) {
+  for (const key of ["api", "web", "daemon"]) {
     if (!payload.components[key]) throw new Error("missing component " + key);
     if (payload.components[key].state !== "stopped") {
       throw new Error(key + " state = " + payload.components[key].state);

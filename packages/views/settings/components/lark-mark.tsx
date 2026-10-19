@@ -31,7 +31,7 @@
 // (Lark binds over a QR device flow — there is no webhook). Feishu is a
 // ByteDance product and Semi Design is ByteDance's own design system, so the
 // artwork is the vendor's own mark rather than a redrawing of it; see the
-// license notice above. Same 24x24 box and currentColor fill as WecomMark next
+// license notice above. Same 24x24 box and currentColor fill as the other
 // door, so every channel mark shares one sizing contract.
 export function LarkMark({ className }: { className?: string }) {
   return (

@@ -34,10 +34,8 @@ Le monorepo impose des frontières strictes entre les packages :
 | `packages/ui` | rien | `@multica/core`, logique métier |
 | `packages/views` | `core/`, `ui/` | `next/*`, `react-router-dom`, stores |
 | `apps/web/platform/` | `next/*` | autres applications |
-| `apps/desktop/.../platform/` | `react-router-dom`, electron | autres applications |
-| `apps/mobile/` | types et fonctions pures de `@multica/core` | pages React, stores et implémentations de plateforme de Web/Desktop |
 
-Si une logique apparaît dans les deux applications, elle DOIT être extraite dans un package partagé. Aucune exception pour une « petite » duplication. Mobile possède sa propre UI, sa propre couche de données et son propre processus de publication ; il ne partage que les types et les fonctions pures.
+Une logique partagée par plusieurs applications DOIT être extraite dans un package partagé. Aucune exception pour une « petite » duplication.
 
 ### Fichiers et composants
 
@@ -277,13 +275,12 @@ Exemples :
 - `inbox.empty.title`
 - `settings.preferences.language.title`
 
-### Textes réservés au Web ou au Desktop
+### Textes réservés au Web
 
 - Textes partagés : au premier niveau du JSON du namespace
 - Web uniquement : section `web`
-- Desktop uniquement : section `desktop`
 
-Consultez `auth.json` pour l'exemple de référence (la section `web` contient `prefer_desktop` / `desktop_handoff.*`).
+Consultez `auth.json` pour l'exemple de référence.
 
 ---
 
@@ -313,7 +310,7 @@ Les descriptions sont facultatives et omises par défaut. Avant d'en ajouter une
 - Gardez visibles, lorsqu'ils sont pertinents, les permissions, le coût, les conséquences destructrices, les prérequis d'exécution, les contraintes de saisie et la reprise après erreur. Ne les cachez pas dans une aide qui n'apparaît qu'au survol.
 - N'affichez des indications d'introduction que là où elles sont nécessaires. Placez l'utilisation avancée et les diagnostics dans une aide explicite et accessible plutôt que dans le corps de page par défaut.
 - Conservez les libellés de champ, les noms accessibles et les associations de description nécessaires. Ne déplacez pas en bloc une prose visible redondante vers du texte réservé aux lecteurs d'écran.
-- Relisez ensemble les textes anglais et traduits, y compris les chaînes indépendantes de l'application mobile. En revue de PR, vérifiez l'information ajoutée, la répétition sur un même écran, les conditions d'affichage et les contraintes préservées. La longueur est un signal de revue, pas une règle de suppression automatique.
+- Relisez ensemble les textes anglais et traduits. En revue de PR, vérifiez l'information ajoutée, la répétition sur un même écran, les conditions d'affichage et les contraintes préservées. La longueur est un signal de revue, pas une règle de suppression automatique.
 
 Les composants de paramètres partagés acceptent déjà des descriptions facultatives. Les exemples et les nouveaux points d'appel doivent les omettre sauf justification ; n'ajoutez pas de props de description obligatoires ni de politique de rédaction distincte.
 

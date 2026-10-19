@@ -70,7 +70,7 @@ Les différents worktrees partagent le conteneur PostgreSQL, pas la base de donn
 ### Workflow complet
 
 ```bash
-make up               # Démarre l'environnement de ce checkout (C=api,web,daemon,desktop)
+make up               # Démarre l'environnement de ce checkout (C=api,web,daemon)
 make status           # Affiche ce qui tourne et prouve qu'il s'agit de cet environnement
 make list             # Liste tous les environnements de cette machine
 make down             # Arrête les processus, conserve la base de données
@@ -81,13 +81,13 @@ make check            # Exécute le workflow complet de vérification locale
 make build            # Compile les binaires server, CLI et migrate
 ```
 
-`make up` traite un environnement comme un objet nommé : il alloue sous verrou les ports de l'API, de Web et du renderer Desktop,
+`make up` traite un environnement comme un objet nommé : il alloue sous verrou les ports de l'API et de Web,
 le nom de la base de données et le profil CLI, puis les enregistre dans `~/.multica/dev/`,
 de sorte que deux checkouts ne peuvent pas occuper le même emplacement sans que l'un d'eux en soit averti.
 Il vérifie la base de données via `DATABASE_URL` et le backend via
 `GET /health`, qui renvoie `pid`, `commit` et `started_at` — une simple réponse 200
 pourrait aussi provenir d'un processus résiduel sur le même port. `make destroy`
-supprime la base de données, le profil CLI, les espaces de travail du daemon, le userData de Desktop et
+supprime la base de données, le profil CLI, les espaces de travail du daemon et
 l'entrée du registre ; en cas d'échec de la suppression, l'entrée du registre est conservée pour une nouvelle tentative. Les environnements
 temporaires sont nettoyés au mieux lors du `make up` suivant l'expiration de leur TTL.
 
@@ -96,14 +96,11 @@ temporaires sont nettoyés au mieux lors du `make up` suivant l'expiration de le
 ```bash
 pnpm install
 pnpm dev:web
-pnpm dev:desktop
 pnpm build
 pnpm typecheck
 pnpm lint
 pnpm test
 ```
-
-Les commandes racine excluent Mobile par défaut. Mobile dispose de ses propres scripts et de sa propre CI ; lisez `apps/mobile/AGENTS.md` avant de le modifier.
 
 ### Backend
 
@@ -124,13 +121,13 @@ make cli ARGS="issue list"
 
 ## Modifier des fonctionnalités frontend
 
-Placez les fonctionnalités nécessaires à la fois à Web et à Desktop selon leur responsabilité :
+Placez les fonctionnalités frontend partagées selon leur responsabilité :
 
 1. Placez les types d'API, les queries, les mutations et la logique indépendante de la plateforme dans `packages/core/`.
 2. Placez l'UI de base dans `packages/ui/` ; elle ne doit pas dépendre du code métier.
 3. Placez les pages et composants métier dans `packages/views/`.
-4. Conservez les adaptateurs Next.js, Electron et de routage dans l'application correspondante.
-5. Branchez les pages partagées à la fois dans Web et dans Desktop.
+4. Conservez Next.js et les adaptateurs de routage dans `apps/web/`.
+5. Branchez les pages partagées dans les routes web.
 
 TanStack Query gère les données serveur. Zustand gère l'état client, comme les filtres, les brouillons et la mise en page. Consultez [Architecture du projet](/developers/architecture) et le `AGENTS.md` racine pour connaître la frontière exacte.
 
@@ -155,7 +152,7 @@ Utilisez une transaction applicative dans la couche service lorsque plusieurs é
 | --- | --- |
 | Logique métier partagée, queries, stores | `packages/core/*.test.ts` |
 | Pages et composants partagés | `packages/views/*.test.tsx` |
-| Intégration à la plateforme Web ou Desktop | Répertoire `apps/*` correspondant |
+| Intégration à la plateforme Web | `apps/web/` |
 | Workflows de bout en bout | `e2e/*.spec.ts` |
 | Backend | `*_test.go` dans le package Go concerné |
 

@@ -145,7 +145,7 @@ func TestMembershipRemovalAcrossHubsAndScopes(t *testing.T) {
 	// Exercise the exact common receiver used by legacy, sharded and mirrored
 	// relays, including duplicate processing on another node.
 	for i := 0; i < 2; i++ {
-		deliverEnvelope(remote, nil, nil, envelope{Scope: ScopeWorkspace, ScopeID: testWorkspaceID, PayloadJSON: removed, EventID: "removal"})
+		deliverEnvelope(remote, nil, envelope{Scope: ScopeWorkspace, ScopeID: testWorkspaceID, PayloadJSON: removed, EventID: "removal"})
 	}
 	for _, conn := range []*websocket.Conn{oldLocal, oldRemote, secondRemote} {
 		wantMembershipClosed(t, conn)
@@ -197,7 +197,7 @@ func TestMembershipRemovalReplayAfterRejoin(t *testing.T) {
 	mc := &mockMembershipChecker{}
 	conn := membershipConn(t, membershipServer(t, hub, mc), testUserID, testWorkspaceID)
 	removed := `{"type":"member:removed","payload":{"workspace_id":"test-workspace","user_id":"test-user"}}`
-	deliverEnvelope(hub, nil, nil, envelope{Scope: ScopeWorkspace, ScopeID: testWorkspaceID, PayloadJSON: removed})
+	deliverEnvelope(hub, nil, envelope{Scope: ScopeWorkspace, ScopeID: testWorkspaceID, PayloadJSON: removed})
 	waitFor(t, "stale removal to be checked", func() bool { return hub.memberRemovalPending.Load() == 0 })
 	hub.BroadcastToWorkspace(testWorkspaceID, []byte(`{"type":"issue:updated"}`))
 	// Neither a hard close nor a stale frontend removal notification is valid
@@ -210,7 +210,7 @@ func TestMembershipReplayCannotRestoreRevokedAccess(t *testing.T) {
 	mc := &changingMembership{}
 	conn := membershipConn(t, membershipServer(t, hub, mc), testUserID, testWorkspaceID)
 	mc.revoked.Store(true)
-	deliverEnvelope(hub, nil, nil, envelope{
+	deliverEnvelope(hub, nil, envelope{
 		Scope: ScopeWorkspace, ScopeID: testWorkspaceID,
 		PayloadJSON: `{"type":"comment:created","payload":{"body":"retained-content"}}`,
 	})
