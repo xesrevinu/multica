@@ -1422,6 +1422,31 @@ export class ApiClient {
     return this.fetch<unknown>(`/api/orchestrator/flow/${encodeURIComponent(key)}/reject`, { method: "POST", body: JSON.stringify({ reason }) });
   }
 
+  // Issue-centric UI views (raw JSON; parsed by @multica/core/orchestrator).
+  async listOrchIssues(params?: { settledLimit?: number; project?: string }): Promise<unknown> {
+    const q = new URLSearchParams();
+    if (params?.settledLimit !== undefined) q.set("settled_limit", String(params.settledLimit));
+    if (params?.project) q.set("project", params.project);
+    const qs = q.toString();
+    return this.fetch<unknown>(`/api/orchestrator/issues${qs ? `?${qs}` : ""}`);
+  }
+
+  async getOrchIssueTimeline(key: string): Promise<unknown> {
+    return this.fetch<unknown>(`/api/orchestrator/issues/${encodeURIComponent(key)}/timeline`);
+  }
+
+  async getOrchIssuePR(key: string): Promise<unknown> {
+    return this.fetch<unknown>(`/api/orchestrator/issues/${encodeURIComponent(key)}/pr`);
+  }
+
+  async orchFlowAction(key: string, action: "accept" | "reject" | "unblock" | "cancel" | "pause" | "resume" | "replay", body?: { reason?: string }): Promise<unknown> {
+    return this.fetch<unknown>(`/api/orchestrator/flow/${encodeURIComponent(key)}/${action}`, { method: "POST", body: JSON.stringify(body ?? {}) });
+  }
+
+  async orchPROp(key: string, op: "update-branch" | "rerun-checks" | "merge"): Promise<unknown> {
+    return this.fetch<unknown>(`/api/orchestrator/issues/${encodeURIComponent(key)}/pr/${op}`, { method: "POST", body: "{}" });
+  }
+
   async listOrchestratorTeams(): Promise<{ teams: OrchestratorTeam[] }> {
     return this.fetch<{ teams: OrchestratorTeam[] }>(`/api/orchestrator/teams`);
   }
