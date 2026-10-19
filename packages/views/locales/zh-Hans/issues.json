@@ -540,7 +540,7 @@
     "wakeup_checkin_coalesced_other": "静默检查 {{count}} 次 · 最近一次：{{note}}",
     "wakeup_chip_created_by": "{{name}} 创建",
     "wakeup_chip_system": "系统规则",
-    "orchestrator_transition": "编排器：{{tid}} {{why}}"
+    "orchestrator_transition": "流程 {{tid}} {{why}}"
   },
   "comment": {
     "add_reaction": "添加表情回应",

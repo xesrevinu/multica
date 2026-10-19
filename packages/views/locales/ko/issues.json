@@ -540,7 +540,7 @@
     "wakeup_checkin_coalesced_other": "조용한 확인 {{count}}회 · 최근: {{note}}",
     "wakeup_chip_created_by": "{{name}} 생성",
     "wakeup_chip_system": "시스템 규칙",
-    "orchestrator_transition": "오케스트레이터: {{tid}} {{why}}"
+    "orchestrator_transition": "플로우 {{tid}} {{why}}"
   },
   "comment": {
     "add_reaction": "반응 추가",

@@ -552,7 +552,7 @@
     "wakeup_checkin_coalesced_other": "{{count}} silent checks · latest: {{note}}",
     "wakeup_chip_created_by": "{{name}}'s wakeup",
     "wakeup_chip_system": "System rule",
-    "orchestrator_transition": "orchestrator: {{tid}} {{why}}"
+    "orchestrator_transition": "flow {{tid}} {{why}}"
   },
   "comment": {
     "add_reaction": "Add reaction",
