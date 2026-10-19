@@ -44,3 +44,36 @@ Reference implementation: /Users/kee/Workspace/ai-stack/multica-e2e/teamctl (kep
 - The Reject UI was verified end-to-end: ATT-60 rejected from the browser → T3_rework with the typed reason; the timeline shows the Orchestrator rows.
 - T3c verdict carry-over (patch-id): unit test on a temp repo (rebase same / changed differs). Live: ATT-60 awaiting acceptance, I merged main into agent/ATT-60 (fast-forward push, no force) → T3c_carry_verdict "same patch-id as reviewed 2694c93172b6", no extra review run.
 - Known dev-console noise, not from this work: the docs proxy :4747 is refused (500 in the Next overlay "1 Issue"), and the nativeButton prop warning.
+
+## Step: one branch name, PocketJS engine keys, e2e fixes, shadow mode, docs (2026-10-19 17:03–17:35)
+- One branch name everywhere: `agent/<lowercase slug of key>` (util.BranchSlug, used by both the daemon's sanitizeName and the engine's branchOf). The preset says push the branch you are on; the PR title carries the uppercase KEY. Linking is case-insensitive over title/body/branch (handler test added). The e2e stack has no GitHub App webhook, so live link rows could not be observed (github_pull_request is empty).
+- Engine keys for the PocketJS patch (tests in settings_test.go):
+  - roles.routes: label → owner pool; a busy pool waits; T7 uses the pool.
+  - limits.slots.<name>: counts needs:<name> siblings in todo/in_progress.
+  - acceptance.default_for_labels.
+  - min_free_gb: the name was already aligned.
+- e2e found real bugs (ATT-64), all fixed:
+  - The guard refused the lead's phase=unblocked/cancel_proposed/planned, so the lead wrote review_requested and the issue was stuck in blocked. All three phases are now allowed; a planned epic never starts; blocked shows a wait reason.
+  - The reviewer moved its run HEAD, so the daemon preserved a detached worktree and the next `wt switch` failed on the occupied path. The daemon now forks a task branch in that case (branchUnavailable). Reviewer instructions forbid checkout in the run dir. A failed or cancelled reviewer run now counts as infra, not review.
+  - Owner rebase + force-push violated the daemon delivery check ("no longer contains the start commit"). The rebase-conflict skill now merges origin/main and forbids force-push.
+- Shadow mode: spec `shadow: true`, plus migration 585 adding 'shadow' to the transition state check. Verified on ATT-68: transition logged, the issue was untouched, and the guard was off.
+- Item 1 verification (evidence in .orch-dev/runs/PR-S1n-S3n.ATT-65-67.txt):
+  - ATT-65 (S1), and ATT-66/67 (S3 conflict: precheck conflict → owner merged main → review → merged) all merged.
+  - PR heads were agent/att-65..67; the remote branches were deleted after merge.
+  - The hub was on main, clean, with main == origin/main = fd456f8 after the merges.
+  - Worktrees follow `~/.cursor/worktrees/autoteam-sandbox/agent-att-6x` = the wt template `{{ repo }}/{{ branch | sanitize }}`. The pre-start hook ran for every one (/tmp/wt-hook-autoteam-sandbox.log).
+  - No per-task clone: there is no "git clone" in the daemon or api logs, and only the integ worktree exists in the cache.
+- Incident: I restarted the daemon with `env -i`, so it lost the provider keys. Every run failed with "Connection error.", and two issues were blocked on infra attempts. I restarted it with the login env and unblocked both with `flow unblock`. Runbook updated.
+- Docs:
+  - docs/orchestrator/pocketjs/ (patches + mapping)
+  - production-readiness.md
+  - roles.md: division of responsibilities
+  - README: new keys, branch rule
+  - runbook: daemon restart
+- Remaining:
+  - B1 leader election.
+  - B2 GitHub REST instead of the server-side hub/gh.
+  - B3 GitHub App.
+  - B4 migration renumbering to a reserved range before the first prod deploy.
+  - B7 metrics.
+  - The ATT-64 leftovers (closed PR #19, remote branch agent/ATT-64, three e2e worktrees) were kept as evidence.
