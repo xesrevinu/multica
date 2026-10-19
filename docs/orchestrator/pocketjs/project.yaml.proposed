@@ -1,0 +1,112 @@
+# PocketJS orchestrator config — PROPOSAL (not applied to the pocketjs repo).
+# Drop-in `orchestrator:` blocks for the two projects in pocketjs
+# .multica/project.yaml (baseline e7c2dda6, repo effect-anything/holt).
+#
+# Check names below are the real GitHub check-run names, read from the
+# check runs of commit a44a6375 (CI run 39038075351, 2026-10-17) and matching
+# .github/workflows/ci.yml job `name:` fields with the matrix expanded:
+#   vitest                      (job test)
+#   cargo test (ubuntu-24.04)   (job rust, matrix os)
+#   cargo test (macos-latest)   (job rust, matrix os)
+#   note bundle (macos-app)     (job bundle, matrix target)
+#   note bundle (linux-app)     (job bundle, matrix target)
+#   format, types and clippy    (job lint)
+# The old patch used job ids (test/rust/bundle/lint): those never appear as
+# check names, so the gate would have waited forever on MISSING.
+#
+# Caveats found while reading the repo:
+# - ci.yml is paused (`on: workflow_dispatch` only) on local main; PRs get no
+#   CI checks until pull_request is restored. While paused, requiring the CI
+#   names would block every merge, so required_checks below is the
+#   "CI enabled" set and `required_checks_while_ci_paused` is what to apply now.
+# - Branch protection / rulesets cannot be read: the repo is private on a free
+#   plan (GitHub 403 "Upgrade to GitHub Pro"), so there are no server-side
+#   required checks; the orchestrator's required_checks is the only gate.
+# - The multica GitHub App is NOT installed on effect-anything/holt
+#   (installation lookup 404). GitHub mode needs it (PR reads, merge,
+#   review-verdict status, CI re-run). Install the App on the repo first.
+#   The check names were therefore read with Ray's gh login (read-only GET).
+# - The last push-triggered CI runs (Oct 17) were all red; fix main before
+#   turning the gate on, or every PR goes back as ci_failure.
+
+pocket:   # project "Pocket" (OX Squad)
+  orchestrator:
+    preset: impl-review-merge
+    roles:
+      lead: yielded-lead
+      reviewer: yielded-reviewer          # independent of every owner pool
+      owners: [heavy-engineer, gbot]
+      human: Ray
+      # area owners: first matching label picks the owner pool
+      routes:
+        - { labels: [area:hard, area:cross-cutting], owners: [gbot] }
+        - { labels: [area:host], owners: [heavy-engineer, gbot] }          # crates/, Rust host (needs:cargo)
+        - { labels: [area:compiler], owners: [heavy-engineer, gbot] }      # compiler/
+        - { labels: [area:framework], owners: [heavy-engineer, gbot] }     # framework/, packages/
+        - { labels: [area:cli], owners: [heavy-engineer, gbot] }           # cli/
+        - { labels: [area:apps], owners: [heavy-engineer, gbot] }          # apps/
+    repo:
+      mode: github
+      slug: effect-anything/holt
+      hub: /Users/kee/Workspace/boom/pocketjs
+      main: main
+      branch_prefix: agent/
+      required_checks:
+        - vitest
+        - cargo test (ubuntu-24.04)
+        - cargo test (macos-latest)
+        - note bundle (macos-app)
+        - note bundle (linux-app)
+        - format, types and clippy
+        - review-verdict                  # published by the engine as the App
+      # required_checks_while_ci_paused: [review-verdict]
+      disk_path: /Users/kee/.cursor/worktrees
+    acceptance:
+      # issues that need Ray's acceptance before merge
+      labels: [needs-acceptance, needs-GUI-Master, needs-Ray-signoff]
+      default_for_labels: [area:apps]     # user-visible app behaviour; risk=high also forces it
+    limits:
+      impl: 3
+      review: 3
+      infra: 2
+      stuck_min: 60        # cold Rust builds are long
+      idle_min: 15         # one cargo step can be silent for minutes
+      min_free_gb: 40      # every worktree has its own target/
+      slots: { cargo: 2 }  # <=2 issues labelled needs:cargo in todo/in_progress at once
+
+studio:   # project "Studio Parts" (Studio Squad)
+  orchestrator:
+    preset: impl-review-merge
+    roles:
+      lead: yielded-lead
+      reviewer: yielded-reviewer
+      owners: [frontend-engineer, control-plane-engineer]
+      human: Ray
+      routes:
+        - { labels: [area:hard, area:cross-cutting], owners: [gbot] }
+        - { labels: [area:studio-app], owners: [frontend-engineer] }          # studio/app
+        - { labels: [area:control-plane], owners: [control-plane-engineer] }  # studio/control-plane
+    repo:
+      mode: github
+      slug: effect-anything/holt
+      hub: /Users/kee/Workspace/boom/pocketjs
+      main: main
+      branch_prefix: agent/
+      # studio is TS; the Rust/bundle jobs still run on every PR (no path
+      # filters in ci.yml), so require the full set to keep main green.
+      required_checks:
+        - vitest
+        - cargo test (ubuntu-24.04)
+        - cargo test (macos-latest)
+        - note bundle (macos-app)
+        - note bundle (linux-app)
+        - format, types and clippy
+        - review-verdict
+      disk_path: /Users/kee/.cursor/worktrees
+    acceptance:
+      labels: [needs-acceptance, needs-GUI-Master, needs-Ray-signoff]
+      default_for_labels: [area:studio-app]   # every studio/app screen change waits for Ray (screenshots: PocketJS convention)
+    limits: { impl: 3, review: 3, infra: 2, stuck_min: 45, idle_min: 12, min_free_gb: 40, slots: { cargo: 2 } }
+# Cargo concurrency: slots are per project. Pocket and Studio together can
+# reach 4 cargo-heavy issues; set studio slots.cargo to 1 if the Mac Studio
+# (10 cores / 32 GB) thrashes. The daemon's max_concurrent_tasks stays 3 per agent.
