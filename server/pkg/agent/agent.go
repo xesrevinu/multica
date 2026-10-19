@@ -28,7 +28,11 @@ type ExecOptions struct {
 	// capability handshake enabled additional messages.
 	EnableTaskSupplement bool
 	Cwd                  string
-	Model                string
+	// WorkspaceID is the Multica workspace that owns this task. Grok Bot has
+	// no workspace concept, so the gbot backend uses it to keep each workspace's
+	// session file and completion marker separate. Other backends ignore it.
+	WorkspaceID string
+	Model       string
 	// SystemPrompt carries the Multica runtime brief for the few providers
 	// that cannot pick it up from disk. The daemon leaves it empty for every
 	// other provider (see daemon.providerNeedsInlineSystemPrompt), because the
@@ -356,8 +360,8 @@ type Config struct {
 // add deveco, migration 179 to add grok, migration 202 to add qwen,
 // migration 242 to add qoderclicn, migration 253 to add qwenpaw,
 // migration 254 to add reasonix, migration 313 to add dsh, migration 342 to
-// add mcode, migration 370 to add dim, migration 403 to add zeroclaw, and
-// migration 441 to add codearts): a custom runtime profile may
+// add mcode, migration 370 to add dim, migration 403 to add zeroclaw,
+// migration 441 to add codearts, and migration 574 to add yielded): a custom runtime profile may
 // only be based on a backend Multica officially supports.
 // qoder and qoderclicn share the same ACP backend; keeping both provider keys
 // lets the daemon auto-detect and register the international and China-region
@@ -386,12 +390,14 @@ var SupportedTypes = []string{
 	"qoder",
 	"qoderclicn",
 	"traecli",
+	"gbot",
 	"grok",
 	"qwen",
 	"qwenpaw",
 	"mcode",
 	"dim",
 	"zeroclaw",
+	"yielded",
 }
 
 // IsSupportedType reports whether agentType is in the SupportedTypes whitelist.
@@ -487,6 +493,8 @@ func New(agentType string, cfg Config) (Backend, error) {
 		return &qoderBackend{cfg: cfg, defaultExecutable: qoderDefaultBinary(agentType)}, nil
 	case "traecli":
 		return &traecliBackend{cfg: cfg}, nil
+	case "gbot":
+		return &gbotBackend{cfg: cfg}, nil
 	case "grok":
 		return &grokBackend{cfg: cfg}, nil
 	case "qwen":
@@ -497,6 +505,8 @@ func New(agentType string, cfg Config) (Backend, error) {
 		return &mcodeBackend{cfg: cfg}, nil
 	case "zeroclaw":
 		return &zeroclawBackend{cfg: cfg}, nil
+	case "yielded":
+		return &yieldedBackend{cfg: cfg}, nil
 	default:
 		return nil, fmt.Errorf("unknown agent type: %q (supported: %s)", agentType, strings.Join(SupportedTypes, ", "))
 	}
@@ -538,12 +548,14 @@ var launchHeaders = map[string]string{
 	"qoder":       "qodercli --acp",
 	"qoderclicn":  "qoderclicn --acp",
 	"traecli":     "traecli acp serve",
+	"gbot":        "gbot task run",
 	"grok":        "grok agent stdio",
 	"qwen":        "qwen -p (stream-json)",
 	"qwenpaw":     "qwenpaw acp",
 	"dim":         "dim acp",
 	"mcode":       "mcode acp",
 	"zeroclaw":    "zeroclaw acp",
+	"yielded":     "yielded-agent",
 }
 
 // LaunchHeader returns the user-visible launch skeleton for agentType, or an

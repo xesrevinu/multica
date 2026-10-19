@@ -166,6 +166,16 @@ func classifyPoisonedError(errMsg string) (string, bool) {
 	if taskfailure.UnresumableHistory(errMsg) {
 		return FailureReasonAPIInvalidRequest, true
 	}
+	// The upstream bridge says the Cursor conversation behind the session id is
+	// gone and asks the caller to start a new one. Resuming it again replays the
+	// same conversation state into the same refusal, so treat the session as
+	// resume-unsafe instead of keeping it and retrying. Providers word this
+	// without the Anthropic 400 shape, which is why it needs its own marker.
+	if strings.Contains(lowered, "conversation is no longer valid") ||
+		strings.Contains(lowered, "conversation_expired") ||
+		strings.Contains(lowered, "start a new session") && strings.Contains(lowered, "conversation") {
+		return FailureReasonAPIInvalidRequest, true
+	}
 	return "", false
 }
 

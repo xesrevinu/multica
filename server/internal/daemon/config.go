@@ -79,6 +79,7 @@ const (
 	DefaultGCCodexSessionTTL              = 14 * 24 * time.Hour // 14 days — reclaim per-issue Codex session stores untouched this long
 	DefaultGCHermesMemoryTTL              = 90 * 24 * time.Hour // 90 days — reclaim per-agent Hermes memory stores untouched this long (long: reclaiming these is visible amnesia, and they are a few markdown files)
 	DefaultGCHermesSessionTTL             = 14 * 24 * time.Hour // 14 days — reclaim per-conversation Hermes session stores untouched this long (matches Codex: these hold transcripts, and losing an idle one restarts the thread rather than the agent's notes)
+	DefaultGCYieldedSessionTTL            = 14 * 24 * time.Hour // 14 days — reclaim yielded-agent session databases untouched this long (same reasoning as Codex/Hermes: these hold transcripts, and losing an idle one starts a fresh thread instead of resuming a stale one)
 	DefaultGCRepoTTL                      = 30 * 24 * time.Hour // 30 days — evict a bare repo cache no task has checked out this long
 	// DefaultGCTaskTempLegacyTTL is 0 — disabled. Per-task temp dirs left by a
 	// daemon predating the temp dir execution lock carry no liveness signal at
@@ -128,6 +129,7 @@ type Config struct {
 	GCCodexSessionTTL              time.Duration         // reclaim a per-issue Codex session store (~/.codex/multica-sessions/<agent>/<issue>) untouched for at least this long, so a done/abandoned issue's conversation history does not accumulate forever (default: 14d, set 0 to disable)
 	GCHermesMemoryTTL              time.Duration         // reclaim a per-agent Hermes memory store (<profile dir>/hermes-state/<agent>/<profile>) untouched for at least this long, so a deleted agent's memory does not sit on disk forever (default: 90d, set 0 to disable)
 	GCHermesSessionTTL             time.Duration         // reclaim a per-conversation Hermes session store (<profile dir>/hermes-sessions/<agent>/<profile>/<conversation>) untouched for at least this long, so a done or abandoned conversation's transcript does not accumulate forever (default: 14d, set 0 to disable)
+	GCYieldedSessionTTL            time.Duration         // reclaim a yielded-agent session database (~/.local/state/yielded-agent/sessions/<id>.sqlite) untouched for at least this long, so a finished issue stops resuming an ever-growing transcript (default: 14d, set 0 to disable)
 	GCTaskTempLegacyTTL            time.Duration         // reclaim a per-task temp dir (<temp base>/multica-task-*) that carries no execution lock — i.e. left by a daemon predating the lock — once nothing inside it has been touched for this long. Dirs that DO carry the lock are reclaimed on liveness, never on age, so this knob does not apply to them. Neither does it reclaim a dir holding no task content — an old empty leftover, or a shell left by a daemon that died between creating the dir and publishing its lock — because holding no content is exactly what a dir currently being published looks like (default: 0, disabled — see DefaultGCTaskTempLegacyTTL)
 	AutoUpdateEnabled              bool                  // periodically check for a newer CLI release and self-update when idle (default: true on Multica Cloud, false on self-host)
 	AutoUpdateCheckInterval        time.Duration         // how often the auto-update loop polls for a new release (default: 6h)
@@ -266,7 +268,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	// can re-run the same discovery on a live daemon (MUL-5439).
 	agents := probeAgentCLIs()
 	if len(agents) == 0 && !overrides.AllowNoAgents {
-		return Config{}, fmt.Errorf("no agent CLI found: install claude, codebuddy, codearts, codex, copilot, opencode, deveco, openclaw, hermes, pi, omp, cursor-agent, kimi, reasonix, dsh, kiro-cli, agy, qodercli, qoderclicn, traecli, grok, qwen, qwenpaw, mcode, dim, or zeroclaw and ensure it is on PATH")
+		return Config{}, fmt.Errorf("no agent CLI found: install claude, codebuddy, codearts, codex, copilot, opencode, deveco, openclaw, hermes, pi, omp, cursor-agent, kimi, reasonix, dsh, kiro-cli, agy, qodercli, qoderclicn, traecli, grok, qwen, qwenpaw, mcode, dim, zeroclaw, or yielded-agent and ensure it is on PATH")
 	}
 
 	claudeArgs, err := shellArgsFromEnv("MULTICA_CLAUDE_ARGS")
@@ -584,6 +586,10 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	gcYieldedSessionTTL, err := durationFromEnv("MULTICA_GC_YIELDED_SESSION_TTL", DefaultGCYieldedSessionTTL)
+	if err != nil {
+		return Config{}, err
+	}
 	gcRepoTTL, err := durationFromEnv("MULTICA_GC_REPO_TTL", DefaultGCRepoTTL)
 	if err != nil {
 		return Config{}, err
@@ -645,6 +651,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		GCCodexSessionTTL:               gcCodexSessionTTL,
 		GCHermesMemoryTTL:               gcHermesMemoryTTL,
 		GCHermesSessionTTL:              gcHermesSessionTTL,
+		GCYieldedSessionTTL:             gcYieldedSessionTTL,
 		GCTaskTempLegacyTTL:             gcTaskTempLegacyTTL,
 		AutoUpdateEnabled:               autoUpdateEnabled,
 		AutoUpdateCheckInterval:         autoUpdateInterval,
@@ -974,7 +981,7 @@ func isExecutableFile(path string) bool {
 // doesn't require editing this list by hand.
 var defaultAgentCommandNames = append([]string{
 	"claude", "codex", "opencode", "codearts", "deveco", "openclaw", "hermes",
-	"pi", "cursor-agent", "copilot", "kimi", "reasonix", "dsh", "kiro-cli", "codebuddy", "agy", "qodercli", "qoderclicn", "traecli", "grok", "qwen", "qwenpaw", "mcode", "dim", "zeroclaw",
+	"pi", "cursor-agent", "copilot", "kimi", "reasonix", "dsh", "kiro-cli", "codebuddy", "agy", "qodercli", "qoderclicn", "traecli", "gbot", "grok", "qwen", "qwenpaw", "mcode", "dim", "zeroclaw", "yielded-agent",
 }, agent.BuiltinRuntimeCommands()...)
 
 // codexDesktopAppBundlePaths returns candidate macOS app-bundle locations for

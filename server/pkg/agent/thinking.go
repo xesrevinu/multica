@@ -944,6 +944,9 @@ var thinkingDynamicCatalogProviders = map[string]bool{
 	"grok":     true,
 	"opencode": true,
 	"kimi":     true,
+	// yielded-agent declares per-model effort tokens in `--list-models`.
+	// The chosen token is sent on the stdio turn as `thinking`.
+	"yielded": true,
 }
 
 // acpCatalogThinkingProviders are the ACP runtimes that discover their effort

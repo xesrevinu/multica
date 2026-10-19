@@ -1138,7 +1138,7 @@ func TestReuseReclaimsManagedSkillDirWithStrayAgentFile(t *testing.T) {
 func TestReuseSkillRefreshIsCanonicalAcrossProviders(t *testing.T) {
 	t.Parallel()
 
-	for _, provider := range []string{"claude", "codebuddy", "openclaw", "copilot", "qwen", ""} {
+	for _, provider := range []string{"claude", "codebuddy", "openclaw", "copilot", "qwen", "yielded", ""} {
 		provider := provider
 		name := provider
 		if name == "" {
@@ -1217,6 +1217,15 @@ func TestMcodeUsesNativeProjectSkillRoot(t *testing.T) {
 	want := filepath.Join(workDir, ".minimax", "skills")
 	if got := skillsDirPath(workDir, "mcode"); got != want {
 		t.Fatalf("skillsDirPath(mcode) = %q, want %q", got, want)
+	}
+}
+
+func TestYieldedUsesAgentsSkillRoot(t *testing.T) {
+	t.Parallel()
+	workDir := t.TempDir()
+	want := filepath.Join(workDir, ".agents", "skills")
+	if got := skillsDirPath(workDir, "yielded"); got != want {
+		t.Fatalf("skillsDirPath(yielded) = %q, want %q", got, want)
 	}
 }
 

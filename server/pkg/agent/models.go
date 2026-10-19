@@ -329,6 +329,12 @@ func ListModels(ctx context.Context, providerType string, runtimeCmd Command) (C
 		// ModelSelectionSupported. Return an empty list rather than spawning
 		// an ACP subprocess that can only ever come back empty.
 		return Catalog{Models: []Model{}}, nil
+	case "yielded":
+		// yielded-agent declares its catalog. The daemon does not read Pi's
+		// models.json itself; `yielded-agent --list-models` is the contract.
+		return cachedDiscovery(discoveryCacheKey(providerType, runtimeCmd), func() (Catalog, error) {
+			return discovered(discoverYieldedModels(ctx, runtimeCmd))
+		})
 	default:
 		return Catalog{}, fmt.Errorf("unknown agent type: %q", providerType)
 	}
@@ -1393,6 +1399,106 @@ func isPiDiscoveryNoise(line string) bool {
 // An empty catalog (an omp with no provider credentials configured prints
 // `{"models":[]}`) or a non-zero exit (binary missing, omp too old) falls back
 // to an empty list so the UI degrades to manual entry instead of erroring.
+func discoverYieldedModels(ctx context.Context, runtimeCmd Command) ([]Model, error) {
+	if runtimeCmd.Path == "" {
+		runtimeCmd.Path = "yielded-agent"
+	}
+	if _, err := exec.LookPath(runtimeCmd.Path); err != nil {
+		return nil, fmt.Errorf("yielded-agent model discovery: %w", err)
+	}
+	runCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	cmd := runtimeCmd.exec(runCtx, "--list-models")
+	hideAgentWindow(cmd)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	stdout, err := outputOwned(cmd, runtimeCmd.logger)
+	if err != nil {
+		return nil, fmt.Errorf("yielded-agent --list-models: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return parseYieldedModels(stdout)
+}
+
+// parseYieldedModels reads the catalog `yielded-agent --list-models` declares.
+// The selector is the id Multica persists and sends back on the stdio turn.
+// `thinking` is the effort list the agent itself published; null or an empty
+// list means that model has no effort picker.
+func parseYieldedModels(data []byte) ([]Model, error) {
+	var wrapper struct {
+		Models []struct {
+			Selector  string   `json:"selector"`
+			Provider  string   `json:"provider"`
+			ID        string   `json:"id"`
+			Name      string   `json:"name"`
+			Reasoning bool     `json:"reasoning"`
+			Thinking  []string `json:"thinking"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(data, &wrapper); err != nil {
+		return nil, fmt.Errorf("yielded-agent models: %w", err)
+	}
+	models := make([]Model, 0, len(wrapper.Models))
+	seen := map[string]bool{}
+	for _, entry := range wrapper.Models {
+		selector := strings.TrimSpace(entry.Selector)
+		if selector == "" {
+			provider := strings.TrimSpace(entry.Provider)
+			id := strings.TrimSpace(entry.ID)
+			if provider != "" && id != "" {
+				selector = provider + "/" + id
+			} else {
+				selector = id
+			}
+		}
+		if selector == "" || seen[selector] {
+			continue
+		}
+		seen[selector] = true
+		label := strings.TrimSpace(entry.Name)
+		if label == "" {
+			label = selector
+		}
+		models = append(models, Model{
+			ID:       selector,
+			Label:    label,
+			Provider: strings.TrimSpace(entry.Provider),
+			Thinking: yieldedThinking(entry.Reasoning, entry.Thinking),
+		})
+	}
+	return models, nil
+}
+
+func yieldedThinking(reasoning bool, advertised []string) *ModelThinking {
+	if !reasoning || len(advertised) == 0 {
+		return nil
+	}
+	wanted := map[string]bool{}
+	for _, level := range advertised {
+		if level = strings.TrimSpace(level); level != "" {
+			wanted[level] = true
+		}
+	}
+	levels := make([]ThinkingLevel, 0, len(wanted))
+	for _, value := range piThinkingLevelOrder {
+		if wanted[value] {
+			levels = append(levels, ThinkingLevel{Value: value, Label: piThinkingLevelLabels[value]})
+			delete(wanted, value)
+		}
+	}
+	extra := make([]string, 0, len(wanted))
+	for value := range wanted {
+		extra = append(extra, value)
+	}
+	sort.Strings(extra)
+	for _, value := range extra {
+		levels = append(levels, ThinkingLevel{Value: value, Label: value})
+	}
+	if len(levels) == 0 {
+		return nil
+	}
+	return &ModelThinking{SupportedLevels: levels}
+}
+
 func discoverOmpModels(ctx context.Context, runtimeCmd Command) ([]Model, error) {
 	if runtimeCmd.Path == "" {
 		runtimeCmd.Path = "omp"

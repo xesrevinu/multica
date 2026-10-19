@@ -2286,6 +2286,49 @@ func TestGatePiResumeToSessionFile(t *testing.T) {
 	}
 }
 
+func TestGateYieldedResumeUsesSessionFileNotWorkdir(t *testing.T) {
+	t.Parallel()
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "yielded-gate-" + strings.ReplaceAll(t.Name(), "/", "-")
+	path := yieldedSessionPath(home, id)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("sqlite"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(path) })
+
+	base := t.TempDir()
+	priorDir := filepath.Join(base, "prior")
+	envDir := filepath.Join(base, "fresh")
+	for _, dir := range []string{priorDir, envDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	task := Task{PriorSessionID: id, PriorWorkDir: priorDir}
+	taskCtx := execenv.TaskContextForEnv{PriorSessionResumed: true}
+
+	reachable := gateResumeToReachableSession(&task, &taskCtx, "yielded", envDir, true, false, false, slog.Default())
+	if !reachable || task.PriorSessionID != id || !taskCtx.PriorSessionResumed {
+		t.Fatalf("present session across workdirs: reachable=%v id=%q resumed=%v", reachable, task.PriorSessionID, taskCtx.PriorSessionResumed)
+	}
+
+	missing := Task{PriorSessionID: id + "-absent", PriorWorkDir: envDir}
+	missingCtx := execenv.TaskContextForEnv{PriorSessionResumed: true}
+	if gateResumeToReachableSession(&missing, &missingCtx, "yielded", envDir, true, false, false, slog.Default()) {
+		t.Fatal("missing sqlite was treated as reachable")
+	}
+	if missing.PriorSessionID != "" || missingCtx.PriorSessionResumed || !missingCtx.PriorSessionResumeUnavailable {
+		t.Fatalf("missing session was not dropped: id=%q resumed=%v unavailable=%v", missing.PriorSessionID, missingCtx.PriorSessionResumed, missingCtx.PriorSessionResumeUnavailable)
+	}
+}
+
 func TestGatePiResumeDropsUnusableSessionFile(t *testing.T) {
 	t.Parallel()
 

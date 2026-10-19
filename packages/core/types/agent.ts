@@ -124,20 +124,18 @@ export const RUNTIME_PROFILE_PROTOCOL_FAMILIES = [
   "qoder",
   "qoderclicn",
   "traecli",
+  "gbot",
   "grok",
   "qwen",
   "qwenpaw",
   "mcode",
   "zeroclaw",
+  "yielded",
 ] as const;
 
-export type RuntimeProtocolFamily =
-  (typeof RUNTIME_PROFILE_PROTOCOL_FAMILIES)[number];
+export type RuntimeProtocolFamily = (typeof RUNTIME_PROFILE_PROTOCOL_FAMILIES)[number];
 
-export const RUNTIME_PROFILE_RUNTIME_TYPES = [
-  ...RUNTIME_PROFILE_PROTOCOL_FAMILIES,
-  "omp",
-] as const;
+export const RUNTIME_PROFILE_RUNTIME_TYPES = [...RUNTIME_PROFILE_PROTOCOL_FAMILIES, "omp"] as const;
 export type RuntimeProfileType = (typeof RUNTIME_PROFILE_RUNTIME_TYPES)[number];
 
 // Profile visibility mirrors RuntimeVisibility's vocabulary but uses the
@@ -238,11 +236,7 @@ export interface WorkspaceWorkingAgent {
 
 export type WorkspaceWorkingAgentType = "issue" | "autopilot" | "chat";
 
-export type WorkspaceWorkingAgentMineRelation =
-  | "assigned"
-  | "created"
-  | "involved"
-  | "any";
+export type WorkspaceWorkingAgentMineRelation = "assigned" | "created" | "involved" | "any";
 
 /**
  * A departed-member-safe user ref resolved from the global user table. `name` /
@@ -655,8 +649,8 @@ export interface AgentSkillSummary {
   id: string;
   name: string;
   description: string;
-	/** Older servers omit this field; consumers must treat that as enabled. */
-	enabled?: boolean;
+  /** Older servers omit this field; consumers must treat that as enabled. */
+  enabled?: boolean;
 }
 
 export interface CreateAgentRequest {
@@ -1112,12 +1106,7 @@ export interface DashboardFailureByAgent {
   task_count: number;
 }
 
-export type RuntimeUpdateStatus =
-  | "pending"
-  | "running"
-  | "completed"
-  | "failed"
-  | "timeout";
+export type RuntimeUpdateStatus = "pending" | "running" | "completed" | "failed" | "timeout";
 
 export interface RuntimeUpdate {
   id: string;
@@ -1198,12 +1187,7 @@ export interface RuntimeModelThinkingLevel {
   description?: string;
 }
 
-export type RuntimeModelListStatus =
-  | "pending"
-  | "running"
-  | "completed"
-  | "failed"
-  | "timeout";
+export type RuntimeModelListStatus = "pending" | "running" | "completed" | "failed" | "timeout";
 
 export interface RuntimeModelListRequest {
   id: string;
@@ -1289,10 +1273,10 @@ export interface RuntimeLocalSkillSummary {
 }
 
 export interface RuntimeLocalMcpServerSummary {
-	name: string;
-	transport?: "stdio" | "http" | "sse" | "unknown";
-	source?: string;
-	enabled: boolean;
+  name: string;
+  transport?: "stdio" | "http" | "sse" | "unknown";
+  source?: string;
+  enabled: boolean;
 }
 
 export interface RuntimeLocalSkillListRequest {
@@ -1301,8 +1285,8 @@ export interface RuntimeLocalSkillListRequest {
   status: RuntimeLocalSkillStatus;
   skills?: RuntimeLocalSkillSummary[];
   supported: boolean;
-	mcp_servers?: RuntimeLocalMcpServerSummary[];
-	mcp_supported?: boolean;
+  mcp_servers?: RuntimeLocalMcpServerSummary[];
+  mcp_supported?: boolean;
   error?: string;
   created_at: string;
   updated_at: string;
@@ -1337,8 +1321,8 @@ export interface RuntimeLocalSkillImportRequest {
 export interface RuntimeLocalSkillsResult {
   skills: RuntimeLocalSkillSummary[];
   supported: boolean;
-	mcpServers: RuntimeLocalMcpServerSummary[];
-	mcpSupported: boolean;
+  mcpServers: RuntimeLocalMcpServerSummary[];
+  mcpSupported: boolean;
 }
 
 export interface RuntimeLocalSkillImportResult {

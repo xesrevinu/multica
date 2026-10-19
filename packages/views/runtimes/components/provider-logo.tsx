@@ -421,6 +421,7 @@ export function ProviderLogo({
       return <AntigravityLogo className={className} />;
     case "traecli":
       return <TraeLogo className={className} />;
+    case "gbot":
     case "grok":
       return <GrokLogo className={className} />;
     case "qwen":

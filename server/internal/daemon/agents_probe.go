@@ -298,6 +298,11 @@ var probeAgentCLIs = func() map[string]AgentEntry {
 	if e, ok := probe("MULTICA_GROK_PATH", "grok", "MULTICA_GROK_MODEL"); ok {
 		agents["grok"] = e
 	}
+	// grok-bot-cli (`gbot`) drives a Cursor Grok Bot. It is not the xAI `grok`
+	// runtime above. The target bot is selected per run by MULTICA_GBOT_BOT.
+	if e, ok := probe("MULTICA_GBOT_PATH", "gbot", ""); ok {
+		agents["gbot"] = e
+	}
 	// Qwen Code (`qwen`) runs headlessly with -p and stream-json. Its native
 	// QWEN.md and .qwen/skills task context is prepared by execenv.
 	if e, ok := probe("MULTICA_QWEN_PATH", "qwen", "MULTICA_QWEN_MODEL"); ok {
@@ -330,6 +335,11 @@ var probeAgentCLIs = func() map[string]AgentEntry {
 	// advertise a knob that silently does nothing.
 	if e, ok := probe("MULTICA_ZEROCLAW_PATH", "zeroclaw", ""); ok {
 		agents["zeroclaw"] = e
+	}
+	// yielded-agent is the stdio host that declares its own model catalog.
+	// MULTICA_YIELDED_MODEL is a provider/model-id selector from that catalog.
+	if e, ok := probe("MULTICA_YIELDED_PATH", "yielded-agent", "MULTICA_YIELDED_MODEL"); ok {
+		agents["yielded"] = e
 	}
 	return agents
 }

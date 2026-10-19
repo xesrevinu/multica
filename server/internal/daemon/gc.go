@@ -168,6 +168,14 @@ func (d *Daemon) runGC(ctx context.Context) {
 		stats.bytesReclaimed += storeBytes
 	}
 
+	// yielded-agent keeps one SQLite per conversation under the user's home and
+	// the daemon resumes it by file presence alone, so a finished issue would
+	// otherwise replay an ever-growing transcript on every turn.
+	if storesRemoved, storeBytes := execenv.PruneYieldedSessions(d.cfg.GCYieldedSessionTTL, time.Now(), d.logger); storesRemoved > 0 {
+		stats.hermesSessionStoresReclaimed += storesRemoved
+		stats.bytesReclaimed += storeBytes
+	}
+
 	// Reclaim per-task temp dirs whose owning execution is gone. These are the
 	// agent process's TMPDIR and live under the system temp base, not under
 	// WorkspacesRoot, so the task walk above has never seen them and the only

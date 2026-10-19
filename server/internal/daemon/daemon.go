@@ -6443,12 +6443,14 @@ var runtimeDisplayNameOverrides = map[string]string{
 	"codearts":   "CodeArts",
 	"dsh":        "DeepSeek Harness",
 	"traecli":    "Trae",
+	"gbot":       "Grok Bot",
 	"grok":       "Grok",
 	"qoderclicn": "Qoder CN",
 	"qwen":       "Qwen Code",
 	"qwenpaw":    "QwenPaw",
 	"mcode":      "MiniMax Code",
 	"zeroclaw":   "ZeroClaw",
+	"yielded":    "Yielded",
 }
 
 func init() {
@@ -6487,7 +6489,8 @@ func providerDisplayName(name string) string {
 // and no inline delivery: claude 2.1.220 (CLAUDE.md), codex 0.144.6 driving the
 // app-server (AGENTS.md), opencode 1.17.7 (AGENTS.md), pi 0.67.2 (AGENTS.md),
 // hermes 0.18.2 over ACP (AGENTS.md). MCode 0.1.2 also loads AGENTS.md by its
-// native runtime contract. kiro was confirmed earlier by a kiro-cli
+// native runtime contract. yielded-agent reads the launch directory's AGENTS.md
+// into the turn itself. kiro was confirmed earlier by a kiro-cli
 // 2.13.0 ACP smoke — see the call site. Still unprobed: grok, qoder, codebuddy.
 func providerNeedsInlineSystemPrompt(provider string) bool {
 	switch provider {
@@ -6558,6 +6561,10 @@ func gateResumeToReachableSession(task *Task, taskCtx *execenv.TaskContextForEnv
 		reachable = sessionHomeReachable
 	} else if provider == "codex" && codexWorktreeResumeEligible {
 		reachable = sessionHomeReachable
+	} else if provider == "yielded" {
+		// The sqlite file is named from the session id under the user state
+		// directory. A new workdir can still resume it; a missing file cannot.
+		reachable = yieldedSessionPresent(task.PriorSessionID)
 	} else {
 		// Compare the directories, not the spelling. Reuse runs in the canonical
 		// path it validated and locked, which need not be character-identical to
@@ -6584,6 +6591,39 @@ func gateResumeToReachableSession(task *Task, taskCtx *execenv.TaskContextForEnv
 		task.PriorSessionResumeUnavailable = true
 	}
 	return reachable
+}
+
+// yieldedSessionFileName matches yielded-agent's session file name:
+// non [A-Za-z0-9._-] bytes become '_', then the first 120 bytes, plus .sqlite.
+func yieldedSessionFileName(sessionID string) string {
+	var b strings.Builder
+	for i := 0; i < len(sessionID) && b.Len() < 120; i++ {
+		c := sessionID[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '.', c == '_', c == '-':
+			b.WriteByte(c)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return b.String() + ".sqlite"
+}
+
+func yieldedSessionPath(home, sessionID string) string {
+	return filepath.Join(home, ".local", "state", "yielded-agent", "sessions", yieldedSessionFileName(sessionID))
+}
+
+func yieldedSessionPresent(sessionID string) bool {
+	id := strings.TrimSpace(sessionID)
+	if id == "" {
+		return false
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return false
+	}
+	info, err := os.Stat(yieldedSessionPath(home, id))
+	return err == nil && info.Mode().IsRegular()
 }
 
 func providerUsesPiSessionFile(provider string) bool {
@@ -8521,6 +8561,14 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if task.AutopilotID != "" {
 		agentEnv["MULTICA_AUTOPILOT_ID"] = task.AutopilotID
 	}
+	if provider == "gbot" && task.Agent != nil {
+		for _, arg := range task.Agent.CustomArgs {
+			const prefix = "MULTICA_GBOT_BOT="
+			if strings.HasPrefix(arg, prefix) && strings.TrimSpace(arg[len(prefix):]) != "" {
+				agentEnv["MULTICA_GBOT_BOT"] = strings.TrimSpace(arg[len(prefix):])
+			}
+		}
+	}
 	// Quick-create marker — when set, the multica CLI's `issue create`
 	// command stamps the new issue with origin_type=quick_create +
 	// origin_id=<task_id> so the completion handler can find it
@@ -8714,6 +8762,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	execOpts := agent.ExecOptions{
 		EnableTaskSupplement:       taskSupplementNegotiated,
 		Cwd:                        env.WorkDir,
+		WorkspaceID:                task.WorkspaceID,
 		Model:                      model,
 		ThreadName:                 deriveTaskThreadName(task),
 		Timeout:                    d.cfg.AgentTimeout,
