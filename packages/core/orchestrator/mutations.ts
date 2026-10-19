@@ -48,3 +48,12 @@ export function useOrchRemoveWorktree(wsId: string) {
     onSettled: invalidate,
   });
 }
+
+// Member-editable issue metadata (e.g. acceptance_required); null clears it.
+export function useOrchSetMeta(wsId: string, issueId: string) {
+  const invalidate = useInvalidateOrch(wsId);
+  return useMutation({
+    mutationFn: (v: { key: string; value: string | null }) => api.setIssueMetadataKey(issueId, v.key, v.value),
+    onSettled: invalidate,
+  });
+}
