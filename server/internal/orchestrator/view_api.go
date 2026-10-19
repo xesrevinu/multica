@@ -134,7 +134,17 @@ func (s *Service) hIssues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sortIssueViews(vs)
-	writeJSON(w, 200, map[string]any{"issues": vs})
+	// settled_total lets the list say "Settled (64)" while only shipping the
+	// most recent ones.
+	var settledTotal int
+	q := `SELECT count(*) FROM issue WHERE workspace_id=$1 AND status IN ('done','cancelled')`
+	qargs := []any{wsID(r)}
+	if pid := r.URL.Query().Get("project"); pid != "" {
+		q += ` AND project_id::text=$2`
+		qargs = append(qargs, pid)
+	}
+	_ = s.opt.Pool.QueryRow(r.Context(), q, qargs...).Scan(&settledTotal)
+	writeJSON(w, 200, map[string]any{"issues": vs, "settled_total": settledTotal})
 }
 
 func (s *Service) viewByKey(r *http.Request, key string) (*IssueView, error) {
