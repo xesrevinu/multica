@@ -26,3 +26,12 @@ Reference implementation: /Users/kee/Workspace/ai-stack/multica-e2e/teamctl (kep
 - PR-S6 ATT-54..57: pass. Stage-1 PRs merged in parallel, stage 2 started (16:10:48) only after both were done, then merged.
 - PR-S4 ATT-58: pass, on the new daemon. With idle_min=1 the agent's `sleep 150` was cancelled 3 times ("no tool output for 1m"), then T6 block to lead after infra 2/2, orchestrator_alert inbox. idle_min restored to 8, `flow unblock` → the 150s sleep was tolerated → PR merged.
 - PR-S5 ATT-59: in progress (intentional first-attempt CI flake → expect exactly one re-run).
+- PR-S5 ATT-59: pass. The first CI attempt was red (intentional flake); the engine re-ran it once (run 39223273946 attempt 2 = success; the agents' task_messages have no rerun) → merged PR #17. The re-run is now logged (commit "log CI re-runs"). Note: the "one re-run per head" memory is in-process, so a server restart could allow one more.
+- Scenario suite on the in-app engine: S1–S6, PR-S1–S6, GA, OOB, F1, F2 all pass.
+
+## Remaining
+- Multi-replica: no leader election yet (single-replica assumption, documented in design.md).
+- patch-id verdict carry-over (rebase-only reworks still re-review).
+- UI: transitions are listed in the Flow card, not interleaved in the comment timeline; reject from the UI is not implemented (CLI needs --reason); the frontend has no special rendering for the orchestrator_alert inbox type.
+- The CI re-run memory should be persisted (orchestrator_issue_state).
+- PocketJS .multica changes deferred, as instructed.
