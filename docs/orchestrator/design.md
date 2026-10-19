@@ -60,7 +60,7 @@ backoff 重试；同一 revision 的 idem_key 会复用这行（failed 不算 do
 | T2_review | todo/in_progress | in_review→reviewer | phase=review_requested、分支已推、无活动 run、预检通过（本地合并+check_cmd；GitHub：PR 存在/自动开、无冲突、CI 不红） |
 | T3_rework | in_review/todo/in_progress | todo→owner | verdict=changes、CI 红（已重跑过一次）、冲突、验收拒绝；attempt_impl+1 |
 | T3b_rereview | in_review | in_review→reviewer | 没有 verdict（rerun）或 reviewed_sha≠head |
-| T4_done | in_review | done | approve@head、required checks 绿、mergeable、（需要时）验收通过；`gh pr merge --squash --delete-branch --match-head-commit` 或本地 squash+push |
+| T4_done | in_review | done | approve@head、required checks 绿、mergeable、（需要时）验收通过；GitHub App REST squash merge（`sha` 防护，标题 = PR 标题，合并后删分支）或本地 squash+push |
 | T5_rerun | todo/in_progress | 同 | run 结束但没交接；失败 run 记 infra，否则记 impl |
 | T5b_cancel_stuck | 活动状态 | 同 | 运行中的 run 超过 stuck_min（排队中不算） |
 | T6_block | 任意活动 | blocked→lead | 次数用尽、agent phase=blocked、dead-letter；通知 |
@@ -95,8 +95,8 @@ PR 自动完成（`pr_merge_status`）对被编排 project 视为 `none`：合�
 ## GitHub
 
 - App 已配置且 `github_pull_request` 快照 2 分钟内更新过：预检直接读快照（head、checks rollup、mergeable），不调 GitHub API。
-- 否则：`gh pr view` 轮询（reconciler 每 60s，加事件触发）。合并总是 `gh`，带 `--match-head-commit`，不会合进没审过的 head。
-- CI 红：对这个 head 的失败 workflow run 执行一次 `gh run rerun --failed`；同一个 head 第二次红才退回 owner（pstack babysit 规则）。
+- 否则：用 App REST 实时读 PR、check runs 和 commit statuses（reconciler 每 60s，加事件触发；GET 走 ETag，304 不耗额度）。合并走 `PUT /pulls/{n}/merge`，带 `sha`，不会合进没审过的 head。
+- CI 红：对这个 head 的失败 workflow run 调一次 `POST /actions/runs/{id}/rerun-failed-jobs`；同一个 head 第二次红才退回 owner（pstack babysit 规则）。
 
 ## 来自 pstack 的做法
 
@@ -113,7 +113,7 @@ PR 自动完成（`pr_merge_status`）对被编排 project 视为 `none`：合�
 ## 已知限制
 
 - 单 worker：一个慢合并（本地 check_cmd）会拖住其他 issue 的评估。规模大时改成每 project 一个 worker。
-- 多副本部署：worker 没有选主；同时跑两个 server 时两个都会评估。idem_key 防止重复执行同一转移，但 `gh pr merge` 这类外部动作可能被尝试两次（GitHub 侧幂等）。需要上线前加 advisory lock 选主。
+- 多副本部署：worker 没有选主；同时跑两个 server 时两个都会评估。idem_key 防止重复执行同一转移，但 squash merge 这类外部动作可能被尝试两次（GitHub 侧幂等）。需要上线前加 advisory lock 选主。
 - patch-id 复用 verdict（rebase 后 diff 不变免重审）未实现。
 - spec 的 `transitions` 只做校验和展示，引擎只实现 preset。
 
