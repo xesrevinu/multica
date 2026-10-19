@@ -21,6 +21,7 @@ import {
 } from "@multica/core/tabs";
 import { canGoBackInApp } from "./in-app-history";
 import { WebTabCoordinator } from "./tab-coordinator";
+import { SessionTabsProvider } from "@multica/views/layout/session-tabs";
 
 function isTransitionPath(path: string): boolean {
   return extractWorkspaceSlug(path) === null;
@@ -185,9 +186,15 @@ export function WebNavigationProvider({
   children: React.ReactNode;
 }) {
   return (
-    <Suspense>
-      <WebTabCoordinator />
-      <NavigationProviderInner>{children}</NavigationProviderInner>
-    </Suspense>
+    // The provider publishes "session tabs are available here" for the whole
+    // web app: the coordinator, the navigation adapter and DashboardLayout all
+    // read it (gated by the compact breakpoint). Without it every consumer
+    // sits outside a provider and web session tabs never turn on.
+    <SessionTabsProvider>
+      <Suspense>
+        <WebTabCoordinator />
+        <NavigationProviderInner>{children}</NavigationProviderInner>
+      </Suspense>
+    </SessionTabsProvider>
   );
 }
