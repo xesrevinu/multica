@@ -17,3 +17,12 @@ Reference implementation: /Users/kee/Workspace/ai-stack/multica-e2e/teamctl (kep
 - S4 pass (on its own): ATT-40 run >20m → T5b_cancel_stuck → T5 rerun
 - Incident: the ATT-40 owner ran `rg` over /Users/kee looking for the rejection reason, which was only in metadata.acceptance. Killed only that rg (a daemon→pi child), paused the team, cancelled the run. Fix: reject also writes blocked_reason; WORKSPACE SCOPE rule added to instructions, skills, the platform reference and the runbook. The rerun was clean.
 - Not done yet: PR-S3..S6, M4 UI, patch-id verdict carry-over, leader election, rebuilding the e2e daemon/CLI from orch
+
+## Step: idle detection, M4 UI, e2e daemon rebuild, PR-S3/S4/S6 (2026-10-19 16:00–16:30)
+- 54ea8f512 no-progress detection: `limits.idle_min` (default 8, negative disables). A running run with no task_message for that long gets T5b (counts as an infra attempt).
+- 0336312ae web: issue Flow card (state rail with current node, phase, attempt counters, failures, why blocked, paused, waiting, next decision, last 10 transitions, Accept button) and project team section (spec summary plus pause/resume). views typecheck clean; vitest projects+issues 1443/1443 pass.
+- e2e daemon rebuilt from feat/orchestrator: the old binary is kept as multica-e2e/server/bin/multica.bak-pre-orch, and the daemon was restarted with the same env/profile (pid 57230).
+- PR-S3 ATT-52/53: pass. PR #11 merged first; #12 GitHub mergeable=CONFLICTING → T3 rework → re-review → merged (de563cc).
+- PR-S6 ATT-54..57: pass. Stage-1 PRs merged in parallel, stage 2 started (16:10:48) only after both were done, then merged.
+- PR-S4 ATT-58: pass, on the new daemon. With idle_min=1 the agent's `sleep 150` was cancelled 3 times ("no tool output for 1m"), then T6 block to lead after infra 2/2, orchestrator_alert inbox. idle_min restored to 8, `flow unblock` → the 150s sleep was tolerated → PR merged.
+- PR-S5 ATT-59: in progress (intentional first-attempt CI flake → expect exactly one re-run).
