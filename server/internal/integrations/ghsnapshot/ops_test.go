@@ -33,13 +33,26 @@ func fakeGitHub(t *testing.T) (*httptest.Server, *[]string) {
 				`","permissions":{"contents":"write","pull_requests":"write","checks":"read","actions":"read"}}`))
 		case p == "/repos/o/r/pulls/7":
 			_, _ = w.Write([]byte(`{"number":7,"title":"t","state":"open","html_url":"https://x/7","mergeable":false,"mergeable_state":"dirty",
-				"additions":3,"deletions":1,"changed_files":2,"head":{"ref":"agent/att-1","sha":"abc"},"base":{"ref":"main"}}`))
+				"additions":3,"deletions":1,"changed_files":2,"head":{"ref":"agent/att-1","sha":"abc"},"base":{"ref":"main"},"user":{"login":"app[bot]"},"labels":[{"name":"risk:low"}]}`))
 		case p == "/repos/o/r/pulls/7/commits":
-			_, _ = w.Write([]byte(`[{"sha":"abc","commit":{"message":"feat: x\n\nbody","author":{"name":"bot","date":"2026-10-19T01:00:00Z"}},"author":{"login":"app[bot]"}}]`))
+			_, _ = w.Write([]byte(`[{"sha":"abc","commit":{"message":"feat: x\n\nbody","author":{"name":"bot","date":"2026-10-19T01:00:00Z"}},"author":{"login":"app[bot]"},"parents":[{"sha":"p1"},{"sha":"p2"}]}]`))
 		case p == "/repos/o/r/commits/abc/check-runs":
 			_, _ = w.Write([]byte(`{"check_runs":[{"name":"test","status":"completed","conclusion":"failure","html_url":"u","app":{"slug":"github-actions"}}]}`))
 		case p == "/repos/o/r/compare/main...abc":
-			_, _ = w.Write([]byte(`{"ahead_by":1,"behind_by":4}`))
+			_, _ = w.Write([]byte(`{"ahead_by":1,"behind_by":4,"merge_base_commit":{"sha":"mb"}}`))
+		case p == "/repos/o/r/compare/mb...main":
+			_, _ = w.Write([]byte(`{"files":[{"filename":"src/a.js"},{"filename":"README.md"}]}`))
+		case p == "/repos/o/r/pulls/7/files":
+			_, _ = w.Write([]byte(`[{"filename":"src/a.js","status":"modified","additions":3,"deletions":1,"patch":"@@"},{"filename":"test/a.test.js","status":"added","additions":2}]`))
+		case p == "/repos/o/r/pulls/7/reviews":
+			_, _ = w.Write([]byte(`[{"user":{"login":"rev"},"state":"CHANGES_REQUESTED","body":"fix it","submitted_at":"2026-10-19T02:00:00Z"},{"user":{"login":"x"},"state":"PENDING"}]`))
+		case p == "/repos/o/r/pulls/7/comments":
+			_, _ = w.Write([]byte(`[{"id":5,"user":{"login":"rev"},"path":"src/a.js","line":3,"body":"nit","created_at":"2026-10-19T02:01:00Z"}]`))
+		case p == "/repos/o/r/issues/7/labels":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`[]`))
+		case p == "/repos/o/r/git/refs/heads/agent/att-1":
+			w.WriteHeader(http.StatusNoContent)
 		case p == "/repos/o/r/pulls/7/update-branch":
 			var b map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&b)
@@ -76,6 +89,12 @@ func TestPRDetailAndOps(t *testing.T) {
 	if d.MergeableState != "dirty" || d.BehindBy != 4 || len(d.Commits) != 1 || d.Commits[0].Message != "feat: x" || d.Commits[0].Author != "app[bot]" {
 		t.Fatalf("detail %+v", d)
 	}
+	if len(d.Commits[0].Parents) != 2 || d.Author != "app[bot]" || len(d.Labels) != 1 || len(d.Conflicts) != 1 || d.Conflicts[0] != "src/a.js" {
+		t.Fatalf("parents/labels/conflicts %+v", d)
+	}
+	if len(d.Reviews) != 1 || d.Reviews[0].State != "CHANGES_REQUESTED" || len(d.ReviewComments) != 1 || d.ReviewComments[0].Line != 3 {
+		t.Fatalf("reviews %+v %+v", d.Reviews, d.ReviewComments)
+	}
 	if len(d.Checks) != 1 || d.Checks[0].Conclusion != "failure" || d.Checks[0].App != "github-actions" {
 		t.Fatalf("checks %+v", d.Checks)
 	}
@@ -85,7 +104,7 @@ func TestPRDetailAndOps(t *testing.T) {
 		t.Fatal(err)
 	}
 	ab := AbilitiesFrom(perms)
-	if !ab.UpdateBranch || !ab.Merge || ab.Rerun || !ab.ReadChecks {
+	if !ab.UpdateBranch || !ab.Merge || ab.Rerun || !ab.ReadChecks || !ab.Labels || !ab.DeleteBranch {
 		t.Fatalf("abilities %+v", ab)
 	}
 
@@ -103,7 +122,17 @@ func TestPRDetailAndOps(t *testing.T) {
 	if strings.Contains(err.Error(), "ghs_x") {
 		t.Fatal("token leaked into error")
 	}
-	want := "POST /app/installations/1/access_tokens,PUT /repos/o/r/pulls/7/update-branch,POST /repos/o/r/actions/runs/11/rerun-failed-jobs,PUT /repos/o/r/pulls/7/merge"
+	files, err := c.PRFiles(ctx, 1, "o", "r", 7)
+	if err != nil || len(files) != 2 || files[1].Status != "added" {
+		t.Fatalf("files %v %v", files, err)
+	}
+	if err := c.AddLabels(ctx, 1, "o", "r", 7, []string{"risk:low"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DeleteBranch(ctx, 1, "o", "r", "agent/att-1"); err != nil {
+		t.Fatal(err)
+	}
+	want := "POST /app/installations/1/access_tokens,PUT /repos/o/r/pulls/7/update-branch,POST /repos/o/r/actions/runs/11/rerun-failed-jobs,PUT /repos/o/r/pulls/7/merge,POST /repos/o/r/issues/7/labels,DELETE /repos/o/r/git/refs/heads/agent/att-1"
 	if got := strings.Join(*calls, ","); got != want {
 		t.Fatalf("calls\n got  %s\n want %s", got, want)
 	}

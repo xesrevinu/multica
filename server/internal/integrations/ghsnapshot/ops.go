@@ -99,7 +99,9 @@ type PRCommit struct {
 	SHA     string    `json:"sha"`
 	Message string    `json:"message"`
 	Author  string    `json:"author"`
+	Avatar  string    `json:"avatar,omitempty"`
 	Date    time.Time `json:"date"`
+	Parents []string  `json:"parents"`
 }
 
 // PRCheck is one check run on the PR head.
@@ -113,24 +115,84 @@ type PRCheck struct {
 
 // PRDetail is the live PR state shown on the PR card.
 type PRDetail struct {
-	Number         int        `json:"number"`
-	Title          string     `json:"title"`
-	State          string     `json:"state"` // open | closed | merged
-	Draft          bool       `json:"draft"`
-	URL            string     `json:"url"`
-	HeadRef        string     `json:"head_ref"`
-	HeadSHA        string     `json:"head_sha"`
-	BaseRef        string     `json:"base_ref"`
-	Mergeable      *bool      `json:"mergeable"`
-	MergeableState string     `json:"mergeable_state"` // clean | dirty | behind | blocked | unstable | unknown
-	BehindBy       int        `json:"behind_by"`
-	AheadBy        int        `json:"ahead_by"`
-	Additions      int        `json:"additions"`
-	Deletions      int        `json:"deletions"`
-	ChangedFiles   int        `json:"changed_files"`
-	Commits        []PRCommit `json:"commits"`
-	Checks         []PRCheck  `json:"checks"`
-	MergedAt       *time.Time `json:"merged_at,omitempty"`
+	Number         int               `json:"number"`
+	Title          string            `json:"title"`
+	State          string            `json:"state"` // open | closed | merged
+	Draft          bool              `json:"draft"`
+	URL            string            `json:"url"`
+	HeadRef        string            `json:"head_ref"`
+	HeadSHA        string            `json:"head_sha"`
+	BaseRef        string            `json:"base_ref"`
+	Mergeable      *bool             `json:"mergeable"`
+	MergeableState string            `json:"mergeable_state"` // clean | dirty | behind | blocked | unstable | unknown
+	BehindBy       int               `json:"behind_by"`
+	AheadBy        int               `json:"ahead_by"`
+	Additions      int               `json:"additions"`
+	Deletions      int               `json:"deletions"`
+	ChangedFiles   int               `json:"changed_files"`
+	Commits        []PRCommit        `json:"commits"`
+	Checks         []PRCheck         `json:"checks"`
+	MergedAt       *time.Time        `json:"merged_at,omitempty"`
+	Author         string            `json:"author,omitempty"`
+	Labels         []string          `json:"labels"`
+	Reviews        []PRReview        `json:"reviews"`
+	ReviewComments []PRReviewComment `json:"review_comments"`
+	// Conflicts lists files changed on both sides since the merge base when
+	// GitHub reports the PR as dirty (a cheap stand-in for git's conflict set).
+	Conflicts   []string `json:"conflicts"`
+	HeadDeleted bool     `json:"head_deleted"`
+}
+
+// PRReview is one submitted review (approve / request changes / comment).
+type PRReview struct {
+	User        string    `json:"user"`
+	Avatar      string    `json:"avatar,omitempty"`
+	State       string    `json:"state"`
+	Body        string    `json:"body"`
+	SubmittedAt time.Time `json:"submitted_at"`
+	URL         string    `json:"url,omitempty"`
+}
+
+// PRReviewComment is an inline (diff) review comment.
+type PRReviewComment struct {
+	ID        int64     `json:"id"`
+	User      string    `json:"user"`
+	Avatar    string    `json:"avatar,omitempty"`
+	Path      string    `json:"path"`
+	Line      int       `json:"line,omitempty"`
+	Body      string    `json:"body"`
+	CreatedAt time.Time `json:"created_at"`
+	URL       string    `json:"url,omitempty"`
+	InReplyTo int64     `json:"in_reply_to,omitempty"`
+}
+
+// PRFile is one changed file of a pull request.
+type PRFile struct {
+	Filename  string `json:"filename"`
+	Status    string `json:"status"`
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
+	Patch     string `json:"patch,omitempty"`
+	Previous  string `json:"previous_filename,omitempty"`
+}
+
+type ghUser struct {
+	Login     string `json:"login"`
+	AvatarURL string `json:"avatar_url"`
+}
+
+func (u *ghUser) login() string {
+	if u == nil {
+		return ""
+	}
+	return u.Login
+}
+
+func (u *ghUser) avatar() string {
+	if u == nil {
+		return ""
+	}
+	return u.AvatarURL
 }
 
 func repoPath(owner, repo string) string {
@@ -161,6 +223,10 @@ func (c *Client) FetchPRDetail(ctx context.Context, installationID int64, owner,
 		Base struct {
 			Ref string `json:"ref"`
 		} `json:"base"`
+		User   *ghUser `json:"user"`
+		Labels []struct {
+			Name string `json:"name"`
+		} `json:"labels"`
 	}
 	if err := c.REST(ctx, installationID, http.MethodGet, fmt.Sprintf("%s/pulls/%d", base, number), nil, &pr); err != nil {
 		return nil, err
@@ -168,7 +234,11 @@ func (c *Client) FetchPRDetail(ctx context.Context, installationID int64, owner,
 	d := &PRDetail{Number: pr.Number, Title: pr.Title, State: pr.State, Draft: pr.Draft, URL: pr.HTMLURL,
 		HeadRef: pr.Head.Ref, HeadSHA: pr.Head.SHA, BaseRef: pr.Base.Ref, Mergeable: pr.Mergeable, MergeableState: pr.MergeableState,
 		Additions: pr.Additions, Deletions: pr.Deletions, ChangedFiles: pr.ChangedFiles, MergedAt: pr.MergedAt,
-		Commits: []PRCommit{}, Checks: []PRCheck{}}
+		Commits: []PRCommit{}, Checks: []PRCheck{}, Author: pr.User.login(), Labels: []string{},
+		Reviews: []PRReview{}, ReviewComments: []PRReviewComment{}, Conflicts: []string{}}
+	for _, l := range pr.Labels {
+		d.Labels = append(d.Labels, l.Name)
+	}
 	if pr.Merged {
 		d.State = "merged"
 	}
@@ -181,18 +251,23 @@ func (c *Client) FetchPRDetail(ctx context.Context, installationID int64, owner,
 				Date time.Time `json:"date"`
 			} `json:"author"`
 		} `json:"commit"`
-		Author *struct {
-			Login string `json:"login"`
-		} `json:"author"`
+		Author  *ghUser `json:"author"`
+		Parents []struct {
+			SHA string `json:"sha"`
+		} `json:"parents"`
 	}
 	if c.REST(ctx, installationID, http.MethodGet, fmt.Sprintf("%s/pulls/%d/commits?per_page=100", base, number), nil, &commits) == nil {
 		for _, x := range commits {
 			who := x.Commit.Author.Name
-			if x.Author != nil && x.Author.Login != "" {
-				who = x.Author.Login
+			if x.Author.login() != "" {
+				who = x.Author.login()
 			}
 			msg, _, _ := strings.Cut(x.Commit.Message, "\n")
-			d.Commits = append(d.Commits, PRCommit{SHA: x.SHA, Message: msg, Author: who, Date: x.Commit.Author.Date})
+			pc := PRCommit{SHA: x.SHA, Message: msg, Author: who, Avatar: x.Author.avatar(), Date: x.Commit.Author.Date, Parents: []string{}}
+			for _, p := range x.Parents {
+				pc.Parents = append(pc.Parents, p.SHA)
+			}
+			d.Commits = append(d.Commits, pc)
 		}
 	}
 	if pr.Head.SHA != "" {
@@ -219,14 +294,141 @@ func (c *Client) FetchPRDetail(ctx context.Context, installationID int64, owner,
 	}
 	if pr.Base.Ref != "" && pr.Head.SHA != "" && d.State == "open" {
 		var cmp struct {
-			AheadBy  int `json:"ahead_by"`
-			BehindBy int `json:"behind_by"`
+			AheadBy         int `json:"ahead_by"`
+			BehindBy        int `json:"behind_by"`
+			MergeBaseCommit struct {
+				SHA string `json:"sha"`
+			} `json:"merge_base_commit"`
 		}
 		if c.REST(ctx, installationID, http.MethodGet, fmt.Sprintf("%s/compare/%s...%s", base, url.PathEscape(pr.Base.Ref), url.PathEscape(pr.Head.SHA)), nil, &cmp) == nil {
 			d.AheadBy, d.BehindBy = cmp.AheadBy, cmp.BehindBy
+			if pr.MergeableState == "dirty" && cmp.MergeBaseCommit.SHA != "" {
+				d.Conflicts = c.overlap(ctx, installationID, base, number, cmp.MergeBaseCommit.SHA, pr.Base.Ref)
+			}
+		}
+	}
+	c.fillReviews(ctx, installationID, base, number, d)
+	if d.State != "open" && pr.Head.Ref != "" {
+		var ref struct{}
+		if err := c.REST(ctx, installationID, http.MethodGet, base+"/git/ref/heads/"+pathRef(pr.Head.Ref), nil, &ref); err != nil {
+			var ae *APIError
+			d.HeadDeleted = errors.As(err, &ae) && ae.Status == 404
 		}
 	}
 	return d, nil
+}
+
+// pathRef escapes each segment of a ref so "agent/att-1" stays a path.
+func pathRef(ref string) string {
+	parts := strings.Split(ref, "/")
+	for i, p := range parts {
+		parts[i] = url.PathEscape(p)
+	}
+	return strings.Join(parts, "/")
+}
+
+// overlap returns files the PR changes that the base also changed since the
+// merge base.
+func (c *Client) overlap(ctx context.Context, installationID int64, base string, number int, mergeBase, baseRef string) []string {
+	out := []string{}
+	mine := map[string]bool{}
+	files, err := c.ListPRFiles(ctx, installationID, base, number)
+	if err != nil {
+		return out
+	}
+	for _, f := range files {
+		mine[f.Filename] = true
+	}
+	var cmp struct {
+		Files []struct {
+			Filename string `json:"filename"`
+		} `json:"files"`
+	}
+	if c.REST(ctx, installationID, http.MethodGet, fmt.Sprintf("%s/compare/%s...%s", base, url.PathEscape(mergeBase), url.PathEscape(baseRef)), nil, &cmp) != nil {
+		return out
+	}
+	for _, f := range cmp.Files {
+		if mine[f.Filename] {
+			out = append(out, f.Filename)
+		}
+	}
+	return out
+}
+
+func (c *Client) fillReviews(ctx context.Context, installationID int64, base string, number int, d *PRDetail) {
+	var reviews []struct {
+		User        *ghUser   `json:"user"`
+		State       string    `json:"state"`
+		Body        string    `json:"body"`
+		SubmittedAt time.Time `json:"submitted_at"`
+		HTMLURL     string    `json:"html_url"`
+	}
+	if c.REST(ctx, installationID, http.MethodGet, fmt.Sprintf("%s/pulls/%d/reviews?per_page=100", base, number), nil, &reviews) == nil {
+		for _, r := range reviews {
+			if r.State == "PENDING" {
+				continue
+			}
+			d.Reviews = append(d.Reviews, PRReview{User: r.User.login(), Avatar: r.User.avatar(), State: r.State, Body: r.Body, SubmittedAt: r.SubmittedAt, URL: r.HTMLURL})
+		}
+	}
+	var comments []struct {
+		ID        int64     `json:"id"`
+		User      *ghUser   `json:"user"`
+		Path      string    `json:"path"`
+		Line      *int      `json:"line"`
+		Body      string    `json:"body"`
+		CreatedAt time.Time `json:"created_at"`
+		HTMLURL   string    `json:"html_url"`
+		InReplyTo int64     `json:"in_reply_to_id"`
+	}
+	if c.REST(ctx, installationID, http.MethodGet, fmt.Sprintf("%s/pulls/%d/comments?per_page=100", base, number), nil, &comments) == nil {
+		for _, x := range comments {
+			rc := PRReviewComment{ID: x.ID, User: x.User.login(), Avatar: x.User.avatar(), Path: x.Path, Body: x.Body, CreatedAt: x.CreatedAt, URL: x.HTMLURL, InReplyTo: x.InReplyTo}
+			if x.Line != nil {
+				rc.Line = *x.Line
+			}
+			d.ReviewComments = append(d.ReviewComments, rc)
+		}
+	}
+}
+
+// ListPRFiles returns the PR's changed files (first 300, GitHub's page cap
+// ×3). base is repoPath(owner, repo).
+func (c *Client) ListPRFiles(ctx context.Context, installationID int64, base string, number int) ([]PRFile, error) {
+	out := []PRFile{}
+	for page := 1; page <= 3; page++ {
+		var files []PRFile
+		if err := c.REST(ctx, installationID, http.MethodGet, fmt.Sprintf("%s/pulls/%d/files?per_page=100&page=%d", base, number, page), nil, &files); err != nil {
+			if page == 1 {
+				return nil, err
+			}
+			break
+		}
+		out = append(out, files...)
+		if len(files) < 100 {
+			break
+		}
+	}
+	return out, nil
+}
+
+// PRFiles is ListPRFiles addressed by owner/repo.
+func (c *Client) PRFiles(ctx context.Context, installationID int64, owner, repo string, number int) ([]PRFile, error) {
+	return c.ListPRFiles(ctx, installationID, repoPath(owner, repo), number)
+}
+
+// AddLabels adds labels to the PR (an issue under the hood); existing labels
+// stay. Unknown labels are created by GitHub with a default colour.
+func (c *Client) AddLabels(ctx context.Context, installationID int64, owner, repo string, number int, labels []string) error {
+	if len(labels) == 0 {
+		return nil
+	}
+	return c.REST(ctx, installationID, http.MethodPost, fmt.Sprintf("%s/issues/%d/labels", repoPath(owner, repo), number), map[string]any{"labels": labels}, nil)
+}
+
+// DeleteBranch deletes a head branch (refs/heads/<ref>).
+func (c *Client) DeleteBranch(ctx context.Context, installationID int64, owner, repo, ref string) error {
+	return c.REST(ctx, installationID, http.MethodDelete, repoPath(owner, repo)+"/git/refs/heads/"+pathRef(ref), nil, nil)
 }
 
 // UpdateBranch merges the base branch into the PR branch.
@@ -287,6 +489,8 @@ type PRAbilities struct {
 	UpdateBranch bool `json:"update_branch"`
 	Rerun        bool `json:"rerun"`
 	Merge        bool `json:"merge"`
+	Labels       bool `json:"labels"`
+	DeleteBranch bool `json:"delete_branch"`
 }
 
 func AbilitiesFrom(perms map[string]string) PRAbilities {
@@ -297,5 +501,7 @@ func AbilitiesFrom(perms map[string]string) PRAbilities {
 		UpdateBranch: w("contents") && w("pull_requests"),
 		Rerun:        w("actions"),
 		Merge:        w("contents") && w("pull_requests"),
+		Labels:       w("issues") || w("pull_requests"),
+		DeleteBranch: w("contents"),
 	}
 }
