@@ -25,7 +25,9 @@ export const AGENT_FOCUS_CONVERSATION_STARTERS = "conversation_starters";
 function workspaceScoped(slug: string) {
   const ws = `/${encode(slug)}`;
   return {
-    root: () => `${ws}/issues`,
+    // Landing surface: the agent chat ("nothing selected" in the issue-centric
+    // shell). Issue lists stay reachable as secondary views.
+    root: () => `${ws}/chat`,
     usage: () => `${ws}/usage`,
     issues: () => `${ws}/issues`,
     issueDetail: (id: string) => `${ws}/issues/${encode(id)}`,
