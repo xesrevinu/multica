@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/multica-ai/multica/server/internal/orchestrator"
 	"log/slog"
 	"math"
 	"net/http"
@@ -201,6 +202,8 @@ type RuntimeRecoveryNotifier interface {
 }
 
 type Handler struct {
+	// Orchestrator is the in-app state machine (nil = disabled).
+	Orchestrator           *orchestrator.Service
 	Queries                *db.Queries
 	ReadSelector           *dbreader.Selector
 	DB                     dbExecutor

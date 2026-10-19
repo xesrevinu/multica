@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/orchestrator"
 	"log/slog"
 	"net/http"
 	"net/netip"
@@ -462,6 +463,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	h.TaskService.FeatureFlags = opts.FeatureFlags
 	h.TaskService.Metrics = opts.BusinessMetrics
 	h.IssueService.Metrics = opts.BusinessMetrics
+	h.Orchestrator = orchestrator.New(orchestrator.Options{Pool: pool, Bus: bus, Queries: queries, Reconcile: envDurationPositive("MULTICA_ORCHESTRATOR_RECONCILE", 60*time.Second)})
 	entitlementClient, entitlementErr := entitlement.New(entitlement.Config{
 		BaseURL:  signupConfig.CloudURL,
 		Observer: opts.BusinessMetrics,
@@ -2002,6 +2004,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/snapshot", h.GetSearchIndexSnapshot)
 				r.Post("/changes", h.ListSearchIndexChanges)
 			})
+
+			// In-app orchestrator: team specs and member flow controls.
+			r.With(handler.RequireHumanActor).Mount("/api/orchestrator", h.Orchestrator.Routes())
 
 			// Issues
 			r.Route("/api/issues", func(r chi.Router) {

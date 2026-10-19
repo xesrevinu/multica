@@ -196,7 +196,9 @@ func (h *Handler) decidePRAutoComplete(ctx context.Context, ws db.Workspace, iss
 	case issue.TriageState.Valid:
 		d.State = prAutoCompleteTriage
 		return d, nil
-	case d.Target == "":
+	case d.Target == "" || h.Orchestrator.Owns(uuidToString(issue.ProjectID)):
+		// pr_merge_status=none for orchestrated projects: the orchestrator
+		// merges and moves the issue itself, a webhook must not race it.
 		d.State = prAutoCompleteWorkspaceDisabled
 		return d, nil
 	case disabled:

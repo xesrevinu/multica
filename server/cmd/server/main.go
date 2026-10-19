@@ -708,6 +708,11 @@ func main() {
 	// create a second wrapper around the same primary pool.
 	h.ReadSelector = dbreader.New(h.Queries, replicaQueries, readRecorder)
 	h.PRRefresh.SetReadSelector(h.ReadSelector)
+	// In-app orchestrator: consumes the bus, reconciles every minute and
+	// applies decisions through the router as its service member.
+	if h.Orchestrator != nil {
+		h.Orchestrator.Start(context.Background(), r)
+	}
 
 	// Reconciled race recoveries in the batched scheduler reuse the same
 	// daemon:register refresh the sync transition path publishes. Wired before
