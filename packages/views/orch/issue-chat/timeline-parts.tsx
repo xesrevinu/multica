@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronRight, ExternalLink, GitCommitHorizontal, GitPullRequest, Loader2 } from "lucide-react";
+import { ChevronRight, ExternalLink, GitCommitHorizontal, Loader2 } from "lucide-react";
 import { isBuiltInIssueStatus } from "@multica/core/issue-statuses";
 import type { TimelineEntry } from "@multica/core/types";
 import { useActorName } from "@multica/core/workspace/hooks";
@@ -12,6 +12,8 @@ import { AgentRunComment } from "../../issues/components/comment-card";
 import type { CommentRun } from "../../issues/components/comment-runs";
 import { formatDuration } from "../format";
 import { ReadonlyContent } from "../../editor";
+import { Collapse } from "../parts/collapse";
+import { PersonAvatar } from "../parts/person-avatar";
 import { runDurationMs, type GitHubReviewItem } from "./build-items";
 
 export function useStatusText() {
@@ -31,14 +33,14 @@ export function TransitionDivider({ entry }: { entry: TimelineEntry }) {
   if (d.assignee) parts.push(t(($) => $.chat.assigned_to, { who: d.assignee }));
   return (
     <div className="flex items-center gap-3 py-3" data-testid="orch-transition">
-      <span className="h-px flex-1 bg-border" />
+      <span className="h-px flex-1 bg-border/70" />
       <span className="inline-flex max-w-[80%] items-center gap-1.5 text-micro text-muted-foreground" title={d.why || undefined}>
         <GitCommitHorizontal className="size-3 shrink-0 text-faint-foreground" />
         {d.tid && <span className="font-mono">{d.tid.replace(/^T\d+_/, "")}</span>}
         {parts.length > 0 && <span className="truncate">{parts.join(" · ")}</span>}
         <span className="shrink-0 text-faint-foreground">· {timeAgo(entry.created_at)}</span>
       </span>
-      <span className="h-px flex-1 bg-border" />
+      <span className="h-px flex-1 bg-border/70" />
     </div>
   );
 }
@@ -63,7 +65,7 @@ export function ActivitiesFold({ entries, defaultOpen = false }: { entries: Time
         <ChevronRight className={cn("size-3 shrink-0 transition-transform", open && "rotate-90")} />
         <span>{t(($) => $.activity.activity_count, { count: entries.length })}</span>
       </button>
-      {open && (
+      <Collapse open={open}>
         <ul className="mt-1 ml-1.5 flex flex-col gap-0.5 border-l border-border/60 pl-3">
           {entries.map((e) => (
             <li key={e.id} className="flex items-baseline gap-1.5 text-caption text-muted-foreground">
@@ -73,7 +75,7 @@ export function ActivitiesFold({ entries, defaultOpen = false }: { entries: Time
             </li>
           ))}
         </ul>
-      )}
+      </Collapse>
     </div>
   );
 }
@@ -116,11 +118,11 @@ export function WorkedForFold({ run, entering, agentName }: { run: CommentRun; e
         <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} />
         {at && <span className="ml-auto shrink-0 text-caption text-faint-foreground">{timeAgo(at)}</span>}
       </button>
-      {open && (
-        <div className="mt-2">
+      <Collapse open={open}>
+        <div className="mt-2 max-h-[min(24rem,50vh)] overflow-y-auto">
           <AgentRunComment run={run} entering={entering} standalone />
         </div>
-      )}
+      </Collapse>
     </div>
   );
 }
@@ -137,7 +139,7 @@ export function GitHubReviewMessage({ review }: { review: GitHubReviewItem }) {
   return (
     <div className="px-1 py-1" data-testid="orch-gh-review">
       <div className="flex items-center gap-1.5 text-caption">
-        {review.avatar ? <img src={review.avatar} alt="" className="size-5 rounded-full" /> : <GitPullRequest className="size-4 text-muted-foreground" />}
+        <PersonAvatar name={review.user} url={review.avatar} />
         <span className="text-body font-medium text-foreground">{review.user}</span>
         {verb && (
           <span className={cn("text-muted-foreground", stateKey === "APPROVED" && "text-emerald-700 dark:text-emerald-300", stateKey === "CHANGES_REQUESTED" && "text-red-700 dark:text-red-300")}>

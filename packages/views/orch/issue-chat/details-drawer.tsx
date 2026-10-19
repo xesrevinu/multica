@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ExternalLink, Pencil } from "lucide-react";
@@ -29,6 +29,37 @@ import { useStatusText } from "./timeline-parts";
 
 export type DrawerTab = "details" | "files" | "worktrees" | "terminal";
 const RISKS = ["low", "medium", "high"] as const;
+const DRAWER_WIDTH_KEY = "orch-drawer-width";
+const DRAWER_WIDTH_MIN = 320;
+const DRAWER_WIDTH_MAX = 720;
+
+function useDrawerWidth() {
+  const [width, setWidth] = useState(512);
+  const widthRef = useRef(width);
+  widthRef.current = width;
+  useEffect(() => {
+    const stored = Number(localStorage.getItem(DRAWER_WIDTH_KEY));
+    if (stored >= DRAWER_WIDTH_MIN && stored <= DRAWER_WIDTH_MAX) setWidth(stored);
+  }, []);
+  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = widthRef.current;
+    const move = (ev: PointerEvent) => {
+      const next = Math.min(DRAWER_WIDTH_MAX, Math.max(DRAWER_WIDTH_MIN, startW + (startX - ev.clientX)));
+      widthRef.current = next;
+      setWidth(next);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      localStorage.setItem(DRAWER_WIDTH_KEY, String(widthRef.current));
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  return { width, onPointerDown };
+}
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -69,6 +100,7 @@ export function DetailsDrawer({
 }) {
   const { t } = useT("orch");
   const isMobile = useIsMobile();
+  const { width, onPointerDown } = useDrawerWidth();
   const p = useWorkspacePaths();
   const [localTab, setLocalTab] = useState<DrawerTab>(tab);
   const current = onTabChange ? tab : localTab;
@@ -78,9 +110,19 @@ export function DetailsDrawer({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side={isMobile ? "bottom" : "right"}
-        className={isMobile ? "max-h-[88vh] rounded-t-2xl" : "w-[32rem] sm:max-w-lg"}
+        className={isMobile ? "max-h-[88vh] rounded-t-2xl pb-[env(safe-area-inset-bottom)]" : "sm:max-w-none"}
+        style={isMobile ? undefined : { width, maxWidth: width }}
         data-testid="orch-details-drawer"
       >
+        {!isMobile && (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={t(($) => $.drawer.resize)}
+            onPointerDown={onPointerDown}
+            className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize touch-none hover:bg-border"
+          />
+        )}
         <SheetHeader className="gap-1 border-b border-border pb-0">
           <p className="font-mono text-micro text-muted-foreground">{issue.identifier}</p>
           <SheetTitle className="pr-8 text-title-sm">{issue.title}</SheetTitle>
@@ -89,11 +131,11 @@ export function DetailsDrawer({
             {t(($) => $.drawer.open_classic)}
           </AppLink>
           <Tabs value={current} onValueChange={(x) => setTab(x as DrawerTab)} className="mt-2">
-            <TabsList variant="line" className="h-8 gap-3 p-0">
-              <TabsTrigger value="details" className="flex-none px-0 text-label" data-testid="orch-drawer-tab-details">{t(($) => $.drawer.tab_details)}</TabsTrigger>
-              <TabsTrigger value="files" className="flex-none px-0 text-label" data-testid="orch-drawer-tab-files">{t(($) => $.drawer.tab_files)}</TabsTrigger>
-              <TabsTrigger value="worktrees" className="flex-none px-0 text-label" data-testid="orch-drawer-tab-worktrees">{t(($) => $.drawer.tab_worktrees)}</TabsTrigger>
-              <TabsTrigger value="terminal" className="flex-none px-0 text-label" data-testid="orch-drawer-tab-terminal">{t(($) => $.drawer.tab_terminal)}</TabsTrigger>
+            <TabsList variant="line" className="h-8 w-full justify-start gap-3 overflow-x-auto p-0">
+              <TabsTrigger value="details" className="flex-none shrink-0 px-0 text-label" data-testid="orch-drawer-tab-details">{t(($) => $.drawer.tab_details)}</TabsTrigger>
+              <TabsTrigger value="files" className="flex-none shrink-0 px-0 text-label" data-testid="orch-drawer-tab-files">{t(($) => $.drawer.tab_files)}</TabsTrigger>
+              <TabsTrigger value="worktrees" className="flex-none shrink-0 px-0 text-label" data-testid="orch-drawer-tab-worktrees">{t(($) => $.drawer.tab_worktrees)}</TabsTrigger>
+              <TabsTrigger value="terminal" className="flex-none shrink-0 px-0 text-label" data-testid="orch-drawer-tab-terminal">{t(($) => $.drawer.tab_terminal)}</TabsTrigger>
             </TabsList>
           </Tabs>
         </SheetHeader>

@@ -24,13 +24,25 @@ import {
   type OrchPROp,
 } from "@multica/core/orchestrator";
 import { Button } from "@multica/ui/components/ui/button";
+import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { useT, useTimeAgo } from "../../i18n";
 import { checksTone, prStateTone, PR_STATE_CHIP, shortSha, TONE_DOT } from "../format";
 import { DiffStat, PRStateIcon } from "../parts/chips";
 import { CommitGraph, LaneChip, type GraphRow } from "../parts/commit-graph";
+import { PersonAvatar } from "../parts/person-avatar";
 
 type Detail = NonNullable<OrchPRCard["pr"]>;
+
+function PRCardSkeleton() {
+  return (
+    <div className="overflow-hidden rounded-2xl border border-border bg-card p-4" data-testid="orch-pr-card-loading" aria-busy="true">
+      <Skeleton className="h-4 w-2/3" />
+      <Skeleton className="mt-2 h-3 w-1/2" />
+      <Skeleton className="mt-3 h-16 w-full" />
+    </div>
+  );
+}
 
 // PRCard: the Codex-style pull request card — title + state, a commit graph
 // with branch lanes (PR branch, and the base branch where it was merged in),
@@ -40,12 +52,15 @@ export function PRCard({ wsId, issueKey, hasPR }: { wsId: string; issueKey: stri
   const { t } = useT("orch");
   const { data: linked = [] } = useQuery({ ...orchPRListOptions(wsId, issueKey), enabled: hasPR });
   const [number, setNumber] = useState<number | undefined>(undefined);
-  const { data, isLoading } = useQuery(orchPRCardOptions(wsId, issueKey, hasPR, number));
-  if (isLoading && hasPR) {
+  const { data, isLoading, isError, refetch, isFetching } = useQuery(orchPRCardOptions(wsId, issueKey, hasPR, number));
+  if (isLoading && hasPR) return <PRCardSkeleton />;
+  if (isError && hasPR) {
     return (
-      <div className="flex items-center gap-2 rounded-2xl border border-border px-4 py-3 text-caption text-muted-foreground" data-testid="orch-pr-card-loading">
-        <Loader2 className="size-3.5 animate-spin" />
-        {t(($) => $.pr.loading)}
+      <div className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-card px-4 py-3" data-testid="orch-pr-card-error">
+        <p className="text-caption text-muted-foreground">{t(($) => $.pr.error)}</p>
+        <Button size="sm" variant="outline" disabled={isFetching} onClick={() => void refetch()}>
+          {t(($) => $.pr.retry)}
+        </Button>
       </div>
     );
   }
@@ -199,18 +214,11 @@ function PRCardBody({ wsId, issueKey, data, number }: { wsId: string; issueKey: 
             ) : (
               <span className="inline-flex items-center gap-1"><Check className="size-3.5 text-emerald-600 dark:text-emerald-400" />{t(($) => $.pr.checks_passed, { passed, total: checks.length })}</span>
             )}
-            {pr && pr.reviews.length > 0 && (
-              <span className="inline-flex items-center gap-1">
-                · {pr.reviews.slice(-3).map((r) => (
-                  <span key={`${r.user}-${r.submitted_at}`} className="inline-flex items-center gap-1" title={r.body}>
-                    {r.avatar ? <img src={r.avatar} alt="" className="size-4 rounded-full" /> : null}
-                    <span>{r.user} {t(($) => $.pr.review_state[r.state as "APPROVED"] ?? $.pr.review_state.COMMENTED)}</span>
-                  </span>
-                ))}
-              </span>
-            )}
             {checks.length > 0 && <ChevronRight className={cn("ml-auto size-3.5 transition-transform", showChecks && "rotate-90")} />}
           </button>
+          {pr && pr.reviews.length > 0 && (
+            <ReviewFaces reviews={pr.reviews} label={(state) => t(($) => $.pr.review_state[state as "APPROVED"] ?? $.pr.review_state.COMMENTED)} />
+          )}
           {showChecks && checks.length > 0 && (
             <ul className="flex flex-col gap-0.5 px-4 pb-2">
               {checks.map((c) => (
@@ -276,6 +284,30 @@ function PRCardBody({ wsId, issueKey, data, number }: { wsId: string; issueKey: 
   );
 }
 
+type ReviewFace = { user: string; avatar?: string; state: string; body: string; submitted_at: string };
+
+// Latest verdict per reviewer. A missing or broken avatar becomes an initial,
+// so merged PRs don't show a row of empty circles.
+function ReviewFaces({ reviews, label }: { reviews: ReviewFace[]; label: (state: string) => string }) {
+  const latest = new Map<string, ReviewFace>();
+  for (const r of reviews) {
+    if (r.user) latest.set(r.user, r);
+  }
+  const rows = [...latest.values()];
+  if (rows.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 pb-2" data-testid="orch-pr-reviewers">
+      {rows.map((r) => (
+        <span key={r.user} className="inline-flex min-w-0 max-w-full items-center gap-1.5 text-caption" title={r.body || r.user}>
+          <PersonAvatar name={r.user} url={r.avatar} />
+          <span className="truncate text-foreground">{r.user}</span>
+          <span className="shrink-0 text-muted-foreground">{label(r.state)}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 // graphRows lays the PR's commits out newest first. The first-parent chain
 // is lane 0; a merge commit's second parent is the base branch (lane 1),
 // closed by a "base tip" row. While "update branch" runs, a pending merge
@@ -328,7 +360,7 @@ function graphRows(
           <span className="ml-auto flex shrink-0 items-center gap-1.5 text-caption text-muted-foreground">
             <span className="font-mono text-micro">{shortSha(c.sha)}</span>
             <span aria-hidden>·</span>
-            {c.avatar ? <img src={c.avatar} alt="" className="size-3.5 rounded-full" /> : null}
+            {c.author ? <PersonAvatar name={c.author} url={c.avatar} className="size-4 text-[9px]" /> : null}
             <span className="max-w-28 truncate">{c.author}</span>
             {c.date && (
               <>

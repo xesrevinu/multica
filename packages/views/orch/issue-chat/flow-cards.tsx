@@ -65,11 +65,13 @@ export function FlowStateCard({ wsId, timeline }: { wsId: string; timeline: Orch
                 ? t(($) => $.cards.blocked_title)
                 : t(($) => $.cards.cancel_proposed_title)}
           </p>
-          <p className="mt-0.5 text-caption text-muted-foreground">
-            {mode === "acceptance"
-              ? t(($) => $.cards.acceptance_body, { sha: shortSha(flow.reviewed_sha || flow.head_sha) || "—" })
-              : flow.blocked_reason || timeline.waiting || ""}
-          </p>
+          {(mode === "acceptance" || !!(flow.blocked_reason || timeline.waiting)) && (
+            <p className="mt-0.5 text-caption text-muted-foreground">
+              {mode === "acceptance"
+                ? t(($) => $.cards.acceptance_body, { sha: shortSha(flow.reviewed_sha || flow.head_sha) || "—" })
+                : flow.blocked_reason || timeline.waiting}
+            </p>
+          )}
         </div>
       </div>
       {form && (

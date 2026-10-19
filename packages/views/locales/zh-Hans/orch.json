@@ -188,7 +188,9 @@
     "review_comments": "评审意见",
     "view_files": "变更文件",
     "base_tip": "{{base}} 最新",
-    "loading": "正在加载 PR…"
+    "loading": "正在加载 PR…",
+    "error": "无法加载此拉取请求",
+    "retry": "重试"
   },
   "drawer": {
     "title": "详情",
@@ -217,6 +219,7 @@
     "tab_files": "变更文件",
     "tab_worktrees": "工作树",
     "tab_terminal": "终端",
+    "resize": "调整详情宽度",
     "edit": "编辑",
     "save": "保存",
     "cancel": "取消",

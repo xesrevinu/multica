@@ -188,7 +188,9 @@
     "review_comments": "리뷰 댓글",
     "view_files": "변경된 파일",
     "base_tip": "{{base}} 최신",
-    "loading": "PR 불러오는 중…"
+    "loading": "PR 불러오는 중…",
+    "error": "풀 리퀘스트를 불러오지 못했습니다",
+    "retry": "다시 시도"
   },
   "drawer": {
     "title": "세부 정보",
@@ -217,6 +219,7 @@
     "tab_files": "변경된 파일",
     "tab_worktrees": "워크트리",
     "tab_terminal": "터미널",
+    "resize": "세부 정보 너비 조절",
     "edit": "편집",
     "save": "저장",
     "cancel": "취소",

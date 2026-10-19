@@ -189,7 +189,9 @@
     "review_comments": "Review comments",
     "view_files": "Files changed",
     "base_tip": "{{base}} tip",
-    "loading": "Loading pull request…"
+    "loading": "Loading pull request…",
+    "error": "Could not load this pull request",
+    "retry": "Retry"
   },
   "drawer": {
     "title": "Details",
@@ -218,6 +220,7 @@
     "tab_files": "Files changed",
     "tab_worktrees": "Worktrees",
     "tab_terminal": "Terminal",
+    "resize": "Resize details",
     "edit": "Edit",
     "save": "Save",
     "cancel": "Cancel",

@@ -221,7 +221,7 @@ export function IssueChatView({ issueId }: { issueId: string }) {
           <AppLink
             href={paths.root()}
             aria-label={t(($) => $.mobile.back)}
-            className="-ml-1 rounded-md p-1.5 text-muted-foreground hover:bg-muted md:hidden"
+            className="-ml-1 inline-flex size-11 items-center justify-center rounded-md text-muted-foreground hover:bg-muted md:hidden"
             data-testid="orch-mobile-back"
           >
             <ArrowLeft className="size-4" />
@@ -262,7 +262,7 @@ export function IssueChatView({ issueId }: { issueId: string }) {
               <button
                 type="button"
                 onClick={() => setDrawerOpen(true, "files")}
-                className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-micro text-muted-foreground hover:bg-muted hover:text-foreground"
+                className="inline-flex min-h-11 items-center gap-1 rounded-md px-2 text-micro text-muted-foreground hover:bg-muted hover:text-foreground md:min-h-8"
                 title={t(($) => $.pr.view_files)}
                 aria-label={t(($) => $.pr.view_files)}
                 data-testid="orch-open-files"
@@ -276,7 +276,7 @@ export function IssueChatView({ issueId }: { issueId: string }) {
               onClick={() => setDrawerOpen(true, "details")}
               aria-label={t(($) => $.chat.details)}
               title={t(($) => $.shortcuts.title)}
-              className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="inline-flex size-11 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground md:size-8"
             >
               <PanelRight className="size-4" />
             </button>
@@ -284,7 +284,7 @@ export function IssueChatView({ issueId }: { issueId: string }) {
         </header>
 
         <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto" data-testid="orch-chat-scroll">
-          <div ref={contentRef} className="mx-auto flex w-full max-w-[46rem] flex-col gap-3 px-4 py-6 sm:px-6">
+          <div ref={contentRef} className="mx-auto flex w-full max-w-[760px] flex-col gap-4 px-4 py-6 sm:px-6">
             {/* The issue description opens the conversation, like the first message. */}
             <div className="mb-1 px-1" data-testid="orch-issue-intro">
               <p className="mb-1.5 text-caption text-muted-foreground">
@@ -308,7 +308,7 @@ export function IssueChatView({ issueId }: { issueId: string }) {
           <button
             type="button"
             onClick={() => scrollToBottom(true)}
-            className="absolute right-6 bottom-40 z-10 inline-flex items-center gap-1 rounded-full border border-border bg-background/95 px-2.5 py-1 text-caption text-muted-foreground shadow-sm hover:text-foreground"
+            className="absolute right-4 bottom-[calc(8.5rem+env(safe-area-inset-bottom))] z-10 inline-flex min-h-11 items-center gap-1 rounded-full border border-border bg-background/95 px-3 text-caption text-muted-foreground shadow-sm hover:text-foreground md:right-6 md:min-h-8"
           >
             <ArrowDown className="size-3" />
             {t(($) => $.chat.jump_latest)}
@@ -316,7 +316,7 @@ export function IssueChatView({ issueId }: { issueId: string }) {
         )}
 
         <footer className="shrink-0 bg-background">
-          <div className="mx-auto flex w-full max-w-[46rem] flex-col gap-2 px-4 pt-1 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6">
+          <div className="mx-auto flex w-full max-w-[760px] flex-col gap-2 px-4 pt-1 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6">
             {v?.paused && <p className="rounded-md bg-muted px-2 py-1 text-caption text-muted-foreground">{t(($) => $.chat.paused_banner)}</p>}
             {orch && <FlowStateCard wsId={wsId} timeline={orch} />}
             <div className="flex flex-col">

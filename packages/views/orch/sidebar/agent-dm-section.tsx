@@ -87,7 +87,7 @@ export function AgentDmSection({ wsId, chatHref, chatSessions, viewedSessionId, 
                 const busy = busyAgentIds.has(agent.id);
                 return (
                   <SidebarMenuItem key={agent.id}>
-                    <SidebarMenuButton isActive={active} render={<AppLink href={href} />} className={ITEM}>
+                    <SidebarMenuButton isActive={active} render={<AppLink href={href} title={agent.name} />} className={cn(ITEM, "h-9")}>
                       <span className="relative">
                         <ActorAvatar name={agent.name} initials={agent.name.charAt(0).toUpperCase()} avatarUrl={agent.avatar_url ?? undefined} size="xs" />
                         <span

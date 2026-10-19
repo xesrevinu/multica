@@ -189,7 +189,9 @@
     "review_comments": "Commentaires de revue",
     "view_files": "Fichiers modifiés",
     "base_tip": "tête de {{base}}",
-    "loading": "Chargement de la pull request…"
+    "loading": "Chargement de la pull request…",
+    "error": "Impossible de charger cette pull request",
+    "retry": "Réessayer"
   },
   "drawer": {
     "title": "Détails",
@@ -218,6 +220,7 @@
     "tab_files": "Fichiers modifiés",
     "tab_worktrees": "Worktrees",
     "tab_terminal": "Terminal",
+    "resize": "Redimensionner les détails",
     "edit": "Modifier",
     "save": "Enregistrer",
     "cancel": "Annuler",

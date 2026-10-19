@@ -69,6 +69,7 @@ const sourceSerif = Source_Serif_4({
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  viewportFit: "cover",
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#ffffff" },
     { media: "(prefers-color-scheme: dark)", color: "#05070b" },
@@ -98,9 +99,8 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     title: "Multica",
-    // `default` keeps the web view below the status bar. Going edge-to-edge
-    // (`black-translucent` + viewport-fit=cover) needs env(safe-area-inset-*)
-    // padding, which no surface in the app has yet.
+    // `default` keeps the status bar opaque. viewport-fit=cover still reports
+    // env(safe-area-inset-*) so the shell can pad the home indicator and notch.
     statusBarStyle: "default",
   },
   openGraph: {
@@ -138,7 +138,7 @@ export default async function RootLayout({
       suppressHydrationWarning
       className={cn("antialiased font-sans h-full", inter.variable, geistMono.variable, sourceSerif.variable)}
     >
-      <body className="h-full overflow-hidden">
+      <body className="h-full overflow-hidden pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)]">
         {/* LightningCSS cannot parse ::highlight(); see FIND_HIGHLIGHT_CSS. */}
         <style dangerouslySetInnerHTML={{ __html: FIND_HIGHLIGHT_CSS }} />
         {/*

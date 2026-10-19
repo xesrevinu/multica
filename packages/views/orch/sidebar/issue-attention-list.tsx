@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, type KeyboardEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Bell, ChevronRight, CircleAlert, GitBranch, Pause, Pin, PinOff, Search, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
@@ -43,6 +43,7 @@ import { formatDuration, shortAgo, since } from "../format";
 import { usePhaseLabel } from "../labels";
 import { OpenTabButton } from "../open-tab";
 import { DiffStat, PRChip, ProjectBadge, WorkingLabel } from "../parts/chips";
+import { Collapse } from "../parts/collapse";
 import { useOrchViewOptions } from "./view-options";
 
 export type IssueAttentionListProps = {
@@ -143,18 +144,31 @@ export function IssueAttentionList({ wsId, pathname, issueHref }: IssueAttention
     nest: view.showSubIssues,
   };
 
+  const onListKeyDown = (e: KeyboardEvent) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const tag = (e.target as HTMLElement).tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    const root = e.currentTarget;
+    const rows = [...root.querySelectorAll<HTMLElement>('[data-testid="orch-issue-row"]')];
+    if (rows.length === 0) return;
+    const current = rows.findIndex((r) => r === document.activeElement);
+    const next = e.key === "ArrowDown" ? Math.min(rows.length - 1, current + 1) : Math.max(0, current < 0 ? 0 : current - 1);
+    e.preventDefault();
+    rows[next]?.focus();
+  };
+
   return (
-    <SidebarGroup className="pt-0" data-testid="orch-issue-list">
-      <SidebarGroupLabel>{t(($) => $.sidebar.issues)}</SidebarGroupLabel>
-      <div className="mb-1 flex items-center gap-1 px-1">
-        <label className="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md border border-sidebar-border bg-background/60 px-2 focus-within:border-ring">
+    <SidebarGroup className="min-w-0 max-w-full overflow-x-hidden pt-0" data-testid="orch-issue-list" onKeyDown={onListKeyDown}>
+      <SidebarGroupLabel className="sticky top-0 z-10 bg-sidebar">{t(($) => $.sidebar.issues)}</SidebarGroupLabel>
+      <div className="mb-1 flex w-full min-w-0 items-center gap-1 px-1" data-testid="orch-filter-row">
+        <label className="flex h-8 min-w-0 flex-1 items-center gap-1.5 overflow-hidden rounded-md border border-sidebar-border bg-background/60 px-2 focus-within:border-ring">
           <Search className="size-3 shrink-0 text-muted-foreground" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t(($) => $.sidebar.filter_placeholder)}
             aria-label={t(($) => $.sidebar.filter_placeholder)}
-            className="min-w-0 flex-1 bg-transparent text-caption outline-none placeholder:text-faint-foreground"
+            className="w-0 min-w-0 flex-1 bg-transparent text-caption outline-none placeholder:text-faint-foreground"
           />
         </label>
         <DropdownMenu>
@@ -163,7 +177,7 @@ export function IssueAttentionList({ wsId, pathname, issueHref }: IssueAttention
             title={t(($) => $.sidebar.view_options)}
             data-testid="orch-view-options"
             className={cn(
-              "relative inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-sidebar-border bg-background/60 text-muted-foreground hover:text-foreground",
+              "relative inline-flex size-8 shrink-0 items-center justify-center rounded-md border border-sidebar-border bg-background/60 text-muted-foreground hover:text-foreground",
               customized && "text-foreground",
             )}
           >
@@ -274,24 +288,26 @@ export function IssueAttentionList({ wsId, pathname, issueHref }: IssueAttention
               <ChevronRight className={cn("size-3.5 transition-transform", showSettled && "rotate-90")} />
               {t(($) => $.sidebar.settled_footer, { count: settledTotal })}
             </button>
-            {showSettled && settled && (
-              <ul className="flex flex-col gap-px">
-                {settled.nodes.map((n) => (
-                  <IssueRow key={`s-${n.id}`} node={n} depth={0} ctx={ctx} />
-                ))}
-                {settledTotal > settled.count && settledLimit < 500 && (
-                  <li>
-                    <button
-                      type="button"
-                      onClick={() => setSettledLimit((n) => Math.min(500, n + 50))}
-                      className="w-full rounded-md px-2.5 py-1 text-left text-caption text-muted-foreground hover:text-foreground"
-                    >
-                      {t(($) => $.sidebar.load_more)}
-                    </button>
-                  </li>
-                )}
-              </ul>
-            )}
+            <Collapse open={showSettled && !!settled}>
+              {settled && (
+                <ul className="flex flex-col gap-px">
+                  {settled.nodes.map((n) => (
+                    <IssueRow key={`s-${n.id}`} node={n} depth={0} ctx={ctx} />
+                  ))}
+                  {settledTotal > settled.count && settledLimit < 500 && (
+                    <li>
+                      <button
+                        type="button"
+                        onClick={() => setSettledLimit((n) => Math.min(500, n + 50))}
+                        className="w-full rounded-md px-2.5 py-1 text-left text-caption text-muted-foreground hover:text-foreground"
+                      >
+                        {t(($) => $.sidebar.load_more)}
+                      </button>
+                    </li>
+                  )}
+                </ul>
+              )}
+            </Collapse>
           </section>
         )}
       </SidebarGroupContent>
@@ -314,7 +330,7 @@ const BUCKET_DOT: Record<OrchAttentionBucket, string> = {
 function BucketHeader({ bucket, count }: { bucket: OrchAttentionBucket; count: number }) {
   const { t } = useT("orch");
   return (
-    <div className="flex h-7 items-center gap-1.5 px-2.5 pt-1 text-caption font-medium text-muted-foreground">
+    <div className="sticky top-7 z-[1] flex h-7 items-center gap-1.5 bg-sidebar px-2.5 text-caption font-medium text-muted-foreground">
       <span className={cn("size-1.5 rounded-full", BUCKET_DOT[bucket])} />
       <span>{t(($) => $.sidebar.bucket[bucket])}</span>
       <span className="ml-auto tabular-nums text-faint-foreground">{count}</span>
@@ -374,7 +390,8 @@ function IssueRow({ node, depth, ctx }: { node: OrchIssueNode; depth: number; ct
       >
         <AppLink
           href={href}
-          className="flex min-w-0 flex-col gap-0.5 px-2.5 py-1.5"
+          title={node.title || node.key}
+          className="flex min-h-9 min-w-0 flex-col justify-center gap-0.5 overflow-hidden px-2.5 py-1 outline-none focus-visible:bg-sidebar-accent"
           data-testid="orch-issue-row"
           data-key={node.key}
         >
@@ -421,7 +438,7 @@ function IssueRow({ node, depth, ctx }: { node: OrchIssueNode; depth: number; ct
               e.stopPropagation();
               ctx.togglePin(node.id, isPinned);
             }}
-            className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="rounded-sm p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             {isPinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
           </button>
@@ -441,12 +458,14 @@ function IssueRow({ node, depth, ctx }: { node: OrchIssueNode; depth: number; ct
           </button>
         )}
       </div>
-      {hasKids && open && (
-        <ul className="flex flex-col gap-px">
-          {node.subIssues.map((c) => (
-            <IssueRow key={c.id} node={c} depth={depth + 1} ctx={ctx} />
-          ))}
-        </ul>
+      {hasKids && (
+        <Collapse open={open}>
+          <ul className="flex flex-col gap-px">
+            {node.subIssues.map((c) => (
+              <IssueRow key={c.id} node={c} depth={depth + 1} ctx={ctx} />
+            ))}
+          </ul>
+        </Collapse>
       )}
     </li>
   );
