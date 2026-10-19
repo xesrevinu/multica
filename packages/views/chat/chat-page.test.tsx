@@ -24,6 +24,9 @@ vi.mock("./components/chat-message-list", () => ({
   ChatMessageList: () => <div>chat-message-list</div>,
   ChatMessageSkeleton: () => <div>chat-message-skeleton</div>,
 }));
+vi.mock("../orch/mobile-home", () => ({
+  MobileIssueHome: () => <div data-testid="orch-mobile-home" />,
+}));
 vi.mock("./components/chat-input", () => ({
   ChatInput: () => <div>chat-input</div>,
 }));

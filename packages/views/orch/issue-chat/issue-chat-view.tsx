@@ -2,14 +2,14 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDown, GitPullRequest, PanelRight } from "lucide-react";
+import { ArrowDown, ArrowLeft, GitPullRequest, PanelRight } from "lucide-react";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { issueDetailOptions, issueTasksOptions } from "@multica/core/issues/queries";
 import { orchTimelineOptions, useOrchRealtime } from "@multica/core/orchestrator";
 import { memberListOptions } from "@multica/core/workspace/queries";
 import { useActorName } from "@multica/core/workspace/hooks";
-import { SidebarTrigger } from "@multica/ui/components/ui/sidebar";
+import { useWorkspacePaths } from "@multica/core/paths";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { useT, useTimeAgo } from "../../i18n";
@@ -19,6 +19,7 @@ import { EMPTY_COMMENT_RUNS, buildCommentRunView, type CommentRun } from "../../
 import { CurrentIssueRenderContextProvider } from "../../issues/current-issue-render-context";
 import { useIssueTimeline } from "../../issues/hooks/use-issue-timeline";
 import { ReadonlyContent } from "../../editor";
+import { AppLink } from "../../navigation";
 import { checksTone, TONE_DOT } from "../format";
 import { usePhaseLabel } from "../labels";
 import { buildChatItems, type ChatItem } from "./build-items";
@@ -35,6 +36,7 @@ const EMPTY_REPLIES: never[] = [];
 // below it. Replaces the document-style IssueDetail on /issues/:id.
 export function IssueChatView({ issueId }: { issueId: string }) {
   const wsId = useWorkspaceId();
+  const paths = useWorkspacePaths();
   const { t } = useT("orch");
   const user = useAuthStore((s) => s.user);
   const phaseLabel = usePhaseLabel();
@@ -164,7 +166,14 @@ export function IssueChatView({ issueId }: { issueId: string }) {
     <CurrentIssueRenderContextProvider value={renderContext}>
       <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col bg-background" data-testid="orch-issue-chat">
         <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border/60 px-4">
-          <SidebarTrigger className="-ml-1 md:hidden" />
+          <AppLink
+            href={paths.root()}
+            aria-label={t(($) => $.mobile.back)}
+            className="-ml-1 rounded-md p-1.5 text-muted-foreground hover:bg-muted md:hidden"
+            data-testid="orch-mobile-back"
+          >
+            <ArrowLeft className="size-4" />
+          </AppLink>
           <button
             type="button"
             onClick={() => setDrawerOpen(true)}
