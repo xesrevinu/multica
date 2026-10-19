@@ -1,0 +1,218 @@
+diff -ruN a/.multica/project.yaml b/.multica/project.yaml
+--- a/.multica/project.yaml	2026-10-19 17:03:13
++++ b/.multica/project.yaml	2026-10-19 17:03:13
+@@ -1,6 +1,10 @@
+ # Multica declaration. One file, two workspaces.
+ 
+ skills:
++  - name: pocket-checks
++    bind: listed
++    description: Area to check mapping for owner and reviewer runs.
++    path: ./skills/pocket-checks
+   - name: rust-best-practices
+     bind: listed
+     description: Idiomatic Rust for the host. Does not choose the build command.
+@@ -33,11 +37,11 @@
+     skills:
+       - improve-codebase-architecture
+     instructions: |
+-      Do not edit, commit, push, merge, or mark an issue done. Do not split.
++      Do not edit, commit, push, merge, or mark an issue done.
+ 
+-      Pick the next single step from the squad roster. A hard problem, or one that splits into independent parts, goes to gbot. A single clear part goes to that part's owner. A child issue is already one part: mention its owner, not gbot. Research only when the issue asks, or the choice cannot be made from the issue itself. Then implementation. Then review. One @mention. Do not also open a todo child for that same work.
++      In orchestrated projects (Pocket, Studio Parts) the orchestrator assigns owners, routes review and rework, and merges. You do two things there, following the preset lead role (`multica team preset render`): plan an epic into staged backlog children with area labels (`area:host`, `area:compiler`, `area:framework`, `area:cli`, `area:apps`, `area:studio-app`, `area:control-plane`, `area:hard`), `needs:cargo` when the change builds Rust, and `needs-GUI-Master` when a person must look at a screen; and handle issues that arrive blocked (clarify and `phase=unblocked`, `phase=cancel_proposed`, or escalate). No @mentions to start work; the engine starts it.
+ 
+-      A review with no blocking finding is ready for a person: set this issue in_review. That status is only for this issue. Do not wait for another issue. A blocking finding goes back to the implementer. If the implementer says they are blocked, set blocked. You do not accept the work.
++      Outside orchestrated projects keep the old roster rule: one @mention to the next single step.
+ 
+   - name: yielded-researcher
+     runtime: mac-studio:yielded
+@@ -181,9 +185,37 @@
+             runtime: mac-studio:yielded
+             execution_mode: worktree
+             label: pocketjs
+-          - type: github_repo
++        # In-app orchestrator owns status/assignee for this project (replaces the
++        # squad's @mention routing). Rendered role text: `multica team preset render`.
++        orchestrator:
++          preset: impl-review-merge
++          roles:
++            lead: yielded-lead
++            reviewer: yielded-reviewer
++            owners: [heavy-engineer, gbot]
++            # proposed engine extension (see docs plan): area labels route to owners
++            routes:
++              - { labels: [area:hard, area:cross-cutting], owners: [gbot] }
++              - { labels: [area:host, area:compiler, area:framework, area:cli, area:apps], owners: [heavy-engineer, gbot] }
++          repo:
++            mode: github
++            slug: effect-anything/holt
+             url: git@github.com:effect-anything/holt.git
+-            label: pocketjs
++            hub: /Users/kee/Workspace/boom/pocketjs   # wt switch from here; .config/wt.toml hooks run
++            main: main
++            branch_prefix: agent/
++            required_checks: [test, rust, bundle, lint, review-verdict]
++            disk_path: /Users/kee/.cursor/worktrees
++          acceptance:
++            labels: [needs-acceptance, needs-GUI-Master, needs-Ray-signoff]
++          limits:
++            impl: 3
++            review: 3
++            infra: 2
++            stuck_min: 60        # cold Rust builds are long
++            idle_min: 15         # one cargo step can be silent for minutes
++            min_free_gb: 40      # every worktree has its own target/
++            slots: { cargo: 2 }  # proposed: at most 2 issues labelled needs:cargo run at once (10 cores / 32 GB)
+ 
+     squads:
+       - name: OX Squad
+@@ -248,9 +280,28 @@
+             runtime: mac-studio:yielded
+             execution_mode: worktree
+             label: pocketjs
+-          - type: github_repo
++        orchestrator:
++          preset: impl-review-merge
++          roles:
++            lead: yielded-lead
++            reviewer: yielded-reviewer
++            owners: [frontend-engineer, control-plane-engineer]
++            routes:
++              - { labels: [area:studio-app], owners: [frontend-engineer] }
++              - { labels: [area:control-plane], owners: [control-plane-engineer] }
++          repo:
++            mode: github
++            slug: effect-anything/holt
+             url: git@github.com:effect-anything/holt.git
+-            label: pocketjs
++            hub: /Users/kee/Workspace/boom/pocketjs
++            main: main
++            branch_prefix: agent/
++            required_checks: [test, lint, review-verdict]
++            disk_path: /Users/kee/.cursor/worktrees
++          acceptance:
++            labels: [needs-acceptance, needs-GUI-Master, needs-Ray-signoff]
++            default_for_labels: [area:studio-app]   # every studio/app screen change waits for Ray
++          limits: { impl: 3, review: 3, infra: 2, stuck_min: 45, idle_min: 12, min_free_gb: 40, slots: { cargo: 2 } }
+ 
+     squads:
+       - name: Studio Squad
+diff -ruN a/.multica/skills/pocket-checks/SKILL.md b/.multica/skills/pocket-checks/SKILL.md
+--- a/.multica/skills/pocket-checks/SKILL.md	1970-01-01 08:00:00
++++ b/.multica/skills/pocket-checks/SKILL.md	2026-10-19 17:03:13
+@@ -0,0 +1,23 @@
++---
++name: pocket-checks
++description: Pick and run the checks that cover a PocketJS change by area, the same way for the owner and the independent reviewer. Use in orchestrated Pocket and Studio runs.
++---
++
++# Pocket checks
++
++1. Area from the issue label (`area:*`) and the changed paths (`git diff --name-only origin/main...HEAD`).
++2. Run the checks for every touched area. Never assemble cargo or tsc by hand.
++
++| Paths | Check |
++|---|---|
++| crates/, host code | `pocket dev <app> --target macos-app` smoke, `bun run test --project host` |
++| compiler/ | `bun run test --project compiler` |
++| framework/ | `bun run test --project framework` |
++| cli/ | `bun run test --project cli` |
++| apps/<app>/ | `pocket check apps/<app>` |
++| studio/app/ | `pocket dev studio`, check the named screen, screenshot into `studio/app/.build/validation/<KEY>/` |
++| studio/control-plane/ | that package's tests |
++| any TS source | `bun check` |
++
++3. Put each command and the tail of its output in the result comment. A check you could not run is reported as not verified, with the reason.
++4. Screenshots and logs stay in ignored `.build/validation/`; never commit them.
+diff -ruN a/.multica/workflow.md b/.multica/workflow.md
+--- a/.multica/workflow.md	2026-10-19 17:03:13
++++ b/.multica/workflow.md	2026-10-19 17:03:13
+@@ -1,49 +1,47 @@
+-# Multica 流程
++# Multica 流程（编排器版）
+ 
+-## 框架（OX）
++两个项目（Pocket / Studio Parts）由 Multica 内置编排器驱动：状态和指派只由引擎写，agent 通过 metadata 交接。人仍然是最后一关：GUI 改动和需要签字的改动停在验收门，Ray 用 Flow 卡片或 `multica flow accept|reject` 决定，引擎在同一个 head 上合并。
+ 
+-范围是 framework、compiler、Rust host、CLI、apps。不进 `studio/`。实现者是 `grok-engineer`，研究和审查仍是 yielded。
+-
+ ```mermaid
+ flowchart TD
+-  in["人在 OX 建 backlog issue，不指派"] --> gate{"人把 issue 交给 OX Squad"}
+-  gate --> lead["yielded-lead 开工，自己不改代码"]
+-  lead --> ask{"issue 要求先研究吗"}
+-  ask -->|是| rs["@ yielded-researcher，只读，评论交回"]
+-  rs --> impl["@ grok-engineer"]
+-  ask -->|否| impl
+-  impl --> wt["mac-studio 上的 wt worktree，agent/issue"]
+-  wt --> code["pocket dev，只跑相关检查；不手写 cargo，不共享 target"]
+-  code --> rv["实现者评论后，leader @ yielded-reviewer"]
+-  rv --> read["审查只读"]
+-  read --> audit{"人还要审计吗"}
+-  audit -->|要| extra["人直接指派 code-auditor，不经过 squad"]
+-  audit -->|不要| review["leader 把 issue 设为 in_review"]
+-  extra --> review
+-  review --> ray["Ray 合并，并标 done"]
++  in["人或 lead 建 backlog issue，带 area:* 标签"] --> t1{"引擎 T1：依赖完成、stage 已开、磁盘够、cargo 槽位空、owner 空闲"}
++  t1 --> own["按 area 路由给 owner（heavy-engineer / gbot / frontend / control-plane）"]
++  own --> wt["daemon 在 hub 上 wt switch agent/<key>（hooks：direnv、bun 依赖、zvec）"]
++  wt --> code["最小改动；pocket dev / pocket check / bun check / bun run test --project <area>"]
++  code --> pr["push agent/<KEY>，开一个 ready PR（open-pr）"]
++  pr --> rv["引擎 T2 → yielded-reviewer：在真实 sha 上重跑 gate（verify-gates），verdict + review-verdict 状态"]
++  rv -->|changes| own
++  rv -->|approve| ci{"CI：test / rust / bundle / lint + review-verdict"}
++  ci -->|红，第一次| rerun["引擎重跑一次失败的 workflow"]
++  rerun --> ci
++  ci -->|冲突或二次红| own
++  ci -->|绿| gate{"需要验收？（needs-GUI-Master、area:studio-app 默认需要）"}
++  gate -->|是| ray["指派给 Ray，收件箱 action required；accept / reject+理由"]
++  ray -->|reject| own
++  ray -->|accept| merge
++  gate -->|否| merge["引擎 squash 合并（--match-head-commit），删分支"]
++  own -.->|两次卡住| blocked["blocked → yielded-lead 诊断"]
+ ```
+ 
+-要拆开时，leader 只建 backlog、不指派的子 issue，带 `--parent`、`--stage` 和 `依赖`。人再决定把哪一条交给 squad。
++## 区域 → owner → 检查
+ 
+-## Studio
++| area 标签 | owner | 检查（owner 跑，reviewer 重跑） | cargo |
++|---|---|---|---|
++| area:host | heavy-engineer（难题给 gbot） | `pocket dev <app> --target macos-app` 冒烟 + `bun run test --project host` | needs:cargo |
++| area:compiler | heavy-engineer | `bun run test --project compiler` + `bun check` | 否 |
++| area:framework | heavy-engineer | `bun run test --project framework` + `bun check` | 否 |
++| area:cli | heavy-engineer | `bun run test --project cli` + `bun check` | 视改动 |
++| area:apps | heavy-engineer | `pocket check <app_path>` | 视 host |
++| area:hard / area:cross-cutting | gbot（保留最难部分，其余拆成子单回到 backlog） | 涉及区域的全部检查 | 视改动 |
++| area:studio-app | frontend-engineer | `pocket dev studio` 验证点名的界面 + 截图到 `.build/validation/`；**默认验收门** | 否 |
++| area:control-plane | control-plane-engineer | 该包的测试 | 否 |
+ 
+-`studio/app` 和 `studio/control-plane` 分给不同的人。运行时契约改动回到 OX，不在 Studio 这棵树里改 host。
++## 构建资源
++- 每个 worktree 有自己的 `target/`。`limits.slots.cargo: 2`（10 核 / 32 GB）：带 `needs:cargo` 的 issue 同时最多两条在跑，其余在 T1 等待（`waiting: cargo slots 2/2`）。
++- sccache：`.envrc` 里在 flake 提供 sccache 时设置 `RUSTC_WRAPPER=sccache` 和 `SCCACHE_DIR=$HOME/.cache/sccache-pocketjs`、`SCCACHE_CACHE_SIZE=40G`。各 worktree 共享编译缓存，不共享 `target/`（AGENTS.md 规则不变）。
++- 磁盘：`min_free_gb: 40` 低于阈值时 T1 不再开新单。
+ 
+-```mermaid
+-flowchart TD
+-  in["人在 Studio 建 backlog issue，不指派"] --> gate{"人把 issue 交给 Studio Squad"}
+-  gate --> lead["yielded-lead 开工"]
+-  lead --> where{"落点"}
+-  where -->|studio/app| fe["@ frontend-engineer"]
+-  where -->|studio/control-plane| cp["@ control-plane-engineer"]
+-  where -->|要改 runtime 或 host 契约| ox["停下；人在 OX 另开 issue，Studio 这条写上依赖"]
+-  fe --> wt["另一棵 wt worktree"]
+-  cp --> wt
+-  wt --> verify{"哪一边"}
+-  verify -->|app| screen["pocket dev studio，验证点名的界面"]
+-  verify -->|control-plane| tests["只跑这块的测试，不改 studio/app"]
+-  screen --> rv["leader @ yielded-reviewer"]
+-  tests --> rv
+-  rv --> review["审查通过后 leader 设 in_review"]
+-  review --> ray["Ray 合并，并标 done"]
+-```
++## 不变的规则
++- 一条 issue 一个 wt worktree，`wt` 选目录；不 clone GitHub，不改主 checkout。
++- agent 不合并、不标 done；合并由引擎在 review + CI（+ 验收）全绿后做。
++- Studio 改 host 契约：在 OX 开 issue，Studio 这条写 `deps=`，引擎等它合并后再开工。
