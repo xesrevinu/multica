@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TimelineEntry } from "@multica/core/types";
-import { buildChatItems } from "./build-items";
+import { buildChatItems, mergeReviewItems } from "./build-items";
 
 const at = (m: number) => new Date(Date.UTC(2026, 9, 19, 10, m)).toISOString();
 const act = (id: string, m: number, action: string): TimelineEntry => ({ type: "activity", id, actor_type: "member", actor_id: "u", created_at: at(m), action, details: {} });
@@ -19,5 +19,20 @@ describe("buildChatItems", () => {
 
   it("handles an empty timeline", () => {
     expect(buildChatItems([], []).items).toEqual([]);
+  });
+
+  it("slots GitHub reviews and threaded review comments in by time", () => {
+    const { items } = buildChatItems([com("c1", 0), com("c2", 10)], []);
+    const merged = mergeReviewItems(
+      items,
+      [{ user: "rev", state: "APPROVED", body: "lgtm", submitted_at: at(5) }, { user: "rev", state: "COMMENTED", body: "", submitted_at: at(6) }],
+      [
+        { id: 1, user: "rev", path: "a.js", line: 3, body: "nit", created_at: at(7), in_reply_to: 0 },
+        { id: 2, user: "dev", path: "a.js", line: 3, body: "fixed", created_at: at(8), in_reply_to: 1 },
+      ],
+    );
+    expect(merged.map((i) => i.id)).toEqual(["c1", `gh-review-0-${at(5)}`, "gh-comment-1", "c2"]);
+    const thread = merged[2] as { review: { replies: { body: string }[] } };
+    expect(thread.review.replies.map((r) => r.body)).toEqual(["fixed"]);
   });
 });

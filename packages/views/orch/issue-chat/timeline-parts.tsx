@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronRight, GitCommitHorizontal, Loader2 } from "lucide-react";
+import { ChevronRight, ExternalLink, GitCommitHorizontal, GitPullRequest, Loader2 } from "lucide-react";
 import { isBuiltInIssueStatus } from "@multica/core/issue-statuses";
 import type { TimelineEntry } from "@multica/core/types";
 import { useActorName } from "@multica/core/workspace/hooks";
@@ -11,7 +11,8 @@ import { formatActivity } from "../../issues/components/issue-detail";
 import { AgentRunComment } from "../../issues/components/comment-card";
 import type { CommentRun } from "../../issues/components/comment-runs";
 import { formatDuration } from "../format";
-import { runDurationMs } from "./build-items";
+import { ReadonlyContent } from "../../editor";
+import { runDurationMs, type GitHubReviewItem } from "./build-items";
 
 export function useStatusText() {
   const { t } = useT("issues");
@@ -119,6 +120,55 @@ export function WorkedForFold({ run, entering, agentName }: { run: CommentRun; e
         <div className="mt-2">
           <AgentRunComment run={run} entering={entering} standalone />
         </div>
+      )}
+    </div>
+  );
+}
+
+const GITHUB = "GitHub";
+
+// GitHubReviewMessage: a PR review or inline review comment from GitHub,
+// rendered like an agent message with a file:line chip.
+export function GitHubReviewMessage({ review }: { review: GitHubReviewItem }) {
+  const { t } = useT("orch");
+  const timeAgo = useTimeAgo();
+  const stateKey = (review.state ?? "") as "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED";
+  const verb = review.type === "review" && review.state ? t(($) => $.pr.review_state[stateKey] ?? $.pr.review_state.COMMENTED) : undefined;
+  return (
+    <div className="px-1 py-1" data-testid="orch-gh-review">
+      <div className="flex items-center gap-1.5 text-caption">
+        {review.avatar ? <img src={review.avatar} alt="" className="size-5 rounded-full" /> : <GitPullRequest className="size-4 text-muted-foreground" />}
+        <span className="text-body font-medium text-foreground">{review.user}</span>
+        {verb && (
+          <span className={cn("text-muted-foreground", stateKey === "APPROVED" && "text-emerald-700 dark:text-emerald-300", stateKey === "CHANGES_REQUESTED" && "text-red-700 dark:text-red-300")}>
+            {verb}
+          </span>
+        )}
+        {review.path && (
+          <span className="inline-flex max-w-64 items-center truncate rounded-md border border-border bg-muted px-1.5 font-mono text-micro text-foreground" title={review.path}>
+            {review.path}
+            {review.line ? `:${review.line}` : ""}
+          </span>
+        )}
+        <span className="text-faint-foreground">{`· ${GITHUB} · ${timeAgo(review.at)}`}</span>
+        {review.url && (
+          <a href={review.url} target="_blank" rel="noreferrer" className="ml-auto text-muted-foreground hover:text-foreground" aria-label={t(($) => $.pr.open_on_github)}>
+            <ExternalLink className="size-3.5" />
+          </a>
+        )}
+      </div>
+      <ReadonlyContent content={review.body} className="mt-1 pl-[26px] text-body" />
+      {(review.replies ?? []).length > 0 && (
+        <ul className="mt-2 ml-[26px] flex flex-col gap-2 border-l border-border pl-3">
+          {review.replies!.map((r, i) => (
+            <li key={`${r.at}-${i}`}>
+              <p className="text-caption">
+                <span className="font-medium text-foreground">{r.user}</span> <span className="text-faint-foreground">· {timeAgo(r.at)}</span>
+              </p>
+              <ReadonlyContent content={r.body} className="text-body" />
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );

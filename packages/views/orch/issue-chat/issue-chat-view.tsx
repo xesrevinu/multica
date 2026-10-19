@@ -2,11 +2,11 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDown, ArrowLeft, GitPullRequest, PanelRight } from "lucide-react";
+import { ArrowDown, ArrowLeft, FileDiff, PanelRight } from "lucide-react";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { issueDetailOptions, issueTasksOptions } from "@multica/core/issues/queries";
-import { orchTimelineOptions, useOrchRealtime } from "@multica/core/orchestrator";
+import { orchPRCardOptions, orchTimelineOptions, useOrchRealtime } from "@multica/core/orchestrator";
 import { memberListOptions } from "@multica/core/workspace/queries";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
@@ -21,13 +21,14 @@ import { useIssueTimeline } from "../../issues/hooks/use-issue-timeline";
 import { ReadonlyContent } from "../../editor";
 import { AppLink } from "../../navigation";
 import { checksTone, TONE_DOT } from "../format";
+import { DiffStat, PRChip } from "../parts/chips";
 import { usePhaseLabel } from "../labels";
-import { buildChatItems, type ChatItem } from "./build-items";
-import { DetailsDrawer } from "./details-drawer";
+import { buildChatItems, mergeReviewItems, type ChatItem } from "./build-items";
+import { DetailsDrawer, type DrawerTab } from "./details-drawer";
 import { FlowStateCard } from "./flow-cards";
 import { PRCard } from "./pr-card";
 import { ComposerChips, StatusStrip } from "./status-strip";
-import { ActivitiesFold, TransitionDivider, WorkedForFold } from "./timeline-parts";
+import { ActivitiesFold, GitHubReviewMessage, TransitionDivider, WorkedForFold } from "./timeline-parts";
 
 const EMPTY_REPLIES: never[] = [];
 
@@ -93,9 +94,19 @@ export function IssueChatView({ issueId }: { issueId: string }) {
     prevRuns.current = next.runs;
     return next;
   }, [tasks, timeline]);
-  const model = useMemo(() => buildChatItems(runView.timeline, runView.standaloneRuns), [runView]);
+  const { data: prCard } = useQuery(orchPRCardOptions(wsId, key, !!orch?.issue.pr));
+  const model = useMemo(() => {
+    const m = buildChatItems(runView.timeline, runView.standaloneRuns);
+    const pr = prCard?.pr;
+    return pr ? { ...m, items: mergeReviewItems(m.items, pr.reviews, pr.review_comments) } : m;
+  }, [runView, prCard]);
 
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerOpen, setDrawerOpenRaw] = useState(false);
+  const [drawerTab, setDrawerTab] = useState<DrawerTab>("details");
+  const setDrawerOpen = useCallback((open: boolean, tab?: DrawerTab) => {
+    if (tab) setDrawerTab(tab);
+    setDrawerOpenRaw(open);
+  }, []);
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
@@ -163,6 +174,8 @@ export function IssueChatView({ issueId }: { issueId: string }) {
         return <TransitionDivider entry={item.entry} />;
       case "activities":
         return <ActivitiesFold entries={item.entries} />;
+      case "review":
+        return <GitHubReviewMessage review={item.review} />;
       case "comment":
         return (
           <MessageFrame mine={item.entry.actor_type === "member"}>
@@ -212,7 +225,7 @@ export function IssueChatView({ issueId }: { issueId: string }) {
           </AppLink>
           <button
             type="button"
-            onClick={() => setDrawerOpen(true)}
+            onClick={() => setDrawerOpen(true, "details")}
             className="flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5 text-left hover:bg-muted/60"
             data-testid="orch-title"
           >
@@ -236,14 +249,28 @@ export function IssueChatView({ issueId }: { issueId: string }) {
                 target="_blank"
                 rel="noreferrer"
                 className="hidden items-center gap-1 rounded-full border border-border px-2 py-0.5 text-micro text-muted-foreground hover:text-foreground sm:inline-flex"
+                data-testid="orch-header-pr"
               >
-                <GitPullRequest className="size-3" />#{v.pr.number}
+                <PRChip number={v.pr.number} state={v.pr.state} />
                 <span className={cn("size-1.5 rounded-full", TONE_DOT[prTone])} />
               </a>
             )}
+            {v?.pr && (
+              <button
+                type="button"
+                onClick={() => setDrawerOpen(true, "files")}
+                className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-micro text-muted-foreground hover:bg-muted hover:text-foreground"
+                title={t(($) => $.pr.view_files)}
+                aria-label={t(($) => $.pr.view_files)}
+                data-testid="orch-open-files"
+              >
+                <FileDiff className="size-4" />
+                <DiffStat additions={v.pr.additions} deletions={v.pr.deletions} className="hidden sm:inline-flex" />
+              </button>
+            )}
             <button
               type="button"
-              onClick={() => setDrawerOpen(true)}
+              onClick={() => setDrawerOpen(true, "details")}
               aria-label={t(($) => $.chat.details)}
               title={t(($) => $.chat.details)}
               className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -303,7 +330,15 @@ export function IssueChatView({ issueId }: { issueId: string }) {
             </div>
           </div>
         </footer>
-        <DetailsDrawer open={drawerOpen} onOpenChange={setDrawerOpen} wsId={wsId} issue={issue} timeline={orch} />
+        <DetailsDrawer
+          open={drawerOpen}
+          onOpenChange={(o) => setDrawerOpen(o)}
+          wsId={wsId}
+          issue={issue}
+          timeline={orch}
+          tab={drawerTab}
+          onTabChange={setDrawerTab}
+        />
       </div>
     </CurrentIssueRenderContextProvider>
   );
