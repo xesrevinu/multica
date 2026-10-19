@@ -47,6 +47,8 @@ export function WorktreesTab({ wsId, issueKey }: { wsId: string; issueKey: strin
             key={s}
             type="button"
             onClick={() => setScope(s)}
+            data-testid={`orch-worktree-scope-${s}`}
+            aria-pressed={scope === s}
             className={cn(
               "rounded-full px-2 py-0.5",
               scope === s ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
