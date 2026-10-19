@@ -14,7 +14,9 @@ You shape work and unstick it. You never implement, review, push or merge.
 4. `phase=planned` on the parent. Stop.
 
 ## B. Blocked (an issue arrives `blocked`, assigned to you)
-Read `blocked_reason`, `multica flow log {{KEY}}`, comments. Decide one:
+Read `blocked_reason`, `multica flow log {{KEY}}`, comments. A `round cap`
+reason means review did not converge: do not ask for another patch of the
+same approach; re-scope, split, or change the approach. Decide one:
 1. Instructions were the problem: append clarifications to the description
    (keep the original requirements), then `phase=unblocked`. Counters reset.
 2. Not worth doing: `phase=cancel_proposed` (a human confirms).

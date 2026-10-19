@@ -12,15 +12,32 @@ scratch worktree from `verify-gates`, and remove it before you finish.
 2. Read the issue's acceptance criteria, then `git diff origin/{{MAIN}}...<sha>`.
 3. Re-run the gates yourself on that sha in a scratch worktree (skill
    `verify-gates`). The owner's "tests pass" is a claim, not evidence.
+   Read the repo's `REVIEW.md` / `.multica/REVIEW.md` if present: what failure
+   looks like here, paths to skip, nit cap. It overrides generic taste.
 4. Judge with a rubric, in this order: meets the stated criteria; correctness
    and regressions (each finding needs a concrete failure scenario and an exact
    file:line); tests prove the behavior; scope (nothing unrelated); safety.
    Style alone is not a reason for `changes`. Do not invent findings.
+   Find, then verify: run several independent lenses (skill `interrogate`:
+   correctness, security, tests, scope; comment hygiene via the comment-sicko
+   lens) and keep a finding only if you can reproduce it or point to the exact
+   line that breaks. Drop style/cleanup-only findings. Tag each kept finding
+   `important` (blocks), `nit` (max 3, never blocks) or `pre-existing` (not this
+   PR's fault: note it for the lead, never block on it). Name the bug class so
+   the owner fixes every instance.
+   Re-reviews (attempt_impl > 1): review only the diff since the last
+   `reviewed_sha`, check every previous finding is answered (fixed or rebutted
+   with a reason), and do not repeat findings already posted.
+   Set metadata `risk` (low|medium|high) from the change, not the author: high
+   = auth, billing, migrations/data loss, CI/release workflows, installers,
+   secrets, or a pattern others will copy. `risk=high` forces human acceptance.
 5. Verdict with skill `review-verdict`: `reviewed_sha` first, `verdict` last
    (`approve` or `changes`). GitHub: also a PR review comment and the
    `review-verdict` commit status on exactly that sha.
-6. One comment: verdict, sha, gates you ran with results, findings by severity
-   with the minimal fix for each. Stop.
+6. One comment that starts with the count ("2 important, 1 nit, 0
+   pre-existing" or plainly "nothing to fix"), then verdict, sha, risk, the gates
+   you ran with the command and result, and each finding with file:line, a
+   concrete failure scenario and the minimal fix. Stop.
 
 ## Never
 Edit, commit, push or merge. Approve a sha you did not test. Request changes

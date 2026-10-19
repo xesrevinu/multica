@@ -34,7 +34,7 @@ func TestGuard(t *testing.T) {
 		t.Error("paused team must not guard")
 	}
 	s.teams["p"].Paused = false
-	if s.CheckAgentMeta("p", "attempt_impl", "1") == "" || s.CheckAgentMeta("p", "phase", `"merged"`) == "" || s.CheckAgentMeta("p", "phase", `"review_requested"`) != "" || s.CheckAgentMeta("p", "phase", `"unblocked"`) != "" || s.CheckAgentMeta("p", "phase", `"cancel_proposed"`) != "" || s.CheckAgentMeta("p", "verdict", `"approve"`) != "" {
+	if s.CheckAgentMeta("p", "attempt_impl", "1") == "" || s.CheckAgentMeta("p", "phase", `"merged"`) == "" || s.CheckAgentMeta("p", "phase", `"review_requested"`) != "" || s.CheckAgentMeta("p", "phase", `"unblocked"`) != "" || s.CheckAgentMeta("p", "phase", `"cancel_proposed"`) != "" || s.CheckAgentMeta("p", "verdict", `"approve"`) != "" || s.CheckAgentMeta("p", "risk", `"High"`) != "" || s.CheckAgentMeta("p", "risk", `"severe"`) == "" {
 		t.Error("agent metadata guard")
 	}
 }

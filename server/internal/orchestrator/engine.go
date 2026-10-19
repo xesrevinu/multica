@@ -97,6 +97,11 @@ func (sp *Spec) NeedsAcceptance(i *Issue) bool {
 	if v := i.Meta["acceptance_required"]; v == "true" || v == "1" || v == "yes" {
 		return true
 	}
+	// risk is the reviewer's tier for the change (low|medium|high); the change
+	// sets the tier, not the author. high always needs a person.
+	if strings.EqualFold(i.Meta["risk"], "high") {
+		return true
+	}
 	return hasLabel(i.Labels, sp.Acceptance.Labels) || hasLabel(i.Labels, sp.Acceptance.DefaultForLabels)
 }
 
@@ -168,7 +173,8 @@ func (sp *Spec) rework(s *Snapshot, why string, extra map[string]string) *Decisi
 	m := s.Issue.Meta
 	n := num(m["attempt_impl"]) + 1
 	if n > sp.Limits.Impl {
-		return sp.block(s, "impl attempts exhausted: "+why, nil)
+		// round cap: another patch rarely converges; the lead reconsiders the approach.
+		return sp.block(s, "impl attempts exhausted: "+why+" (round cap: reconsider the approach or split, not another patch)", nil)
 	}
 	meta := map[string]string{"phase": PhChangesRequested, "attempt_impl": itoa(n), "verdict": "", "blocked_reason": why}
 	for k, v := range extra {

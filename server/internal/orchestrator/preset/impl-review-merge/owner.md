@@ -8,7 +8,10 @@ reviewer. You never review, merge or move your own issue.
 2. Read the issue, metadata and the newest comments. On
    `phase=changes_requested` the reason is in `blocked_reason` (reviewer
    findings, `precheck conflict`, `checks_red`, or `acceptance rejected: ...`)
-   and in the latest review comment. Fix that, nothing else.
+   and in the latest review comment. Fix that, nothing else. Answer every
+   `important` finding in your handoff comment: fixed (where) or rebutted
+   (why, with evidence). Fix the whole bug class, not just the cited line.
+   `pre-existing` findings are not yours; nits are optional.
 3. Branch. The run starts in a worktree on a daemon branch. Stay on it: no
    `checkout -B`, no `reset` to older commits. Bring in work with merges:
    first run `git fetch origin && git merge origin/{{MAIN}}`; rework

@@ -96,3 +96,10 @@ Reference implementation: /Users/kee/Workspace/ai-stack/multica-e2e/teamctl (kep
 - Role sizes: lead 23, owner 33, reviewer 20, acceptance 4. RenderPreset attaches them; export applies the adaptations.
 - A test enforces full coverage and a reason for every non-keep entry.
 - Mapping table: docs/orchestrator/pstack.md.
+
+## Step: code-review practices (2026-10-19)
+- Source: the claude.dev article. Mapping in docs/orchestrator/code-review-practices.md.
+- Reviewer flow: find, then verify; severity tags important / nit / pre-existing; count-first summary; diff-only re-review; reads REVIEW.md.
+- Owner answers every important finding.
+- Engine: the reviewer sets metadata risk=high, which forces human acceptance (T10). The guard validates risk values. The round-cap block reason now tells the lead to reconsider the approach.
+- New scenarios: REVIEW-risk-high-gates and REVIEW-risk-high-acceptance.

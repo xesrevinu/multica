@@ -1,6 +1,9 @@
 package orchestrator
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // ErrCodeOwned is the machine-readable API error code of a refused write.
 const ErrCodeOwned = "orchestrator_owned"
@@ -66,8 +69,14 @@ func (s *Service) CheckAgentMeta(projectID, key, value string) string {
 	if key == "phase" && !AgentPhaseValues[trimJSON(value)] {
 		return fmt.Sprintf("agents may set phase to review_requested, blocked, implementing, unblocked, cancel_proposed or planned, not %s", value)
 	}
+	if key == "risk" && !RiskValues[strings.ToLower(trimJSON(value))] {
+		return fmt.Sprintf("risk must be low, medium or high, not %s", value)
+	}
 	return ""
 }
+
+// RiskValues: the reviewer's risk tier; high forces human acceptance.
+var RiskValues = map[string]bool{"low": true, "medium": true, "high": true}
 
 func trimJSON(v string) string {
 	if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
