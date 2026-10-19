@@ -48,3 +48,4 @@
 - 核对 required_checks 实际名称。
 - gbot 既是 owner 又拆分：拆分后父单写 `phase=planned`（引擎不再启动它），子单建成 todo 由引擎派（backlog = 未计划，引擎不碰）。
 - 两个项目共用一个 hub 和仓库，worktree 都在 `~/.cursor/worktrees/pocketjs/agent-<key>`。
+- 分支命名：`agent/<key>`（worktree `agent-<key>`）只给编排器用；herdr worker 用 `herdr/<task>`，不要用 `agent/<task>`，否则会占住编排分支，issue 被 `[branch_occupied]` 阻塞。
