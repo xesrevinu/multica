@@ -453,9 +453,11 @@ func TestIntegrationCargoSlotsAcrossIssues(t *testing.T) {
 	x, _ := f.issue("c1", "needs:cargo")
 	y, _ := f.issue("c2", "needs:cargo")
 	f.svc.reconcile(f.ctx)
-	sx, _, _ := f.state(x)
-	sy, _, _ := f.state(y)
-	if (sx == StTodo) == (sy == StTodo) {
-		t.Fatalf("exactly one cargo issue may start: %s %s", sx, sy)
+	// T1 keeps the issue in todo and assigns the owner, so "started" means
+	// an owner was assigned (fixture issues are created in todo).
+	_, ax, _ := f.state(x)
+	_, ay, _ := f.state(y)
+	if (ax != "") == (ay != "") {
+		t.Fatalf("exactly one cargo issue may start: assignees %q %q", ax, ay)
 	}
 }
