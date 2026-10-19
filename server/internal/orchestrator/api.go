@@ -184,7 +184,7 @@ func (s *Service) hApply(w http.ResponseWriter, r *http.Request) {
 	// moves an orchestrated issue to done (see handler/pr_auto_complete.go).
 	_ = s.ensureMember(r.Context(), wsID(r))
 	_ = s.reload(r.Context())
-	s.Kick()
+	go s.reconcile(contextBG()) // a changed limit (disk, owners) can unblock waiting issues now
 	writeJSON(w, 200, map[string]any{"project_id": pid, "changes": diffSpecs(cur, sp), "human_user_id": human})
 }
 

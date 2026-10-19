@@ -257,7 +257,7 @@ func (s *store) recordFailure(ctx context.Context, issueID string, err error, ba
 }
 
 func (s *store) clearFailure(ctx context.Context, issueID string) {
-	_, _ = s.pool.Exec(ctx, `UPDATE orchestrator_issue_state SET failures=0, next_at=NULL, last_error='' WHERE issue_id=$1 AND failures>0`, issueID)
+	_, _ = s.pool.Exec(ctx, `UPDATE orchestrator_issue_state SET failures=0, next_at=NULL, last_error='', last_wait='' WHERE issue_id=$1 AND (failures>0 OR last_wait<>'')`, issueID)
 }
 
 func (s *store) setWait(ctx context.Context, issueID, wait string) bool {
