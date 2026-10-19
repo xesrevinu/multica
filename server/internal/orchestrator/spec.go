@@ -93,7 +93,9 @@ type RepoSpec struct {
 	BranchPrefix   string   `json:"branch_prefix" yaml:"branch_prefix"`
 	CheckCmd       string   `json:"check_cmd,omitempty" yaml:"check_cmd,omitempty"`
 	RequiredChecks []string `json:"required_checks,omitempty" yaml:"required_checks,omitempty"`
-	DiskPath       string   `json:"disk_path,omitempty" yaml:"disk_path,omitempty"`
+	// DiskPath overrides where the free-disk check looks; empty = the wt
+	// (worktrunk) worktree-path root, see wt.go.
+	DiskPath string `json:"disk_path,omitempty" yaml:"disk_path,omitempty"`
 }
 
 type Limits struct {

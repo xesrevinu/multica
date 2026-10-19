@@ -36,6 +36,10 @@ func (s *Service) Routes() http.Handler {
 	r.Post("/flow/{key}/replay", s.hReplay)
 	r.Get("/issues", s.hIssues)
 	r.Get("/issues/{key}/timeline", s.hIssueTimeline)
+	r.Get("/issues/{key}/pr", s.hPR)
+	r.Post("/issues/{key}/pr/update-branch", s.hPROp("update-branch"))
+	r.Post("/issues/{key}/pr/rerun-checks", s.hPROp("rerun-checks"))
+	r.Post("/issues/{key}/pr/merge", s.hPROp("merge"))
 	return r
 }
 

@@ -23,6 +23,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/inbox"
+	"github.com/multica-ai/multica/server/internal/integrations/ghsnapshot"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
@@ -72,6 +73,10 @@ type Service struct {
 	lastBeat  time.Time
 	lastErr   string
 	disabled  bool
+
+	// gh is the GitHub App client for PR card ops (nil = App not configured).
+	ghOnce sync.Once
+	gh     *ghsnapshot.Client
 }
 
 func New(opt Options) *Service {
@@ -339,7 +344,7 @@ func (s *Service) snapshot(ctx context.Context, t *Team, rows []issueRow, row *i
 		for _, r := range fresh {
 			sn.Siblings = append(sn.Siblings, r.Issue)
 		}
-		sn.FreeGB = freeGB(t.Spec.Repo.DiskPath)
+		sn.FreeGB = freeGB(diskPath(t.Spec))
 	case StTodo, StInProgress, StInReview:
 		if sn.ActiveRun == nil {
 			if sn.Head, err = s.repo.head(ctx, t.Spec, row.Key); err != nil {
