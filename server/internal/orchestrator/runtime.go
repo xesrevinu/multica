@@ -59,6 +59,7 @@ type Service struct {
 	svcUserID string
 	token     string
 	wake      chan struct{}
+	locks     sync.Map
 	lastBeat  time.Time
 	lastErr   string
 	disabled  bool
@@ -204,7 +205,7 @@ func (s *Service) loop(ctx context.Context) {
 				continue
 			}
 			for _, id := range ids {
-				s.processID(ctx, id, "event")
+				go s.processID(ctx, id, "event")
 			}
 		case <-rec.C:
 			s.reconcile(ctx)
@@ -234,20 +235,28 @@ func (s *Service) reconcile(ctx context.Context) {
 		s.fail("reload", err)
 		return
 	}
+	var wg sync.WaitGroup
 	for _, t := range s.snapshotTeams() {
-		rows, err := s.st.projectIssues(ctx, t.ProjectID)
-		if err != nil {
-			s.fail("reconcile list", err)
-			continue
-		}
-		for i := range rows {
-			if rows[i].Status == StDone || rows[i].Status == StCancelled {
-				continue
+		wg.Add(1)
+		go func(t *Team) { // projects in parallel, issues of one project serially
+			defer wg.Done()
+			unlock := s.lockKey("p:" + t.ProjectID)
+			defer unlock()
+			rows, err := s.st.projectIssues(ctx, t.ProjectID)
+			if err != nil {
+				s.fail("reconcile list", err)
+				return
 			}
-			s.process(ctx, t, rows, &rows[i], "reconcile")
-		}
-		s.remindBlocked(ctx, t, rows)
+			for i := range rows {
+				if rows[i].Status == StDone || rows[i].Status == StCancelled {
+					continue
+				}
+				s.process(ctx, t, rows, &rows[i], "reconcile")
+			}
+			s.remindBlocked(ctx, t, rows)
+		}(t)
 	}
+	wg.Wait()
 	s.mu.Lock()
 	s.lastBeat = time.Now()
 	s.mu.Unlock()
@@ -261,6 +270,11 @@ func (s *Service) processID(ctx context.Context, issueID, source string) {
 	t := s.Team(row.ProjectID)
 	if t == nil {
 		return
+	}
+	unlock := s.lockKey("p:" + t.ProjectID)
+	defer unlock()
+	if row, err = s.st.issue(ctx, issueID); err != nil || row == nil {
+		return // re-read under the lock: the queued event may be stale
 	}
 	rows, err := s.st.projectIssues(ctx, t.ProjectID)
 	if err != nil {
@@ -324,6 +338,10 @@ func (s *Service) process(ctx context.Context, t *Team, rows []issueRow, row *is
 	now := time.Now()
 	if !s.st.backoffOK(ctx, row.ID, now) {
 		return
+	}
+	if row.Status == StBacklog {
+		// owner selection reads workspace-wide busy state: serialize T1 per workspace
+		defer s.lockKey("w:" + t.WorkspaceID)()
 	}
 	d, err := s.decide(ctx, t, rows, row)
 	if err == nil && d != nil {
@@ -596,3 +614,11 @@ func issueIDOf(e events.Event) string {
 var errNotFound = errors.New("not found")
 
 func contextBG() context.Context { return context.Background() }
+
+// lockKey is a named mutex (per project / per workspace).
+func (s *Service) lockKey(k string) func() {
+	m, _ := s.locks.LoadOrStore(k, &sync.Mutex{})
+	mx := m.(*sync.Mutex)
+	mx.Lock()
+	return mx.Unlock
+}
