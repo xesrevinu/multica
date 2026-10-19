@@ -51,6 +51,7 @@ func (s *Service) CheckWrite(in GuardInput) string {
 var EngineOwnedMetaKeys = map[string]bool{
 	"owner": true, "attempt_impl": true, "attempt_review": true, "attempt_infra": true,
 	"merged_sha": true, "pr_number": true, "pr": true, "acceptance": true, "acceptance_required": true, "review_started_sha": true,
+	"paused": true, "cancel_requested": true,
 }
 
 // AgentPhaseValues are the phase values an agent may write. unblocked and

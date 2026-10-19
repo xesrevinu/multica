@@ -208,6 +208,17 @@ func (sp *Spec) Decide(s *Snapshot, probe Prober) *Decision {
 	if st == StDone || st == StCancelled {
 		return nil
 	}
+	// Member flow controls (written only through /api/orchestrator, never by agents).
+	if m["cancel_requested"] == "true" {
+		d := &Decision{Tid: "T8b_member_cancel", Status: StCancelled, Meta: map[string]string{"phase": PhCancelled, "cancel_requested": "", "paused": ""}, Why: "cancelled by a member"}
+		if s.ActiveRun != nil {
+			d.CancelRun = s.ActiveRun.ID
+		}
+		return d
+	}
+	if m["paused"] == "true" {
+		return &Decision{Wait: "paused by a member (resume to continue)"}
+	}
 	// T9: converge status to the engine-owned phase.
 	if ok, has := phaseStatus[m["phase"]]; has && !contains(ok, st) {
 		target := ok[0]
