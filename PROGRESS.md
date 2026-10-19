@@ -35,3 +35,12 @@ Reference implementation: /Users/kee/Workspace/ai-stack/multica-e2e/teamctl (kep
 - UI: transitions are listed in the Flow card, not interleaved in the comment timeline; reject from the UI is not implemented (CLI needs --reason); the frontend has no special rendering for the orchestrator_alert inbox type.
 - The CI re-run memory should be persisted (orchestrator_issue_state).
 - PocketJS .multica changes deferred, as instructed.
+
+## Step: remaining items (2026-10-19 16:34–16:55)
+- CI re-run record persisted: migration 584 `orchestrator_ci_retry(head_sha PK)`. The first INSERT wins across restarts; the in-memory map stays only as a fast path.
+- Transitions go into the issue timeline (activity_log action=orchestrator_transition, actor = Orchestrator service user, never coalesced). The Flow card has Accept plus Reject with a reason (button disabled while the reason is empty). The orchestrator_alert inbox type has a label in web+mobile and shows the full alert body.
+- Web dev now runs from the orch worktree on :13819 (`.orch-dev/web.sh`, pid in web.pid), pointed at the e2e API :18899. The old e2e web dev was stopped.
+- Headless screenshots: system Chrome via playwright channel "chrome", headless, no focus stealing (`.orch-dev/shots.mjs`, `reject.mjs`). The playwright chromium download hung, so it was not used. Files in .orch-dev/shots/: flow-blocked(.png,-card), flow-acceptance(.png,-card), flow-after-reject(.png,-card), reject-filled, team(.png,-card), inbox, inbox-alert.
+- The Reject UI was verified end-to-end: ATT-60 rejected from the browser → T3_rework with the typed reason; the timeline shows the Orchestrator rows.
+- T3c verdict carry-over (patch-id): unit test on a temp repo (rebase same / changed differs). Live: ATT-60 awaiting acceptance, I merged main into agent/ATT-60 (fast-forward push, no force) → T3c_carry_verdict "same patch-id as reviewed 2694c93172b6", no extra review run.
+- Known dev-console noise, not from this work: the docs proxy :4747 is refused (500 in the Next overlay "1 Issue"), and the nativeButton prop warning.
