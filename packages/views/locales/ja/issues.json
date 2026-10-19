@@ -539,7 +539,8 @@
     "wakeup_checkin": "サイレントチェック：{{note}}",
     "wakeup_checkin_coalesced_other": "サイレントチェック {{count}} 回 · 最新：{{note}}",
     "wakeup_chip_created_by": "{{name}} が作成",
-    "wakeup_chip_system": "システムルール"
+    "wakeup_chip_system": "システムルール",
+    "orchestrator_transition": "オーケストレーター: {{tid}} {{why}}"
   },
   "comment": {
     "add_reaction": "リアクションを追加",
@@ -1703,6 +1704,8 @@
     "resume": "再開",
     "no_teams": "オーケストレーション対象のプロジェクトはありません。",
     "phase": "フェーズ",
-    "accept": "受け入れる"
+    "accept": "受け入れる",
+    "reject": "却下",
+    "reject_reason": "理由（担当者が読みます）"
   }
 }

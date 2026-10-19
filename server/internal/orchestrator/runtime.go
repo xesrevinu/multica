@@ -464,10 +464,25 @@ func (s *Service) apply(ctx context.Context, t *Team, row *issueRow, d *Decision
 			return err
 		}
 	}
+	s.activity(ctx, row, d, source)
 	if d.Notify != "" {
 		s.notify(ctx, t, row, d)
 	}
 	return nil
+}
+
+// activity interleaves the transition into the issue timeline (activity_log,
+// action orchestrator_transition) so people see why the issue moved where it
+// happened, not only in `multica flow log`.
+func (s *Service) activity(ctx context.Context, row *issueRow, d *Decision, source string) {
+	det, _ := json.Marshal(map[string]string{"tid": d.Tid, "why": short(d.Why, 300), "status": d.Status, "assignee": d.Assignee, "source": source})
+	var actor any
+	if s.svcUserID != "" {
+		actor = s.svcUserID
+	}
+	if _, err := s.opt.Pool.Exec(ctx, `INSERT INTO activity_log (workspace_id, issue_id, actor_type, actor_id, action, details) VALUES ($1, $2, 'member', $3, 'orchestrator_transition', $4)`, row.Workspace, row.ID, actor, det); err != nil {
+		slog.Warn("orchestrator: activity log", "issue", row.Key, "err", err)
+	}
 }
 
 func (s *Service) publishMeta(ctx context.Context, row *issueRow) {

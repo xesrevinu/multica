@@ -539,7 +539,8 @@
     "wakeup_checkin": "조용한 확인: {{note}}",
     "wakeup_checkin_coalesced_other": "조용한 확인 {{count}}회 · 최근: {{note}}",
     "wakeup_chip_created_by": "{{name}} 생성",
-    "wakeup_chip_system": "시스템 규칙"
+    "wakeup_chip_system": "시스템 규칙",
+    "orchestrator_transition": "오케스트레이터: {{tid}} {{why}}"
   },
   "comment": {
     "add_reaction": "반응 추가",
@@ -1703,6 +1704,8 @@
     "resume": "재개",
     "no_teams": "오케스트레이션된 프로젝트가 없습니다.",
     "phase": "단계",
-    "accept": "수락"
+    "accept": "수락",
+    "reject": "거절",
+    "reject_reason": "사유 (담당자가 읽습니다)"
   }
 }

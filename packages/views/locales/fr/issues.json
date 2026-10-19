@@ -551,7 +551,8 @@
     "wakeup_checkin_coalesced_one": "{{count}} vérification silencieuse · dernière : {{note}}",
     "wakeup_checkin_coalesced_other": "{{count}} vérifications silencieuses · dernière : {{note}}",
     "wakeup_chip_created_by": "Réveil de {{name}}",
-    "wakeup_chip_system": "Règle système"
+    "wakeup_chip_system": "Règle système",
+    "orchestrator_transition": "orchestrateur : {{tid}} {{why}}"
   },
   "comment": {
     "add_reaction": "Ajouter une réaction",
@@ -1768,6 +1769,8 @@
     "resume": "Reprendre",
     "no_teams": "Aucun projet orchestré dans cet espace.",
     "phase": "Phase",
-    "accept": "Accepter"
+    "accept": "Accepter",
+    "reject": "Refuser",
+    "reject_reason": "Raison (lue par le responsable)"
   }
 }

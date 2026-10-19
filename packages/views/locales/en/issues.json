@@ -551,7 +551,8 @@
     "wakeup_checkin_coalesced_one": "{{count}} silent check · latest: {{note}}",
     "wakeup_checkin_coalesced_other": "{{count}} silent checks · latest: {{note}}",
     "wakeup_chip_created_by": "{{name}}'s wakeup",
-    "wakeup_chip_system": "System rule"
+    "wakeup_chip_system": "System rule",
+    "orchestrator_transition": "orchestrator: {{tid}} {{why}}"
   },
   "comment": {
     "add_reaction": "Add reaction",
@@ -1768,6 +1769,8 @@
     "resume": "Resume",
     "no_teams": "No orchestrated projects in this workspace.",
     "phase": "Phase",
-    "accept": "Accept"
+    "accept": "Accept",
+    "reject": "Reject",
+    "reject_reason": "Reason (the owner reads it)"
   }
 }

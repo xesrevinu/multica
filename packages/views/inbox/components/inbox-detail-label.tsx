@@ -38,6 +38,7 @@ export function useTypeLabels(): Record<InboxItemType, string> {
     autopilot_paused: t(($) => $.types.autopilot_paused),
     autopilot_quota_exceeded: t(($) => $.types.autopilot_quota_exceeded),
     children_done: t(($) => $.types.children_done),
+    orchestrator_alert: t(($) => $.types.orchestrator_alert),
   };
 }
 
@@ -108,6 +109,10 @@ export function InboxDetailLabel({ item }: { item: InboxItem }) {
     case "due_date_changed": {
       if (details.to) return <span>{t(($) => $.labels.set_due_date_to, { date: shortDate(details.to, locale) })}</span>;
       return <span>{t(($) => $.labels.removed_due_date)}</span>;
+    }
+    case "orchestrator_alert": {
+      if (item.body) return <span className="whitespace-pre-wrap">{item.body}</span>;
+      return <span>{typeLabels[item.type]}</span>;
     }
     case "new_comment": {
       if (item.body) return <span>{item.body}</span>;

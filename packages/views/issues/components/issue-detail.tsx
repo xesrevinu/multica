@@ -413,6 +413,8 @@ function formatActivity(
       return t(($) => $.activity.task_completed, { count: entry.coalesced_count ?? 1 });
     case "task_failed":
       return t(($) => $.activity.task_failed, { count: entry.coalesced_count ?? 1 });
+    case "orchestrator_transition":
+      return t(($) => $.activity.orchestrator_transition, { tid: details.tid ?? "", why: details.why ?? "" });
     case "squad_leader_evaluated": {
       const reason = details.reason?.trim();
       switch (details.outcome) {
@@ -1676,6 +1678,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     // Duplicate marks name a different issue on every row.
     const NEVER_COALESCE_ACTIONS = new Set([
       "squad_leader_evaluated",
+      "orchestrator_transition",
       "wakeup_created",
       "wakeup_triggered",
       "wakeup_timed_out",

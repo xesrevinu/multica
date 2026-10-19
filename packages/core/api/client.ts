@@ -1418,6 +1418,10 @@ export class ApiClient {
     return this.fetch<unknown>(`/api/orchestrator/flow/${encodeURIComponent(key)}/accept`, { method: "POST", body: "{}" });
   }
 
+  async rejectOrchestratorFlow(key: string, reason: string): Promise<unknown> {
+    return this.fetch<unknown>(`/api/orchestrator/flow/${encodeURIComponent(key)}/reject`, { method: "POST", body: JSON.stringify({ reason }) });
+  }
+
   async listOrchestratorTeams(): Promise<{ teams: OrchestratorTeam[] }> {
     return this.fetch<{ teams: OrchestratorTeam[] }>(`/api/orchestrator/teams`);
   }

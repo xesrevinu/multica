@@ -539,7 +539,8 @@
     "wakeup_checkin": "静默检查：{{note}}",
     "wakeup_checkin_coalesced_other": "静默检查 {{count}} 次 · 最近一次：{{note}}",
     "wakeup_chip_created_by": "{{name}} 创建",
-    "wakeup_chip_system": "系统规则"
+    "wakeup_chip_system": "系统规则",
+    "orchestrator_transition": "编排器：{{tid}} {{why}}"
   },
   "comment": {
     "add_reaction": "添加表情回应",
@@ -1703,6 +1704,8 @@
     "resume": "恢复",
     "no_teams": "此工作区没有编排项目。",
     "phase": "阶段",
-    "accept": "验收通过"
+    "accept": "验收通过",
+    "reject": "拒绝",
+    "reject_reason": "理由（owner 会读到）"
   }
 }

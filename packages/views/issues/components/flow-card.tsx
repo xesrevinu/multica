@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@multica/core/api";
 import type { OrchestratorFlow } from "@multica/core/api";
@@ -37,6 +38,12 @@ export function FlowCard({ identifier }: { identifier: string }) {
   });
   const accept = useMutation({
     mutationFn: () => api.acceptOrchestratorFlow(identifier),
+    onSettled: () => qc.invalidateQueries({ queryKey: flowQueryKey(identifier) }),
+  });
+  const [reason, setReason] = useState("");
+  const reject = useMutation({
+    mutationFn: () => api.rejectOrchestratorFlow(identifier, reason.trim()),
+    onSuccess: () => setReason(""),
     onSettled: () => qc.invalidateQueries({ queryKey: flowQueryKey(identifier) }),
   });
   if (!flow) return null;
@@ -120,14 +127,32 @@ export function FlowCard({ identifier }: { identifier: string }) {
       </div>
 
       {m.phase === "awaiting_acceptance" && (
-        <button
-          type="button"
-          className="rounded bg-primary px-2 py-1 text-primary-foreground disabled:opacity-50"
-          disabled={accept.isPending}
-          onClick={() => accept.mutate()}
-        >
-          {t(($) => $.orchestrator.accept)}
-        </button>
+        <div className="space-y-1" data-testid="orchestrator-acceptance">
+          <button
+            type="button"
+            className="rounded bg-primary px-2 py-1 text-primary-foreground disabled:opacity-50"
+            disabled={accept.isPending || reject.isPending}
+            onClick={() => accept.mutate()}
+          >
+            {t(($) => $.orchestrator.accept)}
+          </button>
+          <div className="flex gap-1">
+            <input
+              className="min-w-0 flex-1 rounded border bg-background px-1.5 py-0.5"
+              value={reason}
+              placeholder={t(($) => $.orchestrator.reject_reason)}
+              onChange={(e) => setReason(e.target.value)}
+            />
+            <button
+              type="button"
+              className="rounded border border-destructive px-2 py-0.5 text-destructive disabled:opacity-50"
+              disabled={!reason.trim() || reject.isPending || accept.isPending}
+              onClick={() => reject.mutate()}
+            >
+              {t(($) => $.orchestrator.reject)}
+            </button>
+          </div>
+        </div>
       )}
 
       {flow.recent && flow.recent.length > 0 && (
