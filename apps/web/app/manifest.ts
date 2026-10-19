@@ -1,7 +1,8 @@
 import type { MetadataRoute } from "next";
 
 /**
- * Installable web manifest. Start at /inbox so session-aware proxy routing
+ * Installable web manifest. Start at /chat (the app's landing surface; a
+ * reserved slug and legacy segment) so session-aware proxy routing
  * opens the workspace or login; the marketing host's root would open the landing
  * page even for a signed-in user.
  *
@@ -10,7 +11,7 @@ import type { MetadataRoute } from "next";
  */
 
 /** Launch path. Exported so manifest.test.ts can run it through the proxy. */
-export const PWA_START_URL = "/inbox";
+export const PWA_START_URL = "/chat";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
@@ -52,6 +53,7 @@ export default function manifest(): MetadataRoute.Manifest {
     // segments, so they resolve to the last workspace the same way start_url
     // does instead of needing a slug the manifest cannot know.
     shortcuts: [
+      { name: "Chat", url: "/chat" },
       { name: "Inbox", url: "/inbox" },
       { name: "My Issues", url: "/my-issues" },
     ],
