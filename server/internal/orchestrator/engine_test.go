@@ -256,3 +256,23 @@ transitions: [{id: X, actor: agent, from: [in_review], to: [done]}]`,
 		t.Fatal(s.Mermaid(""))
 	}
 }
+
+func TestIdle(t *testing.T) {
+	sp := spec(t)
+	s := snap(StInProgress, map[string]string{"phase": PhImplementing})
+	st := now.Add(-12 * time.Minute)
+	act := now.Add(-9 * time.Minute)
+	s.ActiveRun = &Run{ID: "run-abcdef12", Status: "running", StartedAt: &st, LastActivity: &act}
+	if d := sp.Decide(s, nil); d == nil || d.Tid != "T5b_cancel_stuck" || !strings.Contains(d.Why, "no tool output") {
+		t.Fatal(d)
+	}
+	act = now.Add(-2 * time.Minute)
+	if d := sp.Decide(s, nil); d != nil {
+		t.Fatal("active run must not be cancelled", d)
+	}
+	sp.Limits.IdleMin = -1
+	act = now.Add(-11 * time.Minute)
+	if d := sp.Decide(s, nil); d != nil {
+		t.Fatal("negative idle_min disables", d)
+	}
+}

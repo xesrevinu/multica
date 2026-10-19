@@ -81,6 +81,7 @@ type Limits struct {
 	Review           int `json:"review" yaml:"review"`
 	Infra            int `json:"infra" yaml:"infra"`
 	StuckMin         int `json:"stuck_min" yaml:"stuck_min"`
+	IdleMin          int `json:"idle_min" yaml:"idle_min"` // no task_message for this long → cancel; default 8, negative disables
 	MinFreeGB        int `json:"min_free_gb" yaml:"min_free_gb"`
 	BlockedRemindMin int `json:"blocked_remind_min" yaml:"blocked_remind_min"`
 	Failures         int `json:"dead_letter_after" yaml:"dead_letter_after"`
@@ -142,6 +143,7 @@ func (s *Spec) Defaults() {
 	d(&s.Limits.Review, 3)
 	d(&s.Limits.Infra, 2)
 	d(&s.Limits.StuckMin, 20)
+	d(&s.Limits.IdleMin, 8)
 	d(&s.Limits.MinFreeGB, 20)
 	d(&s.Limits.BlockedRemindMin, 60)
 	d(&s.Limits.Failures, 5)

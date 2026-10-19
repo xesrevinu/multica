@@ -24,6 +24,9 @@ type Run struct {
 	ID        string
 	Status    string // queued, dispatched, running, completed, failed, cancelled
 	StartedAt *time.Time
+	// LastActivity is the newest task_message time (nil if none yet). A run whose
+	// agent is stuck inside one tool call (e.g. an rg over $HOME) emits nothing.
+	LastActivity *time.Time
 }
 
 // Snapshot is everything Decide may look at. Collected by the runtime.
@@ -191,6 +194,15 @@ func (sp *Spec) Decide(s *Snapshot, probe Prober) *Decision {
 	if s.ActiveRun != nil {
 		if r := s.ActiveRun; r.StartedAt != nil && s.Now.Sub(*r.StartedAt) > time.Duration(sp.Limits.StuckMin)*time.Minute {
 			return &Decision{Tid: "T5b_cancel_stuck", CancelRun: r.ID, Why: fmt.Sprintf("run %s running %dm > %dm", r.ID[:min(8, len(r.ID))], int(s.Now.Sub(*r.StartedAt).Minutes()), sp.Limits.StuckMin)}
+		}
+		if r := s.ActiveRun; r.Status == "running" && r.StartedAt != nil && sp.Limits.IdleMin > 0 {
+			last := *r.StartedAt
+			if r.LastActivity != nil && r.LastActivity.After(last) {
+				last = *r.LastActivity
+			}
+			if idle := s.Now.Sub(last); idle > time.Duration(sp.Limits.IdleMin)*time.Minute {
+				return &Decision{Tid: "T5b_cancel_stuck", CancelRun: r.ID, Why: fmt.Sprintf("run %s no tool output for %dm > idle_min %dm", r.ID[:min(8, len(r.ID))], int(idle.Minutes()), sp.Limits.IdleMin)}
+			}
 		}
 		return nil
 	}

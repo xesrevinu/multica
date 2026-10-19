@@ -23,7 +23,7 @@ orchestrator:
     main: main
     check_cmd: npm test && npm run lint   # 送审前的本地预检（可选）
     required_checks: [test, lint]
-  limits: { impl: 3, review: 3, infra: 2, stuck_min: 20, min_free_gb: 20 }
+  limits: { impl: 3, review: 3, infra: 2, stuck_min: 20, idle_min: 8, min_free_gb: 20 }
   acceptance:
     labels: [needs-acceptance, needs-GUI-Master, needs-Ray-signoff]
 ```

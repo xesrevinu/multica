@@ -49,7 +49,7 @@ SELECT count(*) FROM orchestrator_event WHERE processed_at IS NULL;   -- 堆积 
 ### agent 跑出工作区（如 rg 扫整个 $HOME）
 现象：run 长时间 running，`ps` 里能看到 daemon → agent → `rg/grep ... /Users/<you>`。
 处理：先 `ps -o pid,ppid,command` 确认父进程是 daemon 下的 agent，只 kill 那个子进程；`multica team pause <team>` 防止 T5 立刻重跑；`multica issue cancel-task <run>`；修指令（WORKSPACE SCOPE 规则）后 `team resume`，engine 会重跑（记 infra attempt）。
-兜底：T5b 在 `limits.stuck_min` 后取消卡住的 run。案例：ATT-40 被验收拒绝后，owner 想找拒绝理由的原文，在 $HOME 下跑了 rg（理由当时只写在 metadata.acceptance 里）。现在 reject 也会写 `blocked_reason`。
+兜底：T5b 在 `limits.stuck_min`（默认 20）后取消卡住的 run；另外 `limits.idle_min`（默认 8，负数关闭）内 run 没有任何 task_message（工具输出/消息）也会提前取消，专门抓“卡在一个工具调用里”的情况。案例：ATT-40 被验收拒绝后，owner 想找拒绝理由的原文，在 $HOME 下跑了 rg（理由当时只写在 metadata.acceptance 里）。现在 reject 也会写 `blocked_reason`。
 
 ## 改 team
 

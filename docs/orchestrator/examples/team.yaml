@@ -19,6 +19,7 @@ orchestrator:
     review: 3
     infra: 2
     stuck_min: 20
+    idle_min: 8        # no tool output this long → cancel run (negative disables)
     min_free_gb: 20
     blocked_remind_min: 60
     dead_letter_after: 5
