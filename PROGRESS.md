@@ -77,3 +77,14 @@ Reference implementation: /Users/kee/Workspace/ai-stack/multica-e2e/teamctl (kep
   - B4 migration renumbering to a reserved range before the first prod deploy.
   - B7 metrics.
   - The ATT-64 leftovers (closed PR #19, remote branch agent/ATT-64, three e2e worktrees) were kept as evidence.
+
+## Step: fast feedback harness + GitHub App on local e2e (2026-10-19 17:41–17:52)
+- Replay harness: `testdata/scenarios/*.yaml` has 21 scenarios. 15 of them are tied to recorded e2e sequences in testdata/recorded.txt (exported from the e2e DB). They run in under 0.1s.
+- Integration layer: real runtime + real Postgres (`multica_orch_test`, created by scripts/orch-testdb.sh) with a fake API router, fake agents and a fake GitHub. 7 tests, ~1s. A `repoBackend` interface is the seam.
+- Bug found by the integration layer: two needs:cargo issues started in one pass, because the siblings snapshot was stale. Fixed: the backlog snapshot now re-reads siblings.
+- docs/orchestrator/testing.md covers the layers, when real-agent e2e is still needed, and a 4-scenario smoke set.
+- GitHub App:
+  - K8s (read-only): the secret holds GITHUB_APP_ID/PRIVATE_KEY/SLUG/WEBHOOK_SECRET. There is one installation (xesrevinu, all repos).
+  - Local wiring: github-app.env (600) is loaded by run-api.sh, the installation row is bound to the e2e workspace, and the ghrelay poller replays App deliveries for the sandbox repo, signed.
+  - Verified: local github_pull_request snapshots and issue_pull_request links for #18–#23, including the lowercase branches.
+- INCIDENT: the App private key was printed in the session output by a `cut` over a multi-line PEM. Recommend rotating it.
