@@ -77,6 +77,8 @@ type Client struct {
 type cachedToken struct {
 	token  string
 	expiry time.Time
+	// permissions the installation granted this token (e.g. "contents":"write").
+	permissions map[string]string
 }
 
 // NewClientFromEnv builds a Client from GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY.
@@ -188,8 +190,9 @@ func (c *Client) mintInstallationToken(ctx context.Context, installationID int64
 		return "", fmt.Errorf("github installation token: unexpected status %d", resp.StatusCode)
 	}
 	var parsed struct {
-		Token     string `json:"token"`
-		ExpiresAt string `json:"expires_at"`
+		Token       string            `json:"token"`
+		ExpiresAt   string            `json:"expires_at"`
+		Permissions map[string]string `json:"permissions"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return "", errors.New("github installation token: malformed response")
@@ -204,7 +207,7 @@ func (c *Client) mintInstallationToken(ctx context.Context, installationID int64
 		}
 	}
 	c.mu.Lock()
-	c.tokens[installationID] = cachedToken{token: parsed.Token, expiry: expiry}
+	c.tokens[installationID] = cachedToken{token: parsed.Token, expiry: expiry, permissions: parsed.Permissions}
 	c.mu.Unlock()
 	return parsed.Token, nil
 }
