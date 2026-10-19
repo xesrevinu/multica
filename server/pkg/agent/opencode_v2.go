@@ -100,7 +100,7 @@ func opencodeModelArg(model, thinkingLevel string) (string, bool) {
 // The message deliberately does not name agent.mcp_config. ExecOptions.McpConfig
 // is the *composed* set, and only one of its sources is the agent's own column:
 // the daemon also folds in the workspace MCP servers bound to the agent (at
-// claim), the task's integration/Composio servers and the plugin-hook tool
+// claim), the task's connected-app servers and the plugin-hook tool
 // server (at run), and the runtime's own servers on top of those. A task whose
 // agent has no MCP configuration at all still arrives here with a non-empty
 // config, so an error telling the operator to edit agent.mcp_config would point

@@ -26,7 +26,11 @@ describe("settings location", () => {
     ],
     [
       "tab=integrations&integration=composio",
-      { tab: "apps", section: null, integration: null },
+      { tab: "channels", section: null, integration: null },
+    ],
+    [
+      "tab=integrations&connected=notion",
+      { tab: "channels", section: null, integration: null },
     ],
   ])("resolves the retired %s entry", (search, expected) => {
     expect(resolve(search)).toEqual(expected);
@@ -45,13 +49,6 @@ describe("settings location", () => {
       integration: null,
     });
   });
-
-  it.each(["connected=notion", "error=composio_connect_failed"])(
-    "sends the Composio OAuth callback (%s) to Connected apps",
-    (callback) => {
-      expect(resolve(`tab=integrations&${callback}`).tab).toBe("apps");
-    },
-  );
 
   it("passes current pages and anchors through untouched", () => {
     expect(resolve("tab=code&section=pr-sidebar")).toEqual({

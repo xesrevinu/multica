@@ -26,7 +26,7 @@ export function createEnDict(
     cta: "Start free trial",
     downloadDesktop: "Download Desktop",
     talkToSales: "Talk to sales",
-    worksWith: "Works with 20+ AI coding tools",
+    worksWith: "Works with Claude Code, Codex, OpenCode, Pi, and more",
     imageAlt: "Multica board view \u2014 issues managed by humans and agents",
   },
 
@@ -104,7 +104,7 @@ export function createEnDict(
       label: "RUNTIMES",
       title: "One dashboard for all your compute",
       description:
-        "Local daemons and cloud runtimes, managed from a single panel. Real-time monitoring of online/offline status, usage charts, and activity heatmaps. Auto-detects 26 supported coding tools on your machine.",
+        "Local daemons and cloud runtimes, managed from a single panel. Real-time monitoring of online/offline status, usage charts, and activity heatmaps. Auto-detects supported coding CLIs on your machine.",
       cards: [
         {
           title: "Unified runtime panel",
@@ -119,7 +119,7 @@ export function createEnDict(
         {
           title: "Auto-detection on first run",
           description:
-            "Multica scans for 26 supported coding tools \u2014 Antigravity, Claude Code, CodeBuddy, CodeArts, Codex, Copilot, Cursor, DeepSeek Harness, DevEco Code, Dim, Grok, Hermes, Kimi, Kiro CLI, MiniMax Code, Oh-My-Pi, OpenClaw, OpenCode, Pi, Qoder, Qoder CN, Qwen Code, QwenPaw, Reasonix, Trae CLI, and ZeroClaw \u2014 and registers a runtime for each one it finds.",
+            "Multica scans for supported coding CLIs \u2014 Claude Code, Codex, OpenCode, Pi, Oh-My-Pi, Grok, Grok Bot, DeepSeek Harness, and Yielded \u2014 and registers a runtime for each one it finds.",
         },
       ],
     },
@@ -139,7 +139,7 @@ export function createEnDict(
       {
         title: "Install the CLI & connect your machine",
         description:
-          "Run multica setup \u2014 it walks you through OAuth, starts the daemon, and scans for the 26 supported coding tools (Antigravity, Claude Code, CodeBuddy, CodeArts, Codex, Copilot, Cursor, DeepSeek Harness, DevEco Code, Dim, Grok, Hermes, Kimi, Kiro CLI, MiniMax Code, Oh-My-Pi, OpenClaw, OpenCode, Pi, Qoder, Qoder CN, Qwen Code, QwenPaw, Reasonix, Trae CLI, ZeroClaw). Whichever ones you already have installed get registered as runtimes automatically.",
+          "Run multica setup \u2014 it walks you through OAuth, starts the daemon, and scans for supported coding CLIs (Claude Code, Codex, OpenCode, Pi, Oh-My-Pi, Grok, Grok Bot, DeepSeek Harness, and Yielded). Whichever ones you already have installed get registered as runtimes automatically.",
       },
       {
         title: "Create your first agent",
@@ -196,7 +196,7 @@ export function createEnDict(
       {
         question: "What coding agents does Multica support?",
         answer:
-          "Multica supports 26 coding tools out of the box: Antigravity, Claude Code, CodeBuddy, CodeArts, Codex, Copilot, Cursor, DeepSeek Harness, DevEco Code, Dim, Grok, Hermes, Kimi, Kiro CLI, MiniMax Code, Oh-My-Pi, OpenClaw, OpenCode, Pi, Qoder, Qoder CN, Qwen Code, QwenPaw, Reasonix, Trae CLI, and ZeroClaw. The daemon auto-detects whichever CLIs you already have installed and registers a runtime for each one. Since the source code is public, you can also add your own backends.",
+          "Multica supports Claude Code, Codex, OpenCode, Pi, Oh-My-Pi, Grok, Grok Bot, DeepSeek Harness, and Yielded. The daemon auto-detects whichever CLIs you already have installed and registers a runtime for each one. Since the source code is public, you can also add your own backends.",
       },
       {
         question: "Do I need to self-host, or is there a cloud version?",
@@ -464,7 +464,7 @@ export function createEnDict(
           "PostHog: product analytics and crash reports",
           "Google: sign-in, if you choose Sign in with Google",
           "Large language model providers: the AI features described above",
-          "Integrations you connect, such as Slack, Lark, DingTalk, WeCom, Telegram, GitHub, GitLab, or apps connected through Composio: the data you choose to exchange with them, which is also subject to their own terms",
+          "Integrations you connect, such as Slack, Lark, DingTalk, WeCom, Telegram, GitHub, or GitLab: the data you choose to exchange with them, which is also subject to their own terms",
         ],
       },
       {
@@ -2343,11 +2343,10 @@ export function createEnDict(
       {
         version: "0.3.31",
         date: "2026-06-26",
-        title: "Cross-workspace unread dot, Composio toolkit foundation, and a friendlier editor",
+        title: "Cross-workspace unread dot and a friendlier editor",
         changes: [],
         features: [
           "The workspace switcher shows a dot when another workspace has unread inbox items.",
-          "New Composio toolkit foundation that prepares the upcoming third-party integrations.",
           "You can run desktop dev on multiple checkouts side by side without them clashing.",
           "The Chinese docs homepage now opens with a short intro video.",
         ],

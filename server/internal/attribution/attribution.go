@@ -23,10 +23,8 @@
 // labelling one. Every other constructor here only mirrors a human the caller
 // computed.
 //
-// It does NOT decide Composio access: since MUL-3963 the connected-apps overlay is
-// built from the AGENT OWNER's connections and allow-list and ignores the
-// originator entirely (integrations/composio/dispatch.go). Naming the originator
-// here therefore hands out no third-party credentials.
+// It does not grant third-party app credentials. Naming the originator
+// here only records who authorized the run.
 package attribution
 
 import "github.com/jackc/pgx/v5/pgtype"
@@ -149,8 +147,8 @@ const (
 //
 //   - UserID is the AUTHORIZATION human the caller writes into
 //     originator_user_id. It is the value canInvokeAgent reads; it is legitimately
-//     invalid (NULL) when no human authorized the run. It does NOT select Composio
-//     connections — those follow the agent owner (MUL-3963).
+//     invalid (NULL) when no human authorized the run. It is not a credential
+//     selector.
 //   - AccountableUserID is the AUDIT human written into accountable_user_id. The
 //     one-way invariant (enforced by finalizeAttribution): when UserID is valid,
 //     AccountableUserID equals it. When UserID is NULL (no human authorized the

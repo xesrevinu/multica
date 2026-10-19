@@ -45,8 +45,7 @@ const hasActiveInstallation = (data: {
 
 /**
  * Messaging channels: a directory of the chat apps agents can be reached
- * from, each opening its own detail page. Code hosting lives on the Code page
- * and account-level app connections on Connected apps.
+ * from, each opening its own detail page. Code hosting lives on the Code page.
  */
 export function ChannelsTab() {
   const { t } = useT("settings");

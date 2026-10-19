@@ -18,84 +18,59 @@ Multica는 사용 중인 AI 코딩 도구를 대체하지 않습니다. 런타�
 
 ## 지원 도구
 
-| 도구 | 감지 명령 | 세션 복원 | Multica의 MCP 관리 | 스킬 주입 위치 |
+| 도구 | 감지 명령 | 세션 복원 | Multica 관리 MCP | 스킬 주입 경로 |
 |---|---|---:|---:|---|
-| Antigravity | `agy` | ✓ | — | `.agents/skills/` |
 | Claude Code | `claude` | ✓ | ✓ | `.claude/skills/` |
-| CodeBuddy | `codebuddy` | ✓ | ✓ | `.codebuddy/skills/` |
-| CodeArts | `codearts` | ✓ | ✓ | `.codeartsdoer/skills/` |
 | Codex | `codex` | ✓ | ✓ | `$CODEX_HOME/skills/` |
-| GitHub Copilot CLI | `copilot` | ✓ | — | `.github/skills/` |
-| Cursor Agent | `cursor-agent` | ✓ | ✓ | `.cursor/skills/` |
 | DeepSeek Harness | `dsh` | ✓ | ✓ | `.dsh/skills/` |
-| DevEco Code | `deveco` | ✓ | — | `.deveco/skills/` |
 | Grok | `grok` | ✓ | ✓ | `.grok/skills/` |
-| Hermes | `hermes` | ✓ | ✓ | 실행별 `HERMES_HOME/skills/` |
-| Kimi CLI | `kimi` | ✓ | ✓ | `.kimi/skills/` |
-| Kiro CLI | `kiro-cli` | ✓ | ✓ | `.kiro/skills/` |
-| MiniMax Code | `mcode` | — | ✓ | `.minimax/skills/` |
-| OpenClaw | `openclaw` | ✓ | ✓ | `skills/` |
 | OpenCode | `opencode` | ✓ | ✓ | `.opencode/skills/` |
 | Pi | `pi` | ✓ | ✓ | `.pi/skills/` |
 | Oh-My-Pi | `omp` | ✓ | ✓ | `.omp/skills/` |
-| Qoder CLI | `qodercli` | ✓ | ✓ | `.qoder/skills/` |
-| Qoder CN CLI | `qoderclicn` | ✓ | ✓ | `.qoder/skills/` |
-| Qwen Code | `qwen` | ✓ | ✓ | `.qwen/skills/` |
-| QwenPaw | `qwenpaw` | ✓ | ✓ | 실행별 워크스페이스 `skills/` |
-| Reasonix | `reasonix` | ✓ | ✓ | `.reasonix/skills/` |
-| Trae CLI | `traecli` | ✓ | ✓ | `.traecli/skills/` |
-| Dim | `dim` | ✓ | ✓ | — |
+| Yielded | `yielded-agent` | ✓ | ✓ | `.agents/skills/` |
 
-"Multica의 MCP 관리"는 에이전트 설정에 MCP server를 입력하면 Multica가 실행 전에 해당 도구로 전달할 수 있다는 뜻입니다. 도구 자체에 다른 MCP 설정 방법이 없다는 뜻은 아닙니다.
+"Multica 관리 MCP"는 에이전트 설정에 MCP 서버를 정의하면 Multica가 실행 전에 그 도구로 전달한다는 뜻입니다. 그 도구에 다른 MCP 설정 방법이 없다는 뜻은 아닙니다.
 
 ## 모델 출처
 
-에이전트를 만들 때 모델 목록은 해당 런타임에서 가져옵니다. 일부 도구는 고정된 모델 이름을 제공하고, 일부는 로컬 설정, 로그인 계정, 구독 권한에 따라 사용 가능한 모델을 반환합니다.
+에이전트를 만들 때 모델 목록은 해당 런타임에서 옵니다. 고정된 모델 이름을 제공하는 도구도 있고, 로컬 설정, 로그인한 계정, 구독 권한에 따라 사용 가능한 모델을 돌려주는 도구도 있습니다.
 
-모델을 선택하지 않으면 Multica가 해당 도구의 기본 설정을 사용합니다. 목록이 비어 있다면 런타임이 온라인이고 도구에 로그인되어 있는지 확인한 뒤 모델 목록을 새로 고치세요.
+모델을 고르지 않으면 Multica는 그 도구의 기본값을 사용합니다. 목록이 비어 있으면 런타임이 온라인인지, 도구에 로그인되어 있는지 확인한 뒤 모델 목록을 새로고침하세요.
 
-QwenPaw와 MiniMax Code는 예외입니다. Multica에서 고른 모델을 받아들이지 않으므로 선택 상자가 비활성 상태로 "런타임에서 관리"라고 표시됩니다. 모델은 각 도구의 자체 설정에서 선택하세요. 모델 목록이 비어 있는 것은 정상이며 런타임이 오프라인이라는 뜻이 아닙니다.
-
-DeepSeek Harness의 모델 카탈로그는 런타임 자체가 제공합니다(`dsh --profile multica --list-models`). 모델 ID는 `provider/model` 형식(예: `deepseek-official/deepseek-chat`)이므로 목록에서 전체 ID를 선택하세요.
+DeepSeek Harness의 모델 카탈로그는 런타임이 직접 제공합니다(`dsh --profile multica --list-models`). 모델 id는 `provider/model` 형식입니다(예: `deepseek-official/deepseek-chat`). 목록에서 전체 id를 선택하세요.
 
 <Callout type="info">
-도구마다 모델 이름이 다를 수 있습니다. AI 코딩 도구를 바꾸면 기존 모델 값은 새 도구에서 유효하지 않으므로 다시 선택해야 합니다.
+도구마다 모델 이름이 다를 수 있습니다. AI 코딩 도구를 바꾸면 이전 모델 값은 새 도구에서 유효하지 않으므로 다시 선택해야 합니다.
 </Callout>
 
 ## 세션 복원
 
-표에서 ✓로 표시된 도구는 이후 실행에서 기존 세션을 이어갈 수 있습니다. 원래 세션이 여전히 존재하고 해당 세션에 접근할 수 있는 런타임이 실행을 처리해야 합니다. MiniMax Code 0.1.2는 ACP에서 세션 로드 기능을 알리지 않으므로 이후 실행에서는 새 MCode 세션을 시작합니다.
+✓로 표시된 도구는 이후 실행에서 기존 세션을 이어 갈 수 있습니다. 원래 세션이 남아 있고, 그 세션에 도달할 수 있는 런타임이 실행해야 합니다.
 
-Multica는 도구가 반환한 세션 식별자를 저장합니다. 다음에 같은 태스크에서 작업을 이어갈 때 런타임이 이 세션의 복원을 시도합니다. 복원할 수 없으면 새 세션을 만들어 계속 실행합니다. Pi는 로컬 세션 파일 경로를 저장하므로 원래 컴퓨터와 파일에 더 많이 의존합니다.
+Multica는 도구가 돌려준 세션 식별자를 저장합니다. 같은 태스크에서 작업을 이어 갈 때 런타임은 그 세션 복원을 시도하고, 복원할 수 없으면 새 세션을 만들어 계속합니다. Pi는 로컬 세션 파일 경로를 저장하므로 원래 컴퓨터와 파일에 더 의존합니다.
 
-재시도와 세션 복원 규칙은 [실행](/tasks#수동-재시도)을 참고하세요.
+재시도와 세션 복원 규칙은 [실행](/tasks#manual-retry)을 참고하세요.
 
 ## MCP 설정
 
-Antigravity, GitHub Copilot CLI, DevEco Code는 현재 에이전트의 MCP 설정을 읽지 않으므로 에이전트를 만들 때 이 항목이 표시되지 않습니다.
-
-Pi에 관리형 MCP 설정을 전달하려면 Pi 0.99.0 이상이 필요합니다. 이전 Pi 버전에서도 MCP 설정이 없는 에이전트는 계속 실행할 수 있습니다.
+Pi에 관리형 MCP를 전달하려면 Pi 0.99.0 이상이 필요합니다. 더 오래된 Pi도 MCP가 없는 에이전트는 실행할 수 있습니다.
 
 <Callout type="warning">
-MCP server의 명령, 인수, 환경 변수는 에이전트 설정과 함께 서버에 저장됩니다. 공유할 필요가 없는 로컬 자격 증명을 설정에 직접 넣지 마세요.
+MCP 서버의 명령, 인수, 환경 변수는 에이전트 설정과 함께 서버에 저장됩니다. 공유할 필요가 없는 로컬 자격 증명은 설정에 넣지 마세요.
 </Callout>
 
 ## 스킬 주입 방식
 
-실행을 시작하기 전에 Multica가 에이전트에 연결된 스킬을 위 표의 해당 위치에 기록해 도구가 자체 기본 메커니즘으로 발견할 수 있게 합니다.
+실행이 시작되기 전에 Multica는 에이전트에 연결된 스킬을 위 표의 경로에 써서, 각 도구가 자기 방식으로 찾게 합니다.
 
-저장소에 원래 있던 스킬은 덮어쓰지 않습니다. 이름이 충돌하면 Multica가 주입하는 복사본에 다른 디렉터리 이름을 사용하며 실행이 끝나면 자신이 만든 파일만 정리합니다.
+저장소에 이미 있는 스킬은 덮어쓰지 않습니다. 이름이 겹치면 Multica는 주입한 복사본에 다른 디렉터리 이름을 씁니다. 실행이 끝난 뒤 정리하는 파일은 직접 만든 파일뿐입니다.
 
-Codex, Hermes, OpenClaw의 처리는 조금 다릅니다.
+Codex는 실행마다 `CODEX_HOME`을 쓰므로 스킬이 시스템 전역 Codex 디렉터리에 기록되지 않습니다.
 
-- Codex는 실행별 `CODEX_HOME`을 사용하며 시스템 수준 Codex 디렉터리에 스킬을 기록하지 않습니다.
-- Hermes는 실행별 `HERMES_HOME`을 사용합니다. 기존 로컬 설정은 계속 읽을 수 있지만 연결된 스킬과 세션 데이터는 실행별로 격리됩니다. 이 격리는 에이전트에 스킬이 연결된 경우에만 사용되며, 연결된 스킬이 없는 실행은 컴퓨터의 기존 Hermes 홈 디렉터리를 사용합니다.
-- OpenClaw는 현재 실행용 작업 디렉터리의 `skills/`를 사용하고 실행별 설정을 통해 이 디렉터리를 워크스페이스로 지정합니다.
-
-스킬 생성 및 연결 방법은 [스킬](/skills)을 참고하세요.
+스킬을 만들고 연결하는 방법은 [스킬](/skills)을 참고하세요.
 
 ## 다음 단계
 
-- [에이전트 생성 및 설정](/agents-create) — 모델과 사고 강도를 설정합니다.
-- [AI 코딩 도구 설치](/install-agent-runtime) — 설치와 감지 단계를 확인합니다.
-- [데몬과 런타임](/daemon-runtimes) — 런타임 등록과 동시 실행을 알아봅니다.
+- [에이전트 만들기와 설정](/agents-create) — 모델과 사고 강도 설정.
+- [AI 코딩 도구 설치](/install-agent-runtime) — 설치와 감지.
+- [데몬과 런타임](/daemon-runtimes) — 런타임 등록과 동시 실행.

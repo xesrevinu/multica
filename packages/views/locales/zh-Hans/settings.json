@@ -407,7 +407,6 @@
       "billing": "账单与套餐",
       "code": "代码",
       "channels": "消息渠道",
-      "apps": "已连接应用",
       "workflows": "工作流"
     },
     "groups": {
@@ -941,35 +940,6 @@
     "install_error_forbidden": "你已没有在此工作区安装飞书 Bot 的权限，请联系工作区管理员。",
     "install_error_generic": "安装失败，请重试。"
   },
-  "composio": {
-    "page_description": "连接智能体可使用的应用。",
-    "not_enabled_title": "Composio 集成未启用",
-    "not_enabled_description_prefix": "在服务器上设置",
-    "not_enabled_description_suffix": "以启用 Composio toolkit 连接。",
-    "loading": "正在加载 toolkit…",
-    "load_failed": "加载 Composio toolkit 失败。",
-    "empty_title": "还没有可连接的应用",
-    "empty_description": "你的 Composio 项目里还没有启用 auth config 的 toolkit。请在 Composio 后台启用一个 auth config，它才会出现在这里。",
-    "search_placeholder": "搜索 toolkit…",
-    "connect": "连接",
-    "connecting": "连接中…",
-    "connected": "已连接",
-    "disconnect": "断开",
-    "disconnecting": "断开中...",
-    "connect_failed": "无法发起连接，请重试。",
-    "disconnect_failed": "无法断开连接，请重试。",
-    "toast_disconnected": "已断开",
-    "disconnect_confirm_title": "断开这个应用？",
-    "disconnect_confirm_description": "你的已连接账号将在 Composio 侧被撤销，你的智能体将失去对该 toolkit 的访问权限。你可以稍后重新连接。",
-    "disconnect_confirm_cancel": "取消",
-    "connections_load_failed": "无法加载你已有的连接，连接状态可能不完整。",
-    "toast_connected": "已连接",
-    "toast_connect_failed": "连接未能完成，请重试。",
-    "last_used": "最近使用 {{when}}",
-    "last_used_never": "从未使用",
-    "expired": "令牌已过期",
-    "reconnect": "重新连接"
-  },
   "slack": {
     "section_title": "Slack",
     "page_description": "在 Slack 中与智能体对话，或用 /issue 创建任务。",
@@ -1315,7 +1285,6 @@
     "title": "为智能体接入工具的方式",
     "current": "当前页面",
     "mcp": "由管理员添加、在工作区内共享，再按智能体分配。",
-    "apps": "用你自己的账号通过 Composio 授权，在你拥有的智能体上启用。",
     "plugins": "安装后可提供工具、定时 hook 和存储，每个插件单独授权。"
   }
 }

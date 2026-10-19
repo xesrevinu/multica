@@ -263,23 +263,19 @@ Agent-specific overrides:
 | `MULTICA_CLAUDE_MODEL` | Override the Claude model used |
 | `MULTICA_CODEX_PATH` | Custom path to the `codex` binary |
 | `MULTICA_CODEX_MODEL` | Override the Codex model used |
-| `MULTICA_COPILOT_PATH` | Custom path to the `copilot` (GitHub Copilot CLI) binary |
-| `MULTICA_COPILOT_MODEL` | Override the Copilot model used (note: GitHub Copilot routes models through your account entitlement, so this may not be honoured) |
 | `MULTICA_OPENCODE_PATH` | Custom path to the `opencode` binary |
 | `MULTICA_OPENCODE_MODEL` | Override the OpenCode model used |
-| `MULTICA_CODEARTS_PATH` | Custom path to the `codearts` launcher or binary |
-| `MULTICA_CODEARTS_MODEL` | Override the CodeArts model used |
-| `MULTICA_OPENCLAW_PATH` | Custom path to the `openclaw` binary |
-| `MULTICA_OPENCLAW_MODEL` | Override the OpenClaw model used |
-| `MULTICA_OPENCLAW_CLI_TIMEOUT` | Deadline for each `openclaw config ...` call during task preparation (default 30s; accepts `45s` or `45`). Raise it when the local CLI is slow to start; the daemon also reads it from `backends.openclaw.cli_timeout` in the CLI config |
-| `MULTICA_HERMES_PATH` | Custom path to the `hermes` binary |
-| `MULTICA_HERMES_MODEL` | Override the Hermes model used |
 | `MULTICA_PI_PATH` | Custom path to the `pi` binary |
 | `MULTICA_PI_MODEL` | Override the Pi model used |
-| `MULTICA_CURSOR_PATH` | Custom path to the `cursor-agent` binary |
-| `MULTICA_CURSOR_MODEL` | Override the Cursor Agent model used |
+| `MULTICA_OMP_PATH` | Custom path to the `omp` binary |
+| `MULTICA_OMP_MODEL` | Override the Oh-My-Pi model used |
 | `MULTICA_GROK_PATH` | Custom path to the `grok` binary |
 | `MULTICA_GROK_MODEL` | Override the Grok model used (e.g. `grok-4.5`) |
+| `MULTICA_GBOT_PATH` | Custom path to the `gbot` binary |
+| `MULTICA_DSH_PATH` | Custom path to the `dsh` binary |
+| `MULTICA_DSH_MODEL` | Override the DeepSeek Harness model used |
+| `MULTICA_YIELDED_PATH` | Custom path to the `yielded-agent` binary |
+| `MULTICA_YIELDED_MODEL` | Override the Yielded model used |
 
 ## Database Setup
 

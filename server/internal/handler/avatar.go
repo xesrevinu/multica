@@ -83,7 +83,7 @@ var (
 
 // avatarURLSigningKey derives an avatar-specific HMAC key from JWT_SECRET via
 // SHA-256, so this signing domain never shares an identical key with session
-// tokens. Mirrors composioStateSecret in the router.
+// tokens.
 func avatarURLSigningKey() []byte {
 	avatarSigningKeyOnce.Do(func() {
 		sum := sha256.Sum256(append([]byte("avatar-url:"), auth.JWTSecret()...))

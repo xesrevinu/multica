@@ -2458,10 +2458,7 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 	// comment input. Comment tasks replace this with the ids actually embedded
 	// in the capability-aware response built below.
 	deliveredCommentIDs = []pgtype.UUID{}
-	composioMCPEnabled := h.composioMCPAppsEnabled(r.Context())
-	if composioMCPEnabled {
-		resp.ConnectedApps = parseRuntimeConnectedAppsForClaim(task.RuntimeConnectedApps, task.ID)
-	}
+	resp.ConnectedApps = parseRuntimeConnectedAppsForClaim(task.RuntimeConnectedApps, task.ID)
 	agent, err := h.Queries.GetAgent(r.Context(), task.AgentID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -2574,13 +2571,11 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 			mcpConfig = resolved
 		}
 	}
-	// Layer the per-task overlay (set at enqueue from the initiator
-	// user's active integrations — currently Composio) on top of the
-	// agent's saved mcp_config. Overlay wins on server-name collisions
-	// because it carries the live user-scoped session URL. Errors are
-	// logged but never fail the claim: a broken overlay must not prevent
-	// the agent from running with its base config.
-	if composioMCPEnabled && len(task.RuntimeMcpOverlay) > 0 {
+	// Layer a per-task MCP overlay on top of the agent's saved mcp_config.
+	// Overlay wins on server-name collisions. Errors are logged but never
+	// fail the claim: a broken overlay must not prevent the agent from
+	// running with its base config.
+	if len(task.RuntimeMcpOverlay) > 0 {
 		if merged, err := mergeMCPOverlay(mcpConfig, json.RawMessage(task.RuntimeMcpOverlay)); err != nil {
 			slog.Warn("daemon claim: merge runtime_mcp_overlay failed; falling back to agent mcp_config", "task_id", uuidToString(task.ID), "error", err)
 		} else {

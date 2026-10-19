@@ -409,7 +409,6 @@
       "billing": "Facturation",
       "code": "Code",
       "channels": "Messagerie",
-      "apps": "Applications connectées",
       "workflows": "Workflows"
     },
     "groups": {
@@ -946,35 +945,6 @@
     "install_error_forbidden": "Vous n'avez plus la permission d'installer des bots Lark dans cet espace de travail. Demandez à un administrateur de l'espace de travail pour continuer.",
     "install_error_generic": "Échec de l'installation. Réessayez."
   },
-  "composio": {
-    "page_description": "Connectez des applications que vos agents peuvent utiliser.",
-    "not_enabled_title": "Intégration Composio non activée",
-    "not_enabled_description_prefix": "Définissez",
-    "not_enabled_description_suffix": "sur le serveur pour activer les connexions aux boîtes à outils Composio.",
-    "loading": "Chargement des boîtes à outils…",
-    "load_failed": "Échec du chargement des boîtes à outils Composio.",
-    "empty_title": "Aucune application connectable pour l'instant",
-    "empty_description": "Aucune boîte à outils n'a encore de configuration d'authentification activée dans votre projet Composio. Activez-en une dans le tableau de bord Composio pour la rendre disponible ici.",
-    "search_placeholder": "Rechercher des boîtes à outils…",
-    "connect": "Connecter",
-    "connecting": "Connexion…",
-    "connected": "Connecté",
-    "disconnect": "Déconnecter",
-    "disconnecting": "Déconnexion…",
-    "connect_failed": "Impossible de démarrer la connexion. Veuillez réessayer.",
-    "disconnect_failed": "Impossible de déconnecter. Veuillez réessayer.",
-    "toast_disconnected": "Déconnecté",
-    "disconnect_confirm_title": "Déconnecter cette application ?",
-    "disconnect_confirm_description": "Votre compte connecté sera révoqué chez Composio et vos agents perdront l'accès à cette boîte à outils. Vous pourrez vous reconnecter plus tard.",
-    "disconnect_confirm_cancel": "Annuler",
-    "connections_load_failed": "Impossible de charger vos connexions existantes : l'état de connexion peut être incomplet.",
-    "toast_connected": "Connecté",
-    "toast_connect_failed": "Impossible d'établir la connexion. Veuillez réessayer.",
-    "last_used": "Dernière utilisation {{when}}",
-    "last_used_never": "Jamais utilisé",
-    "expired": "Jeton expiré",
-    "reconnect": "Reconnecter"
-  },
   "slack": {
     "section_title": "Slack",
     "page_description": "Discutez avec les agents dans Slack ou créez une tâche avec /issue.",
@@ -1325,7 +1295,6 @@
     "title": "Donner des outils aux agents",
     "current": "Cette page",
     "mcp": "Ajoutés par les administrateurs, partagés dans l'espace de travail puis attribués agent par agent.",
-    "apps": "Autorisées avec votre propre compte via Composio et activées sur les agents qui vous appartiennent.",
     "plugins": "Paquets installés pouvant ajouter des outils, des hooks planifiés et du stockage, chacun avec ses propres autorisations."
   }
 }

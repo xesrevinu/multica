@@ -1351,12 +1351,12 @@ describe("AppConfigSchema cdn_signed drift", () => {
   it("parses frontend feature flag decisions", () => {
     const parsed = AppConfigSchema.parse({
       feature_flags: {
-        composio_mcp_apps: true,
+        plugins_v1: true,
         malformed_future_flag: "yes",
       },
     });
     expect(parsed.feature_flags).toEqual({
-      composio_mcp_apps: true,
+      plugins_v1: true,
       malformed_future_flag: false,
     });
   });

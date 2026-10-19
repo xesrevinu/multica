@@ -407,7 +407,6 @@
       "billing": "請求とプラン",
       "code": "コード",
       "channels": "メッセージング",
-      "apps": "接続済みアプリ",
       "workflows": "ワークフロー"
     },
     "groups": {
@@ -941,35 +940,6 @@
     "install_error_forbidden": "このワークスペースに Lark ボットを設置する権限がなくなりました。ワークスペース管理者にお問い合わせください。",
     "install_error_generic": "設置に失敗しました。もう一度お試しください。"
   },
-  "composio": {
-    "page_description": "エージェントが使えるアプリに接続します。",
-    "not_enabled_title": "Composio integration not enabled",
-    "not_enabled_description_prefix": "Set",
-    "not_enabled_description_suffix": "on the server to enable Composio toolkit connections.",
-    "loading": "Loading toolkits…",
-    "load_failed": "Failed to load Composio toolkits.",
-    "empty_title": "No connectable apps yet",
-    "empty_description": "No toolkit has an enabled auth config in your Composio project yet. Enable one in the Composio dashboard to make it available here.",
-    "search_placeholder": "Search toolkits…",
-    "connect": "Connect",
-    "connecting": "Connecting…",
-    "connected": "Connected",
-    "disconnect": "Disconnect",
-    "disconnecting": "Disconnecting…",
-    "connect_failed": "Couldn't start the connection. Please try again.",
-    "disconnect_failed": "Couldn't disconnect. Please try again.",
-    "toast_disconnected": "Disconnected",
-    "disconnect_confirm_title": "Disconnect this app?",
-    "disconnect_confirm_description": "Your connected account will be revoked at Composio and your agents will lose access to this toolkit. You can reconnect later.",
-    "disconnect_confirm_cancel": "Cancel",
-    "connections_load_failed": "Couldn't load your existing connections, so connected status may be incomplete.",
-    "toast_connected": "接続しました",
-    "toast_connect_failed": "接続を完了できませんでした。もう一度お試しください。",
-    "last_used": "最終使用 {{when}}",
-    "last_used_never": "未使用",
-    "expired": "トークンの有効期限切れ",
-    "reconnect": "再接続"
-  },
   "slack": {
     "section_title": "Slack",
     "page_description": "Slack でエージェントと対話し、/issue でタスクを作成できます。",
@@ -1315,7 +1285,6 @@
     "title": "エージェントにツールを与える方法",
     "current": "このページ",
     "mcp": "管理者が追加してワークスペースで共有し、エージェントごとに割り当てます。",
-    "apps": "自分のアカウントで Composio 経由で承認し、自分が所有するエージェントで有効にします。",
     "plugins": "インストールするとツール、定期フック、ストレージを追加でき、プラグインごとに権限を付与します。"
   }
 }

@@ -266,7 +266,6 @@
     "environment": "环境变量",
     "custom_args": "自定义参数",
     "mcp_config": "MCP",
-    "composio_mcp": "MCP 应用",
     "integrations": "集成",
     "runtime_config": "路由",
     "discard_dialog_title": "放弃未保存的修改？",
@@ -612,21 +611,6 @@
       "redacted_hint": "只有智能体 owner 或工作区 admin 可以查看此配置。",
       "dialog_json_help": "以 JSON 编辑完整的服务器配置。"
     },
-    "composio_mcp": {
-      "subtitle": "勾选 toolkit，只在你自己（这个智能体的创建者）直接或通过下级智能体链路触发这个智能体时，才把它挂载为 MCP server。",
-      "loading": "正在加载你的连接…",
-      "load_failed": "无法加载你已连接的应用，请稍后重试。",
-      "empty_title": "还没有已连接的应用",
-      "empty_link_to_settings": "去 \"设置 → 集成\" 连一个",
-      "connected": "已连接",
-      "toggle_aria": "允许该智能体使用 {{toolkit}}",
-      "saving": "正在保存…",
-      "save_failed_toast": "保存失败，请重试",
-      "redacted_title": "已配置——对你隐藏",
-      "redacted_hint": "只有该智能体的创建者才能查看或修改它可使用的应用。",
-      "shared_warning": "该智能体已共享。能够运行该智能体的人可以通过它使用你在此启用的 Composio 应用。如果这些应用涉及敏感数据，请改用\"私有\"或缩小访问范围。",
-      "workspace_warning": "公开给工作区：工作区内任何成员都可以通过该智能体使用这些 Composio 应用。"
-    },
     "runtime_config": {
       "mode_label": "路由模式",
       "mode_local": "Local",
@@ -790,8 +774,7 @@
     "members_group": "成员",
     "public_group": "公开访问",
     "owner_only_readonly": "只有该智能体的所有者可以更改谁能调用它。",
-    "members_empty": "没有可选择的工作区成员",
-    "composio_switch_hint": "提示——该智能体已启用 Composio 应用。共享后，所有获得访问权限的人都可以通过该智能体使用这些应用。"
+    "members_empty": "没有可选择的工作区成员"
   },
   "profile_card": {
     "unavailable": "智能体不可用",

@@ -173,14 +173,11 @@ func TestCreateMediaGatedIssueCommitsDeferredTaskAtomicallyBeforeCreatedEvent(t 
 
 	bus := events.New()
 	wakeup := &stubWakeup{}
-	createdOverlay := json.RawMessage(`{"mcpServers":{"creator":{"url":"https://creator.example"}}}`)
 	taskService := &TaskService{
-		Queries:      q,
-		TxStarter:    pool,
-		Bus:          bus,
-		Composio:     &stubOverlayBuilder{resp: createdOverlay},
-		FeatureFlags: composioMCPAppsTestFlags(true),
-		Wakeup:       wakeup,
+		Queries:   q,
+		TxStarter: pool,
+		Bus:       bus,
+		Wakeup:    wakeup,
 	}
 	var competingTaskID pgtype.UUID
 	var competingErr error
@@ -235,13 +232,8 @@ func TestCreateMediaGatedIssueCommitsDeferredTaskAtomicallyBeforeCreatedEvent(t 
 			callbackErr = fmt.Errorf("task during issue:created = status %q media_pending %v", status, mediaPending)
 			return
 		}
-		var runtimeOverlayValue, createdOverlayValue any
-		if err := json.Unmarshal(runtimeOverlay, &runtimeOverlayValue); err != nil {
-			callbackErr = fmt.Errorf("decode task overlay during issue:created: %w", err)
-			return
-		}
-		if err := json.Unmarshal(createdOverlay, &createdOverlayValue); err != nil || !reflect.DeepEqual(runtimeOverlayValue, createdOverlayValue) {
-			callbackErr = fmt.Errorf("task overlay during issue:created = %s, want %s", runtimeOverlay, createdOverlay)
+		if len(runtimeOverlay) != 0 {
+			callbackErr = fmt.Errorf("task overlay during issue:created = %s, want empty", runtimeOverlay)
 			return
 		}
 
@@ -506,13 +498,8 @@ func TestHydrateDeferredChannelIssueTaskOverlayDoesNotOverwriteMergedCommentPlan
 		t.Fatalf("MergeCommentIntoPendingTask: %v", err)
 	}
 
-	hydrationBuilder := &stubOverlayBuilder{
-		resp: json.RawMessage(`{"mcpServers":{"stale":{"url":"https://stale.example"}}}`),
-	}
 	hydratingService := &TaskService{
-		Queries:      q,
-		Composio:     hydrationBuilder,
-		FeatureFlags: composioMCPAppsTestFlags(true),
+		Queries: q,
 	}
 	if err := hydratingService.hydrateDeferredChannelIssueTaskOverlay(ctx, task); err != nil {
 		t.Fatalf("hydrateDeferredChannelIssueTaskOverlay: %v", err)

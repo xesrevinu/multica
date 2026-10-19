@@ -8,8 +8,7 @@ import type {
   MemberWithUser,
 } from "@multica/core/types";
 import { providerSupportsMcpConfig } from "@multica/core/agents";
-import { useFeatureEnabled } from "@multica/core/config";
-import { COMPOSIO_MCP_APPS_FLAG } from "@multica/core/feature-flags";
+
 import { useWorkspaceId } from "@multica/core/hooks";
 import { larkInstallationsOptions } from "@multica/core/lark";
 import { slackInstallationsOptions } from "@multica/core/slack";
@@ -32,7 +31,7 @@ import { SkillsTab } from "./tabs/skills-tab";
 import { EnvTab } from "./tabs/env-tab";
 import { CustomArgsTab } from "./tabs/custom-args-tab";
 import { McpConfigTab } from "./tabs/mcp-config-tab";
-import { AgentMcpTab } from "./tabs/agent-mcp-tab";
+
 import { IntegrationsTab } from "./tabs/integrations-tab";
 
 import { AgentDetailInspector } from "./agent-detail-inspector";
@@ -50,7 +49,6 @@ export type DetailTab =
   | "instructions"
   | "skills"
   | "mcp_config"
-  | "composio_mcp"
   | "integrations"
   | "general"
   | "access"
@@ -63,7 +61,6 @@ type SecondaryTab = {
     | "instructions"
     | "skills"
     | "mcp_config"
-    | "composio_mcp"
     | "integrations"
     | "general"
     | "access"
@@ -75,7 +72,6 @@ const CAPABILITY_TABS: SecondaryTab[] = [
   { id: "instructions", labelKey: "instructions" },
   { id: "skills", labelKey: "skills" },
   { id: "mcp_config", labelKey: "mcp_config" },
-  { id: "composio_mcp", labelKey: "composio_mcp" },
   { id: "integrations", labelKey: "integrations" },
 ];
 
@@ -84,7 +80,6 @@ const SETTINGS_TABS: SecondaryTab[] = [
   { id: "access", labelKey: "access" },
   { id: "env", labelKey: "environment" },
   { id: "custom_args", labelKey: "custom_args" },
-
 ];
 
 const TOP_TABS: { id: DetailSection; labelKey: DetailSection }[] = [
@@ -152,10 +147,7 @@ export function AgentOverviewPane({
   const wsId = useWorkspaceId();
   const navigation = useNavigation();
   const urlView = navigation.searchParams.get("view");
-  const composioMCPAppsEnabled = useFeatureEnabled(
-    COMPOSIO_MCP_APPS_FLAG,
-    false,
-  );
+
   const [activeView, setActiveView] = useState<DetailTab>(() =>
     isDetailTab(urlView) ? urlView : "overview",
   );
@@ -185,25 +177,13 @@ export function AgentOverviewPane({
     const showMcp = runtime
       ? providerSupportsMcpConfig(runtime.provider)
       : true;
-    const showComposioMcp =
-      composioMCPAppsEnabled &&
-      !!currentUserId &&
-      !!agent.owner_id &&
-      agent.owner_id === currentUserId;
 
     return CAPABILITY_TABS.filter((tab) => {
       if (tab.id === "mcp_config") return showMcp;
-      if (tab.id === "composio_mcp") return showComposioMcp;
       if (tab.id === "integrations") return integrationsConfigured;
       return true;
     });
-  }, [
-    agent.owner_id,
-    composioMCPAppsEnabled,
-    currentUserId,
-    integrationsConfigured,
-    runtime,
-  ]);
+  }, [integrationsConfigured, runtime]);
 
   const visibleSettingsTabs = useMemo(
     () =>
@@ -459,9 +439,7 @@ export function AgentOverviewPane({
                       onDirtyChange={setActiveDirty}
                     />
                   )}
-                  {effectiveView === "composio_mcp" && (
-                    <AgentMcpTab agent={agent} />
-                  )}
+
                   {effectiveView === "integrations" && (
                     <IntegrationsTab agent={agent} />
                   )}

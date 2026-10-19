@@ -34,12 +34,7 @@ vi.mock("./mcp-tab", stub("McpTab"));
 vi.mock("./billing-tab", stub("BillingTab"));
 
 const shell = vi.hoisted(() => ({
-  appsAvailable: false,
   role: "owner" as "owner" | "admin" | "member",
-}));
-vi.mock("./connected-apps-tab", () => ({
-  ConnectedAppsTab: () => <div>ConnectedAppsTab</div>,
-  useComposioAvailable: () => shell.appsAvailable,
 }));
 
 vi.mock("@multica/core/paths", () => ({
@@ -101,7 +96,6 @@ function nav() {
 beforeEach(() => {
   layout.compact = true;
   navigationState.search = "";
-  shell.appsAvailable = false;
   shell.role = "owner";
   configStore.getState().setFeatureFlags({});
   replace.mockClear();
@@ -273,21 +267,6 @@ describe("SettingsPage information architecture", () => {
       "aria-current",
       "page",
     );
-  });
-
-  it("lists Connected apps with the personal pages only when Composio is available", () => {
-    const first = renderWithI18n(<SettingsPage />);
-    expect(screen.queryByRole("link", { name: "Connected apps" })).toBeNull();
-    first.unmount();
-
-    shell.appsAvailable = true;
-    navigationState.search = "tab=integrations&connected=notion";
-    renderWithI18n(<SettingsPage />);
-    const personal = within(nav()).getByRole("region", { name: /Personal/ });
-    expect(
-      within(personal).getByRole("link", { name: "Connected apps" }),
-    ).toHaveAttribute("aria-current", "page");
-    expect(screen.getByText("ConnectedAppsTab")).toBeInTheDocument();
   });
 
   it("marks pages a member can only view", () => {

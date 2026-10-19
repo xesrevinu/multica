@@ -21,8 +21,7 @@ import (
 //
 //   - Merge is by SERVER NAME (the inner-map key under `mcpServers`).
 //     On a name collision the OVERLAY wins. This is on purpose: the overlay
-//     carries the live, user-scoped session URL (e.g. the user's own
-//     Composio MCP bearer), whereas the agent's saved entry under the same
+//     carries the live, user-scoped session URL, whereas the agent's saved entry under the same
 //     name — if any — would be a stale or admin-shared placeholder.
 //
 //   - Either side may be empty / nil / the literal `null`. Empty-everywhere

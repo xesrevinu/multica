@@ -19,7 +19,7 @@ import (
 //
 // The invoke gate is the security-critical one: a workspace admin must NOT be
 // able to invoke someone's private agent (and thereby use that owner's
-// Composio/OAuth connections) just because they are an admin. Admin retains
+// connected accounts) just because they are an admin. Admin retains
 // management + inventory visibility, not the ability to run.
 //
 // permission_mode drives invoke:

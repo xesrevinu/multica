@@ -175,8 +175,8 @@ type TaskContextForEnv struct {
 	// instead of presenting a partial catalog as complete.
 	IssueStatusesOmitted int
 	// ConnectedApps lists per-run external app capabilities mounted through
-	// MCP overlays. Rendered briefly so the agent can map app names such as
-	// Notion to the actual MCP server name (`composio`).
+	// MCP overlays. Rendered briefly so the agent can map an app name to the
+	// MCP server that serves it.
 	ConnectedApps []runtimeapps.ConnectedApp
 	// RequestingUserName + RequestingUserProfileDescription describe the
 	// human the agent is acting on behalf of. v1 sources them from the

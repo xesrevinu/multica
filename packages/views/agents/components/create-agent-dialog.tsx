@@ -11,8 +11,7 @@ import { SkillMultiSelect } from "./skill-multi-select";
 import { AvatarUploadControl } from "../../common/avatar-upload-control";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { useFeatureEnabled } from "@multica/core/config";
-import { COMPOSIO_MCP_APPS_FLAG } from "@multica/core/feature-flags";
+
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import type {
   Agent,
@@ -84,13 +83,8 @@ export function CreateAgentDialog({
   const isDuplicate = !!template;
   const queryClient = useQueryClient();
   const wsId = useWorkspaceId();
-  // MUL-4010: rolls out the private / public_to access model in the create
-  // flow to match the AccessPicker on the agent detail page. Shares the
-  // `composio_mcp_apps` switch with the Composio rollout — the MUL-3963
-  // permission model exists to gate Composio sharing, so both surfaces flip
-  // together. Defaults OFF so production stays on the legacy Workspace /
-  // Personal toggle until Composio is greenlit.
-  const accessPickerEnabled = useFeatureEnabled(COMPOSIO_MCP_APPS_FLAG, false);
+  // Private / public-to access matches AccessPicker on the agent detail page.
+  const accessPickerEnabled = true;
 
   // Name defaults: duplicate uses "<original> copy". Manual-create starts blank.
   const [name, setName] = useState(
@@ -486,8 +480,7 @@ export function CreateAgentDialog({
 
 
 /**
- * AccessSection — inline access editor for the create/duplicate flow, gated
- * on `COMPOSIO_MCP_APPS_FLAG`. Mirrors the semantics of
+ * AccessSection — inline access editor for the create/duplicate flow. Mirrors the semantics of
  * `AccessPicker` on the agent detail page: the underlying model is
  * `permission_mode` + `invocation_targets` (MUL-3963), not the legacy
  * `visibility`.

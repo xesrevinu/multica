@@ -21,17 +21,14 @@ import (
 	"github.com/multica-ai/multica/server/internal/chattitle"
 	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/events"
-	"github.com/multica-ai/multica/server/internal/featureflags"
 	"github.com/multica-ai/multica/server/internal/inbox"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/realtime"
-	"github.com/multica-ai/multica/server/internal/runtimeapps"
 	"github.com/multica-ai/multica/server/internal/tracing"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
-	"github.com/multica-ai/multica/server/pkg/featureflag"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/multica-ai/multica/server/pkg/redact"
 	"github.com/multica-ai/multica/server/pkg/skillbundle"
@@ -54,9 +51,6 @@ type TaskService struct {
 	// SourceContextStorage is used only by the bounded 30-day cleanup pass for
 	// terminal quick-create captures. Nil disables it where storage is absent.
 	SourceContextStorage SourceContextObjectStore
-	// FeatureFlags is the server-side toggle router. Nil is valid and returns
-	// each call site's default.
-	FeatureFlags *featureflag.Service
 	// EmptyClaim caches "this runtime has no queued task" so the daemon
 	// poll path can skip a Postgres scan on the steady-state empty case.
 	// Optional — a nil cache disables the fast path and every claim
@@ -67,14 +61,6 @@ type TaskService struct {
 	// stale dispatched task. It removes the unconditional reclaim UPDATE from
 	// idle claim polls while missing/error states preserve the DB fallback.
 	ReclaimCheck *ReclaimCheckCache
-	// Composio computes the per-task MCP overlay (Stage 3 of the Composio
-	// epic, MUL-3721) — the integration's "current user's connected apps
-	// → MCP session URL" hook called from each Enqueue* path. Optional: a
-	// nil ComposioOverlayBuilder turns the overlay step into a no-op so
-	// every Multica deployment that hasn't enabled Composio behaves
-	// exactly as before. Wired in router.go after composiointeg.NewService
-	// succeeds; the concrete type is *composio.Service.
-	Composio ComposioOverlayBuilder
 	// QuickActions generates chat follow-up suggestions through the
 	// server-internal LLM layer. Optional: nil (or a disabled client) turns the
 	// whole feature off — no pending marker, no pills — which is the expected
@@ -97,27 +83,6 @@ type TaskService struct {
 type SourceContextObjectStore interface {
 	DeleteObject(ctx context.Context, key string) error
 	KeyFromURL(rawURL string) string
-}
-
-// ComposioOverlayBuilder is the seam TaskService uses to build the per-task
-// MCP overlay at enqueue time. Implemented by
-// internal/integrations/composio.Service.BuildTaskOverlay; tests provide an
-// inline fake so they don't have to spin a fake Composio SDK.
-//
-// Contract: a zero MCPOverlayResult means "no overlay for this run" — covers
-// all gates the implementation enforces (no owner / empty allowlist / empty
-// intersection with active connections / empty session URL). Any non-empty
-// MCPOverlay is the exact value to store in agent_task_queue.runtime_mcp_overlay;
-// ConnectedApps is non-secret metadata to store alongside it for daemon brief
-// injection. A non-nil error is surfaced to the caller but treated as
-// best-effort — failed overlay computation must not fail the enqueue.
-//
-// agent is passed by value so the builder can inspect OwnerID and
-// ComposioToolkitAllowlist without re-querying the DB; every enqueue path
-// already loaded the agent for runtime/archive checks, so passing it is
-// free and avoids a second GetAgent round-trip in the hot path.
-type ComposioOverlayBuilder interface {
-	BuildTaskOverlay(ctx context.Context, originatorUserID pgtype.UUID, agent db.Agent) (runtimeapps.MCPOverlayResult, error)
 }
 
 type TaskWakeupNotifier interface {
@@ -314,14 +279,14 @@ func (s *TaskService) BuildCommentTriggerSummary(ctx context.Context, workspaceI
 	return s.buildCommentTriggerSummary(ctx, workspaceID, commentID)
 }
 
-// BuildRuntimeMCPOverlayForMerge recomputes the Composio MCP overlay +
+// BuildRuntimeMCPOverlayForMerge recomputes the runtime MCP overlay +
 // connected-app metadata for (originatorUserID, agent), used when a merge
 // re-stamps a coalesced task's originator (MUL-4195 review must-fix #1). The
 // overlay is a pure function of (originator, agent); re-stamping it alongside
 // originator_user_id keeps the coalescing run's connected-app capabilities and
 // audit attribution consistent with the latest trigger comment's originator
 // instead of the task's original one. Fails soft to empty (same as the enqueue
-// path) so a transient Composio hiccup never blocks the merge.
+// path) so a transient overlay failure never blocks the merge.
 func (s *TaskService) BuildRuntimeMCPOverlayForMerge(ctx context.Context, originatorUserID pgtype.UUID, agent db.Agent) (overlay, connectedApps []byte) {
 	data := s.buildRuntimeMCPOverlay(ctx, originatorUserID, agent)
 	return data.Overlay, data.ConnectedApps
@@ -379,46 +344,11 @@ type runtimeMCPOverlayData struct {
 	ConnectedApps json.RawMessage
 }
 
-// buildRuntimeMCPOverlay computes the optional per-task Composio MCP overlay.
-// Enqueue paths call this BEFORE inserting the queued row so the daemon cannot
-// claim a task during the network round-trip to Composio and miss the overlay.
-func (s *TaskService) buildRuntimeMCPOverlay(ctx context.Context, originatorUserID pgtype.UUID, agent db.Agent) runtimeMCPOverlayData {
-	if s == nil || s.Composio == nil {
-		return runtimeMCPOverlayData{}
-	}
-	if !featureflags.ComposioMCPAppsEnabled(ctx, s.FeatureFlags) {
-		return runtimeMCPOverlayData{}
-	}
-	result, err := s.Composio.BuildTaskOverlay(ctx, originatorUserID, agent)
-	if err != nil {
-		slog.Warn("runtime mcp overlay: BuildTaskOverlay failed; task will run without composio overlay",
-			"originator_user_id", util.UUIDToString(originatorUserID),
-			"agent_id", util.UUIDToString(agent.ID),
-			"error", err,
-		)
-		return runtimeMCPOverlayData{}
-	}
-	if len(result.MCPOverlay) == 0 {
-		slog.Debug("runtime mcp overlay: no composio overlay for task",
-			"originator_user_id", util.UUIDToString(originatorUserID),
-			"agent_id", util.UUIDToString(agent.ID),
-		)
-		return runtimeMCPOverlayData{}
-	}
-	data := runtimeMCPOverlayData{Overlay: result.MCPOverlay}
-	if len(result.ConnectedApps) > 0 {
-		raw, err := json.Marshal(result.ConnectedApps)
-		if err != nil {
-			slog.Warn("runtime mcp overlay: marshal connected app metadata failed",
-				"originator_user_id", util.UUIDToString(originatorUserID),
-				"agent_id", util.UUIDToString(agent.ID),
-				"error", err,
-			)
-			return data
-		}
-		data.ConnectedApps = raw
-	}
-	return data
+// buildRuntimeMCPOverlay is retained so enqueue paths keep a single place
+// to attach a per-task MCP overlay. Connected-app sessions are no longer
+// built here, so every enqueue stores an empty overlay.
+func (s *TaskService) buildRuntimeMCPOverlay(context.Context, pgtype.UUID, db.Agent) runtimeMCPOverlayData {
+	return runtimeMCPOverlayData{}
 }
 
 // resolveOriginatorFromTriggerComment returns the top-of-chain HUMAN user
@@ -451,8 +381,8 @@ func (s *TaskService) resolveOriginatorFromTriggerComment(ctx context.Context, w
 // comment-triggered run. It performs the DB reads and hands the gathered facts
 // to the pure attribution.ClassifyComment rules so the classification stays
 // side-effect-free and unit-tested. The returned UserID is byte-identical to
-// the pre-MUL-4302 originator resolution, so authorization behavior (Composio
-// overlay, canInvokeAgent A2A gate) is unchanged. workspaceID scopes the comment
+// the pre-MUL-4302 originator resolution, so authorization behavior (the
+// runtime MCP overlay and the canInvokeAgent A2A gate) is unchanged. workspaceID scopes the comment
 // lookup to the task's workspace (MUL-4252).
 //
 // agentAuthoredSource selects the label for an agent-authored trigger comment:
@@ -1170,44 +1100,16 @@ func (s *TaskService) EnqueueDeferredChannelIssueTask(ctx context.Context, issue
 
 // createDeferredChannelIssueTaskWithQueries inserts the inert media-gated task
 // through the caller's query handle. IssueService passes its transaction-bound
-// Queries so the issue and task become visible atomically. Composio is
-// intentionally absent from the transaction-scoped service: the task cannot be
-// claimed while deferred, so the optional external overlay is hydrated after
-// commit without holding database locks across a network call.
+// Queries so the issue and task become visible atomically. The task cannot be
+// claimed while deferred.
 func (s *TaskService) createDeferredChannelIssueTaskWithQueries(ctx context.Context, q *db.Queries, issue db.Issue, fireAt time.Time) (db.AgentTaskQueue, error) {
 	txService := &TaskService{Queries: q}
 	return txService.enqueueIssueTask(ctx, issue, pgtype.UUID{}, false, "", pgtype.UUID{}, pgtype.UUID{}, pgtype.Timestamptz{Time: fireAt, Valid: true}, OriginDerived)
 }
 
-// hydrateDeferredChannelIssueTaskOverlay fills the optional Composio overlay
-// after the issue+task transaction commits. The conditional update refuses to
-// overwrite a comment merge that won the post-commit race and already
-// re-attributed the task (with its own matching overlay).
-func (s *TaskService) hydrateDeferredChannelIssueTaskOverlay(ctx context.Context, task db.AgentTaskQueue) error {
-	if s == nil || s.Queries == nil || s.Composio == nil || !featureflags.ComposioMCPAppsEnabled(ctx, s.FeatureFlags) {
-		return nil
-	}
-	agent, err := s.Queries.GetAgent(ctx, task.AgentID)
-	if err != nil {
-		return fmt.Errorf("load agent for deferred channel issue task overlay: %w", err)
-	}
-	overlay := s.buildRuntimeMCPOverlay(ctx, task.OriginatorUserID, agent)
-	if len(overlay.Overlay) == 0 {
-		return nil
-	}
-	updated, err := s.Queries.SetDeferredChannelIssueTaskRuntimeOverlay(ctx, db.SetDeferredChannelIssueTaskRuntimeOverlayParams{
-		ID:                       task.ID,
-		RuntimeMcpOverlay:        overlay.Overlay,
-		RuntimeConnectedApps:     overlay.ConnectedApps,
-		ExpectedOriginatorUserID: task.OriginatorUserID,
-	})
-	if err != nil {
-		return fmt.Errorf("set deferred channel issue task overlay: %w", err)
-	}
-	if updated == 0 {
-		slog.Debug("deferred channel issue task overlay skipped: task plan changed",
-			"task_id", util.UUIDToString(task.ID))
-	}
+// hydrateDeferredChannelIssueTaskOverlay is a no-op. Deferred channel tasks
+// used to attach an external MCP overlay after commit.
+func (s *TaskService) hydrateDeferredChannelIssueTaskOverlay(context.Context, db.AgentTaskQueue) error {
 	return nil
 }
 
@@ -2354,7 +2256,7 @@ func (s *TaskService) SendDirectChatMessage(
 	uploaderType string,
 	uploaderID pgtype.UUID,
 ) (*DirectChatSendResult, error) {
-	// Build the per-task Composio overlay before the transaction — it can do
+	// Build the per-task MCP overlay before the transaction — it can do
 	// network I/O and must not run with a DB transaction open.
 	overlay := s.buildRuntimeMCPOverlay(ctx, initiatorUserID, agent)
 
@@ -4886,7 +4788,7 @@ func (s *TaskService) FailTaskWithTransition(ctx context.Context, taskID pgtype.
 	// SAME transaction as the fail (MUL-4351). Doing it atomically closes the
 	// window between the fail committing and the retry appearing during which a
 	// newer chat task could claim the now-idle session and jump ahead of the
-	// retry. The overlay build can do network I/O (Composio), so we resolve it
+	// retry. The overlay build can do network I/O, so we resolve it
 	// here — before the transaction — and only for retryable failures, so the
 	// common agent_error path skips this work entirely.
 	var (
@@ -4913,7 +4815,7 @@ func (s *TaskService) FailTaskWithTransition(ctx context.Context, taskID pgtype.
 			}
 			if agent, aerr := s.Queries.GetAgent(ctx, parent.AgentID); aerr != nil {
 				// Best-effort: a missing overlay is not retry-fatal — the child
-				// simply runs without the Composio overlay.
+				// simply runs without the runtime MCP overlay.
 				slog.Warn("fail task auto-retry: load agent for overlay failed",
 					"task_id", util.UUIDToString(taskID),
 					"agent_id", util.UUIDToString(parent.AgentID), "error", aerr)
