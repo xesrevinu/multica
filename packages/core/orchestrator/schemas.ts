@@ -99,7 +99,30 @@ export const OrchPRCommitSchema = z.object({
   sha: str,
   message: str.catch(""),
   author: str.catch(""),
+  avatar: optStr,
   date: str.catch(""),
+  parents: z.array(z.string()).nullish().catch([]).transform((v) => v ?? []),
+});
+
+export const OrchPRReviewSchema = z.object({
+  user: str.catch(""),
+  avatar: optStr,
+  state: str.catch(""),
+  body: str.catch(""),
+  submitted_at: str.catch(""),
+  url: optStr,
+});
+
+export const OrchPRReviewCommentSchema = z.object({
+  id: num,
+  user: str.catch(""),
+  avatar: optStr,
+  path: str.catch(""),
+  line: num,
+  body: str.catch(""),
+  created_at: str.catch(""),
+  url: optStr,
+  in_reply_to: num,
 });
 
 export const OrchPRDetailSchema = z.object({
@@ -121,9 +144,15 @@ export const OrchPRDetailSchema = z.object({
   commits: z.array(OrchPRCommitSchema).nullish().catch([]).transform((v) => v ?? []),
   checks: z.array(OrchPRCheckSchema).nullish().catch([]).transform((v) => v ?? []),
   merged_at: optStr,
+  author: optStr,
+  labels: z.array(z.string()).nullish().catch([]).transform((v) => v ?? []),
+  reviews: z.array(OrchPRReviewSchema).nullish().catch([]).transform((v) => v ?? []),
+  review_comments: z.array(OrchPRReviewCommentSchema).nullish().catch([]).transform((v) => v ?? []),
+  conflicts: z.array(z.string()).nullish().catch([]).transform((v) => v ?? []),
+  head_deleted: z.boolean().catch(false),
 });
 
-const NO_ABILITIES = { read_checks: false, update_branch: false, rerun: false, merge: false };
+const NO_ABILITIES = { read_checks: false, update_branch: false, rerun: false, merge: false, labels: false, delete_branch: false };
 
 export const OrchPRCardSchema = z.object({
   mode: z.enum(["github", "local"]).catch("github"),
@@ -132,11 +161,83 @@ export const OrchPRCardSchema = z.object({
   pr: OrchPRDetailSchema.nullish().catch(null).transform((v) => v ?? null),
   summary: OrchPRSummarySchema.nullish().catch(null).transform((v) => v ?? null),
   can: z
-    .object({ read_checks: z.boolean().catch(false), update_branch: z.boolean().catch(false), rerun: z.boolean().catch(false), merge: z.boolean().catch(false) })
+    .object({
+      read_checks: z.boolean().catch(false),
+      update_branch: z.boolean().catch(false),
+      rerun: z.boolean().catch(false),
+      merge: z.boolean().catch(false),
+      labels: z.boolean().catch(false),
+      delete_branch: z.boolean().catch(false),
+    })
     .catch(NO_ABILITIES),
   error: optStr,
 });
 
+export const OrchLinkedPRSchema = z.object({
+  number: z.number(),
+  title: str.catch(""),
+  state: str.catch(""),
+  url: str.catch(""),
+  branch: optStr,
+  repo: str.catch(""),
+  author: optStr,
+  merged_at: optStr,
+  updated_at: str.catch(""),
+  primary: z.boolean().catch(false),
+});
+
+export const OrchPRFileSchema = z.object({
+  filename: str,
+  status: str.catch("modified"),
+  additions: num,
+  deletions: num,
+  patch: optStr,
+  previous_filename: optStr,
+});
+
+export const OrchPRFilesSchema = z.object({
+  mode: z.enum(["github", "local"]).catch("github"),
+  live: z.boolean().catch(false),
+  files: z.array(OrchPRFileSchema).nullish().catch([]).transform((v) => v ?? []),
+});
+
+export const OrchWorktreeSchema = z.object({
+  path: str,
+  branch: optStr,
+  head: optStr,
+  project: str.catch(""),
+  hub: str.catch(""),
+  issue_key: optStr,
+  issue_id: optStr,
+  title: optStr,
+  status: optStr,
+  running: z.boolean().catch(false),
+  dirty: num,
+  ahead: num,
+  behind: num,
+  files: num,
+  additions: num,
+  deletions: num,
+  locked: z.boolean().catch(false),
+  prunable: z.boolean().catch(false),
+});
+
+export const OrchWorktreesSchema = z.object({
+  hubs: z
+    .array(z.object({ project: str.catch(""), hub: str.catch(""), main: str.catch("main"), available: z.boolean().catch(false) }))
+    .nullish()
+    .catch([])
+    .transform((v) => v ?? []),
+  worktrees: z.array(OrchWorktreeSchema).nullish().catch([]).transform((v) => v ?? []),
+});
+
+export type OrchLinkedPR = z.infer<typeof OrchLinkedPRSchema>;
+export type OrchPRFile = z.infer<typeof OrchPRFileSchema>;
+export type OrchPRFiles = z.infer<typeof OrchPRFilesSchema>;
+export type OrchWorktree = z.infer<typeof OrchWorktreeSchema>;
+export type OrchWorktrees = z.infer<typeof OrchWorktreesSchema>;
+export type OrchPRReview = z.infer<typeof OrchPRReviewSchema>;
+export type OrchPRReviewComment = z.infer<typeof OrchPRReviewCommentSchema>;
 export type OrchIssue = z.infer<typeof OrchIssueSchema>;
 export type OrchRun = z.infer<typeof OrchRunSchema>;
 export type OrchTransition = z.infer<typeof OrchTransitionSchema>;

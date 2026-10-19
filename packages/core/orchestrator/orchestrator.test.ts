@@ -58,7 +58,7 @@ describe("parseOrchTimeline / parseOrchPRCard", () => {
   it("defaults PR abilities to false", () => {
     const c = parseOrchPRCard({ mode: "local" });
     expect(c?.mode).toBe("local");
-    expect(c?.can).toEqual({ read_checks: false, update_branch: false, rerun: false, merge: false });
+    expect(c?.can).toEqual({ read_checks: false, update_branch: false, rerun: false, merge: false, labels: false, delete_branch: false });
     expect(c?.pr).toBeNull();
   });
 });

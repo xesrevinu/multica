@@ -1,6 +1,12 @@
 import { api } from "../api";
 import { parseWithFallback } from "../api/schema";
 import {
+  OrchLinkedPRSchema,
+  OrchPRFilesSchema,
+  OrchWorktreesSchema,
+  type OrchLinkedPR,
+  type OrchPRFiles,
+  type OrchWorktrees,
   OrchIssueSchema,
   OrchPRCardSchema,
   OrchTimelineSchema,
@@ -41,6 +47,23 @@ export async function fetchOrchTimeline(key: string) {
   return parseOrchTimeline(await api.getOrchIssueTimeline(key));
 }
 
-export async function fetchOrchPRCard(key: string) {
-  return parseOrchPRCard(await api.getOrchIssuePR(key));
+export async function fetchOrchPRCard(key: string, number?: number) {
+  return parseOrchPRCard(await api.getOrchIssuePR(key, number));
+}
+
+export async function fetchOrchPRList(key: string): Promise<OrchLinkedPR[]> {
+  const raw = (await api.listOrchIssuePRs(key)) as { prs?: unknown } | null;
+  return parseWithFallback<OrchLinkedPR[]>(raw?.prs ?? [], OrchLinkedPRSchema.array(), [], { endpoint: "GET /api/orchestrator/issues/:key/prs" });
+}
+
+export async function fetchOrchPRFiles(key: string, number?: number): Promise<OrchPRFiles | null> {
+  return parseWithFallback<OrchPRFiles | null>(await api.getOrchIssuePRFiles(key, number), OrchPRFilesSchema, null, {
+    endpoint: "GET /api/orchestrator/issues/:key/pr/files",
+  });
+}
+
+export async function fetchOrchWorktrees(issueKey?: string): Promise<OrchWorktrees> {
+  return parseWithFallback<OrchWorktrees>(await api.listOrchWorktrees(issueKey), OrchWorktreesSchema, { hubs: [], worktrees: [] }, {
+    endpoint: "GET /api/orchestrator/worktrees",
+  });
 }

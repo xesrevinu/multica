@@ -1435,8 +1435,9 @@ export class ApiClient {
     return this.fetch<unknown>(`/api/orchestrator/issues/${encodeURIComponent(key)}/timeline`);
   }
 
-  async getOrchIssuePR(key: string): Promise<unknown> {
-    return this.fetch<unknown>(`/api/orchestrator/issues/${encodeURIComponent(key)}/pr`);
+  async getOrchIssuePR(key: string, number?: number): Promise<unknown> {
+    const q = number ? `?number=${number}` : "";
+    return this.fetch<unknown>(`/api/orchestrator/issues/${encodeURIComponent(key)}/pr${q}`);
   }
 
   async orchFlowAction(key: string, action: "accept" | "reject" | "unblock" | "cancel" | "pause" | "resume" | "replay", body?: { reason?: string }): Promise<unknown> {
@@ -1454,8 +1455,31 @@ export class ApiClient {
     await this.fetch(path, { method: "PUT", body: JSON.stringify({ value }) });
   }
 
-  async orchPROp(key: string, op: "update-branch" | "rerun-checks" | "merge"): Promise<unknown> {
-    return this.fetch<unknown>(`/api/orchestrator/issues/${encodeURIComponent(key)}/pr/${op}`, { method: "POST", body: "{}" });
+  async orchPROp(
+    key: string,
+    op: "update-branch" | "rerun-checks" | "merge" | "sync-labels" | "delete-branch",
+    number?: number,
+  ): Promise<unknown> {
+    const q = number ? `?number=${number}` : "";
+    return this.fetch<unknown>(`/api/orchestrator/issues/${encodeURIComponent(key)}/pr/${op}${q}`, { method: "POST", body: "{}" });
+  }
+
+  async listOrchIssuePRs(key: string): Promise<unknown> {
+    return this.fetch<unknown>(`/api/orchestrator/issues/${encodeURIComponent(key)}/prs`);
+  }
+
+  async getOrchIssuePRFiles(key: string, number?: number): Promise<unknown> {
+    const q = number ? `?number=${number}` : "";
+    return this.fetch<unknown>(`/api/orchestrator/issues/${encodeURIComponent(key)}/pr/files${q}`);
+  }
+
+  async listOrchWorktrees(issueKey?: string): Promise<unknown> {
+    const q = issueKey ? `?issue=${encodeURIComponent(issueKey)}` : "";
+    return this.fetch<unknown>(`/api/orchestrator/worktrees${q}`);
+  }
+
+  async removeOrchWorktree(path: string, force = false): Promise<unknown> {
+    return this.fetch<unknown>(`/api/orchestrator/worktrees/remove`, { method: "POST", body: JSON.stringify({ path, force }) });
   }
 
   async listOrchestratorTeams(): Promise<{ teams: OrchestratorTeam[] }> {

@@ -4,7 +4,7 @@ import { issueKeys } from "../issues/queries";
 import { orchKeys } from "./queries";
 
 export type OrchFlowAction = "accept" | "reject" | "unblock" | "cancel" | "pause" | "resume";
-export type OrchPROp = "update-branch" | "rerun-checks" | "merge";
+export type OrchPROp = "update-branch" | "rerun-checks" | "merge" | "sync-labels" | "delete-branch";
 
 function useInvalidateOrch(wsId: string) {
   const qc = useQueryClient();
@@ -26,7 +26,8 @@ export function useOrchFlowAction(wsId: string, key: string) {
 export function useOrchPROp(wsId: string, key: string) {
   const invalidate = useInvalidateOrch(wsId);
   return useMutation({
-    mutationFn: (op: OrchPROp) => api.orchPROp(key, op),
+    mutationFn: (v: OrchPROp | { op: OrchPROp; number?: number }) =>
+      typeof v === "string" ? api.orchPROp(key, v) : api.orchPROp(key, v.op, v.number),
     onSettled: invalidate,
   });
 }
@@ -36,6 +37,14 @@ export function useOrchSetRisk(wsId: string, issueId: string) {
   const invalidate = useInvalidateOrch(wsId);
   return useMutation({
     mutationFn: (risk: "low" | "medium" | "high" | null) => api.setIssueMetadataKey(issueId, "risk", risk),
+    onSettled: invalidate,
+  });
+}
+
+export function useOrchRemoveWorktree(wsId: string) {
+  const invalidate = useInvalidateOrch(wsId);
+  return useMutation({
+    mutationFn: (v: { path: string; force?: boolean }) => api.removeOrchWorktree(v.path, v.force),
     onSettled: invalidate,
   });
 }
