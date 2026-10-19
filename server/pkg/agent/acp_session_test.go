@@ -318,11 +318,6 @@ func TestACPBackendsReportRejectedResume(t *testing.T) {
 		rpc       string
 		env       map[string]string
 	}{
-		{agentType: "qoder", binary: "qodercli", rpc: "session/resume"},
-		{agentType: "hermes", binary: "hermes", rpc: "session/resume"},
-		{agentType: "kimi", binary: "kimi", rpc: "session/resume"},
-		{agentType: "kiro", binary: "kiro", rpc: "session/load"},
-		{agentType: "traecli", binary: "traecli", rpc: "session/load"},
 		// Grok refuses to reach session/load without a credential; supply one
 		// through Config so the test does not depend on ambient env.
 		{agentType: "grok", binary: "grok", rpc: "session/load", env: map[string]string{"XAI_API_KEY": "test-only-key"}},

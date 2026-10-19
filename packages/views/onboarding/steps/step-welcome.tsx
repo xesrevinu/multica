@@ -189,7 +189,7 @@ function WelcomeIllustration() {
         actor={{
           kind: "agent",
           name: t(($) => $.welcome.illustration.card3_actor_name),
-          provider: "hermes",
+          provider: "pi",
         }}
         issueId="MCA-38"
         content={t(($) => $.welcome.illustration.card3_body)}
@@ -201,7 +201,7 @@ function WelcomeIllustration() {
         actor={{
           kind: "agent",
           name: t(($) => $.welcome.illustration.card4_actor_name),
-          provider: "openclaw",
+          provider: "grok",
         }}
         issueId="MCA-42"
         content={t(($) => $.welcome.illustration.card4_body)}
@@ -233,14 +233,12 @@ type ProviderName =
   | "claude"
   | "codex"
   | "opencode"
-  | "openclaw"
-  | "hermes"
-  | "kimi"
-  | "kiro"
-  | "qoder"
+  | "grok"
   | "pi"
-  | "copilot"
-  | "cursor";
+  | "dsh"
+  | "gbot"
+  | "yielded"
+  | "omp";
 
 type ActivityActor =
   | { kind: "user"; name: string; initial: string }

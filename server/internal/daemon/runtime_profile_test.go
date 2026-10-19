@@ -154,12 +154,12 @@ func newProfileRegisterFixture(t *testing.T, profiles []RuntimeProfile, profiles
 // profile_id, and that its resolved command path is recorded for runTask.
 // Uses a custom-only host (no built-in agents) to also prove that path still
 // registers.
-func TestRegisterRuntimes_IncludesBuiltInQwen(t *testing.T) {
+func TestRegisterRuntimes_IncludesBuiltInGrok(t *testing.T) {
 	t.Cleanup(stubAgentVersion(t))
 	fx := newProfileRegisterFixture(t, nil, http.StatusOK)
 	d := fx.daemon
 	d.cfg.Agents = map[string]AgentEntry{
-		"qwen": {Path: "/usr/bin/true", Command: "qwen", Model: "qwen3.8-max-preview"},
+		"grok": {Path: "/usr/bin/true", Command: "grok", Model: "grok-4"},
 	}
 
 	resp, _, _, err := d.registerRuntimesForWorkspaceLocked(context.Background(), "ws-1")
@@ -170,20 +170,20 @@ func TestRegisterRuntimes_IncludesBuiltInQwen(t *testing.T) {
 		t.Fatalf("sent runtimes = %d, want 1: %+v", len(fx.sentRuntimes), fx.sentRuntimes)
 	}
 	sent := fx.sentRuntimes[0]
-	if sent["type"] != "qwen" || sent["name"] != "Qwen Code" || sent["version"] != "9.9.9" || sent["status"] != "online" {
-		t.Fatalf("registered Qwen runtime = %+v", sent)
+	if sent["type"] != "grok" || sent["name"] != "Grok" || sent["version"] != "9.9.9" || sent["status"] != "online" {
+		t.Fatalf("registered Grok runtime = %+v", sent)
 	}
-	if len(resp.Runtimes) != 1 || resp.Runtimes[0].Provider != "qwen" {
+	if len(resp.Runtimes) != 1 || resp.Runtimes[0].Provider != "grok" {
 		t.Fatalf("register response = %+v", resp)
 	}
 }
 
-func TestRegisterRuntimes_IncludesBuiltInQoderCN(t *testing.T) {
+func TestRegisterRuntimes_IncludesBuiltInGbot(t *testing.T) {
 	t.Cleanup(stubAgentVersion(t))
 	fx := newProfileRegisterFixture(t, nil, http.StatusOK)
 	d := fx.daemon
 	d.cfg.Agents = map[string]AgentEntry{
-		"qoderclicn": {Path: "/usr/bin/true", Command: "qoderclicn"},
+		"gbot": {Path: "/usr/bin/true", Command: "gbot"},
 	}
 
 	resp, _, _, err := d.registerRuntimesForWorkspaceLocked(context.Background(), "ws-1")
@@ -194,10 +194,10 @@ func TestRegisterRuntimes_IncludesBuiltInQoderCN(t *testing.T) {
 		t.Fatalf("sent runtimes = %d, want 1: %+v", len(fx.sentRuntimes), fx.sentRuntimes)
 	}
 	sent := fx.sentRuntimes[0]
-	if sent["type"] != "qoderclicn" || sent["name"] != "Qoder CN" || sent["version"] != "9.9.9" || sent["status"] != "online" {
-		t.Fatalf("registered Qoder CN runtime = %+v", sent)
+	if sent["type"] != "gbot" || sent["name"] != "Grok Bot" || sent["version"] != "9.9.9" || sent["status"] != "online" {
+		t.Fatalf("registered Grok Bot runtime = %+v", sent)
 	}
-	if len(resp.Runtimes) != 1 || resp.Runtimes[0].Provider != "qoderclicn" {
+	if len(resp.Runtimes) != 1 || resp.Runtimes[0].Provider != "gbot" {
 		t.Fatalf("register response = %+v", resp)
 	}
 }
@@ -269,19 +269,19 @@ func TestRegisterRuntimes_ProfileReusesDiscoveredProviderCommand(t *testing.T) {
 	stubLookPath(t, map[string]string{})
 
 	profiles := []RuntimeProfile{{
-		ID:             "prof-codearts",
+		ID:             "prof-grok",
 		WorkspaceID:    "ws-1",
-		DisplayName:    "CodeArts Profile",
-		ProtocolFamily: "codearts",
-		CommandName:    "codearts",
+		DisplayName:    "Grok Profile",
+		ProtocolFamily: "grok",
+		CommandName:    "grok",
 		Enabled:        true,
 	}}
 	fx := newProfileRegisterFixture(t, profiles, http.StatusOK)
 	d := fx.daemon
 	d.cfg.Agents = map[string]AgentEntry{
-		"codearts": {
-			Path:    `C:\Users\tester\.codeartsdoer\installers\codearts.cmd`,
-			Command: "codearts",
+		"grok": {
+			Path:    "/opt/grok/bin/grok",
+			Command: "grok",
 		},
 	}
 
@@ -289,15 +289,15 @@ func TestRegisterRuntimes_ProfileReusesDiscoveredProviderCommand(t *testing.T) {
 		t.Fatalf("registerRuntimesForWorkspace: %v", err)
 	}
 
-	got := d.profileLaunchSpecs["prof-codearts"]
-	if got.path != `C:\Users\tester\.codeartsdoer\installers\codearts.cmd` {
-		t.Errorf("profileLaunchSpecs[prof-codearts].path = %q, want discovered CodeArts path", got.path)
+	got := d.profileLaunchSpecs["prof-grok"]
+	if got.path != "/opt/grok/bin/grok" {
+		t.Errorf("profileLaunchSpecs[prof-grok].path = %q, want discovered Grok path", got.path)
 	}
 	if len(fx.sentRuntimes) != 2 {
 		t.Fatalf("sent runtimes = %d, want built-in plus profile: %+v", len(fx.sentRuntimes), fx.sentRuntimes)
 	}
-	if fx.sentRuntimes[1]["profile_id"] != "prof-codearts" || fx.sentRuntimes[1]["type"] != "codearts" {
-		t.Fatalf("profile runtime = %+v, want CodeArts prof-codearts", fx.sentRuntimes[1])
+	if fx.sentRuntimes[1]["profile_id"] != "prof-grok" || fx.sentRuntimes[1]["type"] != "grok" {
+		t.Fatalf("profile runtime = %+v, want CodeArts prof-grok", fx.sentRuntimes[1])
 	}
 }
 

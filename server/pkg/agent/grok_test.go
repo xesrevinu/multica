@@ -1246,3 +1246,13 @@ func grokMustFindModel(t *testing.T, models []Model, id string) Model {
 	t.Fatalf("model %q not in catalog: %+v", id, models)
 	return Model{}
 }
+
+func countTokens(lines []string, tok string) int {
+	n := 0
+	for _, l := range lines {
+		if l == tok {
+			n++
+		}
+	}
+	return n
+}

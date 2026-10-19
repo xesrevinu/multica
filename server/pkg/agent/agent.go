@@ -1,8 +1,7 @@
 // Package agent provides a unified interface for executing prompts via
-// coding agents (Claude Code, CodeBuddy, Codex, Copilot, OpenCode, DevEco Code,
-// OpenClaw, Hermes, Pi, Oh-My-Pi, Cursor, Kimi, Reasonix, Kiro, Antigravity, Qoder,
-// Trae, Grok, Qwen Code, QwenPaw, MiniMax Code). It
-// mirrors the happy-cli AgentBackend pattern, translated to idiomatic Go.
+// coding agents (Claude Code, Codex, OpenCode, Pi, Oh-My-Pi, DeepSeek Harness,
+// Grok, gbot, and Yielded). It mirrors the happy-cli AgentBackend pattern,
+// translated to idiomatic Go.
 package agent
 
 import (
@@ -102,10 +101,9 @@ type ExecOptions struct {
 	// rest ignore it. Deliberately not enumerated here — the previous list
 	// went stale as backends were added, which is how MULTICA_QWENPAW_ARGS
 	// shipped plumbed but dropped. Grep for ExtraArgs to see today's set.
-	ExtraArgs        []string        // daemon-wide default CLI arguments appended before CustomArgs
-	CustomArgs       []string        // per-agent CLI arguments appended after ExtraArgs
-	QwenpawWorkspace string          // per-task QwenPaw workspace directory (passed as --workspace to qwenpaw acp); empty when not applicable
-	McpConfig        json.RawMessage // if non-nil, MCP server config to pass via --mcp-config
+	ExtraArgs  []string        // daemon-wide default CLI arguments appended before CustomArgs
+	CustomArgs []string        // per-agent CLI arguments appended after ExtraArgs
+	McpConfig  json.RawMessage // if non-nil, MCP server config to pass via --mcp-config
 	// ThinkingLevel is the runtime-native reasoning/effort value (e.g.
 	// Claude's "low|medium|high|xhigh|max", Codex's "none|minimal|low|
 	// medium|high|xhigh", OpenCode's model variant names). Empty means
@@ -122,17 +120,6 @@ type ExecOptions struct {
 	// routing; empty means inherit local Codex config.
 	// Other providers ignore this field.
 	ServiceTier string
-	// OpenclawMode chooses between local (embedded) and gateway routing for
-	// the openclaw backend. "" or "local" keeps the historical behaviour —
-	// the daemon spawns `openclaw agent --local …` and the agent loop runs
-	// in-process on the daemon host. "gateway" instructs the daemon to drop
-	// the --local flag and let openclaw route the turn through a Gateway (the
-	// user's globally-configured one, or an endpoint pinned in the per-task
-	// config wrapper that the daemon writes from execenv.OpenclawGatewayPin —
-	// see server/internal/daemon/execenv/openclaw_config.go). Other backends
-	// ignore this field, mirroring ThinkingLevel's renderer-side fall-through
-	// pattern. See issue #3260.
-	OpenclawMode string
 	// ClaudeSettingsPath is a daemon-owned, task-local settings file passed
 	// through Claude Code's --settings flag. It currently carries restrictive
 	// runtime-skill overrides only; other providers ignore it.
@@ -351,52 +338,21 @@ type Config struct {
 }
 
 // New creates a Backend for the given agent type.
-// Supported types: "claude", "codebuddy", "codex", "copilot", "opencode", "codearts", "deveco", "openclaw", "hermes", "pi", "cursor", "kimi", "reasonix", "dsh", "kiro", "antigravity", "qoder", "qoderclicn", "traecli", "grok", "qwen", "qwenpaw", "mcode".
+// Supported types: "claude", "codex", "opencode", "pi", "dsh", "gbot", "grok", "yielded".
 //
 // SupportedTypes is the canonical whitelist of agent types eligible to back a
-// custom runtime profile. It MUST stay in lockstep with the
-// runtime_profile.protocol_family CHECK constraint (migration 120, widened by
-// migration 134 to add qoder, migration 136 to add traecli, migration 175 to
-// add deveco, migration 179 to add grok, migration 202 to add qwen,
-// migration 242 to add qoderclicn, migration 253 to add qwenpaw,
-// migration 254 to add reasonix, migration 313 to add dsh, migration 342 to
-// add mcode, migration 370 to add dim, migration 403 to add zeroclaw,
-// migration 441 to add codearts, and migration 574 to add yielded): a custom runtime profile may
-// only be based on a backend Multica officially supports.
-// qoder and qoderclicn share the same ACP backend; keeping both provider keys
-// lets the daemon auto-detect and register the international and China-region
-// binaries independently. traecli (Trae) has a New backend, launch
-// header and provider branding but was previously missing from this whitelist,
-// so the family picker rejected it (#4945). grok is the xAI Grok Build CLI
-// ACP backend (`grok agent --always-approve stdio`). qwen is Qwen Code's
-// native `qwen -p <prompt> --output-format stream-json` backend.
+// custom runtime profile. The historical runtime_profile.protocol_family CHECK
+// is wider than this list; profiles for removed families are no longer
+// constructable. A custom runtime profile may only be based on a backend
+// Multica officially supports.
 var SupportedTypes = []string{
 	"claude",
-	"codebuddy",
 	"codex",
-	"copilot",
 	"opencode",
-	"codearts",
-	"deveco",
-	"openclaw",
-	"hermes",
 	"pi",
-	"cursor",
-	"kimi",
-	"reasonix",
 	"dsh",
-	"kiro",
-	"antigravity",
-	"qoder",
-	"qoderclicn",
-	"traecli",
 	"gbot",
 	"grok",
-	"qwen",
-	"qwenpaw",
-	"mcode",
-	"dim",
-	"zeroclaw",
 	"yielded",
 }
 
@@ -415,21 +371,14 @@ func IsSupportedType(agentType string) bool {
 // resumeRejectionUndetectable lists the backends that cannot produce
 // Result.ResumeRejected at all. They scrape SessionID out of stream output and
 // have no rejection detection: no phrase match, no structured error code, no
-// internal restart. copilot's own comment documents the hole (a session.error
-// arriving before session.start leaves SessionID empty), and antigravity's
-// conversation-id reader returns "" whenever the CLI exits before dispatching.
+// internal restart.
 //
 // Membership is deliberately opt-in. A backend absent from this map is treated
 // as capable, so a new backend fails closed — it reports no rejection and gets
 // no fallback — rather than silently inheriting a guess-based retry. Remove an
 // entry as soon as its backend learns to report rejections.
 var resumeRejectionUndetectable = map[string]bool{
-	"antigravity": true,
-	"copilot":     true,
-	"cursor":      true,
-	"deveco":      true,
-	"opencode":    true,
-	"codearts":    true,
+	"opencode": true,
 }
 
 // ResumeRejectionUndetectable reports whether agentType is a backend that
@@ -457,54 +406,18 @@ func New(agentType string, cfg Config) (Backend, error) {
 	switch agentType {
 	case "claude":
 		return &claudeBackend{cfg: cfg}, nil
-	case "codebuddy":
-		return &codebuddyBackend{cfg: cfg}, nil
 	case "codex":
 		return &codexBackend{cfg: cfg}, nil
-	case "copilot":
-		return &copilotBackend{cfg: cfg}, nil
 	case "opencode":
 		return &opencodeBackend{cfg: cfg}, nil
-	case "codearts":
-		return newCodeArtsBackend(cfg)
-	case "deveco":
-		return &devecoBackend{cfg: cfg}, nil
-	case "openclaw":
-		return &openclawBackend{cfg: cfg}, nil
-	case "hermes":
-		return &hermesBackend{cfg: cfg}, nil
 	case "pi":
 		return &piBackend{cfg: cfg}, nil
-	case "cursor":
-		return &cursorBackend{cfg: cfg}, nil
-	case "kimi":
-		return &kimiBackend{cfg: cfg}, nil
-	case "reasonix":
-		return &reasonixBackend{cfg: cfg}, nil
 	case "dsh":
 		return &dshBackend{cfg: cfg}, nil
-	case "dim":
-		return &dimBackend{cfg: cfg}, nil
-	case "kiro":
-		return &kiroBackend{cfg: cfg}, nil
-	case "antigravity":
-		return &antigravityBackend{cfg: cfg}, nil
-	case "qoder", "qoderclicn":
-		return &qoderBackend{cfg: cfg, defaultExecutable: qoderDefaultBinary(agentType)}, nil
-	case "traecli":
-		return &traecliBackend{cfg: cfg}, nil
 	case "gbot":
 		return &gbotBackend{cfg: cfg}, nil
 	case "grok":
 		return &grokBackend{cfg: cfg}, nil
-	case "qwen":
-		return &qwenBackend{cfg: cfg}, nil
-	case "qwenpaw":
-		return &qwenpawBackend{cfg: cfg}, nil
-	case "mcode":
-		return &mcodeBackend{cfg: cfg}, nil
-	case "zeroclaw":
-		return &zeroclawBackend{cfg: cfg}, nil
 	case "yielded":
 		return &yieldedBackend{cfg: cfg}, nil
 	default:
@@ -529,33 +442,14 @@ func DetectVersion(ctx context.Context, cmd Command) (string, error) {
 // environment variables are deliberately omitted so the string is a hint
 // about *what* users are extending, not a dump of the full command line.
 var launchHeaders = map[string]string{
-	"antigravity": "agy -p (non-interactive)",
-	"claude":      "claude (stream-json)",
-	"codebuddy":   "codebuddy (stream-json)",
-	"codex":       "codex app-server",
-	"copilot":     "copilot (json)",
-	"cursor":      "cursor-agent (stream-json)",
-	"codearts":    "codearts run (json)",
-	"deveco":      "deveco run (json)",
-	"hermes":      "hermes acp",
-	"kimi":        "kimi acp",
-	"reasonix":    "reasonix acp",
-	"dsh":         "dsh --profile multica (stdio)",
-	"kiro":        "kiro-cli acp",
-	"openclaw":    "openclaw agent (json)",
-	"opencode":    "opencode run (json)",
-	"pi":          "pi (json mode)",
-	"qoder":       "qodercli --acp",
-	"qoderclicn":  "qoderclicn --acp",
-	"traecli":     "traecli acp serve",
-	"gbot":        "gbot task run",
-	"grok":        "grok agent stdio",
-	"qwen":        "qwen -p (stream-json)",
-	"qwenpaw":     "qwenpaw acp",
-	"dim":         "dim acp",
-	"mcode":       "mcode acp",
-	"zeroclaw":    "zeroclaw acp",
-	"yielded":     "yielded-agent",
+	"claude":   "claude (stream-json)",
+	"codex":    "codex app-server",
+	"dsh":      "dsh --profile multica (stdio)",
+	"opencode": "opencode run (json)",
+	"pi":       "pi (json mode)",
+	"gbot":     "gbot task run",
+	"grok":     "grok agent stdio",
+	"yielded":  "yielded-agent",
 }
 
 // LaunchHeader returns the user-visible launch skeleton for agentType, or an

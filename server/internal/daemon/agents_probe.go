@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
-	"path/filepath"
+
 	"runtime"
 	"strings"
 	"sync"
@@ -185,39 +185,6 @@ var probeAgentCLIs = func() map[string]AgentEntry {
 	if e, ok := probe("MULTICA_OPENCODE_PATH", "opencode", "MULTICA_OPENCODE_MODEL"); ok {
 		agents["opencode"] = e
 	}
-	if e, ok := probe("MULTICA_CODEARTS_PATH", "codearts", "MULTICA_CODEARTS_MODEL"); ok {
-		agents["codearts"] = e
-	} else if strings.TrimSpace(os.Getenv("MULTICA_CODEARTS_PATH")) == "" {
-		// The native CodeArts installer may update PATH only for future
-		// terminals. A GUI-launched daemon can still discover its stable
-		// user-level launcher. An explicit but invalid override remains a hard
-		// miss and never falls back here.
-		home, err := os.UserHomeDir()
-		if err == nil {
-			for _, name := range []string{"codearts.cmd", "codearts"} {
-				candidate := filepath.Join(home, ".codeartsdoer", "installers", name)
-				path, resolveErr := resolveAgentExecutablePath(candidate)
-				if resolveErr != nil {
-					continue
-				}
-				agents["codearts"] = AgentEntry{
-					Path:    path,
-					Command: "codearts",
-					Model:   strings.TrimSpace(os.Getenv("MULTICA_CODEARTS_MODEL")),
-				}
-				break
-			}
-		}
-	}
-	if e, ok := probe("MULTICA_DEVECO_PATH", "deveco", "MULTICA_DEVECO_MODEL"); ok {
-		agents["deveco"] = e
-	}
-	if e, ok := probe("MULTICA_OPENCLAW_PATH", "openclaw", "MULTICA_OPENCLAW_MODEL"); ok {
-		agents["openclaw"] = e
-	}
-	if e, ok := probe("MULTICA_HERMES_PATH", "hermes", "MULTICA_HERMES_MODEL"); ok {
-		agents["hermes"] = e
-	}
 	if e, ok := probe("MULTICA_PI_PATH", "pi", "MULTICA_PI_MODEL"); ok {
 		agents["pi"] = e
 	}
@@ -233,18 +200,6 @@ var probeAgentCLIs = func() map[string]AgentEntry {
 			agents[desc.ID] = e
 		}
 	}
-	if e, ok := probe("MULTICA_CURSOR_PATH", "cursor-agent", "MULTICA_CURSOR_MODEL"); ok {
-		agents["cursor"] = e
-	}
-	if e, ok := probe("MULTICA_COPILOT_PATH", "copilot", "MULTICA_COPILOT_MODEL"); ok {
-		agents["copilot"] = e
-	}
-	if e, ok := probe("MULTICA_KIMI_PATH", "kimi", "MULTICA_KIMI_MODEL"); ok {
-		agents["kimi"] = e
-	}
-	if e, ok := probe("MULTICA_REASONIX_PATH", "reasonix", "MULTICA_REASONIX_MODEL"); ok {
-		agents["reasonix"] = e
-	}
 	// DSH resolves here like any other CLI. Whether it is *usable* is decided
 	// one layer up: the Multica runtime profile is what gives it the --stdio
 	// protocol, so a bare `dsh` prints a version and still cannot run a task.
@@ -256,42 +211,6 @@ var probeAgentCLIs = func() map[string]AgentEntry {
 	if e, ok := probe("MULTICA_DSH_PATH", "dsh", "MULTICA_DSH_MODEL"); ok {
 		agents["dsh"] = e
 	}
-	if e, ok := probe("MULTICA_KIRO_PATH", "kiro-cli", "MULTICA_KIRO_MODEL"); ok {
-		agents["kiro"] = e
-	}
-	if e, ok := probe("MULTICA_CODEBUDDY_PATH", "codebuddy", "MULTICA_CODEBUDDY_MODEL"); ok {
-		agents["codebuddy"] = e
-	}
-	// agy 1.0.6 added a `--model` flag (MUL-3125), so Antigravity now takes a
-	// model env like every other backend. MULTICA_ANTIGRAVITY_MODEL seeds the
-	// daemon-wide default; its value is the exact `agy models` display string
-	// (e.g. "Claude Opus 4.6 (Thinking)"), not a provider/model slug.
-	if e, ok := probe("MULTICA_ANTIGRAVITY_PATH", "agy", "MULTICA_ANTIGRAVITY_MODEL"); ok {
-		agents["antigravity"] = e
-	}
-	// Qoder CLI ships as the `qodercli` binary (Qoder Desktop does not put it
-	// on PATH; users install it separately, often via an npm global prefix).
-	// It must go through probe() like every other provider so the login-shell
-	// fallback applies: a GUI/Launchpad-started daemon does not inherit the
-	// interactive shell PATH, and without the fallback a perfectly good
-	// qodercli install stayed invisible across restarts (MUL-5524).
-	if e, ok := probe("MULTICA_QODER_PATH", "qodercli", "MULTICA_QODER_MODEL"); ok {
-		agents["qoder"] = e
-	}
-	// Qoder CN CLI exposes the same ACP transport as Qoder CLI under a
-	// separate `qoderclicn` binary and account/config root. Register it as an
-	// independent provider so hosts with either or both editions get the
-	// matching runtime without a custom profile.
-	if e, ok := probe("MULTICA_QODERCLICN_PATH", "qoderclicn", "MULTICA_QODERCLICN_MODEL"); ok {
-		agents["qoderclicn"] = e
-	}
-	// ByteDance official TRAE CLI (the `traecli` binary from https://docs.trae.cn/cli),
-	// driven over ACP via `traecli acp serve --yolo`. MULTICA_TRAECLI_MODEL seeds
-	// the daemon-wide default model (a model id from the user's logged-in traecli
-	// catalog).
-	if e, ok := probe("MULTICA_TRAECLI_PATH", "traecli", "MULTICA_TRAECLI_MODEL"); ok {
-		agents["traecli"] = e
-	}
 	// xAI Grok Build CLI (`grok`), driven over ACP via
 	// `grok agent --always-approve stdio`. MULTICA_GROK_MODEL seeds the
 	// daemon-wide default (e.g. grok-4.5).
@@ -302,39 +221,6 @@ var probeAgentCLIs = func() map[string]AgentEntry {
 	// runtime above. The target bot is selected per run by MULTICA_GBOT_BOT.
 	if e, ok := probe("MULTICA_GBOT_PATH", "gbot", ""); ok {
 		agents["gbot"] = e
-	}
-	// Qwen Code (`qwen`) runs headlessly with -p and stream-json. Its native
-	// QWEN.md and .qwen/skills task context is prepared by execenv.
-	if e, ok := probe("MULTICA_QWEN_PATH", "qwen", "MULTICA_QWEN_MODEL"); ok {
-		agents["qwen"] = e
-	}
-	// QwenPaw (`qwenpaw`) is the QwenPaw CLI agent, driven over ACP via
-	// `qwenpaw acp`. It takes no model env var: the backend never calls
-	// session/set_model (it would rewrite QwenPaw's shared agent config), so
-	// ExecOptions.Model is ignored — see ModelSelectionSupported. Reading one
-	// here would only advertise a knob that silently does nothing.
-	if e, ok := probe("MULTICA_QWENPAW_PATH", "qwenpaw", ""); ok {
-		agents["qwenpaw"] = e
-	}
-	// Dim (`dim`) is the DimCode CLI agent, driven over ACP via `dim acp`.
-	// MULTICA_DIM_MODEL seeds the daemon-wide default (a model id from the
-	// user's logged-in dim catalog).
-	if e, ok := probe("MULTICA_DIM_PATH", "dim", "MULTICA_DIM_MODEL"); ok {
-		agents["dim"] = e
-	}
-	// MiniMax Code (`mcode`) exposes an ACP v1 server through `mcode acp`.
-	// Model selection is owned by the MCode runtime, so there is no model env.
-	if e, ok := probe("MULTICA_MCODE_PATH", "mcode", ""); ok {
-		agents["mcode"] = e
-	}
-	// ZeroClaw (`zeroclaw`) is a Rust-based generic agent CLI, driven over
-	// ACP via `zeroclaw acp`. It takes no model env var: its ACP server has no
-	// `session/set_model` and no handler reads a model param, so the model
-	// comes from ZeroClaw's own agent profile and ExecOptions.Model can never
-	// be applied — see ModelSelectionSupported. Reading one here would only
-	// advertise a knob that silently does nothing.
-	if e, ok := probe("MULTICA_ZEROCLAW_PATH", "zeroclaw", ""); ok {
-		agents["zeroclaw"] = e
 	}
 	// yielded-agent is the stdio host that declares its own model catalog.
 	// MULTICA_YIELDED_MODEL is a provider/model-id selector from that catalog.

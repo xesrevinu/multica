@@ -11,12 +11,12 @@ import (
 func TestBuildOmpArgsOwnsSessionSelection(t *testing.T) {
 	for _, resume := range []string{"", "/saved.jsonl"} {
 		dir := ""
-		want := []string{"-p", "--mode", "json", "--tools", "read"}
+		want := []string{"-p", "--mode", "json", "--no-skills", "--tools", "read"}
 		if resume == "" {
 			dir = "/fresh"
 			want = append(want, "--session-dir", dir)
 		} else {
-			want = []string{"-p", "--mode", "json", "--session", resume, "--tools", "read"}
+			want = []string{"-p", "--mode", "json", "--no-skills", "--session", resume, "--tools", "read"}
 		}
 		args := buildOmpArgs(resume, dir, ExecOptions{CustomArgs: []string{
 			"--session-dir", "/other", "--session-dir=/other", "--no-session",

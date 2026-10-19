@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/pkg/taskfailure"
 )
 
@@ -87,12 +86,6 @@ func TestTaskRunFailureReasonPrefersSpecificPreparationSentinels(t *testing.T) {
 		err  error
 		want string
 	}{
-		"openclaw cli timeout": {
-			err: asEnvironmentSetupFailure(fmt.Errorf(
-				"prepare execution environment: execenv: prepare openclaw config: locate openclaw active config: %w",
-				fmt.Errorf("openclaw config file: context deadline exceeded (process: signal: killed): %w", execenv.ErrOpenclawCLITimeout))),
-			want: taskfailure.ReasonRuntimeCLITimeout.String(),
-		},
 		"skill bundle unavailable": {
 			err: asEnvironmentSetupFailure(fmt.Errorf("prepare execution environment: %w",
 				fmt.Errorf("%w: download skill: connection refused", errSkillBundleUnavailable))),

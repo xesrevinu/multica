@@ -58,21 +58,11 @@ type PrepareParams struct {
 	Profile      string
 	Provider     string // agent provider (determines runtime config and skill injection paths)
 	CodexVersion string // detected Codex CLI version (only used when Provider == "codex")
-	OpenclawBin  string // resolved openclaw CLI path (only used when Provider == "openclaw"); empty = look up on PATH
 	// McpConfig is the agent's saved `mcp_config` JSON, forwarded to the
 	// provider-specific config preparer when that provider materialises MCP
-	// via a per-task config file. Cursor, OpenClaw, and OMP consume it here;
+	// via a per-task config file. OMP consumes it here;
 	// other providers wire MCP via ExecOptions.McpConfig in the agent backend.
 	McpConfig json.RawMessage
-	// CursorMcpAuthSource is an explicit opt-in path to a Cursor mcp-auth.json
-	// file, or the Cursor project data directory containing it. Only Cursor's
-	// managed MCP path consumes it.
-	CursorMcpAuthSource string
-	// OpenclawGateway pins the OpenClaw Gateway endpoint inside the per-task
-	// wrapper. Only consulted when Provider == "openclaw" and the agent's
-	// runtime_config selected gateway mode (issue #3260). Zero means "inherit
-	// whatever the user's global openclaw.json already configures".
-	OpenclawGateway OpenclawGatewayPin
 	// LocalWorkDir, when non-empty, redirects the agent's working directory
 	// to a user-supplied absolute path instead of the synthesised envRoot/
 	// workdir. The path is NOT copied or mounted — the agent operates on
@@ -88,36 +78,6 @@ type PrepareParams struct {
 	// Mutually exclusive with LocalWorkDir — the daemon picks one based on the
 	// resource's execution_mode.
 	LocalWorktree *LocalWorktreeParams
-	// HermesSourceHome is the shared Hermes home the per-task overlay is seeded
-	// from — resolved by the daemon via execenv.ResolveHermesProfile so it honors
-	// the agent's custom_env HERMES_HOME and any -p/--profile or sticky selection.
-	// Only used for the hermes provider; empty falls back to the platform default.
-	HermesSourceHome string
-	// HermesSourceMustExist fails the overlay build closed when HermesSourceHome
-	// is absent — set when an explicit named profile was requested so a typo
-	// doesn't silently seed from an empty home and drop the user's auth/config.
-	HermesSourceMustExist bool
-	// HermesMemoryStore is the agent's persistent Hermes memory store
-	// (HermesMemoryStorePath) the overlay links memories/ to, so memory outlives
-	// the task. Empty keeps memories/ task-local — no agent to key on, or the
-	// Multica profile dir could not be resolved.
-	HermesMemoryStore string
-	// HermesSessionStore is the conversation's persistent Hermes session store
-	// (HermesSessionStorePath) the overlay links state.db to, so the transcript
-	// outlives the task and a follow-up turn can actually resume it. Empty keeps
-	// state.db task-local — no agent or conversation to key on, or the Multica
-	// profile dir could not be resolved.
-	HermesSessionStore string
-	// HermesEnv is the sanitized effective env (agent custom_env minus the daemon
-	// blocklisted keys) used to expand ${VAR} in Hermes external_dirs so it
-	// matches what the Hermes child process actually sees. Only used for hermes.
-	HermesEnv map[string]string
-	// ReasonixEnv is the sanitized agent custom_env, layered over the daemon's
-	// own environment exactly as the child's env is built. The per-task
-	// reasonix.toml restates the permissions from the user config that env
-	// resolves to, so an agent that re-points (or clears) REASONIX_HOME moves the
-	// daemon's read with it. Only used for reasonix.
-	ReasonixEnv map[string]string
 	// CodexCustomArgs are the effective Codex CLI args this task launches with
 	// (daemon defaults + profile-fixed + per-agent custom_args). Only the
 	// Windows sandbox decision reads them, to honor a `-c windows.sandbox=...`
@@ -293,54 +253,6 @@ type Environment struct {
 	// ClaudeSettingsPath is a task-local --settings JSON file that applies
 	// disabled runtime-skill policy without mutating the user's Claude config.
 	ClaudeSettingsPath string
-	// OpenclawConfigPath is the path to the per-task synthesized OpenClaw
-	// config (set only for openclaw provider). The daemon exports this as
-	// OPENCLAW_CONFIG_PATH on the openclaw subprocess so its native skill
-	// scanner pins workspaceDir to WorkDir.
-	OpenclawConfigPath string
-	// OpenclawIncludeRoot is the directory of the user's active OpenClaw
-	// config (set only for openclaw provider with an on-disk user config).
-	// The daemon must prepend it to OPENCLAW_INCLUDE_ROOTS so OpenClaw is
-	// allowed to follow the wrapper's `$include` link out of envRoot into
-	// the user's config — by default OpenClaw confines `$include` to the
-	// directory holding the wrapper file. Empty when no $include is
-	// emitted (fresh install).
-	OpenclawIncludeRoot string
-	// CursorDataDir is the per-task Cursor data directory (set only for
-	// cursor provider when the agent has managed mcp_config). The daemon
-	// exports this as CURSOR_DATA_DIR so project-level MCP approvals are
-	// isolated from the user's persistent ~/.cursor/projects state.
-	CursorDataDir string
-	// HermesHome is the path to the per-task HERMES_HOME overlay (set only for
-	// the hermes provider, and only when the agent has skills bound — empty
-	// otherwise, leaving the user's real home in place). It mirrors ~/.hermes/
-	// via symlink, derives a config.yaml that references the user's real skills
-	// as an external root, and holds the bound skills in its skills/ subdir. The
-	// daemon exports it as HERMES_HOME so the hermes CLI discovers those skills
-	// natively — Hermes has no workspace-relative discovery, so the previous
-	// .agent_context/skills/ fallback was never read (issue #5242). See
-	// hermes_home.go.
-	HermesHome string
-	// HermesSessionStore is the conversation's session store this task's
-	// state.db is actually linked to, or "" when the session database stayed
-	// task-local (no store to key on, or a host that could not create the
-	// link).
-	HermesSessionStore string
-	// HermesSessionHistoryPresent reports that the mounted store actually holds
-	// a session database — a prior turn's transcript this task can resume.
-	// Mounting alone does not imply it: a conversation's first turn, a store the
-	// GC reclaimed between turns, a switched Hermes profile and an operator's
-	// `rm` all mount cleanly onto nothing. The daemon reads THIS, not the store
-	// path, as the answer to "can a prior session id still resolve here?" — see
-	// gateResumeToReachableSession.
-	HermesSessionHistoryPresent bool
-	// QwenpawWorkspace is the path to the per-task QwenPaw workspace directory
-	// (set only for the qwenpaw provider). It is populated with the bound skills
-	// and their skill.json manifest with enabled: true, so the skills are
-	// immediately effective. The daemon passes --workspace <dir> to
-	// `qwenpaw acp` so the QwenPaw agent discovers the skills natively.
-	// See qwenpaw_workspace.go.
-	QwenpawWorkspace string
 
 	logger *slog.Logger // for cleanup logging
 	// lockFile holds the env root's exclusive execution lock for as long as
@@ -649,60 +561,6 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 		env.ClaudeSettingsPath = settingsPath
 	}
 
-	// For Hermes, redirect HERMES_HOME to a per-task compatibility overlay ONLY
-	// when the agent has skills bound. A skill-less Hermes task keeps the user's
-	// real home and its original behavior untouched. The overlay makes the bound
-	// skills visible — Hermes discovers skills only from its home, so the old
-	// .agent_context/skills/ fallback was never read (issue #5242). See
-	// hermes_home.go.
-	//
-	// Note this is a local contract, not an observable product behaviour: the
-	// server appends the platform's built-in skills to every agent's skill set
-	// (service.LoadAgentSkillBundles), so a claimed task's AgentSkills is never
-	// empty and the skill-less branch is effectively unreachable in production.
-	// Emptying an agent's own skill list is NOT a way to opt out of the overlay.
-	if params.Provider == "hermes" && len(params.Task.AgentSkills) > 0 {
-		hermesHome := filepath.Join(envRoot, "hermes-home")
-		sessions, err := prepareHermesHome(hermesHome, params.HermesSourceHome, params.HermesSourceMustExist, params.Task.AgentSkills, params.HermesEnv, params.HermesMemoryStore, params.HermesSessionStore, logger)
-		if err != nil {
-			return nil, fmt.Errorf("execenv: prepare hermes-home: %w", err)
-		}
-		env.HermesHome = hermesHome
-		if sessions.Mounted {
-			env.HermesSessionStore = params.HermesSessionStore
-			env.HermesSessionHistoryPresent = sessions.HistoryPresent
-		}
-	}
-	if params.Provider == "qwenpaw" {
-		qwenpawWorkspace := filepath.Join(envRoot, "qwenpaw-workspace")
-		if err := prepareQwenpawWorkspace(qwenpawWorkspace, params.Task.AgentSkills, logger); err != nil {
-			return nil, fmt.Errorf("execenv: prepare qwenpaw workspace: %w", err)
-		}
-		env.QwenpawWorkspace = qwenpawWorkspace
-	}
-
-	// For Reasonix, deny the `ask` tool for this task through a project-scoped
-	// reasonix.toml. Degraded, not fatal: without it the task still runs under
-	// the backend's fail-closed question handling.
-	if params.Provider == "reasonix" {
-		if err := writeReasonixProjectConfig(workDir, params.ReasonixEnv, manifest, logger); err != nil {
-			logger.Warn("execenv: write reasonix project config failed", "error", err)
-		}
-	}
-
-	// For Cursor, materialize managed MCP into project-local config and use
-	// an isolated CURSOR_DATA_DIR for the per-workdir approval sidecar. Cursor
-	// still reads ~/.cursor/mcp.json, but only servers with approval entries in
-	// this per-task data dir can load, so user-global MCP servers do not leak
-	// into managed-MCP runs.
-	if params.Provider == "cursor" {
-		cursorDataDir, err := prepareCursorMcpConfig(envRoot, workDir, params.McpConfig, params.CursorMcpAuthSource, manifest)
-		if err != nil {
-			return nil, fmt.Errorf("execenv: prepare cursor mcp config: %w", err)
-		}
-		env.CursorDataDir = cursorDataDir
-	}
-
 	if err := writeSidecarManifest(envRoot, manifest); err != nil {
 		// In place the manifest is the ONLY record of what we wrote into the
 		// user's own directory, so losing it strands the sidecar tree there
@@ -715,27 +573,6 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 			return nil, fmt.Errorf("execenv: write sidecar manifest: %w", err)
 		}
 		logger.Warn("execenv: write sidecar manifest failed (non-fatal)", "error", err)
-	}
-
-	// For OpenClaw, synthesize a per-task config that pins workspace to
-	// workDir. The skill scanner then reads {workDir}/skills/ (written by
-	// writeContextFiles above). Fail closed on errors: a malformed user
-	// config that the openclaw CLI can't read is a real problem and
-	// silently degrading to a minimal config would mask it by booting
-	// OpenClaw without the agents / providers / API keys it expects.
-	if params.Provider == "openclaw" {
-		result, err := prepareOpenclawConfig(envRoot, workDir, OpenclawConfigPrep{
-			OpenclawBin: params.OpenclawBin,
-			CacheDir:    openclawProfileCacheDir(params.Profile, logger),
-			McpConfig:   params.McpConfig,
-			Gateway:     params.OpenclawGateway,
-			Logger:      logger,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("execenv: prepare openclaw config: %w", err)
-		}
-		env.OpenclawConfigPath = result.ConfigPath
-		env.OpenclawIncludeRoot = result.IncludeRoot
 	}
 
 	logger.Info("execenv: prepared env", "root", envRoot, "repos_available", len(params.Task.Repos))
@@ -763,17 +600,11 @@ type ReuseParams struct {
 	// exposed into the new task-local sessions dir so thread/resume still finds
 	// it. Empty means a fresh thread. See prepareCodexSessionsDir (MUL-4424).
 	ResumeSessionID string
-	OpenclawBin     string // only used when Provider == "openclaw"; empty = PATH lookup
 	// McpConfig is the agent's saved `mcp_config` JSON. Reused on reuse so a
 	// freshly-saved managed set re-materialises into the wrapper before the
 	// task starts — without this a stale wrapper from a prior run would keep
 	// the old MCP set in play.
 	McpConfig json.RawMessage
-	// CursorMcpAuthSource mirrors PrepareParams.CursorMcpAuthSource on reuse.
-	CursorMcpAuthSource string
-	// OpenclawGateway is the per-task Gateway pin re-applied on reuse so the
-	// agent picks up any runtime_config changes saved since the prior run.
-	OpenclawGateway OpenclawGatewayPin
 	// Profile is the daemon's profile name (empty = default), mirroring
 	// PrepareParams.Profile so a reused task keys its per-issue Codex session
 	// store into the same profile namespace (MUL-4424).
@@ -784,18 +615,6 @@ type ReuseParams struct {
 	// loop) keep the "never delete the user's directory" invariant on
 	// reuse paths.
 	LocalDirectory bool
-	// HermesSourceHome, HermesEnv, HermesMemoryStore and HermesSessionStore
-	// mirror PrepareParams on reuse so the Hermes overlay re-derives against the
-	// agent's current source home / profile, external_dirs vars, memory store and
-	// conversation session store.
-	HermesSourceHome      string
-	HermesSourceMustExist bool
-	HermesEnv             map[string]string
-	HermesMemoryStore     string
-	HermesSessionStore    string
-	// ReasonixEnv mirrors PrepareParams.ReasonixEnv on reuse so the rewritten
-	// reasonix.toml keeps restating the owner's current permissions.
-	ReasonixEnv map[string]string
 	// CodexCustomArgs mirrors PrepareParams.CodexCustomArgs on reuse so the
 	// Windows sandbox decision honors a `-c windows.sandbox=...` override here
 	// too (MUL-4957).
@@ -944,99 +763,10 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 		}
 	}
 
-	// Re-deny Reasonix's `ask` tool on reuse: CleanupSidecars above removed the
-	// prior run's reasonix.toml, so without this the next turn would run with
-	// the tool available again.
-	if params.Provider == "reasonix" {
-		if err := writeReasonixProjectConfig(params.WorkDir, params.ReasonixEnv, manifest, logger); err != nil {
-			logger.Warn("execenv: refresh reasonix project config failed", "error", err)
-		}
-	}
-
-	// Refresh (or tear down) the per-task QwenPaw workspace on reuse.
-	// Rebuild the workspace so an added/removed/edited skill is reflected.
-	if params.Provider == "qwenpaw" && env.RootDir != "" {
-		qwenpawWorkspace := filepath.Join(env.RootDir, "qwenpaw-workspace")
-		if err := prepareQwenpawWorkspace(qwenpawWorkspace, params.Task.AgentSkills, logger); err != nil {
-			logger.Warn("execenv: refresh qwenpaw workspace failed; forcing fresh prepare", "error", err)
-			return nil
-		}
-		env.QwenpawWorkspace = qwenpawWorkspace
-	}
-
-	// Refresh (or tear down) the per-task HERMES_HOME on reuse. With skills
-	// bound, rebuild the overlay so an added/removed/edited skill and the
-	// mirrored home/config track the user's current ~/.hermes/ before the next
-	// hermes process starts. With no skills bound, drop the redirect entirely so
-	// the task reverts to the user's real home — matching a fresh Prepare for a
-	// skill-less agent.
-	if params.Provider == "hermes" && env.RootDir != "" {
-		hermesHome := filepath.Join(env.RootDir, "hermes-home")
-		if len(params.Task.AgentSkills) > 0 {
-			sessions, err := prepareHermesHome(hermesHome, params.HermesSourceHome, params.HermesSourceMustExist, params.Task.AgentSkills, params.HermesEnv, params.HermesMemoryStore, params.HermesSessionStore, logger)
-			if err != nil {
-				// Fail closed: a half-built overlay must not run. Returning nil
-				// makes the daemon fall back to a fresh Prepare, whose error
-				// then blocks dispatch rather than silently dropping the bound
-				// skill.
-				logger.Warn("execenv: refresh hermes-home failed; forcing fresh prepare", "error", err)
-				return nil
-			}
-			env.HermesHome = hermesHome
-			env.HermesSessionStore = ""
-			env.HermesSessionHistoryPresent = false
-			if sessions.Mounted {
-				env.HermesSessionStore = params.HermesSessionStore
-				env.HermesSessionHistoryPresent = sessions.HistoryPresent
-			}
-		} else {
-			env.HermesHome = ""
-			env.HermesSessionStore = ""
-			env.HermesSessionHistoryPresent = false
-			if err := os.RemoveAll(hermesHome); err != nil {
-				logger.Warn("execenv: remove stale hermes-home failed", "error", err)
-			}
-		}
-	}
-
-	// Refresh Cursor's managed MCP sidecars on reuse. A newly saved agent
-	// mcp_config must replace the prior run's .cursor/mcp.json and isolated
-	// approvals before the next cursor-agent process starts.
-	if params.Provider == "cursor" && env.RootDir != "" {
-		cursorDataDir, err := prepareCursorMcpConfig(env.RootDir, params.WorkDir, params.McpConfig, params.CursorMcpAuthSource, manifest)
-		if err != nil {
-			logger.Warn("execenv: refresh cursor mcp config failed", "error", err)
-			return nil
-		}
-		env.CursorDataDir = cursorDataDir
-	}
-
 	if env.RootDir != "" {
 		if err := writeSidecarManifest(env.RootDir, manifest); err != nil {
 			logger.Warn("execenv: refresh sidecar manifest failed", "error", err)
 		}
-	}
-
-	// Refresh the per-task OpenClaw config on reuse — the user may have
-	// added/removed agents or rotated providers since the prior task ran,
-	// and the workspace override always re-targets the current workDir.
-	// Fail closed: a user config that can no longer be parsed should block
-	// reuse rather than degrade to a minimal config that boots OpenClaw
-	// without the registered agents.
-	if params.Provider == "openclaw" {
-		result, err := prepareOpenclawConfig(env.RootDir, params.WorkDir, OpenclawConfigPrep{
-			OpenclawBin: params.OpenclawBin,
-			CacheDir:    openclawProfileCacheDir(params.Profile, logger),
-			McpConfig:   params.McpConfig,
-			Gateway:     params.OpenclawGateway,
-			Logger:      logger,
-		})
-		if err != nil {
-			logger.Warn("execenv: refresh openclaw config failed", "error", err)
-			return nil
-		}
-		env.OpenclawConfigPath = result.ConfigPath
-		env.OpenclawIncludeRoot = result.IncludeRoot
 	}
 
 	logger.Info("execenv: reusing env", "workdir", params.WorkDir)

@@ -4639,8 +4639,7 @@ func (d *Daemon) handlePendingWorkHint(runtimeID, kind string) {
 	// Root context: handleHeartbeatActions hands this ctx to the actual work, so
 	// it must outlive this function. Capability discovery and local-skill imports
 	// are normally quick filesystem operations, while model discovery may shell
-	// out to a CLI for up to ~40s on the slowest provider (see
-	// agent.hermesDiscoveryTimeout). Only the heartbeat request itself is
+	// out to a CLI for up to the discovery timeout. Only the heartbeat request itself is
 	// time-bounded.
 	ctx := d.recoveryContext()
 	if ctx.Err() != nil {
@@ -4725,19 +4724,6 @@ func (d *Daemon) handleModelList(ctx context.Context, rt Runtime, requestID stri
 	if catalog.Fallback {
 		d.logger.Warn("model discovery fell back to a static catalog; reporting it as non-authoritative",
 			"runtime_id", rt.ID, "provider", rt.Provider, "path", execPath, "count", len(models))
-	}
-	if rt.Provider == "codearts" && len(models) == 0 {
-		if home, homeErr := os.UserHomeDir(); homeErr == nil {
-			configuredModels, configErr := loadCodeArtsConfiguredModels(home)
-			if configErr != nil {
-				d.logger.Warn("CodeArts custom model discovery failed",
-					"runtime_id", rt.ID, "path", codeArtsUserConfigPath(home), "error", configErr)
-			} else if len(configuredModels) > 0 {
-				models = configuredModels
-				d.logger.Info("CodeArts model discovery used user-configured providers",
-					"runtime_id", rt.ID, "path", codeArtsUserConfigPath(home), "count", len(models))
-			}
-		}
 	}
 
 	// Wire format matches handler.ModelEntry. Use a struct (not
@@ -6004,15 +5990,6 @@ func taskRunFailureReason(err error) string {
 	if errors.Is(err, errSkillBundleUnavailable) {
 		return taskfailure.ReasonSkillBundleUnavailable.String()
 	}
-	// Structural, not textual: the message ends in "context deadline exceeded",
-	// which Classify routes to agent_error.provider_network — "the connection to
-	// the model provider dropped, check your network" for a stall that is purely
-	// local, plus an auto-retry of a failure that is deterministic on the host.
-	// The sentinel survives the preparation helper boundary via
-	// preparationErrorKind (#7112).
-	if errors.Is(err, execenv.ErrOpenclawCLITimeout) {
-		return taskfailure.ReasonRuntimeCLITimeout.String()
-	}
 	// Everything else that failed while building or re-opening the execution
 	// environment. Last of the structural branches: the four sentinels above
 	// each name a cause the daemon already recognises on its own (task
@@ -6452,17 +6429,10 @@ func taskRootDirParams(workspacesRoot string, task Task) execenv.RootDirParams {
 // this map at init so their display names stay in lockstep with the
 // descriptor.
 var runtimeDisplayNameOverrides = map[string]string{
-	"codearts":   "CodeArts",
-	"dsh":        "DeepSeek Harness",
-	"traecli":    "Trae",
-	"gbot":       "Grok Bot",
-	"grok":       "Grok",
-	"qoderclicn": "Qoder CN",
-	"qwen":       "Qwen Code",
-	"qwenpaw":    "QwenPaw",
-	"mcode":      "MiniMax Code",
-	"zeroclaw":   "ZeroClaw",
-	"yielded":    "Yielded",
+	"dsh":     "DeepSeek Harness",
+	"gbot":    "Grok Bot",
+	"grok":    "Grok",
+	"yielded": "Yielded",
 }
 
 func init() {
@@ -6505,12 +6475,7 @@ func providerDisplayName(name string) string {
 // into the turn itself. kiro was confirmed earlier by a kiro-cli
 // 2.13.0 ACP smoke — see the call site. Still unprobed: grok, qoder, codebuddy.
 func providerNeedsInlineSystemPrompt(provider string) bool {
-	switch provider {
-	case "openclaw", "kimi", "traecli", "qwenpaw":
-		return true
-	default:
-		return false
-	}
+	return false
 }
 
 // gateResumeToReachableSession clears the task's prior session unless this run
@@ -6810,13 +6775,7 @@ func piSessionRecordedCwd(path string) (string, bool) {
 // Every other provider is keyed by cwd or handles its independently addressed
 // store in gateResumeToReachableSession, so this predicate returns true.
 func sessionHomeReachable(provider string, env *execenv.Environment, envReused bool) bool {
-	if provider != "hermes" {
-		return true
-	}
-	if env.HermesSessionStore != "" {
-		return env.HermesSessionHistoryPresent
-	}
-	return envReused
+	return true
 }
 
 // shouldReusePriorWorkdir keeps the local_directory lock and cross-agent
@@ -7954,10 +7913,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if provider == "codex" && resolvedVersion != "" {
 		codexVersion = resolvedVersion
 	}
-	openclawBin := ""
-	if provider == "openclaw" {
-		openclawBin = entry.Path
-	}
 	// Resolve any local_directory assignment again here so runTask can plumb
 	// LocalWorkDir into execenv. handleTask already validated + locked the
 	// path for worker tasks; leader tasks intentionally skip the assignment.
@@ -7972,7 +7927,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// local_directory still fails closed.
 	var agentMcpConfig json.RawMessage
 	var effectiveMcpConfig json.RawMessage
-	var cursorMcpAuthSource string
 	remoteMCPConfig, remoteMCPDiagnostics, remoteMCPBrokers, remoteMCPErr := startTaskRemoteMCPBrokers(
 		prepareCtx, ctx, task.ID, provider, task.RemoteMCPConnections,
 		func(resolveCtx context.Context, contributionID string) (http.Header, error) {
@@ -8034,23 +7988,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			}
 			effectiveMcpConfig = merged
 		}
-		if provider == "cursor" {
-			cursorMcpAuthSource = strings.TrimSpace(task.Agent.CustomEnv[execenv.CursorMcpAuthSourceEnv])
-		}
 	}
-	// Decode openclaw-specific runtime_config knobs once so reuse / prepare /
-	// ExecOptions all see the same mode + gateway pin (issue #3260). Parse
-	// failures fail soft to local mode — a broken JSON blob must never block
-	// task dispatch.
-	var openclawMode string
-	var openclawGateway execenv.OpenclawGatewayPin
-	if task.Agent != nil && provider == "openclaw" {
-		openclawMode, openclawGateway = decodeOpenclawRuntimeConfig(task.Agent.RuntimeConfig, d.logger)
-	}
-	var agentEnvOverrides map[string]string
 	var agentCustomArgs []string
 	if task.Agent != nil {
-		agentEnvOverrides = task.Agent.CustomEnv
 		agentCustomArgs = task.Agent.CustomArgs
 	}
 	// Effective Codex CLI args the task will launch with, normalized through the
@@ -8069,87 +8009,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		// must still be visible to the sandbox decision.
 		extraArgs := append(append([]string{}, profileFixedArgs...), defaultArgsForProvider(d.cfg, provider)...)
 		codexSandboxArgs = agent.NormalizeCodexLaunchArgs(extraArgs, agentCustomArgs, effectiveMcpConfig, d.logger)
-	}
-	// Hermes: resolve the overlay source home through one resolver contract —
-	// the selection parsed from custom_args (agent.ParseHermesProfileArgs) plus
-	// the agent's custom_env HERMES_HOME feed execenv.ResolveHermesProfile, which
-	// reproduces Hermes' own profile semantics (root derivation, explicit vs.
-	// sticky selection, reserved/invalid failure). A reserved/invalid selection
-	// fails the task closed, matching Hermes' sys.exit(1). The selected source
-	// home is exported to hermesEnv["HERMES_HOME"] so ${HERMES_HOME} in a
-	// profile's skills.external_dirs expands against the selected profile home,
-	// as native Hermes does before loading config.yaml. The parsed occurrence is
-	// stripped from the acp argv at launch (only when the overlay is built) so
-	// the flag can't re-point HERMES_HOME past the overlay.
-	var hermesSourceHome string
-	var hermesSourceMustExist bool
-	var hermesEnv map[string]string
-	var hermesMemoryStore string
-	var hermesSessionStore string
-	if provider == "hermes" {
-		// Resolve from the argv hermes will actually parse — launch prefix,
-		// the filtered custom args, then `acp` — which agent.HermesLaunchArgv
-		// assembles the same way the backend does. A custom runtime profile's
-		// fixed_args are the launch prefix now, so they are scanned before
-		// custom_args, and the backend's own `acp` token closes the argv and
-		// participates in the scan. Approximating that argv reads a different
-		// profile than the process does, and the overlay ends up seeded from
-		// the wrong home (GH #7046).
-		sel := agent.ParseHermesProfileArgs(agent.HermesLaunchArgv(profileFixedArgs, agentCustomArgs, d.logger))
-		res := execenv.ResolveHermesProfile(agentEnvOverrides["HERMES_HOME"], sel.Name, sel.Found, sel.Inline)
-		if res.Err != nil {
-			return TaskResult{}, fmt.Errorf("resolve hermes profile: %w", res.Err)
-		}
-		hermesSourceHome = res.SourceHome
-		hermesSourceMustExist = res.MustExist
-		// Which home the overlay is seeded from decides whether the task sees
-		// the user's provider config at all, and it is derived from the daemon
-		// PROCESS environment — invisible from the shell the user tests
-		// `hermes acp` in, which is why a mismatch reads as "works by hand,
-		// fails under Multica" (GH #6872). One line, at Info, so the answer is
-		// in the daemon log before anything fails rather than reconstructed
-		// afterwards.
-		taskLog.Info("hermes home resolved",
-			"source_home", hermesSourceHome,
-			"from_custom_env", strings.TrimSpace(agentEnvOverrides["HERMES_HOME"]) != "",
-			"must_exist", hermesSourceMustExist,
-		)
-		hermesEnv = sanitizeAgentEnv(agentEnvOverrides)
-		if hermesEnv == nil {
-			hermesEnv = map[string]string{}
-		}
-		hermesEnv["HERMES_HOME"] = res.SourceHome
-		// The overlay links memories/ here so the agent's long-term memory
-		// survives the task instead of being reset by every run (#6638). Keyed on
-		// the resolved source home so switching an agent's profile switches its
-		// memory line, matching Hermes' own "a profile is an isolated instance"
-		// model. Guarded from the GC for the whole task, as the Codex store below.
-		if store := execenv.HermesMemoryStorePath(d.cfg.Profile, task.AgentID, res.SourceHome); store != "" {
-			hermesMemoryStore = store
-			d.markActiveStore(store)
-			defer d.unmarkActiveStore(store)
-		}
-		// The overlay links state.db here so the conversation transcript
-		// survives the task and a follow-up turn can actually resume it
-		// (GH #6806). Keyed on (agent, resolved source home, conversation):
-		// tasks of one conversation are serial, so the shard has a single
-		// writer, while two issues never share a database. Guarded from the GC
-		// for the whole task, as the stores above and below.
-		if store := execenv.HermesSessionStorePath(d.cfg.Profile, task.AgentID, res.SourceHome, taskCtx); store != "" {
-			hermesSessionStore = store
-			d.markActiveStore(store)
-			defer d.unmarkActiveStore(store)
-		}
-	}
-	// Reasonix locates its user config from the environment (REASONIX_HOME, and
-	// the platform config dirs behind it), which an agent's custom_env may
-	// re-point or clear. The per-task reasonix.toml has to restate the
-	// permissions from whichever config the child ends up loading, so the deny
-	// rules the runtime owner set there survive the task-scoped config that
-	// overrides them — hence the same sanitized env the child is launched with.
-	var reasonixEnv map[string]string
-	if provider == "reasonix" {
-		reasonixEnv = sanitizeAgentEnv(agentEnvOverrides)
 	}
 	envReused := false
 	priorClaim, priorWorkDir, lockedPriorInfo, reusable, reuseErr := d.lockReusablePriorEnvRoot(ctx, task, localAssignment, envClaim.RootDir())
@@ -8175,22 +8034,13 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			// The canonical path the lock was taken on. Handing Reuse the raw
 			// PriorWorkDir instead would re-resolve it, so the directory we
 			// locked and the directory we use could differ.
-			WorkDir:               priorWorkDir,
-			Provider:              provider,
-			CodexVersion:          codexVersion,
-			ResumeSessionID:       task.PriorSessionID,
-			OpenclawBin:           openclawBin,
-			McpConfig:             effectiveMcpConfig,
-			CursorMcpAuthSource:   cursorMcpAuthSource,
-			OpenclawGateway:       openclawGateway,
-			HermesSourceHome:      hermesSourceHome,
-			HermesSourceMustExist: hermesSourceMustExist,
-			HermesEnv:             hermesEnv,
-			HermesMemoryStore:     hermesMemoryStore,
-			HermesSessionStore:    hermesSessionStore,
-			ReasonixEnv:           reasonixEnv,
-			CodexCustomArgs:       codexSandboxArgs,
-			Task:                  taskCtx,
+			WorkDir:         priorWorkDir,
+			Provider:        provider,
+			CodexVersion:    codexVersion,
+			ResumeSessionID: task.PriorSessionID,
+			McpConfig:       effectiveMcpConfig,
+			CodexCustomArgs: codexSandboxArgs,
+			Task:            taskCtx,
 		})
 		if err != nil {
 			return TaskResult{}, asEnvironmentSetupFailure(fmt.Errorf("reuse execution environment: %w", err))
@@ -8226,21 +8076,12 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			AgentName:       agentName,
 			// This run already holds the claim (envClaim above) and the reset
 			// it implies; preparation must not try to take it again.
-			EnvRootPreclaimed:     true,
-			Provider:              provider,
-			CodexVersion:          codexVersion,
-			OpenclawBin:           openclawBin,
-			McpConfig:             effectiveMcpConfig,
-			CursorMcpAuthSource:   cursorMcpAuthSource,
-			OpenclawGateway:       openclawGateway,
-			HermesSourceHome:      hermesSourceHome,
-			HermesSourceMustExist: hermesSourceMustExist,
-			HermesEnv:             hermesEnv,
-			HermesMemoryStore:     hermesMemoryStore,
-			HermesSessionStore:    hermesSessionStore,
-			ReasonixEnv:           reasonixEnv,
-			CodexCustomArgs:       codexSandboxArgs,
-			Task:                  taskCtx,
+			EnvRootPreclaimed: true,
+			Provider:          provider,
+			CodexVersion:      codexVersion,
+			McpConfig:         effectiveMcpConfig,
+			CodexCustomArgs:   codexSandboxArgs,
+			Task:              taskCtx,
 		}
 		if localAssignment.UsesWorktree() {
 			prepParams.LocalWorktree = &execenv.LocalWorktreeParams{
@@ -8615,32 +8456,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// user's existing state (MUL-5578). The Multica CLI is the exception:
 	// MULTICA_TASK_CONFIG_ROOT above redirects its implicit profile lookup to
 	// private task-local state and prevents Owner-profile fallback.
-	// (Hermes HERMES_HOME is applied after custom_env below so the per-task
-	// overlay can win over a user-set HERMES_HOME; see
-	// layerCustomEnvAndHermesHome.)
-	// Point Cursor at per-task project state when managed MCP is present.
-	// The workdir .cursor/mcp.json carries the managed server list, while
-	// CURSOR_DATA_DIR isolates the matching project approvals from the user's
-	// persistent ~/.cursor/projects state.
-	if env.CursorDataDir != "" {
-		agentEnv["CURSOR_DATA_DIR"] = env.CursorDataDir
-	}
-	// Point OpenClaw at the per-task synthesized config. The config pins
-	// agents.defaults.workspace (and any agents.list[].workspace) to the
-	// task workdir, so the CLI's native skill scanner picks up the per-task
-	// skills written under {workDir}/skills/. Falls back silently when the
-	// preparer didn't run (non-openclaw provider, or write failure).
-	if env.OpenclawConfigPath != "" {
-		agentEnv["OPENCLAW_CONFIG_PATH"] = env.OpenclawConfigPath
-	}
-	// Grant the wrapper config permission to $include the user's active
-	// config across directories. OpenClaw's $include defaults to confining
-	// resolution to the wrapper's own directory; without this, the
-	// wrapper-out-of-envRoot $include into ~/.openclaw/openclaw.json is
-	// rejected and the run boots with no user-registered agents.
-	if rootsValue, ok := composeOpenclawIncludeRoots(env.OpenclawIncludeRoot, os.Getenv("OPENCLAW_INCLUDE_ROOTS")); ok {
-		agentEnv["OPENCLAW_INCLUDE_ROOTS"] = rootsValue
-	}
 	// Inject user-configured custom environment variables (e.g. ANTHROPIC_API_KEY,
 	// ANTHROPIC_BASE_URL for router/proxy mode, or CLAUDE_CODE_USE_BEDROCK for
 	// Bedrock). These are set per-agent via the agent settings UI.
@@ -8650,14 +8465,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if task.Agent != nil {
 		agentCustomEnv = task.Agent.CustomEnv
 	}
-	layerCustomEnvAndHermesHome(agentEnv, agentCustomEnv, env.HermesHome, d.logger)
-	if provider == "reasonix" {
-		reasonixStateHome, err := prepareReasonixTaskStateHome(d.cfg.Profile, task.RuntimeID, task.AgentID)
-		if err != nil {
-			return TaskResult{}, fmt.Errorf("prepare reasonix state home: %w", err)
-		}
-		agentEnv["REASONIX_STATE_HOME"] = reasonixStateHome
-	}
+	layerCustomEnvAndHermesHome(agentEnv, agentCustomEnv, "", d.logger)
 	if provider == "dsh" {
 		dshSessionRoot, err := prepareDshTaskSessionRoot(d.cfg.Profile, task.RuntimeID, task.AgentID)
 		if err != nil {
@@ -8668,21 +8476,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}
 	if err := configureCodexTaskShellEnvironment(provider, env.CodexHome, os.Environ(), agentEnv, agentCustomEnv, d.logger); err != nil {
 		return TaskResult{}, err
-	}
-	// The overlay is authoritative once built, so nothing on the command line
-	// may re-point HERMES_HOME out of it. Both argv regions are stripped
-	// together, against the same assembled argv the resolver read: a selection
-	// can straddle them (a prefix ending in a bare `-p` captures the first
-	// custom arg), which per-region stripping cannot see.
-	var hermesOverlayCustomArgs []string
-	hermesOverlayActive := provider == "hermes" && env != nil && env.HermesHome != ""
-	if hermesOverlayActive {
-		var rawCustomArgs []string
-		if task.Agent != nil {
-			rawCustomArgs = task.Agent.CustomArgs
-		}
-		profileFixedArgs, hermesOverlayCustomArgs = agent.StripHermesProfileSelectors(
-			profileFixedArgs, rawCustomArgs, d.logger)
 	}
 	// Resolve the backend through the unified runtime resolver: built-in
 	// runtime identities (e.g. "omp") dispatch through NewRuntime, protocol
@@ -8751,11 +8544,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		customArgs = task.Agent.CustomArgs
 		mcpConfig = effectiveMcpConfig
 	}
-	if hermesOverlayActive {
-		// Stripped above, alongside the launch prefix. A skill-less hermes task
-		// has no overlay to protect and keeps its flags untouched.
-		customArgs = hermesOverlayCustomArgs
-	}
 	thinkingLevel := ""
 	serviceTier := ""
 	if task.Agent != nil {
@@ -8770,7 +8558,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	model, thinkingLevel, serviceTier = selection.Model, selection.ThinkingLevel, selection.ServiceTier
 
 	var idleWatchdogTimeout time.Duration
-	if provider == "opencode" || provider == "codearts" {
+	if provider == "opencode" {
 		idleWatchdogTimeout = d.cfg.OpenCodeIdleWatchdog
 	}
 	execOpts := agent.ExecOptions{
@@ -8805,9 +8593,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		McpConfig:              mcpConfig,
 		ThinkingLevel:          thinkingLevel,
 		ServiceTier:            serviceTier,
-		OpenclawMode:           openclawMode,
-		ClaudeSettingsPath:     env.ClaudeSettingsPath,
-		QwenpawWorkspace:       env.QwenpawWorkspace,
 	}
 	// Some providers do not reliably load the per-task runtime config files we
 	// write into the task workdir:
@@ -9182,7 +8967,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		// annotations on the outside where a future edit is visibly a change
 		// to human-facing text rather than to classifier input. They are
 		// mutually exclusive by provider, so they cannot stack.
-		errMsg = annotateHermesProviderUnconfigured(errMsg, provider, env.HermesHome != "")
 		errMsg = annotateCodexRetiredCompaction(errMsg, provider)
 		return TaskResult{
 			Status:        "blocked",
@@ -10291,7 +10075,7 @@ func (d *Daemon) unmarkActiveStore(store string) {
 // and, if so, marks it reserved so no task can claim it until the caller runs
 // the returned commit (after the actual removal). ok=false means a task holds it
 // — do not delete. This is the exclusive protocol the store pruners
-// (PruneCodexSessionStores, PruneHermesMemoryStores) need:
+// (PruneCodexSessionStores, PruneYieldedSessions) need:
 // the "confirm inactive" and the mark happen under one lock acquisition, so a
 // markActiveStore either loses the check (store stays) or blocks on the
 // reservation, closing the stat->remove race (MUL-4424).
@@ -10488,7 +10272,7 @@ func isBlockedEnvKey(key string) bool {
 		return true
 	}
 	switch upper {
-	case "HOME", "PATH", "USER", "SHELL", "TERM", "TMPDIR", "TMP", "TEMP", "CODEX_HOME", "REASONIX_STATE_HOME", "CURSOR_DATA_DIR", execenv.CursorMcpAuthSourceEnv, "OPENCLAW_CONFIG_PATH", "OPENCLAW_INCLUDE_ROOTS":
+	case "HOME", "PATH", "USER", "SHELL", "TERM", "TMPDIR", "TMP", "TEMP", "CODEX_HOME":
 		return true
 	}
 	return false
@@ -10640,34 +10424,6 @@ func layerCustomEnvAndHermesHome(agentEnv, customEnv map[string]string, overlayH
 	}
 }
 
-// prepareReasonixTaskStateHome isolates persisted transcripts and leases per
-// (runtime, agent) while leaving REASONIX_HOME untouched. Current Reasonix
-// reads credentials/config from REASONIX_HOME and state from
-// REASONIX_STATE_HOME, so `reasonix setup` remains the sole credential owner
-// and Multica never copies API keys into task-managed files.
-func prepareReasonixTaskStateHome(profile, runtimeID, agentID string) (string, error) {
-	profileDir, err := cli.ProfileDir(profile)
-	if err != nil {
-		return "", err
-	}
-	runtimeSegment, err := validateReasonixStateSegment("runtime", runtimeID)
-	if err != nil {
-		return "", err
-	}
-	agentSegment, err := validateReasonixStateSegment("agent", agentID)
-	if err != nil {
-		return "", err
-	}
-	path := filepath.Join(profileDir, "reasonix-state", runtimeSegment, agentSegment)
-	if err := os.MkdirAll(path, 0o700); err != nil {
-		return "", err
-	}
-	if err := os.Chmod(path, 0o700); err != nil {
-		return "", err
-	}
-	return path, nil
-}
-
 // prepareDshTaskSessionRoot keeps DSH transcripts private to one Multica
 // runtime/agent pair. Credentials and the user's DSH profile remain in the
 // ordinary DSH_HOME; only session persistence is redirected.
@@ -10754,12 +10510,6 @@ func defaultArgsForProvider(cfg Config, provider string) []string {
 		args = cfg.ClaudeArgs
 	case "codex":
 		args = cfg.CodexArgs
-	case "codebuddy":
-		args = cfg.CodebuddyArgs
-	case "qwen":
-		args = cfg.QwenArgs
-	case "qwenpaw":
-		args = cfg.QwenpawArgs
 	default:
 		return nil
 	}

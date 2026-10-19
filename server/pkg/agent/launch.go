@@ -443,30 +443,12 @@ func isASCIIAlpha(ch byte) bool {
 // Only families that reject flags at all appear here; a family whose backend
 // has no blocked-arg policy accepts any prefix.
 var launchPrefixBlockedArgs = map[string]map[string]blockedArgMode{
-	"antigravity": antigravityBlockedArgs,
-	"claude":      claudeBlockedArgs,
-	"codebuddy":   codebuddyBlockedArgs,
-	"codearts":    codeartsBlockedArgs,
-	"codex":       codexBlockedArgs,
-	"copilot":     copilotBlockedArgs,
-	"cursor":      cursorBlockedArgs,
-	"deveco":      devecoBlockedArgs,
-	"grok":        grokBlockedArgs,
-	"hermes":      hermesBlockedArgs,
-	"kimi":        kimiBlockedArgs,
-	"kiro":        kiroBlockedArgs,
-	"opencode":    opencodeBlockedArgs,
-	"openclaw":    openclawBlockedArgs,
-	"pi":          piBlockedArgs,
-	"qoder":       qoderBlockedArgs,
-	"qoderclicn":  qoderBlockedArgs,
-	"qwen":        qwenBlockedArgs,
-	"qwenpaw":     qwenpawBlockedArgs,
-	"reasonix":    reasonixBlockedArgs,
-	"traecli":     traecliBlockedArgs,
-	"dim":         dimBlockedArgs,
-	"zeroclaw":    zeroclawBlockedArgs,
-	"yielded":     yieldedBlockedArgs,
+	"claude":   claudeBlockedArgs,
+	"codex":    codexBlockedArgs,
+	"grok":     grokBlockedArgs,
+	"opencode": opencodeBlockedArgs,
+	"pi":       piBlockedArgs,
+	"yielded":  yieldedBlockedArgs,
 }
 
 // FilterLaunchPrefix is the exported form for callers outside this package —
@@ -491,14 +473,12 @@ func FilterLaunchPrefix(agentType string, prefix []string, logger *slog.Logger) 
 // putting it in custom_args, which is already refused.
 //
 // This deliberately does NOT delegate to filterCustomArgs, even though the two
-// share blocklists. Those maps also carry positional tokens — Hermes and
-// QwenPaw block `acp`, TRAE blocks `acp` and `serve`, Grok blocks `agent`,
-// `stdio` and `serve` — because in custom_args a bare `acp` really is someone
-// re-issuing the backend's own subcommand. In a launch prefix the same token
-// is part of the command's identity: `hermes-wrapper acp tenant` names a
-// program, and dropping `acp` from it would silently rewrite the command into
-// one the operator never configured. Only a leading `-` makes a token eligible
-// for the blocklist here.
+// share blocklists. Those maps also carry positional tokens — Grok blocks
+// `agent`, `stdio`, and `serve` — because in custom_args a bare subcommand
+// really is someone re-issuing the backend's own invocation. In a launch
+// prefix the same token is part of the command's identity, and dropping it
+// would silently rewrite the command into one the operator never configured.
+// Only a leading `-` makes a token eligible for the blocklist here.
 //
 // A blocked flag still consumes its separate value token, positional or not,
 // so `--permission-mode ask` cannot leave a stray `ask` behind to be read as a
