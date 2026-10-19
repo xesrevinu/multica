@@ -66,6 +66,39 @@ type expectation struct {
 	Status   string            `yaml:"status"`
 	Assignee string            `yaml:"assignee"`
 	Meta     map[string]string `yaml:"meta"`
+	Handoff  *handoffExpect    `yaml:"handoff"` // structured send-back context of the decision
+}
+
+type handoffExpect struct {
+	Kind          string `yaml:"kind"` // "none" = no handoff
+	FailureReason string `yaml:"failure_reason"`
+	Attempt       *int   `yaml:"attempt"`
+	Role          string `yaml:"role"`
+	To            string `yaml:"to"`
+	PrevHead      string `yaml:"prev_head"`
+}
+
+func checkHandoff(t *testing.T, where string, e *handoffExpect, h *Handoff) {
+	t.Helper()
+	if e == nil {
+		return
+	}
+	if e.Kind == "none" {
+		if h != nil {
+			t.Fatalf("%s: want no handoff, got %+v", where, h)
+		}
+		return
+	}
+	if h == nil {
+		t.Fatalf("%s: want handoff %s, got none", where, e.Kind)
+	}
+	if h.Kind != e.Kind || (e.FailureReason != "" && h.FailureReason != e.FailureReason) || (e.Role != "" && h.Role != e.Role) ||
+		(e.To != "" && h.To != e.To) || (e.PrevHead != "" && h.PrevHead != e.PrevHead) || (e.Attempt != nil && h.Attempt != *e.Attempt) {
+		t.Fatalf("%s: want handoff %+v, got %+v", where, *e, *h)
+	}
+	if h.Render() == "" {
+		t.Fatalf("%s: empty handoff brief", where)
+	}
 }
 
 type step struct {
@@ -287,6 +320,7 @@ func (w *world) step(t *testing.T, n int, st step) {
 			t.Fatalf("%s: want meta %s=%q, got %q (%+v)", where(), k, v, got, d)
 		}
 	}
+	checkHandoff(t, where(), e.Handoff, w.sp.BuildHandoff(&w.snap, d))
 	w.tids = append(w.tids, normTid(d.Tid))
 	w.apply(d)
 }

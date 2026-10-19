@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
@@ -166,6 +167,7 @@ type timelineTransition struct {
 	Assignee  string    `json:"assignee,omitempty"`
 	Error     string    `json:"error,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+	Handoff   *Handoff  `json:"handoff,omitempty"`
 }
 
 // hIssueTimeline: GET /issues/{key}/timeline — the orchestrator side of the
@@ -192,11 +194,18 @@ func (s *Service) hIssueTimeline(w http.ResponseWriter, r *http.Request) {
 	}
 	trs := []timelineTransition{}
 	rows, err = s.opt.Pool.Query(r.Context(), `SELECT id, tid, state, COALESCE(decision->>'why',''), COALESCE(decision->>'status',''), COALESCE(decision->'meta'->>'phase',''),
-		COALESCE(decision->>'assignee',''), error, created_at FROM orchestrator_transition WHERE issue_id=$1 ORDER BY id LIMIT 500`, v.ID)
+		COALESCE(decision->>'assignee',''), error, created_at, decision->'handoff' FROM orchestrator_transition WHERE issue_id=$1 ORDER BY id LIMIT 500`, v.ID)
 	if err == nil {
 		for rows.Next() {
 			var x timelineTransition
-			if rows.Scan(&x.ID, &x.Tid, &x.State, &x.Why, &x.Status, &x.Phase, &x.Assignee, &x.Error, &x.CreatedAt) == nil {
+			var ho []byte
+			if rows.Scan(&x.ID, &x.Tid, &x.State, &x.Why, &x.Status, &x.Phase, &x.Assignee, &x.Error, &x.CreatedAt, &ho) == nil {
+				if len(ho) > 0 && string(ho) != "null" {
+					x.Handoff = &Handoff{}
+					if json.Unmarshal(ho, x.Handoff) != nil {
+						x.Handoff = nil
+					}
+				}
 				trs = append(trs, x)
 			}
 		}

@@ -80,6 +80,8 @@ type Decision struct {
 	Notify       string            `json:"notify,omitempty"` // human inbox text
 	Why          string            `json:"why,omitempty"`
 	Wait         string            `json:"wait,omitempty"` // no transition; why we are waiting
+	// Handoff is the structured send-back context for the next run (BuildHandoff).
+	Handoff *Handoff `json:"handoff,omitempty"`
 }
 
 // StartsRun reports whether applying d dispatches an agent run.

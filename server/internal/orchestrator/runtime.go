@@ -397,6 +397,7 @@ func (s *Service) process(ctx context.Context, t *Team, rows []issueRow, row *is
 		bd := t.Spec.block(sn, why, nil)
 		bd.Notify = "DEAD-LETTER " + bd.Notify
 		bd.Tid = "T6_block"
+		bd.Handoff = t.Spec.BuildHandoff(sn, bd)
 		if e2 := s.apply(ctx, t, row, bd, "dead-letter"); e2 == nil {
 			s.st.clearFailure(ctx, row.ID)
 		} else {
@@ -419,7 +420,11 @@ func (s *Service) decide(ctx context.Context, t *Team, rows []issueRow, row *iss
 	if t.Spec.Shadow {
 		probe = shadowProbe
 	}
-	return t.Spec.Decide(sn, probe), nil
+	d = t.Spec.Decide(sn, probe)
+	if d != nil && d.Tid != "" {
+		d.Handoff = t.Spec.BuildHandoff(sn, d)
+	}
+	return d, nil
 }
 
 // faultHook lets tests / F-scenarios inject a failure mid-transition
@@ -456,6 +461,9 @@ func injected(tid string) error {
 // cancel/rerun calls, and the notification. A crash between the two halves
 // leaves phase ahead of status, which T9 converges on the next pass.
 func (s *Service) apply(ctx context.Context, t *Team, row *issueRow, d *Decision, source string) (err error) {
+	if d.Handoff != nil && !t.Spec.Shadow {
+		s.enrichHandoff(ctx, t, row, d.Handoff)
+	}
 	logID, fresh, err := s.st.begin(ctx, t, row, d, source)
 	if err != nil {
 		return err
@@ -515,7 +523,11 @@ func (s *Service) apply(ctx context.Context, t *Team, row *issueRow, d *Decision
 // action orchestrator_transition) so people see why the issue moved where it
 // happened, not only in `multica flow log`.
 func (s *Service) activity(ctx context.Context, row *issueRow, d *Decision, source string) {
-	det, _ := json.Marshal(map[string]string{"tid": d.Tid, "why": short(d.Why, 300), "status": d.Status, "assignee": d.Assignee, "source": source})
+	dm := map[string]any{"tid": d.Tid, "why": short(d.Why, 300), "status": d.Status, "assignee": d.Assignee, "source": source}
+	if d.Handoff != nil {
+		dm["handoff"] = d.Handoff // the issue chat renders it as a card
+	}
+	det, _ := json.Marshal(dm)
 	var actor any
 	if s.svcUserID != "" {
 		actor = s.svcUserID

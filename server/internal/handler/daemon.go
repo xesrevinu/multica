@@ -2826,6 +2826,17 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 		// Project workflow (MUL-7420): best-effort, like the status catalog
 		// below — a failure degrades to the workspace-wide status rules.
 		resp.ProjectWorkflow = h.claimProjectWorkflow(r.Context(), issue, task)
+		// Orchestrator send-back context (review findings, failing checks,
+		// failure classification, attempts) for this run, when the engine
+		// handed the issue to this agent because something went wrong.
+		if h.Orchestrator != nil && issue.ProjectID.Valid && h.Orchestrator.Owns(uuidToString(issue.ProjectID)) && resp.Agent != nil {
+			if brief := h.Orchestrator.HandoffBrief(r.Context(), uuidToString(issue.ID), resp.Agent.Name); brief != "" {
+				if resp.ProjectWorkflow == nil {
+					resp.ProjectWorkflow = &TaskProjectWorkflowData{}
+				}
+				resp.ProjectWorkflow.Brief = strings.TrimSpace(resp.ProjectWorkflow.Brief + "\n\n" + brief)
+			}
+		}
 
 		// Load every planned input as one chronological, de-duplicated set.
 		// The trigger is included here so the delivery receipt can only contain

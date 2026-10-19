@@ -1,0 +1,30 @@
+name: every send-back carries a structured handoff (kind, failure_reason, attempt, previous head) for the next run
+spec:
+  roles: {lead: lead, reviewer: rev, owners: [a]}
+  repo: {mode: github, slug: x/y}
+  limits: {impl: 5, infra: 3}
+issue: {key: ATT-90}
+steps:
+  - expect: {tid: T1_start, handoff: {kind: none}}
+  - note: first owner run fails (agent error) -> rerun with run_failure context
+    do: {run: failed, reason: agent_error.unknown, error: "panic: worktree setup exploded"}
+    expect: {tid: T5_rerun, handoff: {kind: run_failure, failure_reason: agent_error.unknown, attempt: 1, role: owner, to: a}}
+  - note: provider limit -> no attempt counted, context says so
+    do: {run: failed, reason: agent_error.provider_quota_limit}
+    expect: {wait: "provider limit"}
+  - do: {advance: 61s}
+    expect: {tid: T5q_provider_limit, handoff: {kind: provider_limit, failure_reason: agent_error.provider_quota_limit, attempt: 1}}
+  - note: delivery; CI red on the pre-check -> rework with ci_failure + previous head
+    do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}, precheck: {ok: false, kind: checks_red, detail: "test=FAILURE"}}
+    expect: {tid: T3_rework, handoff: {kind: ci_failure, attempt: 2, role: owner, to: a, prev_head: h1}}
+  - do: {run: completed, head: h2, meta: {phase: review_requested, head_sha: h2}, precheck: {ok: true, kind: dry}}
+    expect: {tid: T2_review, handoff: {kind: none}}
+  - note: reviewer requests changes -> review_changes, no stale run error
+    do: {run: completed, meta: {verdict: changes, reviewed_sha: h2}}
+    expect: {tid: T3_rework, handoff: {kind: review_changes, attempt: 3, prev_head: h2}}
+  - note: owner run cannot get its branch -> worktree collision blocks to the lead
+    do: {run: failed, error: "[branch_occupied] orchestrator branch agent/att-90 is held by the worktree at /tmp/wt/agent-att-90; free it"}
+    expect: {tid: T6_block, handoff: {kind: worktree_collision, role: lead, to: lead}}
+  - note: lead unblocks -> owner gets the reason it was blocked and prior attempts
+    do: {meta: {phase: unblocked}}
+    expect: {tid: T7_unblock, handoff: {kind: unblock, role: owner, to: a}}
