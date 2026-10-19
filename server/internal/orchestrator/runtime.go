@@ -392,28 +392,27 @@ var faultMu sync.Mutex
 var faultLeft = map[string]int{}
 
 func injected(tid string) error {
-	spec := os.Getenv("MULTICA_ORCHESTRATOR_FAULT")
-	if spec == "" {
-		return nil
-	}
 	faultMu.Lock()
 	defer faultMu.Unlock()
-	parts := strings.SplitN(spec, ":", 2)
-	if parts[0] != tid && parts[0] != "*" {
-		return nil
-	}
-	if _, ok := faultLeft[spec]; !ok {
-		n := 1
-		if len(parts) == 2 {
-			fmt.Sscan(parts[1], &n)
+	for _, spec := range strings.Split(os.Getenv("MULTICA_ORCHESTRATOR_FAULT"), ",") {
+		parts := strings.SplitN(strings.TrimSpace(spec), ":", 2)
+		if parts[0] == "" || (parts[0] != tid && parts[0] != "*") {
+			continue
 		}
-		faultLeft[spec] = n
+		if _, ok := faultLeft[spec]; !ok {
+			n := 1
+			if len(parts) == 2 {
+				fmt.Sscan(parts[1], &n)
+			}
+			faultLeft[spec] = n
+		}
+		if faultLeft[spec] <= 0 {
+			continue
+		}
+		faultLeft[spec]--
+		return fmt.Errorf("injected fault in %s", tid)
 	}
-	if faultLeft[spec] <= 0 {
-		return nil
-	}
-	faultLeft[spec]--
-	return fmt.Errorf("injected fault in %s", tid)
+	return nil
 }
 
 // apply is the actuator: transition log + metadata in one transaction, then
