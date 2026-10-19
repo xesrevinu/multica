@@ -109,3 +109,19 @@ Reference implementation: /Users/kee/Workspace/ai-stack/multica-e2e/teamctl (kep
 - Per-role pstack and preset skills added to the agents. yielded-reviewer now follows the review practices.
 - New .multica/REVIEW.md: failure modes and risk tiers. workflow.md gains review and pstack sections.
 - `git apply --check` is OK for both patches. Both orchestrator specs validate with `preset render -f`. Nothing was applied to pocketjs.
+
+## Step: Web UI redesign (2026-10-19, in progress)
+Plan: docs/orchestrator/ui-redesign.md. Prototype: .orch-dev/proto/index.html. Resume from the first unchecked phase.
+- [x] Design doc committed.
+- [x] Phase 1 backend:
+  - Engine: member `paused` (wait only) and `cancel_requested` (T8b_member_cancel, stops the live run); both engine-owned keys. Scenarios MEMBER-pause-resume and MEMBER-cancel-running.
+  - API: `GET /api/orchestrator/issues` (attention buckets needs_you > running > queued > settled; nullable project/assignee/PR/worktree), `GET /issues/{key}/timeline` (runs, transitions, flow state), `POST /flow/{key}/pause|resume`, `cancel` now works from any open state.
+  - GitHub App: ghsnapshot REST helper + token permissions; `GET /issues/{key}/pr` (live commits, checks, behind_by, `can` from permissions; `mode:local` hides it), `POST /issues/{key}/pr/update-branch|rerun-checks|merge` (merge refused for orchestrated issues: engine_owned).
+  - wt: repo.disk_path optional; default = static root of wt `worktree-path` (repo .config/wt.toml, then user config).
+  - Tests: TestAttentionAndSort, TestWtRootAndDiskPath, TestPRDetailAndOps (httptest fake GitHub), TestIntegrationIssueViewsAndMemberActions. Verified live on e2e (18899) incl. PR #22 via the App.
+  - Priority/risk use existing APIs (PUT /api/issues/{id}, PUT /api/issues/{id}/metadata/risk).
+- [ ] Phase 2 sidebar + DMs
+- [ ] Phase 3 issue chat view
+- [ ] Phase 4 drawer, tabs, secondary nav
+- [ ] Phase 5 mobile PWA
+Helpers (git-excluded): `.orch-dev/api.mjs` (authenticated API calls; needs DEV_CODE from api.env's MULTICA_DEV_VERIFICATION_CODE, never print), `.orch-dev/shots.mjs`.

@@ -34,12 +34,14 @@
 | POST | `/issues/{key}/pr/update-branch` | 把 main 合进分支（GitHub `PUT /pulls/{n}/update-branch`） |
 | POST | `/issues/{key}/pr/rerun-checks` | 重跑失败的 workflow run（`POST /actions/runs/{id}/rerun-failed-jobs`） |
 | POST | `/issues/{key}/pr/merge` | squash merge；orchestrated issue 拒绝（合并由引擎在 Accept 后做），返回 409 `engine_owned` |
-| POST | `/issues/{key}/props` | `{priority?, risk?}`：priority 写 issue 列，risk 写 metadata（low/medium/high） |
 | POST | `/flow/{key}/accept` `/reject` `/unblock` | 现有 |
 | POST | `/flow/{key}/cancel` | blocked → `phase=cancel_proposed`（T8）；其他未结束状态 → `cancel_requested=true`（新 T8b：取消当前 run，status=cancelled） |
 | POST | `/flow/{key}/pause` `/resume` | 单 issue 暂停：`metadata.paused=true`，引擎对它只等待（当前 run 跑完，不再转移）。team 级暂停照旧 |
 
 `paused`、`cancel_requested` 加入引擎专属 metadata 键（agent 不能写）。
+
+Priority / Risk 不加新接口：priority 走现有 `PUT /api/issues/{id}`，risk 走现有 `PUT /api/issues/{id}/metadata/risk`
+（写入守卫已校验 low/medium/high），这样实时事件和权限都沿用现有路径。
 
 ### `/issues` 行
 `id, key, title, status, priority, project{id,title}?, parent_id?, assignee{type,id,name}?, labels[], phase?, risk?,
