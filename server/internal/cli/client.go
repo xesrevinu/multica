@@ -61,6 +61,8 @@ type APIClient struct {
 	AgentID    string
 	TaskID     string
 	HTTPClient *http.Client
+	// ExtraHeaders are sent on every request (e.g. X-Orchestrator-Override).
+	ExtraHeaders map[string]string
 
 	// Identity overrides. Empty values fall back to the package-level
 	// ClientPlatform / ClientVersion / ClientOS.
@@ -91,6 +93,15 @@ type HTTPError struct {
 }
 
 func (e *HTTPError) Error() string {
+	// Orchestrated projects refuse status/assignee writes with a machine-
+	// readable code; say so plainly instead of dumping JSON.
+	var coded struct {
+		Error string `json:"error"`
+		Code  string `json:"code"`
+	}
+	if json.Unmarshal([]byte(e.Body), &coded) == nil && coded.Code == "orchestrator_owned" {
+		return fmt.Sprintf("refused by the orchestrator (code orchestrator_owned): %s", coded.Error)
+	}
 	return fmt.Sprintf("%s %s returned %d: %s", e.Method, e.Path, e.StatusCode, strings.TrimSpace(e.Body))
 }
 
@@ -218,6 +229,9 @@ const clientCapabilities = "stable_attachment_urls"
 
 func (c *APIClient) setHeaders(req *http.Request) {
 	req.Header.Set("X-Client-Capabilities", clientCapabilities)
+	for k, v := range c.ExtraHeaders {
+		req.Header.Set(k, v)
+	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}

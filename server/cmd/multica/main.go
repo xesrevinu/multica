@@ -83,6 +83,8 @@ func init() {
 	rootCmd.AddCommand(repoCmd)
 	rootCmd.AddCommand(skillCmd)
 	rootCmd.AddCommand(squadCmd)
+	rootCmd.AddCommand(teamCmd)
+	rootCmd.AddCommand(flowCmd)
 	rootCmd.AddCommand(chatCmd)
 	rootCmd.AddCommand(daemonCmd)
 	rootCmd.AddCommand(runtimeCmd)

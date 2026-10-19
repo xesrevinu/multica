@@ -642,6 +642,7 @@ func init() {
 
 	// issue update
 	issueUpdateCmd.Flags().String("title", "", "New title")
+	issueUpdateCmd.Flags().Bool("force", false, "Override the orchestrator on an orchestrated project (members only; the reconciler may still converge the issue)")
 	issueUpdateCmd.Flags().String("description", "", "New description (decodes \\n, \\r, \\t, \\\\; pipe via --description-stdin to preserve literal backslashes)")
 	issueUpdateCmd.Flags().Bool("description-stdin", false, "Read new description from stdin (preserves multi-line content verbatim)")
 	issueUpdateCmd.Flags().String("description-file", "", "Read new description from a UTF-8 file (preserves multi-line content verbatim; use this on Windows when stdin piping mangles non-ASCII bytes). The path must be inside the current working directory unless --allow-external-file is set.")
@@ -1683,6 +1684,9 @@ func runIssueUpdate(cmd *cobra.Command, args []string) error {
 	client, err := newAPIClient(cmd)
 	if err != nil {
 		return err
+	}
+	if force, _ := cmd.Flags().GetBool("force"); force {
+		client.ExtraHeaders = map[string]string{"X-Orchestrator-Override": "1"}
 	}
 
 	timeout := cli.APITimeout()
