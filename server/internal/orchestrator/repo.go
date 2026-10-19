@@ -3,7 +3,6 @@ package orchestrator
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"github.com/multica-ai/multica/server/internal/util"
 	"log/slog"
@@ -18,8 +17,9 @@ import (
 )
 
 // repoOps is the git / GitHub side of the engine. Local mode squash-merges
-// into a bare remote; GitHub mode gates on the PR (App snapshot when fresh,
-// `gh` otherwise) and merges with `gh pr merge --squash --match-head-commit`.
+// into a bare remote; GitHub mode gates on the PR (webhook-fed App snapshot
+// when fresh, a live REST read otherwise) and squash-merges through the
+// GitHub App REST API guarded by the head sha. No `gh` CLI on the server.
 type repoOps struct {
 	svc     *Service
 	retried sync.Map // head sha → CI already re-run once
@@ -77,14 +77,6 @@ func freeGB(path string) int {
 	return int(st.Bavail * uint64(st.Bsize) / (1 << 30))
 }
 
-func (r *repoOps) gh(ctx context.Context, sp *Spec, args ...string) (string, error) {
-	o := run(ctx, "", "gh", append(args, "--repo", sp.Repo.Slug)...)
-	if o.code != 0 {
-		return "", fmt.Errorf("gh %s: %s", args[0]+" "+args[1], short(o.err, 300))
-	}
-	return o.out, nil
-}
-
 // head returns the current sha of the issue branch, "" when not pushed.
 func (r *repoOps) head(ctx context.Context, sp *Spec, key string) (string, error) {
 	br := branchOf(sp, key)
@@ -92,14 +84,15 @@ func (r *repoOps) head(ctx context.Context, sp *Spec, key string) (string, error
 		o := run(ctx, sp.Repo.Bare, "git", "rev-parse", "--verify", "-q", "refs/heads/"+br)
 		return strings.TrimSpace(o.out), nil
 	}
-	o := run(ctx, "", "gh", "api", fmt.Sprintf("repos/%s/branches/%s", sp.Repo.Slug, br), "--jq", ".commit.sha")
-	if o.code != 0 {
-		if strings.Contains(o.err+o.out, "404") || strings.Contains(o.err+o.out, "Branch not found") {
-			return "", nil
-		}
-		return "", fmt.Errorf("gh branch lookup: %s", short(o.err, 200))
+	g, err := r.ghRepo(ctx, sp)
+	if err != nil {
+		return "", err
 	}
-	return strings.TrimSpace(o.out), nil
+	sha, err := g.branchHead(ctx, br)
+	if err != nil {
+		return "", fmt.Errorf("github branch lookup: %w", err)
+	}
+	return sha, nil
 }
 
 // integrate squash-merges the branch onto main in a scratch clone, runs the
@@ -166,92 +159,87 @@ func tail(s string, n int) string {
 	return s
 }
 
-type prView struct {
-	Number      int    `json:"number"`
-	URL         string `json:"url"`
-	HeadRefOid  string `json:"headRefOid"`
-	Mergeable   string `json:"mergeable"`
-	State       string `json:"state"`
-	MergeCommit *struct {
-		Oid string `json:"oid"`
-	} `json:"mergeCommit"`
-	StatusCheckRollup []struct {
-		Typename   string `json:"__typename"`
-		Name       string `json:"name"`
-		Context    string `json:"context"`
-		Status     string `json:"status"`
-		Conclusion string `json:"conclusion"`
-		State      string `json:"state"`
-	} `json:"statusCheckRollup"`
-}
-
 // ensurePR finds the open PR of the branch or opens one.
-func (r *repoOps) ensurePR(ctx context.Context, sp *Spec, s *Snapshot) (num, url string, err error) {
+func (r *repoOps) ensurePR(ctx context.Context, g *ghRepo, sp *Spec, s *Snapshot) (num, url string, err error) {
 	if n := s.Issue.Meta["pr_number"]; n != "" {
 		return n, s.Issue.Meta["pr"], nil
 	}
-	out, err := r.gh(ctx, sp, "pr", "list", "--head", branchOf(sp, s.Issue.Key), "--state", "open", "--json", "number,url")
+	br := branchOf(sp, s.Issue.Key)
+	pr, err := g.openPRFor(ctx, br)
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("github pr list: %w", err)
 	}
-	var l []prView
-	_ = json.Unmarshal([]byte(out), &l)
-	if len(l) > 0 {
-		return fmt.Sprint(l[0].Number), l[0].URL, nil
+	if pr == nil {
+		body := fmt.Sprintf("Issue %s.\n\nOpened by the Multica orchestrator because the owner handed over without a PR. The owner's result comment on the issue carries the summary and test evidence.", s.Issue.Key)
+		if pr, err = g.createPR(ctx, br, sp.Repo.Main, s.Issue.Key+": "+s.Issue.Title, body); err != nil {
+			return "", "", fmt.Errorf("github pr create: %w", err)
+		}
 	}
-	body := fmt.Sprintf("Issue %s.\n\nOpened by the Multica orchestrator because the owner handed over without a PR. The owner's result comment on the issue carries the summary and test evidence.", s.Issue.Key)
-	out, err = r.gh(ctx, sp, "pr", "create", "--head", branchOf(sp, s.Issue.Key), "--base", sp.Repo.Main, "--title", s.Issue.Key+": "+s.Issue.Title, "--body", body)
-	if err != nil {
-		return "", "", err
-	}
-	url = strings.TrimSpace(out)
-	return url[strings.LastIndex(url, "/")+1:], url, nil
+	return fmt.Sprint(pr.Number), pr.HTMLURL, nil
 }
 
 // gate evaluates (and with merge=true performs) the GitHub merge.
 func (r *repoOps) gate(ctx context.Context, t *Team, s *Snapshot, merge bool) ProbeResult {
 	sp := t.Spec
-	n, url, err := r.ensurePR(ctx, sp, s)
+	g, err := r.ghRepo(ctx, sp)
 	if err != nil {
+		if res, ok := rateLimited(err, ProbeResult{}); ok {
+			return res
+		}
+		return ProbeResult{Kind: "push_failed", Detail: err.Error()}
+	}
+	n, url, err := r.ensurePR(ctx, g, sp, s)
+	if err != nil {
+		if res, ok := rateLimited(err, ProbeResult{}); ok {
+			return res
+		}
 		return ProbeResult{Kind: "push_failed", Detail: err.Error()}
 	}
 	res := ProbeResult{PR: url, PRNum: n}
-	if snap := r.svc.prSnapshot(ctx, sp, n); snap != nil && !merge {
-		// App snapshot is fresh: no GitHub API call needed for the pre-check.
-		return snap.apply(res, s.Head, sp.Repo.RequiredChecks)
-	}
-	out, err := r.gh(ctx, sp, "pr", "view", n, "--json", "number,url,headRefOid,mergeable,statusCheckRollup,state,mergeCommit")
-	if err != nil {
-		res.Kind, res.Detail = "push_failed", err.Error()
-		return res
-	}
-	var v prView
-	_ = json.Unmarshal([]byte(out), &v)
-	if v.State == "MERGED" {
-		res.OK, res.Kind = true, "already_merged"
-		if v.MergeCommit != nil {
-			res.SHA = v.MergeCommit.Oid
+	if !merge {
+		// Prefer the webhook-fed App snapshot; accept an older one when the
+		// installation's REST budget runs low.
+		age := 2 * time.Minute
+		if g.lowBudget() {
+			age = 15 * time.Minute
 		}
+		if snap := r.svc.prSnapshot(ctx, sp, n, age); snap != nil {
+			return snap.apply(res, s.Head, sp.Repo.RequiredChecks)
+		}
+	}
+	v, err := g.pr(ctx, n)
+	if err != nil {
+		if res, ok := rateLimited(err, res); ok {
+			return res
+		}
+		res.Kind, res.Detail = "push_failed", "github pr view: "+err.Error()
 		return res
 	}
-	if s.Head != "" && v.HeadRefOid != s.Head {
-		res.Kind, res.Detail, res.Pending = "stale", fmt.Sprintf("PR head %s != %s", short(v.HeadRefOid, 12), short(s.Head, 12)), true
+	if v.Merged {
+		res.OK, res.Kind, res.SHA = true, "already_merged", v.MergeCommitSHA
 		return res
+	}
+	if s.Head != "" && v.Head.SHA != s.Head {
+		res.Kind, res.Detail, res.Pending = "stale", fmt.Sprintf("PR head %s != %s", short(v.Head.SHA, 12), short(s.Head, 12)), true
+		return res
+	}
+	var checks map[string]string
+	if len(sp.Repo.RequiredChecks) > 0 {
+		if checks, err = g.checkStates(ctx, v.Head.SHA); err != nil {
+			if res, ok := rateLimited(err, res); ok {
+				return res
+			}
+			res.Kind, res.Detail = "push_failed", "github checks: "+err.Error()
+			return res
+		}
 	}
 	state := func(name string) string {
-		for _, c := range v.StatusCheckRollup {
-			if c.Name == name || c.Context == name {
-				if c.Typename == "StatusContext" {
-					return c.State
-				}
-				if c.Status != "COMPLETED" {
-					return "PENDING"
-				}
-				return c.Conclusion
-			}
+		if st, ok := checks[name]; ok {
+			return st
 		}
 		return "MISSING"
 	}
+	mergeable := v.mergeable()
 	var red, all []string
 	pending := false
 	for _, rc := range sp.Repo.RequiredChecks {
@@ -270,13 +258,13 @@ func (r *repoOps) gate(ctx context.Context, t *Team, s *Snapshot, merge bool) Pr
 		// babysit rule: a red CI head earns exactly one fresh re-run of its
 		// failed workflow runs before it goes back to the owner; an identical
 		// second failure is real.
-		if r.retryCI(ctx, sp, s.Head) {
+		if r.retryCI(ctx, g, s.Head) {
 			res.Kind, res.Pending, res.Detail = "pending", true, "re-running failed CI once: "+strings.Join(red, ",")
 			return res
 		}
 		res.Kind, res.Detail = "checks_red", strings.Join(red, ",")
 		return res
-	case v.Mergeable == "CONFLICTING":
+	case mergeable == "CONFLICTING":
 		res.Kind, res.Detail = "conflict", "GitHub mergeable=CONFLICTING"
 		return res
 	case !merge:
@@ -285,27 +273,27 @@ func (r *repoOps) gate(ctx context.Context, t *Team, s *Snapshot, merge bool) Pr
 	case pending:
 		res.Kind, res.Pending, res.Detail = "pending", true, strings.Join(all, ",")
 		return res
-	case v.Mergeable != "MERGEABLE":
-		res.Kind, res.Pending, res.Detail = "pending", true, "mergeable="+v.Mergeable
+	case mergeable != "MERGEABLE":
+		res.Kind, res.Pending, res.Detail = "pending", true, "mergeable="+mergeable
 		return res
 	}
 	defer r.lock(t.ProjectID)()
-	if _, err := r.gh(ctx, sp, "pr", "merge", n, "--squash", "--delete-branch", "--match-head-commit", s.Head); err != nil {
-		res.Kind, res.Detail = "push_failed", err.Error()
+	num := v.Number
+	sha, err := g.c.SquashMerge(ctx, g.inst, g.owner, g.name, num, s.Head)
+	if err != nil {
+		if res, ok := rateLimited(err, res); ok {
+			return res
+		}
+		res.Kind, res.Detail = "push_failed", "github merge: "+err.Error()
 		return res
 	}
-	out, _ = r.gh(ctx, sp, "pr", "view", n, "--json", "mergeCommit,state")
-	_ = json.Unmarshal([]byte(out), &v)
-	res.OK, res.Kind = v.State == "MERGED", "merged"
-	if res.OK {
-		r.refreshHub(ctx, sp, true)
+	// Same as `gh pr merge --delete-branch`; a repo that auto-deletes head
+	// branches answers 404/422 here, which is fine.
+	if err := g.deleteBranch(ctx, branchOf(sp, s.Issue.Key)); err != nil {
+		slog.Warn("orchestrator: delete merged branch", "pr", num, "err", err)
 	}
-	if v.MergeCommit != nil {
-		res.SHA = v.MergeCommit.Oid
-	}
-	if !res.OK {
-		res.Kind, res.Detail = "push_failed", "state after merge: "+v.State
-	}
+	res.OK, res.Kind, res.SHA = true, "merged", sha
+	r.refreshHub(ctx, sp, true)
 	return res
 }
 
@@ -347,23 +335,24 @@ func (p *prSnap) apply(res ProbeResult, head string, _ []string) ProbeResult {
 }
 
 // prSnapshot returns the GitHub App snapshot of the PR when the App keeps it
-// fresh (webhook-driven ghsnapshot); nil means fall back to `gh`.
-func (s *Service) prSnapshot(ctx context.Context, sp *Spec, num string) *prSnap {
+// fresh (webhook-driven ghsnapshot, fetched within maxAge); nil means read
+// the PR live.
+func (s *Service) prSnapshot(ctx context.Context, sp *Spec, num string, maxAge time.Duration) *prSnap {
 	parts := strings.SplitN(sp.Repo.Slug, "/", 2)
-	if len(parts) != 2 {
+	if len(parts) != 2 || s.opt.Pool == nil {
 		return nil
 	}
 	p := &prSnap{}
 	err := s.opt.Pool.QueryRow(ctx, `SELECT COALESCE(snapshot_head_sha, head_sha, ''), COALESCE(checks_rollup_state,''), COALESCE(api_mergeable::text, mergeable_state, ''), snapshot_fetched_at
-		FROM github_pull_request WHERE lower(repo_owner)=lower($1) AND lower(repo_name)=lower($2) AND pr_number::text=$3 AND snapshot_fetched_at > now() - interval '2 minutes'`,
-		parts[0], parts[1], num).Scan(&p.headSHA, &p.rollup, &p.mergeable, &p.fetched)
+		FROM github_pull_request WHERE lower(repo_owner)=lower($1) AND lower(repo_name)=lower($2) AND pr_number::text=$3 AND snapshot_fetched_at > now() - make_interval(secs => $4)`,
+		parts[0], parts[1], num, maxAge.Seconds()).Scan(&p.headSHA, &p.rollup, &p.mergeable, &p.fetched)
 	if err != nil {
 		return nil
 	}
 	return p
 }
 
-func (r *repoOps) retryCI(ctx context.Context, sp *Spec, head string) bool {
+func (r *repoOps) retryCI(ctx context.Context, g *ghRepo, head string) bool {
 	if head == "" {
 		return false
 	}
@@ -371,26 +360,17 @@ func (r *repoOps) retryCI(ctx context.Context, sp *Spec, head string) bool {
 		return false
 	}
 	// Durable claim: only the first INSERT for a head wins, across restarts.
-	if tag, err := r.svc.opt.Pool.Exec(ctx, `INSERT INTO orchestrator_ci_retry (head_sha) VALUES ($1) ON CONFLICT DO NOTHING`, head); err != nil || tag.RowsAffected() == 0 {
+	if r.svc.opt.Pool == nil {
+		// no database (unit tests): the in-memory claim above is all there is
+	} else if tag, err := r.svc.opt.Pool.Exec(ctx, `INSERT INTO orchestrator_ci_retry (head_sha) VALUES ($1) ON CONFLICT DO NOTHING`, head); err != nil || tag.RowsAffected() == 0 {
 		return false
 	}
-	out, err := r.gh(ctx, sp, "run", "list", "--commit", head, "--json", "databaseId,conclusion")
+	n, err := g.c.RerunFailedChecks(ctx, g.inst, g.owner, g.name, head)
 	if err != nil {
-		return false
+		slog.Warn("orchestrator: CI re-run", "head", head, "err", err)
 	}
-	var runs []struct {
-		ID         int64  `json:"databaseId"`
-		Conclusion string `json:"conclusion"`
-	}
-	_ = json.Unmarshal([]byte(out), &runs)
-	n := 0
-	for _, x := range runs {
-		if x.Conclusion == "failure" || x.Conclusion == "timed_out" || x.Conclusion == "cancelled" {
-			if _, err := r.gh(ctx, sp, "run", "rerun", fmt.Sprint(x.ID), "--failed"); err == nil {
-				n++
-				slog.Info("orchestrator: CI re-run (one per red head)", "head", head, "run", x.ID, "conclusion", x.Conclusion)
-			}
-		}
+	if n > 0 {
+		slog.Info("orchestrator: CI re-run (one per red head)", "head", head, "runs", n)
 	}
 	return n > 0
 }
