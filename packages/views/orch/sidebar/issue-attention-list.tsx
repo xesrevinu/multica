@@ -60,7 +60,7 @@ export function IssueAttentionList({ wsId, pathname, issueHref }: IssueAttention
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t(($) => $.sidebar.filter_placeholder)}
             aria-label={t(($) => $.sidebar.filter_placeholder)}
-            className="min-w-0 flex-1 bg-transparent text-caption outline-none placeholder:text-muted-foreground/70"
+            className="min-w-0 flex-1 bg-transparent text-caption outline-none placeholder:text-muted-foreground"
           />
         </label>
         {projects.length > 1 && (
@@ -175,7 +175,7 @@ function IssueRow({ node, depth, pathname, issueHref }: { node: OrchIssueNode; d
         <AppLink href={href} className="flex min-w-0 flex-1 flex-col gap-0.5" data-testid="orch-issue-row" data-key={node.key}>
           <span className="flex min-w-0 items-center gap-1.5">
             <StatusIcon status={node.status} className="size-3.5 shrink-0" />
-            <span className={cn("truncate", !settled && "text-foreground/90", active && "text-foreground")}>{node.title || node.key}</span>
+            <span className={cn("truncate", !settled && "text-foreground", active && "text-foreground")}>{node.title || node.key}</span>
             {node.paused && <Pause className="size-3 shrink-0 text-muted-foreground" />}
             {reason && REASONS[reason] && node.attention.bucket === "needs_you" && (
               <span className="ml-auto shrink-0 rounded-sm bg-amber-500/15 px-1 text-micro font-medium text-amber-700 dark:text-amber-300">
@@ -188,7 +188,7 @@ function IssueRow({ node, depth, pathname, issueHref }: { node: OrchIssueNode; d
               <span className="shrink-0 font-mono">{node.key}</span>
               {meta.map((m, i) => (
                 <span key={i} className="flex min-w-0 items-center gap-1.5">
-                  <span className="text-muted-foreground/50">·</span>
+                  <span className="text-faint-foreground">·</span>
                   {m}
                 </span>
               ))}

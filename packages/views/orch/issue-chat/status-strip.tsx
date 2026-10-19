@@ -51,7 +51,7 @@ export function StatusStrip({ wsId, issue, timeline }: { wsId: string; issue: Is
       <span className="inline-flex items-center gap-1">
         <span className={cn("size-1.5 rounded-full", v?.running ? "animate-pulse bg-emerald-500" : v?.attention.bucket === "needs_you" ? "bg-amber-500" : "bg-muted-foreground/50")} />
         {orchestrated && v?.phase ? phaseLabel(v.phase) : statusText(issue.status)}
-        {!orchestrated && <span className="text-muted-foreground/60">· {t(($) => $.chat.manual)}</span>}
+        {!orchestrated && <span className="text-faint-foreground">· {t(($) => $.chat.manual)}</span>}
       </span>
       {v?.running && (
         <span>

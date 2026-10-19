@@ -36,10 +36,10 @@ export function TransitionDivider({ entry }: { entry: TimelineEntry }) {
         title={d.why || undefined}
       >
         <GitCommitHorizontal className="size-3 shrink-0" />
-        {d.tid && <span className="font-mono text-foreground/70">{d.tid}</span>}
+        {d.tid && <span className="font-mono text-muted-foreground">{d.tid}</span>}
         {parts.length > 0 && <span className="truncate">{parts.join(" · ")}</span>}
-        {d.why && <span className="hidden truncate text-muted-foreground/80 md:inline">— {d.why}</span>}
-        <span className="shrink-0 text-muted-foreground/60">{timeAgo(entry.created_at)}</span>
+        {d.why && <span className="hidden truncate text-muted-foreground md:inline">— {d.why}</span>}
+        <span className="shrink-0 text-faint-foreground">{timeAgo(entry.created_at)}</span>
       </span>
       <span className="h-px flex-1 bg-border/70" />
     </div>
@@ -70,9 +70,9 @@ export function ActivitiesFold({ entries, defaultOpen = false }: { entries: Time
         <ul className="mt-1 ml-1.5 flex flex-col gap-0.5 border-l border-border/60 pl-3">
           {entries.map((e) => (
             <li key={e.id} className="flex items-baseline gap-1.5 text-caption text-muted-foreground">
-              <span className="font-medium text-foreground/80">{e.actor_name || getActorName(e.actor_type, e.actor_id)}</span>
+              <span className="font-medium text-foreground">{e.actor_name || getActorName(e.actor_type, e.actor_id)}</span>
               <span className="min-w-0 truncate">{formatActivity(e, t, locale, getActorName, statusText)}</span>
-              <span className="ml-auto shrink-0 text-micro text-muted-foreground/60">{timeAgo(e.created_at)}</span>
+              <span className="ml-auto shrink-0 text-micro text-faint-foreground">{timeAgo(e.created_at)}</span>
             </li>
           ))}
         </ul>
