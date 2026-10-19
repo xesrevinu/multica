@@ -28,9 +28,9 @@
 |---|---|---|---|
 | 0 预备 | 完成 B1、B2、B3、B4、B7；镜像带上 git（gh 不再需要） | 单测 + e2e 全绿；在生产快照上 `migrate up/down` 演练通过 | 不涉及生产 |
 | 1 部署演练 | 在 staging（生产库快照 + 1 副本）部署本分支：迁移、启动、`team apply` 一个 shadow 团队、回滚到旧镜像 + `migrate down` 到 574、再前滚 | 两次往返都无数据差异（对比 issue/metadata 行数和校验和） | 旧镜像 + down |
-| 2 生产 shadow | 生产部署，**环境变量 `MULTICA_ORCHESTRATOR_DISABLED=1` 默认关闭**；只给 OX 的 Pocket 项目 apply `shadow: true` | 部署后 API 指标无变化 | 删 team（`orchestrator_team` 一行）或关开关 |
+| 2 生产 shadow | 生产部署，先带 `MULTICA_ORCHESTRATOR_DISABLED=1` 部署（已有开关），确认无副作用后去掉；只给 OX 的 Pocket 项目 apply `shadow: true` | 部署后 API 指标无变化 | 删 team（`orchestrator_team` 一行）或关开关 |
 | 3 shadow 评估 | 一周。每天导出 shadow 转换和真实 activity 对比：漏判（人做了、引擎没想做）、误判（引擎想做、人没做）、时机差 | 误判 0、漏判都有解释 | 同上 |
 | 4 单项目接管 | Pocket 去掉 shadow；先只放低风险 area（compiler/framework），`needs:cargo` slot 1，所有单走验收门 | 3 天内无死信、无人工纠正状态 | `multica team pause`（立即停止所有转换）；必要时 `shadow: true` |
 | 5 扩大 | 放开验收门默认值、slot 到 2；接入 Studio Parts；多副本开启选主 | 阶段 4 指标稳定 | 同上，按项目 |
 
-开关和止损（已存在）：`multica team pause|resume`（单项目急停）、`flow unblock|cancel|replay`、成员用 `--force` 覆盖写保护、死信自动转 blocked 给 lead。新增建议：全局开关环境变量和 `/api/orchestrator/status` 的 leader 字段。
+开关和止损（已存在）：`multica team pause|resume`（单项目急停）、`flow unblock|cancel|replay`、成员用 `--force` 覆盖写保护、死信自动转 blocked 给 lead。全局急停：`MULTICA_ORCHESTRATOR_DISABLED=1`（已存在）。新增建议：`/api/orchestrator/status` 增加 leader 字段。

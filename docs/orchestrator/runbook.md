@@ -65,3 +65,6 @@ multica team apply <project> -f spec.yaml
 ## 故障注入（测试环境）
 
 `MULTICA_ORCHESTRATOR_FAULT=<tid>:<n>`：对该转移的前 n 次在 metadata 已写、状态未写时注入失败（`*` 匹配全部）。用来验证 T9 收敛、backoff 和 dead-letter。
+
+## daemon 重启
+用当前登录 shell 的环境启动（先 unset `MULTICA_*`，再叠加 daemon.env），**不要 `env -i`**：provider key（`*_API_KEY`）丢了以后，每个 run 几秒内以 "Connection error." 失败，引擎按 infra 次数把 issue 转成 blocked。恢复：修好环境后 `multica flow unblock <KEY>`。

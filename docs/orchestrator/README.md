@@ -17,15 +17,21 @@ orchestrator:
     reviewer: at-reviewer            # 独立验证者，不能同时是 owner
     owners: [at-dev-a, at-dev-b]     # 实现者，按空闲分配
     human: ray@example.com           # 验收 + 通知对象，默认是 apply 的人
+    routes:                          # 可选：按 issue 标签选 owner 池，第一条匹配生效；池全忙就等
+      - { labels: [area:hard], owners: [at-dev-a] }
   repo:
     mode: github                     # github | local
     slug: owner/repo
+    hub: /path/to/local/checkout     # 本地主 checkout：daemon 用 wt switch 从这里建 worktree
     main: main
     check_cmd: npm test && npm run lint   # 送审前的本地预检（可选）
     required_checks: [test, lint]
-  limits: { impl: 3, review: 3, infra: 2, stuck_min: 20, idle_min: 8, min_free_gb: 20 }
+  limits: { impl: 3, review: 3, infra: 2, stuck_min: 20, idle_min: 8, min_free_gb: 20,
+            slots: { cargo: 2 } }    # 可选：带 needs:cargo 的 issue 同时最多 2 条 todo/in_progress
   acceptance:
     labels: [needs-acceptance, needs-GUI-Master, needs-Ray-signoff]
+    default_for_labels: [area:ui]    # 可选：带这些标签也走验收门
+  shadow: false                      # true = 只决策并记录（state=shadow），不改任何东西
 ```
 
 ```bash
@@ -90,3 +96,6 @@ blocked 超过 `blocked_remind_min`（默认 60 分钟）的提醒。
 ## 5. Web 界面
 - **Issue 详情侧栏 · 流程卡片**（只在编排项目里显示）：状态轨道 backlog › todo › in progress › in review ›（需要验收时）等待验收 › done，当前节点高亮，blocked/cancelled 用红色标记；phase、尝试次数（impl/review/infra）、引擎失败次数、阻塞原因、暂停原因、等待条件、engine 的下一步（dry-run 决策）；展开可看最近 10 条迁移。处于等待验收时有「验收通过」按钮（拒绝仍走 `multica flow reject --reason`，必须写理由）。每 5 秒刷新。
 - **项目详情 · 编排团队**：preset、角色、limits，暂停/恢复按钮。修改 spec 仍然用 YAML（`multica team apply` 或 multica-config sync）。
+
+## 分支名
+一个 issue 只有一个分支名：`agent/<key 小写>`（ATT-62 → `agent/att-62`），就是 daemon 用 wt 建 worktree 时的分支。owner 原样 push 这个名字，引擎也用它查 PR、合并和删除。PR 标题里写大写 key（`feat(x): … (ATT-62)`）。GitHub 关联按标题、正文、分支名不区分大小写地匹配 key。
