@@ -89,3 +89,25 @@ Screenshot acceptance is a PocketJS-side convention and out of scope here.
 | poteto-agent (agent) | operator |  | Cursor subagent definition; multica roles replace it. |
 
 Acceptance-role skills are for the human accepter / acceptance agent (the preset renders lead, owners, reviewer).
+
+## Re-export to a team (`scripts/orch-preset-sync.py`)
+Pushes the rendered preset to a team's agents in one workspace: creates/updates every mounted skill (SKILL.md plus extra
+files such as `review-verdict/scripts/pr-review-comment.sh` or `interrogate/references/*`), sets each role agent's
+instructions, and sets its skills to the rendered list plus whatever non-pstack skill was already attached (pstack skills a
+role no longer mounts are detached). Dry run by default; `--apply` writes. It only drives the CLI, with the CLI's own
+profile flags after `--`; build the CLI from this branch first (the preset is embedded).
+
+```sh
+go build -o /tmp/multica-orch-cli ./server/cmd/multica
+scripts/orch-preset-sync.py -f spec.yaml --cli /tmp/multica-orch-cli -- --profile <profile> --workspace-id <ws>          # plan
+scripts/orch-preset-sync.py -f spec.yaml --cli /tmp/multica-orch-cli --apply -- --profile <profile> --workspace-id <ws>  # write
+```
+
+- Local e2e (2026-10-20, workspace 2d80f490, spec `.orch-dev/specs/autoteam-sandbox.yaml`; the second team uses the same
+  four agents): 17 skills created, 7 updated; at-lead 3→10 skills, at-dev-a/b 4→12, at-reviewer 4→9; a second dry run
+  shows no change. Pre-sync agent/skill JSON kept in `.orch-dev/backup/`.
+- PocketJS (not done; prod): run it once per project spec (the `orchestrator:` blocks of `project.yaml.proposed`, pocket
+  then studio; the shared lead/reviewer converge on the second run) against the PocketJS workspace profile, dry run
+  first. Caveat: the `skills:` lists that `multica-orchestrator.patch` adds to pocketjs `.multica/project.yaml` predate the
+  slimming (e.g. recall, reflect, unslop, principle-laziness-protocol); if that file is applied declaratively it will
+  re-attach them. Regenerate those lists from the `roles:` in `manifest.yaml` before applying the patch.
