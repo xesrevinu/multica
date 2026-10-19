@@ -1,18 +1,32 @@
 {
   description = "Multica development environment";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+  inputs = {
+    nixpkgs.url = "https://flakehub.com/f/DeterminateSystems/nixpkgs-weekly/0.1";
+  };
 
-  outputs = { nixpkgs, ... }:
+  outputs =
+    { nixpkgs, ... }:
     let
-      systems = [ "aarch64-darwin" "x86_64-darwin" "aarch64-linux" "x86_64-linux" ];
+      systems = [
+        "aarch64-darwin"
+        "x86_64-darwin"
+        "aarch64-linux"
+        "x86_64-linux"
+      ];
       forEachSystem = nixpkgs.lib.genAttrs systems;
-    in {
-      devShells = forEachSystem (system:
+    in
+    {
+      devShells = forEachSystem (
+        system:
         let
-          pkgs = nixpkgs.legacyPackages.${system};
-        in {
-          default = pkgs.mkShell {
+          pkgs = import nixpkgs {
+            inherit system;
+            config.allowUnfree = true;
+          };
+        in
+        {
+          default = pkgs.mkShellNoCC {
             packages = [
               pkgs.nodejs_22
               pkgs.pnpm_10
@@ -24,6 +38,7 @@
               echo "Multica dev shell: Node $(node --version), pnpm $(pnpm --version), Go $(go version | awk '{print $3}')"
             '';
           };
-        });
+        }
+      );
     };
 }

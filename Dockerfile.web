@@ -15,6 +15,10 @@ COPY packages/ui/package.json packages/ui/
 COPY packages/views/package.json packages/views/
 COPY packages/tsconfig/package.json packages/tsconfig/
 COPY packages/eslint-config/package.json packages/eslint-config/
+# pnpm hashes every patchedDependencies entry in the lockfile before installing
+# any workspace, so the mobile patch must be present even though apps/mobile is
+# not installed by this image.
+COPY apps/mobile/patches/ apps/mobile/patches/
 
 RUN corepack enable && \
     PNPM_VERSION="$(node -p 'require("./package.json").packageManager')" && \

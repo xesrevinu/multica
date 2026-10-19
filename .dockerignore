@@ -43,10 +43,11 @@ coverage
 # Default-exclude other app files so they do not enter the build context.
 /apps/*
 !/apps/web/
-!/apps/mobile
+!/apps/mobile/
 /apps/mobile/*
-!/apps/mobile/patches
-!/apps/mobile/patches/**
+# The root lockfile's patchedDependencies hash this patch while installing the
+# web workspace, so the one directory has to stay in the build context.
+!/apps/mobile/patches/
 apps/web/.next
 apps/web/.next/**
 apps/web/node_modules
