@@ -2007,6 +2007,38 @@ func (c *Cache) reconcileHookAt(hooksDir, workspaceID string, enabled bool) erro
 	return nil
 }
 
+const (
+	defaultCoAuthorName  = "multica-agent"
+	defaultCoAuthorEmail = "github@multica.ai"
+)
+
+// coAuthorTrailer is the Co-authored-by value baked into prepare-commit-msg.
+// MULTICA_CO_AUTHOR_NAME and MULTICA_CO_AUTHOR_EMAIL override the product
+// default for a self-hosted bot. Unsafe values are ignored so they cannot
+// break out of the double-quoted shell assignment.
+func coAuthorTrailer() string {
+	name := strings.TrimSpace(os.Getenv("MULTICA_CO_AUTHOR_NAME"))
+	email := strings.TrimSpace(os.Getenv("MULTICA_CO_AUTHOR_EMAIL"))
+	if name == "" {
+		name = defaultCoAuthorName
+	}
+	if email == "" {
+		email = defaultCoAuthorEmail
+	}
+	if !validCoAuthorIdentity(name, email) {
+		name = defaultCoAuthorName
+		email = defaultCoAuthorEmail
+	}
+	return "Co-authored-by: " + name + " <" + email + ">"
+}
+
+func validCoAuthorIdentity(name, email string) bool {
+	if strings.ContainsAny(name, "<>\"\n\r$`\\") || strings.ContainsAny(email, "<>\"\n\r$`\\ \t") {
+		return false
+	}
+	return strings.Contains(email, "@")
+}
+
 // prepareCommitMsgHook builds the prepare-commit-msg hook script that appends
 // a Co-authored-by trailer for the Multica Agent to every commit message.
 //
@@ -2047,7 +2079,7 @@ case "$COMMIT_SOURCE" in
   merge|squash) exit 0 ;;
 esac
 
-` + gate + `TRAILER="Co-authored-by: multica-agent <github@multica.ai>"
+` + gate + `TRAILER="` + coAuthorTrailer() + `"
 
 # Don't add if already present.
 if grep -qF "$TRAILER" "$COMMIT_MSG_FILE"; then

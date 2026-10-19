@@ -112,6 +112,11 @@ type LocalWorktreeParams struct {
 	WorkspaceID    string
 	AgentID        string
 	ConversationID string
+	// CoAuthorStatePath is the workspace toggle file the prepare-commit-msg
+	// hook re-reads. The daemon publishes it; an empty path leaves the hook
+	// ungated, which is the same "no setting published yet" default as a
+	// bare-cache checkout.
+	CoAuthorStatePath string
 	// HolderPID is the daemon process that runs the agent after prepare
 	// returns. The prepare helper's own pid is already dead by then, so an
 	// active hold records this one. Zero means there is no separate holder;
@@ -436,6 +441,21 @@ func PrepareLocalWorktree(params LocalWorktreeParams, logger *slog.Logger) (*Loc
 		// A branch a sibling task forked because the conversation's own branch
 		// was busy is delivered once and never continued, so it records nothing.
 		tracksState: plan.tracksState && actualBranch == plan.name,
+	}
+
+	// Install before the baseline commit. The hook only fires for processes
+	// that carry the daemon environment, so the user's own commits in this
+	// same repository stay untouched, and the baseline commit this function
+	// is about to make already carries the bot.
+	if err := installLocalCoAuthorHook(worktreePath, params.CoAuthorStatePath, logger); err != nil {
+		if clearErr := clearWorktreeHold(gitRoot, actualBranch); clearErr != nil && logger != nil {
+			logger.Warn("execenv: could not clear worktree hold", "branch", actualBranch, "error", clearErr)
+		}
+		removeLocalWorktreeDir(gitRoot, worktreePath, logger)
+		if createdBranch {
+			dropBranch(gitRoot, actualBranch, logger)
+		}
+		return nil, err
 	}
 
 	// Tear the worktree back down on every failure below. A half-replayed tree

@@ -3282,6 +3282,18 @@ func (d *Daemon) workspaceLastRepoSyncErr(workspaceID string) string {
 // the dedicated co-author switch (`co_authored_by_enabled`) so flipping the
 // workspace's master GitHub toggle off also stops new trailers from landing
 // in commits, matching the contract documented in RFC MUL-2414 §4.8.
+// coAuthorStatePath is the toggle file a local-worktree hook re-reads at
+// commit time. Only the real repo cache knows where that file lives; test
+// doubles that don't publish one get an ungated hook, same as a checkout
+// made before any setting was written.
+func coAuthorStatePath(cache repoCacheBackend, workspaceID string) string {
+	repo, ok := cache.(*repocache.Cache)
+	if !ok || repo == nil || workspaceID == "" {
+		return ""
+	}
+	return repo.CoAuthoredByStatePath(workspaceID)
+}
+
 func (d *Daemon) workspaceCoAuthoredByEnabled(workspaceID string) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -8232,7 +8244,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		}
 		if localAssignment.UsesWorktree() {
 			prepParams.LocalWorktree = &execenv.LocalWorktreeParams{
-				LocalPath: localAssignment.AbsPath,
+				LocalPath:         localAssignment.AbsPath,
+				CoAuthorStatePath: coAuthorStatePath(d.repoCache, task.WorkspaceID),
 				// The prepare helper exits before the agent runs. Record this
 				// process so an idle reap can tell a live run from a dead one.
 				HolderPID: os.Getpid(),
