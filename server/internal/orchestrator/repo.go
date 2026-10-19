@@ -356,6 +356,10 @@ func (r *repoOps) retryCI(ctx context.Context, sp *Spec, head string) bool {
 	if _, done := r.retried.LoadOrStore(head, true); done {
 		return false
 	}
+	// Durable claim: only the first INSERT for a head wins, across restarts.
+	if tag, err := r.svc.opt.Pool.Exec(ctx, `INSERT INTO orchestrator_ci_retry (head_sha) VALUES ($1) ON CONFLICT DO NOTHING`, head); err != nil || tag.RowsAffected() == 0 {
+		return false
+	}
 	out, err := r.gh(ctx, sp, "run", "list", "--commit", head, "--json", "databaseId,conclusion")
 	if err != nil {
 		return false
