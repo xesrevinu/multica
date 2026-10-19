@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -256,58 +257,77 @@ func (c *Client) FetchPRDetail(ctx context.Context, installationID int64, owner,
 			SHA string `json:"sha"`
 		} `json:"parents"`
 	}
-	if c.REST(ctx, installationID, http.MethodGet, fmt.Sprintf("%s/pulls/%d/commits?per_page=100", base, number), nil, &commits) == nil {
-		for _, x := range commits {
-			who := x.Commit.Author.Name
-			if x.Author.login() != "" {
-				who = x.Author.login()
-			}
-			msg, _, _ := strings.Cut(x.Commit.Message, "\n")
-			pc := PRCommit{SHA: x.SHA, Message: msg, Author: who, Avatar: x.Author.avatar(), Date: x.Commit.Author.Date, Parents: []string{}}
-			for _, p := range x.Parents {
-				pc.Parents = append(pc.Parents, p.SHA)
-			}
-			d.Commits = append(d.Commits, pc)
-		}
-	}
-	if pr.Head.SHA != "" {
-		var runs struct {
-			CheckRuns []struct {
-				Name       string `json:"name"`
-				Status     string `json:"status"`
-				Conclusion string `json:"conclusion"`
-				HTMLURL    string `json:"html_url"`
-				App        *struct {
-					Slug string `json:"slug"`
-				} `json:"app"`
-			} `json:"check_runs"`
-		}
-		if c.REST(ctx, installationID, http.MethodGet, fmt.Sprintf("%s/commits/%s/check-runs?per_page=100", base, url.PathEscape(pr.Head.SHA)), nil, &runs) == nil {
-			for _, r := range runs.CheckRuns {
-				ck := PRCheck{Name: r.Name, Status: r.Status, Conclusion: r.Conclusion, URL: r.HTMLURL}
-				if r.App != nil {
-					ck.App = r.App.Slug
+	// The follow-up reads are independent and each fills its own fields of d,
+	// so they run concurrently (a PR card was ~6 sequential round trips).
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if c.REST(ctx, installationID, http.MethodGet, fmt.Sprintf("%s/pulls/%d/commits?per_page=100", base, number), nil, &commits) == nil {
+			for _, x := range commits {
+				who := x.Commit.Author.Name
+				if x.Author.login() != "" {
+					who = x.Author.login()
 				}
-				d.Checks = append(d.Checks, ck)
+				msg, _, _ := strings.Cut(x.Commit.Message, "\n")
+				pc := PRCommit{SHA: x.SHA, Message: msg, Author: who, Avatar: x.Author.avatar(), Date: x.Commit.Author.Date, Parents: []string{}}
+				for _, p := range x.Parents {
+					pc.Parents = append(pc.Parents, p.SHA)
+				}
+				d.Commits = append(d.Commits, pc)
 			}
 		}
-	}
-	if pr.Base.Ref != "" && pr.Head.SHA != "" && d.State == "open" {
-		var cmp struct {
-			AheadBy         int `json:"ahead_by"`
-			BehindBy        int `json:"behind_by"`
-			MergeBaseCommit struct {
-				SHA string `json:"sha"`
-			} `json:"merge_base_commit"`
-		}
-		if c.REST(ctx, installationID, http.MethodGet, fmt.Sprintf("%s/compare/%s...%s", base, url.PathEscape(pr.Base.Ref), url.PathEscape(pr.Head.SHA)), nil, &cmp) == nil {
-			d.AheadBy, d.BehindBy = cmp.AheadBy, cmp.BehindBy
-			if pr.MergeableState == "dirty" && cmp.MergeBaseCommit.SHA != "" {
-				d.Conflicts = c.overlap(ctx, installationID, base, number, cmp.MergeBaseCommit.SHA, pr.Base.Ref)
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if pr.Head.SHA != "" {
+			var runs struct {
+				CheckRuns []struct {
+					Name       string `json:"name"`
+					Status     string `json:"status"`
+					Conclusion string `json:"conclusion"`
+					HTMLURL    string `json:"html_url"`
+					App        *struct {
+						Slug string `json:"slug"`
+					} `json:"app"`
+				} `json:"check_runs"`
+			}
+			if c.REST(ctx, installationID, http.MethodGet, fmt.Sprintf("%s/commits/%s/check-runs?per_page=100", base, url.PathEscape(pr.Head.SHA)), nil, &runs) == nil {
+				for _, r := range runs.CheckRuns {
+					ck := PRCheck{Name: r.Name, Status: r.Status, Conclusion: r.Conclusion, URL: r.HTMLURL}
+					if r.App != nil {
+						ck.App = r.App.Slug
+					}
+					d.Checks = append(d.Checks, ck)
+				}
 			}
 		}
-	}
-	c.fillReviews(ctx, installationID, base, number, d)
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if pr.Base.Ref != "" && pr.Head.SHA != "" && d.State == "open" {
+			var cmp struct {
+				AheadBy         int `json:"ahead_by"`
+				BehindBy        int `json:"behind_by"`
+				MergeBaseCommit struct {
+					SHA string `json:"sha"`
+				} `json:"merge_base_commit"`
+			}
+			if c.REST(ctx, installationID, http.MethodGet, fmt.Sprintf("%s/compare/%s...%s", base, url.PathEscape(pr.Base.Ref), url.PathEscape(pr.Head.SHA)), nil, &cmp) == nil {
+				d.AheadBy, d.BehindBy = cmp.AheadBy, cmp.BehindBy
+				if pr.MergeableState == "dirty" && cmp.MergeBaseCommit.SHA != "" {
+					d.Conflicts = c.overlap(ctx, installationID, base, number, cmp.MergeBaseCommit.SHA, pr.Base.Ref)
+				}
+			}
+		}
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		c.fillReviews(ctx, installationID, base, number, d)
+	}()
 	if d.State != "open" && pr.Head.Ref != "" {
 		var ref struct{}
 		if err := c.REST(ctx, installationID, http.MethodGet, base+"/git/ref/heads/"+pathRef(pr.Head.Ref), nil, &ref); err != nil {
@@ -315,6 +335,7 @@ func (c *Client) FetchPRDetail(ctx context.Context, installationID int64, owner,
 			d.HeadDeleted = errors.As(err, &ae) && ae.Status == 404
 		}
 	}
+	wg.Wait()
 	return d, nil
 }
 
