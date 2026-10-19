@@ -302,3 +302,13 @@ func (s *store) claim(ctx context.Context) ([]string, error) {
 	_, _ = s.pool.Exec(ctx, `DELETE FROM orchestrator_event WHERE processed_at < now() - interval '1 day'`)
 	return out, rows.Err()
 }
+
+// shadow records a decision a shadow team would have applied, once per
+// (issue, transition, revision). It reports whether the row is new.
+func (s *store) shadow(ctx context.Context, t *Team, row *issueRow, d *Decision, source string) bool {
+	dj, _ := json.Marshal(d)
+	tag, err := s.pool.Exec(ctx, `INSERT INTO orchestrator_transition (workspace_id, project_id, issue_id, tid, idem_key, decision, state, source, finished_at)
+		VALUES ($1,$2,$3,$4,$5,$6,'shadow',$7,now()) ON CONFLICT (idem_key) DO NOTHING`,
+		t.WorkspaceID, t.ProjectID, row.ID, d.Tid, fmt.Sprintf("shadow|%s|%s|%d", row.ID, d.Tid, row.Revision), dj, source)
+	return err == nil && tag.RowsAffected() > 0
+}

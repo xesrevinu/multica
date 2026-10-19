@@ -465,3 +465,13 @@ func contains(xs []string, x string) bool {
 	}
 	return false
 }
+
+// shadowProbe stands in for the real gates in shadow mode: the review
+// pre-check reports pending (nothing pushed, no PR, no CI rerun) and a merge
+// reports what would happen without doing it.
+func shadowProbe(_ *Snapshot, merge bool) ProbeResult {
+	if merge {
+		return ProbeResult{OK: true, Kind: "dry", Detail: "shadow: would merge"}
+	}
+	return ProbeResult{Pending: true, Kind: "pending", Detail: "shadow: gates not run"}
+}

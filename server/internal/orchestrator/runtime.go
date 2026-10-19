@@ -98,7 +98,7 @@ func (s *Service) Owns(projectID string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	t := s.teams[projectID]
-	return t != nil && !t.Paused && !s.disabled
+	return t != nil && !t.Paused && !s.disabled && !t.Spec.Shadow
 }
 
 // Team returns the cached team of a project.
@@ -352,6 +352,12 @@ func (s *Service) process(ctx context.Context, t *Team, rows []issueRow, row *is
 			}
 			return
 		}
+		if t.Spec.Shadow {
+			if s.st.shadow(ctx, t, row, d, source) {
+				slog.Info("orchestrator: shadow", "issue", row.Key, "tid", d.Tid, "status", d.Status, "assignee", d.Assignee, "why", d.Why)
+			}
+			return
+		}
 		err = s.apply(ctx, t, row, d, source)
 	}
 	if err == nil {
@@ -384,7 +390,11 @@ func (s *Service) decide(ctx context.Context, t *Team, rows []issueRow, row *iss
 	if err != nil {
 		return nil, err
 	}
-	return t.Spec.Decide(sn, s.repo.prober(ctx, t)), nil
+	probe := s.repo.prober(ctx, t)
+	if t.Spec.Shadow {
+		probe = shadowProbe
+	}
+	return t.Spec.Decide(sn, probe), nil
 }
 
 // faultHook lets tests / F-scenarios inject a failure mid-transition
@@ -555,6 +565,9 @@ func (s *Service) notify(ctx context.Context, t *Team, row *issueRow, d *Decisio
 }
 
 func (s *Service) remindBlocked(ctx context.Context, t *Team, rows []issueRow) {
+	if t.Spec.Shadow {
+		return
+	}
 	every := time.Duration(t.Spec.Limits.BlockedRemindMin) * time.Minute
 	for i := range rows {
 		r := &rows[i]

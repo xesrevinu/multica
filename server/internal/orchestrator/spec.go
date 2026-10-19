@@ -46,7 +46,11 @@ const (
 // Spec is the declarative team definition of one project (stored as JSONB in
 // orchestrator_team.spec; authored as the `orchestrator:` YAML section).
 type Spec struct {
-	Preset      string       `json:"preset,omitempty" yaml:"preset,omitempty"`
+	Preset string `json:"preset,omitempty" yaml:"preset,omitempty"`
+	// Shadow: decide and log every transition (state "shadow") but change
+	// nothing: no status/assignee/metadata writes, no runs, no PRs, merges or
+	// CI reruns, no write guard. For trialling a spec on live issues.
+	Shadow      bool         `json:"shadow,omitempty" yaml:"shadow,omitempty"`
 	Roles       Roles        `json:"roles" yaml:"roles"`
 	Repo        RepoSpec     `json:"repo" yaml:"repo"`
 	Limits      Limits       `json:"limits" yaml:"limits"`

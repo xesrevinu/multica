@@ -112,3 +112,16 @@ func TestPlannedEpicNeverStarts(t *testing.T) {
 		t.Fatalf("planned epic must wait, got %+v", d)
 	}
 }
+
+func TestShadowProbeNeverMutates(t *testing.T) {
+	if r := shadowProbe(nil, false); r.OK || !r.Pending {
+		t.Fatalf("shadow precheck must be pending: %+v", r)
+	}
+	if r := shadowProbe(nil, true); !r.OK || r.Kind != "dry" {
+		t.Fatalf("shadow merge must be dry: %+v", r)
+	}
+	s, err := ParseSpec([]byte("orchestrator:\n  shadow: true\n  roles: {lead: l, reviewer: r, owners: [a]}\n  repo: {slug: x/y}\n"))
+	if err != nil || !s.Shadow {
+		t.Fatal("shadow flag must parse", err)
+	}
+}
