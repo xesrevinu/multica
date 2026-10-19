@@ -13,6 +13,7 @@ import { AppLink } from "../../navigation";
 import { StatusIcon } from "../../issues/components/status-icon";
 import { shortSha } from "../format";
 import { usePhaseLabel } from "../labels";
+import { OpenTabButton } from "../open-tab";
 import { useStatusText } from "./timeline-parts";
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -112,12 +113,13 @@ export function DetailsDrawer({ open, onOpenChange, wsId, issue, timeline }: { o
               <h3 className="mb-1 text-micro font-medium uppercase tracking-wide text-muted-foreground">{t(($) => $.drawer.sub_issues)}</h3>
               <ul className="flex flex-col gap-0.5">
                 {kids.map((k) => (
-                  <li key={k.id}>
-                    <AppLink href={p.issueDetail(k.key)} className="flex items-center gap-1.5 rounded-md px-1 py-0.5 text-caption hover:bg-muted">
+                  <li key={k.id} className="group/sub flex items-center gap-1">
+                    <AppLink href={p.issueDetail(k.key)} className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-0.5 text-caption hover:bg-muted">
                       <StatusIcon status={k.status} className="size-3.5 shrink-0" />
                       <span className="font-mono text-micro text-muted-foreground">{k.key}</span>
                       <span className="truncate">{k.title}</span>
                     </AppLink>
+                    <OpenTabButton issueKey={k.key} title={k.title} className="opacity-0 group-hover/sub:opacity-100 focus-visible:opacity-100" />
                   </li>
                 ))}
               </ul>

@@ -24,7 +24,8 @@
       "cancel_proposed": "建议取消",
       "review": "待评审",
       "paused": "已暂停"
-    }
+    },
+    "open_in_tab": "在新标签页打开"
   },
   "phase": {
     "implementing": "实现中",

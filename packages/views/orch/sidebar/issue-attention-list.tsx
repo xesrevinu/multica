@@ -19,6 +19,7 @@ import { useT } from "../../i18n";
 import { StatusIcon } from "../../issues/components/status-icon";
 import { checksTone, formatDuration, since, TONE_DOT } from "../format";
 import { usePhaseLabel } from "../labels";
+import { OpenTabButton } from "../open-tab";
 
 export type IssueAttentionListProps = {
   wsId: string;
@@ -194,6 +195,11 @@ function IssueRow({ node, depth, pathname, issueHref }: { node: OrchIssueNode; d
             </span>
           )}
         </AppLink>
+        <OpenTabButton
+          issueKey={node.key}
+          title={node.title}
+          className="absolute top-1 right-1 hidden bg-sidebar group-hover/row:block"
+        />
       </div>
       {hasKids && open && (
         <ul className="flex flex-col gap-px">

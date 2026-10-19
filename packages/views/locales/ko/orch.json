@@ -24,7 +24,8 @@
       "cancel_proposed": "취소 제안",
       "review": "리뷰",
       "paused": "일시 정지"
-    }
+    },
+    "open_in_tab": "새 탭에서 열기"
   },
   "phase": {
     "implementing": "구현 중",

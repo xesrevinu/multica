@@ -24,7 +24,8 @@
       "cancel_proposed": "Annuler ?",
       "review": "Revue",
       "paused": "En pause"
-    }
+    },
+    "open_in_tab": "Ouvrir dans un nouvel onglet"
   },
   "phase": {
     "implementing": "Implémentation",

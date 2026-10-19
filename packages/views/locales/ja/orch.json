@@ -24,7 +24,8 @@
       "cancel_proposed": "キャンセル提案",
       "review": "レビュー",
       "paused": "一時停止"
-    }
+    },
+    "open_in_tab": "新しいタブで開く"
   },
   "phase": {
     "implementing": "実装中",
