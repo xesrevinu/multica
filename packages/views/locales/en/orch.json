@@ -58,7 +58,8 @@
       "merged": "Merged",
       "closed": "Closed",
       "draft": "Draft"
-    }
+    },
+    "unread": "Unread"
   },
   "phase": {
     "implementing": "Implementing",
@@ -250,5 +251,29 @@
     "issues": "Issues",
     "chat": "Chat",
     "more": "More"
+  },
+  "palette": {
+    "open_details": "Open issue details",
+    "open_files": "Show files changed",
+    "open_worktrees": "Manage worktrees",
+    "accept": "Accept and merge",
+    "pause": "Pause orchestration",
+    "resume": "Resume orchestration",
+    "cancel": "Cancel issue",
+    "update_branch": "Merge base into PR branch",
+    "rerun": "Rerun failed checks",
+    "copy_branch": "Copy branch name",
+    "open_pr": "Open pull request on GitHub",
+    "next_issue": "Next issue",
+    "prev_issue": "Previous issue",
+    "needs_you": "Needs you: {{key}} {{title}}"
+  },
+  "notify": {
+    "needs_you_title": "{{key}} needs you",
+    "enable": "Desktop notifications",
+    "denied": "Notifications are blocked in this browser"
+  },
+  "shortcuts": {
+    "title": "Shortcuts: D details · F files · Alt+↑/↓ previous/next issue · ⌘K actions"
   }
 }

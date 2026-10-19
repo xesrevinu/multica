@@ -58,7 +58,8 @@
       "merged": "병합됨",
       "closed": "닫힘",
       "draft": "초안"
-    }
+    },
+    "unread": "읽지 않음"
   },
   "phase": {
     "implementing": "구현 중",
@@ -249,5 +250,29 @@
     "issues": "이슈",
     "chat": "채팅",
     "more": "더 보기"
+  },
+  "palette": {
+    "open_details": "이슈 세부 정보 열기",
+    "open_files": "변경된 파일 보기",
+    "open_worktrees": "워크트리 관리",
+    "accept": "승인 후 병합",
+    "pause": "오케스트레이션 일시 중지",
+    "resume": "오케스트레이션 재개",
+    "cancel": "이슈 취소",
+    "update_branch": "기본 브랜치를 PR 브랜치에 병합",
+    "rerun": "실패한 검사 재실행",
+    "copy_branch": "브랜치 이름 복사",
+    "open_pr": "GitHub에서 PR 열기",
+    "next_issue": "다음 이슈",
+    "prev_issue": "이전 이슈",
+    "needs_you": "내 처리 필요: {{key}} {{title}}"
+  },
+  "notify": {
+    "needs_you_title": "{{key}}에 처리가 필요합니다",
+    "enable": "데스크톱 알림",
+    "denied": "이 브라우저에서 알림이 차단되었습니다"
+  },
+  "shortcuts": {
+    "title": "단축키: D 세부 정보 · F 파일 · Alt+↑/↓ 이전/다음 이슈 · ⌘K 작업"
   }
 }

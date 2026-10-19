@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, GitBranch, Pause, Pin, PinOff, Search, SlidersHorizontal } from "lucide-react";
+import { Bell, ChevronRight, CircleAlert, GitBranch, Pause, Pin, PinOff, Search, SlidersHorizontal } from "lucide-react";
+import { toast } from "sonner";
 import { useAuthStore } from "@multica/core/auth";
 import {
   applyOrchView,
@@ -17,6 +18,7 @@ import {
   type OrchSort,
   type OrchAssigneeFilter,
 } from "@multica/core/orchestrator";
+import { inboxListOptions } from "@multica/core/inbox/queries";
 import { pinListOptions, useCreatePin, useDeletePin } from "@multica/core/pins";
 import { projectListOptions } from "@multica/core/projects/queries";
 import {
@@ -33,7 +35,9 @@ import {
 } from "@multica/ui/components/ui/dropdown-menu";
 import { SidebarGroup, SidebarGroupContent, SidebarGroupLabel } from "@multica/ui/components/ui/sidebar";
 import { cn } from "@multica/ui/lib/utils";
-import { AppLink } from "../../navigation";
+import { AppLink, useNavigation } from "../../navigation";
+import { useRegisterOrchPalette, type OrchPaletteItem } from "../palette";
+import { useOrchNeedsYouNotify } from "../use-orch-notify";
 import { useT } from "../../i18n";
 import { formatDuration, shortAgo, since } from "../format";
 import { usePhaseLabel } from "../labels";
@@ -56,6 +60,7 @@ type RowCtx = {
   issueHref: (key: string) => string;
   projectIcon: (id?: string) => string | null | undefined;
   pinned: Set<string>;
+  unread: Set<string>;
   togglePin: (id: string, pinned: boolean) => void;
   nest: boolean;
 };
@@ -78,6 +83,37 @@ export function IssueAttentionList({ wsId, pathname, issueHref }: IssueAttention
   const createPin = useCreatePin();
   const deletePin = useDeletePin();
   const pinned = useMemo(() => new Set(pins.filter((p) => p.item_type === "issue").map((p) => p.item_id)), [pins]);
+  const { data: inbox = [] } = useQuery(inboxListOptions(wsId));
+  const unread = useMemo(() => new Set(inbox.filter((i) => !i.read && !i.archived && i.issue_id).map((i) => i.issue_id as string)), [inbox]);
+  const nav = useNavigation();
+  const openIssue = useCallback((key: string) => nav.push(issueHref(key)), [nav, issueHref]);
+  useOrchNeedsYouNotify(issues, openIssue);
+  const paletteItems = useMemo<OrchPaletteItem[]>(
+    () =>
+      (issues ?? [])
+        .filter((i) => i.attention.bucket === "needs_you")
+        .slice(0, 8)
+        .map((i) => ({
+          key: `orch-needs-${i.key}`,
+          label: t(($) => $.palette.needs_you, { key: i.key, title: i.title }),
+          icon: CircleAlert,
+          keywords: ["needs", "attention", "accept", i.key.toLowerCase(), ...i.title.toLowerCase().split(/\s+/)],
+          onSelect: () => openIssue(i.key),
+        })),
+    [issues, openIssue, t],
+  );
+  useRegisterOrchPalette("sidebar-needs-you", paletteItems);
+  const [notifyPerm, setNotifyPerm] = useState<NotificationPermission | "unsupported">(() =>
+    typeof Notification === "undefined" ? "unsupported" : Notification.permission,
+  );
+  const enableNotifications = () => {
+    if (typeof Notification === "undefined") return;
+    if (Notification.permission === "denied") {
+      toast.error(t(($) => $.notify.denied));
+      return;
+    }
+    void Notification.requestPermission().then(setNotifyPerm);
+  };
 
   const projects = useMemo(() => {
     const m = new Map<string, string>();
@@ -101,6 +137,7 @@ export function IssueAttentionList({ wsId, pathname, issueHref }: IssueAttention
     issueHref,
     projectIcon: (id) => (id ? iconById.get(id) : undefined),
     pinned,
+    unread,
     togglePin: (id, isPinned) =>
       isPinned ? deletePin.mutate({ itemType: "issue", itemId: id }) : createPin.mutate({ item_type: "issue", item_id: id }),
     nest: view.showSubIssues,
@@ -194,6 +231,12 @@ export function IssueAttentionList({ wsId, pathname, issueHref }: IssueAttention
             <DropdownMenuCheckboxItem checked={view.showSubIssues} onCheckedChange={(on) => update({ showSubIssues: !!on })}>
               {t(($) => $.sidebar.show_sub_issues)}
             </DropdownMenuCheckboxItem>
+            {notifyPerm !== "unsupported" && (
+              <DropdownMenuCheckboxItem checked={notifyPerm === "granted"} disabled={notifyPerm === "granted"} onCheckedChange={enableNotifications}>
+                <Bell className="size-3.5" />
+                {t(($) => $.notify.enable)}
+              </DropdownMenuCheckboxItem>
+            )}
             {customized && (
               <>
                 <DropdownMenuSeparator />
@@ -291,6 +334,7 @@ function IssueRow({ node, depth, ctx }: { node: OrchIssueNode; depth: number; ct
   const reason = node.attention.reason as keyof typeof REASONS | undefined;
   const hasKids = ctx.nest && node.subIssues.length > 0;
   const isPinned = ctx.pinned.has(node.id);
+  const isUnread = ctx.unread.has(node.id) && !active;
   const diff = diffOf(node);
   const branch = node.worktree?.branch ?? node.pr?.branch;
 
@@ -336,9 +380,10 @@ function IssueRow({ node, depth, ctx }: { node: OrchIssueNode; depth: number; ct
         >
           <span className="flex h-5 min-w-0 items-center gap-1.5">
             <ProjectBadge title={node.project?.title} icon={ctx.projectIcon(node.project?.id)} className={cn(settled && !active && "opacity-50 grayscale")} />
-            <span className={cn("min-w-0 flex-1 truncate text-label font-medium", settled ? "text-muted-foreground" : "text-foreground")}>
+            <span className={cn("min-w-0 flex-1 truncate text-label font-medium", settled ? "text-muted-foreground" : "text-foreground", isUnread && "font-semibold")}>
               {node.title || node.key}
             </span>
+            {isUnread && <span className="size-1.5 shrink-0 rounded-full bg-brand" aria-label={t(($) => $.sidebar.unread)} data-testid="orch-unread" />}
             {isPinned && <Pin className="size-3 shrink-0 text-faint-foreground" />}
             <span className="flex shrink-0 items-center text-caption transition-opacity group-hover/row:opacity-0">{status}</span>
           </span>

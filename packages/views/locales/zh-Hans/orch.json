@@ -58,7 +58,8 @@
       "merged": "已合并",
       "closed": "已关闭",
       "draft": "草稿"
-    }
+    },
+    "unread": "未读"
   },
   "phase": {
     "implementing": "实现中",
@@ -249,5 +250,29 @@
     "issues": "Issue",
     "chat": "对话",
     "more": "更多"
+  },
+  "palette": {
+    "open_details": "打开任务详情",
+    "open_files": "查看变更文件",
+    "open_worktrees": "管理工作树",
+    "accept": "验收并合并",
+    "pause": "暂停编排",
+    "resume": "恢复编排",
+    "cancel": "取消任务",
+    "update_branch": "将基线合并到 PR 分支",
+    "rerun": "重跑失败的检查",
+    "copy_branch": "复制分支名",
+    "open_pr": "在 GitHub 打开 PR",
+    "next_issue": "下一个任务",
+    "prev_issue": "上一个任务",
+    "needs_you": "待你处理：{{key}} {{title}}"
+  },
+  "notify": {
+    "needs_you_title": "{{key}} 需要你处理",
+    "enable": "桌面通知",
+    "denied": "此浏览器已阻止通知"
+  },
+  "shortcuts": {
+    "title": "快捷键：D 详情 · F 文件 · Alt+↑/↓ 上/下一个任务 · ⌘K 操作"
   }
 }

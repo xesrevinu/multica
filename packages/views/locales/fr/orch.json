@@ -58,7 +58,8 @@
       "merged": "Fusionnée",
       "closed": "Fermée",
       "draft": "Brouillon"
-    }
+    },
+    "unread": "Non lu"
   },
   "phase": {
     "implementing": "Implémentation",
@@ -250,5 +251,29 @@
     "issues": "Tickets",
     "chat": "Discussion",
     "more": "Plus"
+  },
+  "palette": {
+    "open_details": "Ouvrir les détails du ticket",
+    "open_files": "Voir les fichiers modifiés",
+    "open_worktrees": "Gérer les worktrees",
+    "accept": "Accepter et fusionner",
+    "pause": "Mettre l’orchestration en pause",
+    "resume": "Reprendre l’orchestration",
+    "cancel": "Annuler le ticket",
+    "update_branch": "Fusionner la base dans la branche",
+    "rerun": "Relancer les vérifications échouées",
+    "copy_branch": "Copier le nom de branche",
+    "open_pr": "Ouvrir la PR sur GitHub",
+    "next_issue": "Ticket suivant",
+    "prev_issue": "Ticket précédent",
+    "needs_you": "À traiter : {{key}} {{title}}"
+  },
+  "notify": {
+    "needs_you_title": "{{key}} vous attend",
+    "enable": "Notifications de bureau",
+    "denied": "Les notifications sont bloquées dans ce navigateur"
+  },
+  "shortcuts": {
+    "title": "Raccourcis : D détails · F fichiers · Alt+↑/↓ ticket précédent/suivant · ⌘K actions"
   }
 }

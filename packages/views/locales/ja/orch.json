@@ -58,7 +58,8 @@
       "merged": "マージ済み",
       "closed": "クローズ",
       "draft": "下書き"
-    }
+    },
+    "unread": "未読"
   },
   "phase": {
     "implementing": "実装中",
@@ -249,5 +250,29 @@
     "issues": "Issue",
     "chat": "チャット",
     "more": "その他"
+  },
+  "palette": {
+    "open_details": "課題の詳細を開く",
+    "open_files": "変更ファイルを表示",
+    "open_worktrees": "ワークツリーを管理",
+    "accept": "受け入れてマージ",
+    "pause": "オーケストレーションを一時停止",
+    "resume": "オーケストレーションを再開",
+    "cancel": "課題をキャンセル",
+    "update_branch": "ベースを PR ブランチにマージ",
+    "rerun": "失敗したチェックを再実行",
+    "copy_branch": "ブランチ名をコピー",
+    "open_pr": "GitHub で PR を開く",
+    "next_issue": "次の課題",
+    "prev_issue": "前の課題",
+    "needs_you": "要対応: {{key}} {{title}}"
+  },
+  "notify": {
+    "needs_you_title": "{{key}} の対応が必要です",
+    "enable": "デスクトップ通知",
+    "denied": "このブラウザでは通知がブロックされています"
+  },
+  "shortcuts": {
+    "title": "ショートカット: D 詳細 · F ファイル · Alt+↑/↓ 前/次の課題 · ⌘K 操作"
   }
 }
