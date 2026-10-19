@@ -40,6 +40,12 @@ func (s *Service) Routes() http.Handler {
 	r.Post("/issues/{key}/pr/update-branch", s.hPROp("update-branch"))
 	r.Post("/issues/{key}/pr/rerun-checks", s.hPROp("rerun-checks"))
 	r.Post("/issues/{key}/pr/merge", s.hPROp("merge"))
+	r.Get("/issues/{key}/prs", s.hPRList)
+	r.Get("/issues/{key}/pr/files", s.hPRFiles)
+	r.Post("/issues/{key}/pr/sync-labels", s.hPRManage("sync-labels"))
+	r.Post("/issues/{key}/pr/delete-branch", s.hPRManage("delete-branch"))
+	r.Get("/worktrees", s.hWorktrees)
+	r.Post("/worktrees/remove", s.hWorktreeRemove)
 	return r
 }
 

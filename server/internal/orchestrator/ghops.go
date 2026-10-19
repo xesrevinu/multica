@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
@@ -39,8 +40,12 @@ func (s *Service) prFor(r *http.Request) (*IssueView, *prTarget, int, string) {
 		return v, nil, 0, ""
 	}
 	t := &prTarget{number: v.PR.Number}
+	// ?number= picks another PR linked to the issue (the PR list).
+	if n, aerr := strconv.Atoi(r.URL.Query().Get("number")); aerr == nil && n > 0 {
+		t.number = n
+	}
 	err = s.opt.Pool.QueryRow(r.Context(), `SELECT g.installation_id, g.repo_owner, g.repo_name FROM issue_pull_request ip JOIN github_pull_request g ON g.id=ip.pull_request_id
-		WHERE ip.issue_id=$1 AND g.pr_number=$2 AND g.workspace_id=$3 ORDER BY g.pr_updated_at DESC LIMIT 1`, v.ID, v.PR.Number, wsID(r)).Scan(&t.installation, &t.owner, &t.repo)
+		WHERE ip.issue_id=$1 AND g.pr_number=$2 AND g.workspace_id=$3 ORDER BY g.pr_updated_at DESC LIMIT 1`, v.ID, t.number, wsID(r)).Scan(&t.installation, &t.owner, &t.repo)
 	if err != nil {
 		return v, nil, 0, ""
 	}
@@ -120,7 +125,7 @@ func (s *Service) hPROp(op string) http.HandlerFunc {
 			return
 		}
 		head := ""
-		if v.PR != nil {
+		if v.PR != nil && v.PR.Number == t.number {
 			head = v.PR.HeadSHA
 		}
 		res := map[string]any{"op": op, "ok": true}
