@@ -452,6 +452,19 @@ func (c *Client) DeleteBranch(ctx context.Context, installationID int64, owner, 
 	return c.REST(ctx, installationID, http.MethodDelete, repoPath(owner, repo)+"/git/refs/heads/"+pathRef(ref), nil, nil)
 }
 
+// FetchPRHead returns the PR's current head commit.
+func (c *Client) FetchPRHead(ctx context.Context, installationID int64, owner, repo string, number int) (string, error) {
+	var pr struct {
+		Head struct {
+			SHA string `json:"sha"`
+		} `json:"head"`
+	}
+	if err := c.REST(ctx, installationID, http.MethodGet, fmt.Sprintf("%s/pulls/%d", repoPath(owner, repo), number), nil, &pr); err != nil {
+		return "", err
+	}
+	return pr.Head.SHA, nil
+}
+
 // UpdateBranch merges the base branch into the PR branch.
 func (c *Client) UpdateBranch(ctx context.Context, installationID int64, owner, repo string, number int, expectedHead string) error {
 	body := map[string]any{}

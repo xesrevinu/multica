@@ -2,10 +2,13 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -124,23 +127,26 @@ func (s *Service) hPROp(op string) http.HandlerFunc {
 			writeErr(w, 403, "github_permission", "the GitHub App installation lacks permission for "+op)
 			return
 		}
-		head := ""
-		if v.PR != nil && v.PR.Number == t.number {
-			head = v.PR.HeadSHA
+		// The head the member saw on the card (optimistic concurrency); the
+		// stored snapshot lags pushes, so without one use the live head.
+		var body struct {
+			HeadSHA string `json:"head_sha"`
+		}
+		_ = json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body)
+		head := strings.TrimSpace(body.HeadSHA)
+		if head == "" {
+			hd, herr := gh.FetchPRHead(r.Context(), t.installation, t.owner, t.repo, t.number)
+			if herr != nil {
+				writeGHErr(w, herr)
+				return
+			}
+			head = hd
 		}
 		res := map[string]any{"op": op, "ok": true}
 		switch op {
 		case "update-branch":
 			err = gh.UpdateBranch(r.Context(), t.installation, t.owner, t.repo, t.number, head)
 		case "rerun-checks":
-			if head == "" {
-				d, derr := gh.FetchPRDetail(r.Context(), t.installation, t.owner, t.repo, t.number)
-				if derr != nil {
-					err = derr
-					break
-				}
-				head = d.HeadSHA
-			}
 			var n int
 			n, err = gh.RerunFailedChecks(r.Context(), t.installation, t.owner, t.repo, head)
 			res["rerun"] = n
