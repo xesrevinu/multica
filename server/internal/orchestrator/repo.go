@@ -22,6 +22,7 @@ import (
 type repoOps struct {
 	svc     *Service
 	retried sync.Map // head sha → CI already re-run once
+	fetched sync.Map // hub path → last fetch time
 	mu      sync.Map // per-project integration lock (serial merge)
 	work    string
 }
@@ -112,7 +113,14 @@ func (r *repoOps) integrate(ctx context.Context, t *Team, s *Snapshot, push bool
 	w := filepath.Join(r.work, "integ-"+t.ProjectID)
 	if _, err := os.Stat(w); err != nil {
 		_ = os.MkdirAll(filepath.Dir(w), 0o755)
-		if o := run(ctx, "", "git", "clone", "-q", src, w); o.code != 0 {
+		if sp.Repo.Hub != "" {
+			// Reuse the local checkout's object store: a detached worktree,
+			// no network clone. Shares origin with the hub.
+			run(ctx, sp.Repo.Hub, "git", "worktree", "prune")
+			if o := run(ctx, sp.Repo.Hub, "git", "worktree", "add", "-q", "--detach", w); o.code != 0 {
+				return ProbeResult{Kind: "push_failed", Detail: "worktree add: " + o.err}
+			}
+		} else if o := run(ctx, "", "git", "clone", "-q", src, w); o.code != 0 {
 			return ProbeResult{Kind: "push_failed", Detail: "clone: " + o.err}
 		}
 		run(ctx, w, "git", "config", "user.email", "orchestrator@multica.local")
@@ -141,9 +149,7 @@ func (r *repoOps) integrate(ctx context.Context, t *Team, s *Snapshot, push bool
 	if ps := run(ctx, w, "git", "push", "-q", "origin", "HEAD:"+M); ps.code != 0 {
 		return ProbeResult{Kind: "push_failed", Detail: tail(ps.err, 200)}
 	}
-	if sp.Repo.Hub != "" {
-		run(ctx, sp.Repo.Hub, "git", "pull", "-q", "--ff-only")
-	}
+	r.refreshHub(ctx, sp, true)
 	// cleanup: the merged branch is done; drop it from the bare remote.
 	run(ctx, sp.Repo.Bare, "git", "update-ref", "-d", "refs/heads/"+branchOf(sp, s.Issue.Key))
 	return ProbeResult{OK: true, Kind: "merged", SHA: strings.TrimSpace(run(ctx, w, "git", "rev-parse", "HEAD").out)}
@@ -287,6 +293,9 @@ func (r *repoOps) gate(ctx context.Context, t *Team, s *Snapshot, merge bool) Pr
 	out, _ = r.gh(ctx, sp, "pr", "view", n, "--json", "mergeCommit,state")
 	_ = json.Unmarshal([]byte(out), &v)
 	res.OK, res.Kind = v.State == "MERGED", "merged"
+	if res.OK {
+		r.refreshHub(ctx, sp, true)
+	}
 	if v.MergeCommit != nil {
 		res.SHA = v.MergeCommit.Oid
 	}
@@ -410,4 +419,33 @@ func (r *repoOps) samePatch(ctx context.Context, t *Team, a, b string) bool {
 	}
 	pa := pid(a)
 	return pa != "" && pa == pid(b)
+}
+
+// refreshHub keeps the local main checkout current so the daemon cuts task
+// worktrees from today's main: fetch origin (throttled to once per 10s unless
+// forced) and fast-forward main when the checkout sits on main with a clean
+// tree. A dirty or diverged hub is left alone (it is the user's checkout);
+// the agent still merges origin/main itself per its instructions.
+func (r *repoOps) refreshHub(ctx context.Context, sp *Spec, force bool) {
+	hub := sp.Repo.Hub
+	if hub == "" {
+		return
+	}
+	now := time.Now()
+	if last, ok := r.fetched.Load(hub); ok && !force && now.Sub(last.(time.Time)) < 10*time.Second {
+		return
+	}
+	r.fetched.Store(hub, now)
+	if o := run(ctx, hub, "git", "fetch", "-q", "origin", "--prune"); o.code != 0 {
+		slog.Warn("orchestrator: hub fetch", "hub", hub, "err", short(o.err, 200))
+		return
+	}
+	cur := strings.TrimSpace(run(ctx, hub, "git", "symbolic-ref", "-q", "--short", "HEAD").out)
+	dirty := strings.TrimSpace(run(ctx, hub, "git", "status", "--porcelain", "--untracked-files=no").out)
+	if cur != sp.Repo.Main || dirty != "" {
+		return
+	}
+	if o := run(ctx, hub, "git", "merge", "-q", "--ff-only", "origin/"+sp.Repo.Main); o.code != 0 {
+		slog.Warn("orchestrator: hub fast-forward", "hub", hub, "err", short(o.err, 200))
+	}
 }

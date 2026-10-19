@@ -433,6 +433,10 @@ func (s *Service) apply(ctx context.Context, t *Team, row *issueRow, d *Decision
 	if err = injected(d.Tid); err != nil {
 		return err
 	}
+	if d.StartsRun() {
+		// The daemon cuts the task worktree from the hub: make it current first.
+		s.repo.refreshHub(ctx, t.Spec, false)
+	}
 	if d.CancelRun != "" {
 		if err = s.call(ctx, t.WorkspaceID, "POST", fmt.Sprintf("/api/issues/%s/tasks/%s/cancel", row.ID, d.CancelRun), nil); err != nil {
 			return err

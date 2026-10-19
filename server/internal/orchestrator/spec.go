@@ -64,11 +64,17 @@ type Roles struct {
 }
 
 type RepoSpec struct {
-	Mode           string   `json:"mode" yaml:"mode"` // "github" or "local"
-	Slug           string   `json:"slug,omitempty" yaml:"slug,omitempty"`
-	URL            string   `json:"url,omitempty" yaml:"url,omitempty"`
-	Bare           string   `json:"bare,omitempty" yaml:"bare,omitempty"` // local mode: bare remote path
-	Hub            string   `json:"hub,omitempty" yaml:"hub,omitempty"`   // local mode: worktree source clone (ff-pulled after merge)
+	Mode string `json:"mode" yaml:"mode"` // "github" or "local"
+	Slug string `json:"slug,omitempty" yaml:"slug,omitempty"`
+	URL  string `json:"url,omitempty" yaml:"url,omitempty"`
+	Bare string `json:"bare,omitempty" yaml:"bare,omitempty"` // local mode: bare remote path
+	// Hub is the local main checkout the project's local_directory resource
+	// points at (both modes). The daemon cuts every task worktree from it
+	// (with `wt switch` when it has .config/wt.toml, so hooks run); the engine
+	// keeps it fresh: fetch + ff-only main before a run starts and after a
+	// merge, and uses `git worktree add` from it instead of cloning for its own
+	// integration checkout. Pushes and PRs still go to origin.
+	Hub            string   `json:"hub,omitempty" yaml:"hub,omitempty"`
 	Main           string   `json:"main" yaml:"main"`
 	BranchPrefix   string   `json:"branch_prefix" yaml:"branch_prefix"`
 	CheckCmd       string   `json:"check_cmd,omitempty" yaml:"check_cmd,omitempty"`
