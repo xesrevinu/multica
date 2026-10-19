@@ -128,13 +128,19 @@ Screenshots: .orch-dev/shots/ui-p2-*, ui-p3-*, ui-p4-*, ui-p5-m-* (box /workspac
 Known: React "nativeButton" unknown-prop warning on every page (pre-existing, not from orch code); drawer is read-only (edit via classic page); sidebar sort is attention-only; core vitest has localStorage failures under Node 26 (env, untouched files).
 Helpers (git-excluded): `.orch-dev/api.mjs` (authenticated API calls; needs DEV_CODE from api.env's MULTICA_DEV_VERIFICATION_CODE, never print), `.orch-dev/shots.mjs`.
 
-## Step: UI round 2 (2026-10-19, in progress)
+## Step: UI round 2 (2026-10-19)
 Ray: "functionally OK but styling only ~50% there". Same constraints. Screenshots → box /workspace/ui2/.
-- [ ] Step 0 merge chore/slim — NOT merged yet: chore/slim stops at DingTalk removal (providers, Composio, Dockerfile.web/stale refs still open per its SLIM-PROGRESS.md). Re-check before the end; tag backup/20261019/pre-slim-merge then merge.
+- [ ] Step 0 merge chore/slim — NOT merged (re-checked 21:30): chore/slim still ends at 31d60c11d "remove the DingTalk integration"; provider trim (keep pi/omp/codex/claude/opencode/yielded/grok/gbot/dsh), Composio removal, Dockerfile.web/stale refs not done. No backup tag created, nothing merged.
 - [x] nativeButton warning fixed (ui tooltip/hover-card wrappers dropped the prop base-ui 1.3 triggers lack).
 - [x] Backend: PR list per issue, PR files, reviews + review comments + conflict files + labels in PR detail, sync-labels / delete-branch ops (App-permission gated), worktree list/remove (server-side git on team hubs), `settled_total`.
 - [x] PWA start_url /chat ("chat" reserved slug + legacy segment).
 - [x] Sidebar: t3 rows (project badge, Working spinner, PR/diff chips, branch), view options (sort/assignee/priority/project/orchestrated/sub-issues, localStorage), hover pin/unpin, "Settled (N)" footer + load more.
 - [x] Chat: plain agent messages, member bubbles, "Worked for …" fold, hairline dividers, rounded composer with agent/priority/risk chips, context bar (mode · diff · branch · phase · actions).
 - [x] Codex-style PR card: commit lanes, branch chips, sha·author·time, conflicts, checks/reviews summary, pending "Merging main into the branch… Resolving" row, linked-PR switcher, sync labels / delete branch.
-- [ ] Drawer in-place editing; worktree panel; files tab; review comments in timeline; cmd-k / shortcuts / unread; e2e run.
+- [x] Drawer: tabs Details / Files changed / Worktrees / Terminal (placeholder); in-place description, priority, risk, acceptance switch, project, labels.
+- [x] Worktree panel (this issue / all; open in editor, copy path, remove with dirty-force confirm).
+- [x] GitHub reviews + review comments merged into the timeline; header PR chip + Files button.
+- [x] Cmd-K orch actions, D / F / Alt+↑↓ shortcuts, unread dots from inbox, toast + desktop notification on needs-you.
+- [x] Fix (found in e2e): PR ops used the stale snapshot head sha → GitHub 409 on update-branch; client now sends the seen head_sha, server falls back to a live GET.
+- [x] Real e2e (multica_e2e-819 / autoteam-sandbox): ATT-69 (PR #24) and ATT-70 (PR #25) went implement → PR → review → acceptance → merge. Acceptance switch, Rerun failed checks, Sync labels and Accept were clicked in the UI; ATT-70 got conflicts after #24, the agent resolved them, the card showed the conflict files.
+- Open: sandbox CI flaky first run; delete-branch not clicked live (repo auto-deletes head branches); update-branch can't fix real conflicts (GitHub 422 → toast); terminal is a placeholder.
