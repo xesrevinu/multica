@@ -47,7 +47,7 @@ func (s *Service) CheckWrite(in GuardInput) string {
 // via `multica flow`); agents writing them would forge counters or gates.
 var EngineOwnedMetaKeys = map[string]bool{
 	"owner": true, "attempt_impl": true, "attempt_review": true, "attempt_infra": true,
-	"merged_sha": true, "acceptance": true, "acceptance_required": true, "review_started_sha": true,
+	"merged_sha": true, "pr_number": true, "pr": true, "acceptance": true, "acceptance_required": true, "review_started_sha": true,
 }
 
 // AgentPhaseValues are the phase values an agent may write.

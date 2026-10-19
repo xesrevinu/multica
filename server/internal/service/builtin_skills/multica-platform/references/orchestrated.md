@@ -9,14 +9,16 @@ status and assignee. You work, write metadata, and write one result comment.
 | You are | Write | Effect |
 |---|---|---|
 | owner | `multica issue status <key> in_progress` (from todo only) | shows you started |
-| owner | push `agent/<KEY>`, then `phase=review_requested`, `head_sha=<pushed sha>`, `pr=<url>` | orchestrator pre-checks (merge + checks), opens the PR if missing, assigns the reviewer |
+| owner | push `agent/<KEY>` (open the PR on GitHub projects), then `head_sha=<pushed sha>`, then `phase=review_requested` last | orchestrator pre-checks (merge + checks), finds or opens the PR, records `pr`, assigns the reviewer |
 | reviewer | `verdict=approve` or `verdict=changes`, `reviewed_sha=<the sha you ran>` | approve@head + green CI → merge (or human acceptance); changes → back to owner |
 | anyone | `phase=blocked`, `blocked_reason=<one line: what is missing, who can give it>` | issue goes to the lead, the human is notified |
 | lead | `phase=unblocked` or `phase=cancel_proposed` on a blocked issue | back to the owner (counters reset) or cancelled |
 
-Write metadata with `multica issue metadata set <key> <name> <value>`.
-Everything else (`owner`, `attempt_*`, `merged_sha`, `acceptance`) belongs to
-the orchestrator; writing it is refused with `orchestrator_owned`.
+Write metadata with `multica issue metadata set <KEY> --key <name> --value <value>`;
+quote shas as JSON strings (`--value "\"$SHA\""`) and write the signal key
+(`phase` / `verdict`) last. Everything else (`owner`, `attempt_*`, `pr`,
+`pr_number`, `merged_sha`, `acceptance`) belongs to the orchestrator; writing it
+is refused with `orchestrator_owned`.
 
 ## Rules that keep the machine deterministic
 
