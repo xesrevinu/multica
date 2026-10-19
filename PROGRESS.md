@@ -161,3 +161,17 @@ Ray: "functionally OK but styling only ~50% there". Same constraints. Screenshot
 - B2: handoff stays in the claim's [Project workflow] brief (handler/daemon.go appends HandoffBrief to ProjectWorkflow.Brief); daemon unchanged.
 - B3 (a5157fa55, 907b73f5e): the gate re-asserts review-verdict. If the head's combined review-verdict state differs from the engine's and the newest status is not the App's, the App posts the engine state (pending, or success at the approved sha) over it and logs the creator. The reviewer gets skill script `review-verdict/scripts/pr-review-comment.sh` (only `gh pr review N --comment --body-file`; refuses anything else). reviewer.md/SKILL.md forbid statuses, check runs and approve/request-changes. The reviewer now mounts handoff-metadata (budget 40500). The env cannot block gh: agents use Ray's gh login, and PATH/HOME are blocked custom_env keys. Tests: TestGitHubGateOverridesAgentPostedReviewVerdict, TestForeignVerdict, TestReviewerCannotPostStatusesByInstruction, TestReviewCommentScriptOnlyComments.
 - B4 (34ede5e60): scripts/orch-preset-sync.py applied to local e2e (both teams share at-*): 24 skills (17 new), lead 10 / owner 12 / reviewer 9, idempotent re-run. Backup in .orch-dev/backup/. The PocketJS how-to is in docs/orchestrator/pstack.md; the patch's skill lists are pre-slim.
+
+## Step: install verify, smoke, slim-2 squash, K8s deploy (2026-10-20 05:46–06:25)
+- Woolpup is installed on effect-anything (installation 173184549, all repos, statuses/checks/contents/pull_requests write). The key has NOT been rotated: github-app.env mtime is 10-19 17:47, the K8s secret was last applied 10-16, and the old key still mints JWTs.
+- Smoke test ATT-73 / PR #29, run on the rebuilt e2e API:
+  - First review requested changes → T3_rework with a review_changes handoff → owner fixed it → re-review approved → woolpup[bot] posted review-verdict=success → merged.
+  - The reviewer posted no status itself.
+  - A forged user status landed only after the merge, so the live override path was not exercised; it is covered by unit tests.
+- slim-2 squashed as 5fd835fa7 (tag backup/orch-pre-slim2-20261020), covering parts a and b plus chore/slim. Its stale-refs and squads items are still open on chore/slim-2. Three conflicts (composio/dingtalk imports and the composio helper) were resolved to the slim-2 side.
+  - Checks: go vet, go test (orchestrator/daemon/handler/service/cmd on multica_orch_test) and pnpm typecheck are green.
+- K8s deploy local-5fd835fa7 (tag deploy/orch-k8s-20261020):
+  - DB dump: ~/Backups/multica/prod-pre-orch-20261020-0606.dump.
+  - The rollout script rejects a worktree (.git is a file), so it was run from a clone of the tag, ~/tmp/multica-orch-deploy. The chart is identical to main's.
+  - Verified: migrations 583–585 applied, /health ok, `orchestrator: started teams=0`, and a redelivered installation webhook returned 202.
+- OX/Studio not connected: the effect-anything (and opraying) installations only reached github_pending_installation, because the install did not go through workspace Connect and so carried no state. github_installation has a row only for FX (xesrevinu). Fix: in OX and Studio, Settings → GitHub → Connect → Save on GitHub, which redirects with state and binds the installation.
