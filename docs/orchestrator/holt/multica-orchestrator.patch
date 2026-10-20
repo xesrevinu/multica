@@ -157,7 +157,7 @@ index 3aa3ffb..3e98584 100644
 +            slug: effect-anything/holt
              url: git@github.com:effect-anything/holt.git
 -            label: pocketjs
-+            hub: /Users/kee/Workspace/boom/pocketjs   # wt switch from here; .config/wt.toml hooks run
++            hub: /Users/kee/Workspace/boom/holt   # wt switch from here; .config/wt.toml hooks run
 +            main: main
 +            branch_prefix: agent/
 +            required_checks: [review-verdict]   # CI paused; target set: docs project.yaml.proposed
@@ -240,7 +240,7 @@ index 3aa3ffb..3e98584 100644
 +            slug: effect-anything/holt
              url: git@github.com:effect-anything/holt.git
 -            label: pocketjs
-+            hub: /Users/kee/Workspace/boom/pocketjs
++            hub: /Users/kee/Workspace/boom/holt
 +            main: main
 +            branch_prefix: agent/
 +            required_checks: [review-verdict]   # CI paused; target set: docs project.yaml.proposed

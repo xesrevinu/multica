@@ -51,7 +51,7 @@ pocket:   # project "Pocket" (OX Squad)
     repo:
       mode: github
       slug: effect-anything/holt
-      hub: /Users/kee/Workspace/boom/pocketjs
+      hub: /Users/kee/Workspace/boom/holt
       main: main
       branch_prefix: agent/
       # CI is paused (ci.yml on: workflow_dispatch; Rust compile is slow), so
@@ -94,7 +94,7 @@ studio:   # project "Studio Parts" (Studio Squad)
     repo:
       mode: github
       slug: effect-anything/holt
-      hub: /Users/kee/Workspace/boom/pocketjs
+      hub: /Users/kee/Workspace/boom/holt
       main: main
       branch_prefix: agent/
       # CI paused: review-verdict only for now. Target set once CI is back

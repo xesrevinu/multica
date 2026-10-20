@@ -1,4 +1,4 @@
-# PocketJS 接入编排器（提案，未应用到 pocketjs 仓库）
+# PocketJS 接入编排器（提案，未应用到 holt 仓库；本地 checkout ~/Workspace/boom/holt，旧路径 pocketjs 为软链）
 
 | 文件 | 内容 |
 |---|---|
@@ -15,7 +15,7 @@
 - 删掉了已实现功能上过时的"proposed"注释。
 - 前提：pstack 技能要先进 workspace（`multica team preset export <dir>` 后 `multica skill create`），否则 project.yaml 里引用的名字不存在。
 
-应用：在 pocketjs 根目录 `git apply docs/.../multica-orchestrator.patch`（已 `git apply --check` 通过）。两段 `orchestrator:` 已用 `multica team preset render -f` 解析和校验通过（route owner 自动并入 owners、reviewer 不在 owner 池）。
+应用：在 holt 根目录 `git apply docs/.../multica-orchestrator.patch`（已 `git apply --check` 通过）。两段 `orchestrator:` 已用 `multica team preset render -f` 解析和校验通过（route owner 自动并入 owners、reviewer 不在 owner 池）。
 
 ## 映射
 
@@ -47,5 +47,5 @@
 ## 待 Ray 定
 - CI 恢复后在两个项目里取消注释 6 个 check 名（名称已从真实 check run 核对）。
 - gbot 既是 owner 又拆分：拆分后父单写 `phase=planned`（引擎不再启动它），子单建成 todo 由引擎派（backlog = 未计划，引擎不碰）。
-- 两个项目共用一个 hub 和仓库，worktree 都在 `~/.cursor/worktrees/pocketjs/agent-<key>`。
+- 两个项目共用一个 hub 和仓库，worktree 都在 `~/.cursor/worktrees/holt/agent-<key>（旧 worktree 仍在 ~/.cursor/worktrees/pocketjs）`。
 - 分支命名：`agent/<key>`（worktree `agent-<key>`）只给编排器用；herdr worker 用 `herdr/<task>`，不要用 `agent/<task>`，否则会占住编排分支，issue 被 `[branch_occupied]` 阻塞。

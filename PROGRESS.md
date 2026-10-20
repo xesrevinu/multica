@@ -65,7 +65,7 @@ Reference implementation: /Users/kee/Workspace/ai-stack/multica-e2e/teamctl (kep
   - No per-task clone: there is no "git clone" in the daemon or api logs, and only the integ worktree exists in the cache.
 - Incident: I restarted the daemon with `env -i`, so it lost the provider keys. Every run failed with "Connection error.", and two issues were blocked on infra attempts. I restarted it with the login env and unblocked both with `flow unblock`. Runbook updated.
 - Docs:
-  - docs/orchestrator/pocketjs/ (patches + mapping)
+  - docs/orchestrator/holt/ (patches + mapping)
   - production-readiness.md
   - roles.md: division of responsibilities
   - README: new keys, branch rule
@@ -152,7 +152,7 @@ Ray: "functionally OK but styling only ~50% there". Same constraints. Screenshot
   - [x] Sandbox verification ATT-72 / PR #28: T1 → T2 → reviewer changes ("[important] clamp must throw RangeError when lo > hi") → T3_rework persisted handoff kind=review_changes, attempt 2, prev_head d255fba8, diff summary, 2 findings (issue comment + GitHub review) → owner run 01a154d8 prompt_bytes 2273 vs 937 for every other run (brief injected; reviewer re-review run stayed 937 = no leak) → owner pushed 41fb6c05 "throw RangeError when clamp bounds are inverted" → re-review approve. Card rendered in the issue chat (.orch-dev/shots/handoff-card-att72.png). Merge left to the engine/CI.
   - Note: the reviewer agent still posted a `review-verdict` failure status itself (instructions say not to); the engine ignores non-App statuses.
 - [x] 2. pstack slimming (966283041): manifest `roles:` = mounted sets + budget_bytes/max_skills; lead 7, owner 8, reviewer 5, acceptance 2 (was 23/33/20/4); TestRoleContextBudget. Reviewer: 4 parallel lenses (correctness/security/tests/API design), only high-confidence findings with severity.
-- [x] 3. PocketJS proposal (8912b555e): docs/orchestrator/pocketjs/project.yaml.proposed. Repo is /Users/kee/Workspace/boom/pocketjs (effect-anything/holt); no stash there. App not installed on the repo (404); branch protection unreadable (private/free 403); check names from real check runs via gh read-only. CI paused (workflow_dispatch).
+- [x] 3. PocketJS proposal (8912b555e): docs/orchestrator/holt/project.yaml.proposed. Repo is /Users/kee/Workspace/boom/holt (effect-anything/holt); no stash there. App not installed on the repo (404); branch protection unreadable (private/free 403); check names from real check runs via gh read-only. CI paused (workflow_dispatch).
 
 ## Step: Woolpup install + CI-paused checks + reviewer guard + preset sync (2026-10-20 00:00–00:20)
 - A. App slug `woolpup` (GET /app as the App = id 1049652). Opened https://github.com/apps/woolpup/installations/new in Zen (`open -g`). Install needs Ray's click (org effect-anything → repo holt or all → Install). Polled GET /repos/effect-anything/holt/installation for ~11 min: still 404. Poller: ~/tmp/poll-woolpup.sh (log ~/tmp/poll-woolpup.log).
