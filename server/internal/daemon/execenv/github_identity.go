@@ -31,9 +31,9 @@ func AgentGitIdentity() (name, email string) {
 	return name, email
 }
 
-// agentGitHelper reads the token from the agent's environment at use time,
-// so the value is never written to disk.
-const agentGitHelper = `!f() { test "$1" = get || exit 0; test -n "${GH_TOKEN:-}" || exit 0; echo username=x-access-token; echo "password=${GH_TOKEN}"; }; f`
+// agentGitHelper asks the daemon for a fresh token at use time (falling back
+// to the run's GH_TOKEN), so long runs keep pushing and nothing hits disk.
+const agentGitHelper = `!f() { test "$1" = get || exit 0; multica github-token --git-credential 2>/dev/null && exit 0; test -n "${GH_TOKEN:-}" || exit 0; echo username=x-access-token; echo "password=${GH_TOKEN}"; }; f`
 
 // ConfigureWorktreeGitHubIdentity sets the bot author and token-based GitHub
 // auth in this worktree's own config (extensions.worktreeConfig), leaving the

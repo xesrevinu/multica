@@ -73,6 +73,7 @@ func init() {
 	versionCmd.GroupID = groupAdditional
 
 	rootCmd.AddCommand(issueCmd)
+	rootCmd.AddCommand(githubTokenCmd)
 	rootCmd.AddCommand(projectCmd)
 	rootCmd.AddCommand(labelCmd)
 	rootCmd.AddCommand(propertyCmd)

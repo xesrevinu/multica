@@ -3,7 +3,9 @@ package daemon
 import (
 	"context"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -44,6 +46,10 @@ func (d *Daemon) applyAgentGitHubIdentity(ctx context.Context, taskID, workDir s
 		}
 		return
 	}
+	agentGitHubTokens.put(taskID, cachedGitHubToken{token: token, exp: exp})
+	if shim := installGhShim(ghShimDir(), agentEnv["PATH"]); shim != "" {
+		agentEnv["PATH"] = shim + string(filepath.ListSeparator) + agentEnv["PATH"]
+	}
 	agentEnv["GH_TOKEN"] = token
 	agentEnv["GITHUB_TOKEN"] = token
 	// gh prefers GH_TOKEN over its stored login; keep it from prompting.
@@ -51,4 +57,12 @@ func (d *Daemon) applyAgentGitHubIdentity(ctx context.Context, taskID, workDir s
 	if logger != nil {
 		logger.Info("github app identity applied to agent", "expires_at", exp.UTC().Format(time.RFC3339))
 	}
+}
+
+// ghShimDir holds the daemon's gh shim (a script with no secrets in it).
+func ghShimDir() string {
+	if dir, err := os.UserCacheDir(); err == nil {
+		return filepath.Join(dir, "multica", "gh-shim")
+	}
+	return filepath.Join(os.TempDir(), "multica-gh-shim")
 }
