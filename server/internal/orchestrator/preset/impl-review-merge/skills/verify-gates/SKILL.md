@@ -14,12 +14,12 @@ metadata:
    dependencies, vendor links and the direnv toolchain already prepared):
    `git diff origin/main...$SHA`, `git show $SHA:<path>`, `git grep <pat> $SHA`.
    Never `git checkout`/`switch`/`reset` there: its HEAD must stay put.
-3. To run gates, make the one extra checkout with worktrunk so the repo's
-   setup hooks run (deps, vendor/hermes links, `direnv allow`):
-   `wt switch --yes --no-cd --create rv/<key> --base $SHA`, then work in the
-   path `wt` prints (`git worktree list | grep rv/<key>`). Never plain
-   `git worktree add`, never copy node_modules/vendor by hand: if setup is
-   missing, that is an infra finding, not something to rebuild.
+3. Any checkout you run checks in MUST come from
+   `wt switch --yes --no-cd --create rv/<key> --base $SHA` (its hooks install
+   deps, link vendor/hermes, `direnv allow`); work in the path `wt` prints.
+   No other way: no `git worktree add`, `git archive`, symlinked or copied
+   node_modules/vendor, or any hand-made tree. If wt or its setup fails,
+   report "not verified: <why>" as an infra finding; do not rebuild it.
 4. Run only the checks the repo's checks skill lists for the paths changed
    (e.g. `holt-checks`), with the toolchain from the checkout's `.envrc`
    (`direnv exec . <cmd>` if it is not already in your env). Capture the exact
