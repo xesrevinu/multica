@@ -1,0 +1,11 @@
+name: reviewer approves but tags risk=high → T10 acceptance gate
+spec:
+  roles: {lead: lead, reviewer: rev, owners: [o1]}
+  repo: {mode: github, slug: x/y}
+issue: {key: ATT-10}
+steps:
+  - expect: {tid: T1_start}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
+    expect: {tid: T2_review}
+  - do: {run: completed, meta: {verdict: approve, reviewed_sha: h1, risk: high}}
+    expect: {tid: T10_await_acceptance}

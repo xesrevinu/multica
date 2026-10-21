@@ -452,10 +452,8 @@ type actorDisplayLookup struct {
 type actorDisplayLookupState struct {
 	members       map[string]string
 	agents        map[string]string
-	squads        map[string]string
 	membersLoaded bool
 	agentsLoaded  bool
-	squadsLoaded  bool
 }
 
 func loadActorDisplayLookup(ctx context.Context, client *cli.APIClient) actorDisplayLookup {
@@ -505,25 +503,6 @@ func (l actorDisplayLookup) loadAgents() {
 	}
 }
 
-func (l actorDisplayLookup) loadSquads() {
-	if l.state == nil || l.state.squadsLoaded {
-		return
-	}
-	l.state.squadsLoaded = true
-	l.state.squads = map[string]string{}
-	if l.client == nil || l.client.WorkspaceID == "" {
-		return
-	}
-	var squads []map[string]any
-	if err := l.client.GetJSON(l.ctx, "/api/squads", &squads); err == nil {
-		for _, s := range squads {
-			if id := strVal(s, "id"); id != "" {
-				l.state.squads[id] = strVal(s, "name")
-			}
-		}
-	}
-}
-
 func (l actorDisplayLookup) actor(actorType, id string) string {
 	if actorType == "" || id == "" {
 		return ""
@@ -541,13 +520,6 @@ func (l actorDisplayLookup) actor(actorType, id string) string {
 		if l.state != nil && l.state.agents != nil {
 			if name := l.state.agents[id]; name != "" {
 				return "agent:" + name
-			}
-		}
-	case "squad":
-		l.loadSquads()
-		if l.state != nil && l.state.squads != nil {
-			if name := l.state.squads[id]; name != "" {
-				return "squad:" + name
 			}
 		}
 	}

@@ -13,7 +13,7 @@ func TestTaskSupplementVersionGate(t *testing.T) {
 		{"codex", "codex-cli 0.100.0", true}, {"codex", "0.99.0", false},
 		{"claude", "2.1.110 (Claude Code)", true}, {"claude", "2.1.109", false},
 		{"grok", "1.0.14", true}, {"grok", "1.0.13", false}, {"grok", "0.2.120", false},
-		{"codex", "", false}, {"claude", "dev", false}, {"kimi", "9.0.0", false},
+		{"codex", "", false}, {"claude", "dev", false}, {"pi", "9.0.0", false},
 	} {
 		if got := SupportsTaskSupplement(tc.provider, tc.version); got != tc.want {
 			t.Errorf("%s %q: supported=%v, want %v", tc.provider, tc.version, got, tc.want)
@@ -204,8 +204,6 @@ func TestCheckMinVersion(t *testing.T) {
 		{"claude", "v2.0.0", false},
 		{"claude", "1.0.128", true},
 		{"claude", "1.9.99", true},
-		{"antigravity", "agy version 1.1.10", false},
-		{"antigravity", "1.1.9", true},
 		{"claude", "invalid", true},
 		{"codex", "codex-cli 0.118.0", false},
 		{"codex", "codex-cli 0.100.0", false},
@@ -215,22 +213,7 @@ func TestCheckMinVersion(t *testing.T) {
 		{"grok", "0.2.89", false},
 		{"grok", "0.2.0", true},
 		{"grok", "0.1.9", true},
-		{"qoderclicn", "unverified-version-format", false},
-		{"qwen", "0.20.0", false},
-		{"qwen", "qwen 0.20.1", false},
-		{"qwen", "0.19.9", true},
-		{"dim", "0.3.10", false},
-		{"dim", "0.3.11", false},
-		{"dim", "0.4.0", false},
-		{"dim", "0.3.9", true},
-		{"mcode", "0.1.2", false},
-		{"mcode", "mcode 0.1.1", true},
-		{"zeroclaw", "zeroclaw 0.8.4", false},
-		{"zeroclaw", "0.8.0", false},
-		{"zeroclaw", "0.7.5", true},
-		{"zeroclaw", "invalid", true},
-		{"dim", "0.2.99", true},
-		{"dim", "invalid", true},
+		{"pi", "unverified-version-format", false},
 		// opencode: 1.1.54 is the first build that honors TMPDIR/TMP/TEMP for
 		// Bun native-module extraction. 1.1.53 and 1.1.49 are the versions
 		// actually measured leaking into the shared temp dir (#8392); the CLI

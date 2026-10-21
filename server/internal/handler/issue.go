@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/orchestrator"
 	"io"
 	"log/slog"
 	"net/http"
@@ -3357,6 +3358,10 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 
 	// Determine creator identity: agent (via X-Agent-ID header) or member.
 	creatorType, actualCreatorID := h.resolveActor(r, creatorID, workspaceID)
+	if msg := h.orchestratorCreateLabelsGuard(r, creatorType, creatorID, wsUUID, projectID, labelIDs); msg != "" {
+		writeErrorCode(w, http.StatusForbidden, orchestrator.ErrCodeOwned, msg)
+		return
+	}
 
 	// Optional origin stamping (quick-create / autopilot). Only the
 	// allowed origin types are accepted; anything else is rejected so a
@@ -4009,6 +4014,13 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	// A handoff assignee passes the same gate as a hand-picked one.
 	// An agent's run may only move the issue from the step it works on.
 	callerType, _ := h.resolveActor(r, userID, workspaceID)
+	// Orchestrated projects: the orchestrator is the sole writer of status and
+	// assignee (internal/orchestrator/guard.go). Refusals carry the machine-
+	// readable code orchestrator_owned.
+	if msg := h.orchestratorGuard(r, callerType, userID, prevIssue, req.Status != nil, params.Status, (touchedType || touchedID) && (params.AssigneeType != prevIssue.AssigneeType || params.AssigneeID != prevIssue.AssigneeID)); msg != "" {
+		writeErrorCode(w, http.StatusForbidden, orchestrator.ErrCodeOwned, msg)
+		return
+	}
 	callerRun := h.agentRunOnIssue(r, callerType, prevIssue)
 	handoff, err := h.applyIssueWorkflow(r.Context(), prevIssue, &params, req.Status != nil, touchedType || touchedID, req.EnterWorkflowStep, callerRun)
 	if err != nil {
@@ -4847,6 +4859,9 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		// not list the batch status is skipped like the other per-item guards;
 		// entering a handoff step reassigns this issue to the step's handler.
 		callerType, _ := h.resolveActor(r, userID, workspaceID)
+		if msg := h.orchestratorGuard(r, callerType, userID, prevIssue, req.Updates.Status != nil, params.Status, (batchTouchedType || batchTouchedID) && (params.AssigneeType != prevIssue.AssigneeType || params.AssigneeID != prevIssue.AssigneeID)); msg != "" {
+			continue
+		}
 		callerRun := h.agentRunOnIssue(r, callerType, prevIssue)
 		handoff, err := h.applyIssueWorkflow(r.Context(), prevIssue, &params, req.Updates.Status != nil, batchTouchedType || batchTouchedID, false, callerRun)
 		if err != nil {

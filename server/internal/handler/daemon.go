@@ -2427,6 +2427,7 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 	}
 	resp.Traceparent = tracing.TraceparentForTask(uuidToString(task.ID))
 	var issueNumber int32
+	var issueProjectID pgtype.UUID
 	// Claim-only capability: this server resolves the squad-leader role on the
 	// wire (is_leader_task / squad_id), so the daemon must not re-derive it
 	// from the briefing text. Set unconditionally — on every claim, leader or
@@ -2457,10 +2458,7 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 	// comment input. Comment tasks replace this with the ids actually embedded
 	// in the capability-aware response built below.
 	deliveredCommentIDs = []pgtype.UUID{}
-	composioMCPEnabled := h.composioMCPAppsEnabled(r.Context())
-	if composioMCPEnabled {
-		resp.ConnectedApps = parseRuntimeConnectedAppsForClaim(task.RuntimeConnectedApps, task.ID)
-	}
+	resp.ConnectedApps = parseRuntimeConnectedAppsForClaim(task.RuntimeConnectedApps, task.ID)
 	agent, err := h.Queries.GetAgent(r.Context(), task.AgentID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -2573,13 +2571,11 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 			mcpConfig = resolved
 		}
 	}
-	// Layer the per-task overlay (set at enqueue from the initiator
-	// user's active integrations — currently Composio) on top of the
-	// agent's saved mcp_config. Overlay wins on server-name collisions
-	// because it carries the live user-scoped session URL. Errors are
-	// logged but never fail the claim: a broken overlay must not prevent
-	// the agent from running with its base config.
-	if composioMCPEnabled && len(task.RuntimeMcpOverlay) > 0 {
+	// Layer a per-task MCP overlay on top of the agent's saved mcp_config.
+	// Overlay wins on server-name collisions. Errors are logged but never
+	// fail the claim: a broken overlay must not prevent the agent from
+	// running with its base config.
+	if len(task.RuntimeMcpOverlay) > 0 {
 		if merged, err := mergeMCPOverlay(mcpConfig, json.RawMessage(task.RuntimeMcpOverlay)); err != nil {
 			slog.Warn("daemon claim: merge runtime_mcp_overlay failed; falling back to agent mcp_config", "task_id", uuidToString(task.ID), "error", err)
 		} else {
@@ -2685,6 +2681,7 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 		}
 		resp.ThreadName = issue.Title
 		issueNumber = issue.Number
+		issueProjectID = issue.ProjectID
 
 		// Issue-state delta (MUL-7344). Every field below already sits on the
 		// `issue` row this claim loaded, so this costs one extra read — the
@@ -2824,6 +2821,17 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 		// Project workflow (MUL-7420): best-effort, like the status catalog
 		// below — a failure degrades to the workspace-wide status rules.
 		resp.ProjectWorkflow = h.claimProjectWorkflow(r.Context(), issue, task)
+		// Orchestrator send-back context (review findings, failing checks,
+		// failure classification, attempts) for this run, when the engine
+		// handed the issue to this agent because something went wrong.
+		if h.Orchestrator != nil && issue.ProjectID.Valid && h.Orchestrator.Owns(uuidToString(issue.ProjectID)) && resp.Agent != nil {
+			if brief := h.Orchestrator.HandoffBrief(r.Context(), uuidToString(issue.ID), resp.Agent.Name); brief != "" {
+				if resp.ProjectWorkflow == nil {
+					resp.ProjectWorkflow = &TaskProjectWorkflowData{}
+				}
+				resp.ProjectWorkflow.Brief = strings.TrimSpace(resp.ProjectWorkflow.Brief + "\n\n" + brief)
+			}
+		}
 
 		// Load every planned input as one chronological, de-duplicated set.
 		// The trigger is included here so the delivery receipt can only contain
@@ -3605,6 +3613,9 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 		resp.WorkspaceSlug = ws.Slug
 		if issueNumber > 0 {
 			resp.IssueIdentifier = service.IssueIdentifier(ws.IssuePrefix, issueNumber)
+			if h.Orchestrator != nil && issueProjectID.Valid {
+				resp.ExclusiveBranch = h.Orchestrator.ExclusiveBranch(uuidToString(issueProjectID), resp.IssueIdentifier)
+			}
 		}
 		if ws.Context.Valid {
 			resp.WorkspaceContext = ws.Context.String

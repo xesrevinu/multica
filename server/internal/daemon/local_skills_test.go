@@ -4,7 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
+
 	"testing"
 )
 
@@ -34,13 +34,6 @@ func setTestUserHome(t *testing.T, home string) {
 	t.Helper()
 	redirectTestHome(t, home)
 	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
-}
-
-func testDefaultHermesHome(home string) string {
-	if runtime.GOOS == "windows" {
-		return filepath.Join(home, "AppData", "Local", "hermes")
-	}
-	return filepath.Join(home, ".hermes")
 }
 
 func writeTestClaudePlugin(t *testing.T, home, id, name string, enabled bool) string {
@@ -117,107 +110,6 @@ func TestListRuntimeLocalSkills_Claude(t *testing.T) {
 	}
 }
 
-func TestListRuntimeLocalSkills_Mcode(t *testing.T) {
-	home := t.TempDir()
-	redirectTestHome(t, home)
-
-	writeTestLocalSkill(t, filepath.Join(home, ".minimax", "skills"), "mcode-review", map[string]string{
-		"SKILL.md": "---\nname: MCode Review\ndescription: Review code with MiniMax Code\n---\n",
-	})
-
-	skills, supported, err := listRuntimeLocalSkills("mcode")
-	if err != nil {
-		t.Fatalf("listRuntimeLocalSkills: %v", err)
-	}
-	if !supported || len(skills) != 1 {
-		t.Fatalf("supported=%v skills=%#v", supported, skills)
-	}
-	if skills[0].SourcePath != "~/.minimax/skills/mcode-review" {
-		t.Fatalf("source_path = %q", skills[0].SourcePath)
-	}
-}
-
-// TestListRuntimeLocalSkills_Codebuddy is the regression guard for a bug
-// where CodeBuddy was treated as a drop-in alias for Claude and local
-// (user-level) skills were discovered from ~/.claude/skills. CodeBuddy Code
-// is a Claude Code fork but ships its own native config directory and does
-// NOT read ~/.claude/skills by default — see
-// https://www.codebuddy.ai/docs/cli/skills ("User-level Skills:
-// ~/.codebuddy/skills/"). Discovery must use ~/.codebuddy/skills instead.
-func TestListRuntimeLocalSkills_Codebuddy(t *testing.T) {
-	home := t.TempDir()
-	redirectTestHome(t, home)
-
-	writeTestLocalSkill(t, filepath.Join(home, ".codebuddy", "skills"), "review-helper", map[string]string{
-		"SKILL.md": "---\nname: CodeBuddy Review\ndescription: Review code with CodeBuddy\n---\n# CodeBuddy Review\n",
-	})
-	// ~/.claude/skills is not a CodeBuddy discovery root, so this must not
-	// appear for the codebuddy provider.
-	writeTestLocalSkill(t, filepath.Join(home, ".claude", "skills"), "review-helper", map[string]string{
-		"SKILL.md": "---\nname: Claude Review\ndescription: Should not appear for codebuddy\n---\n# Claude Review\n",
-	})
-
-	skills, supported, err := listRuntimeLocalSkills("codebuddy")
-	if err != nil {
-		t.Fatalf("listRuntimeLocalSkills: %v", err)
-	}
-	if !supported {
-		t.Fatal("codebuddy should be supported")
-	}
-	if len(skills) != 1 {
-		t.Fatalf("expected 1 skill, got %d: %+v", len(skills), skills)
-	}
-
-	skill := skills[0]
-	if skill.Key != "review-helper" {
-		t.Fatalf("key = %q, want review-helper", skill.Key)
-	}
-	if skill.Name != "CodeBuddy Review" {
-		t.Fatalf("name = %q, want CodeBuddy Review", skill.Name)
-	}
-	if skill.SourcePath != "~/.codebuddy/skills/review-helper" {
-		t.Fatalf("source_path = %q, want ~/.codebuddy/skills/review-helper", skill.SourcePath)
-	}
-	if skill.CanDisable {
-		t.Fatal("codebuddy runtime skill controls are not supported yet")
-	}
-}
-
-func TestRuntimeLocalSkills_CodebuddyExcludesClaudePluginSkills(t *testing.T) {
-	home := t.TempDir()
-	redirectTestHome(t, home)
-
-	writeTestLocalSkill(t, filepath.Join(home, ".codebuddy", "skills"), "codebuddy-only", map[string]string{
-		"SKILL.md": "---\nname: CodeBuddy Only\n---\n",
-	})
-	installPath := writeTestClaudePlugin(t, home, "paper-desktop@paper", "paper-desktop", true)
-	writeTestLocalSkill(t, filepath.Join(installPath, "skills"), "design-to-code", map[string]string{
-		"SKILL.md": "---\nname: Claude Plugin Skill\n---\n",
-	})
-
-	skills, supported, err := listRuntimeLocalSkills("codebuddy")
-	if err != nil {
-		t.Fatalf("listRuntimeLocalSkills: %v", err)
-	}
-	if !supported {
-		t.Fatal("codebuddy should be supported")
-	}
-	if len(skills) != 1 || skills[0].Key != "codebuddy-only" {
-		t.Fatalf("CodeBuddy must not list Claude plugin skills, got %#v", skills)
-	}
-
-	bundle, supported, err := loadRuntimeLocalSkillBundle("codebuddy", "paper-desktop:design-to-code")
-	if !supported {
-		t.Fatal("codebuddy should be supported for import")
-	}
-	if err == nil || err.Error() != "local skill not found" {
-		t.Fatalf("load Claude plugin skill for CodeBuddy err = %v, want local skill not found", err)
-	}
-	if bundle != nil {
-		t.Fatalf("load Claude plugin skill for CodeBuddy bundle = %#v, want nil", bundle)
-	}
-}
-
 func TestListRuntimeLocalSkills_ClaudeEnabledPlugin(t *testing.T) {
 	home := t.TempDir()
 	redirectTestHome(t, home)
@@ -267,35 +159,6 @@ func TestListRuntimeLocalSkills_ClaudeDisabledPluginIsHidden(t *testing.T) {
 	}
 }
 
-func TestListRuntimeLocalSkills_Kiro(t *testing.T) {
-	home := t.TempDir()
-	redirectTestHome(t, home)
-
-	writeTestLocalSkill(t, filepath.Join(home, ".kiro", "skills"), "review-helper", map[string]string{
-		"SKILL.md": "---\nname: Kiro Review\ndescription: Review code with Kiro\n---\n# Kiro Review\n",
-	})
-
-	skills, supported, err := listRuntimeLocalSkills("kiro")
-	if err != nil {
-		t.Fatalf("listRuntimeLocalSkills: %v", err)
-	}
-	if !supported {
-		t.Fatal("kiro should be supported")
-	}
-	if len(skills) != 1 {
-		t.Fatalf("expected 1 skill, got %d", len(skills))
-	}
-	if skills[0].Key != "review-helper" {
-		t.Fatalf("key = %q, want review-helper", skills[0].Key)
-	}
-	if skills[0].Name != "Kiro Review" {
-		t.Fatalf("name = %q, want Kiro Review", skills[0].Name)
-	}
-	if skills[0].SourcePath != "~/.kiro/skills/review-helper" {
-		t.Fatalf("source_path = %q", skills[0].SourcePath)
-	}
-}
-
 func TestLocalSkills_DiscoversACPProviderRoots(t *testing.T) {
 	tests := []struct {
 		provider string
@@ -304,46 +167,10 @@ func TestLocalSkills_DiscoversACPProviderRoots(t *testing.T) {
 		wantName string
 	}{
 		{
-			provider: "hermes",
-			root:     filepath.Join(".hermes", "skills"),
-			wantPath: "~/.hermes/skills/review-helper",
-			wantName: "Hermes Review",
-		},
-		{
-			provider: "kimi",
-			root:     filepath.Join(".kimi", "skills"),
-			wantPath: "~/.kimi/skills/review-helper",
-			wantName: "Kimi Review",
-		},
-		{
-			provider: "reasonix",
-			root:     filepath.Join(".reasonix", "skills"),
-			wantPath: "~/.reasonix/skills/review-helper",
-			wantName: "Reasonix Review",
-		},
-		{
 			provider: "dsh",
 			root:     filepath.Join(".dsh", "skills"),
 			wantPath: "~/.dsh/skills/review-helper",
 			wantName: "DSH Review",
-		},
-		{
-			provider: "qoder",
-			root:     filepath.Join(".qoder", "skills"),
-			wantPath: "~/.qoder/skills/review-helper",
-			wantName: "Qoder Review",
-		},
-		{
-			provider: "qoderclicn",
-			root:     filepath.Join(".qoder-cn", "skills"),
-			wantPath: "~/.qoder-cn/skills/review-helper",
-			wantName: "Qoder CN Review",
-		},
-		{
-			provider: "qwen",
-			root:     filepath.Join(".qwen", "skills"),
-			wantPath: "~/.qwen/skills/review-helper",
-			wantName: "Qwen Review",
 		},
 		{
 			provider: "grok",
@@ -362,19 +189,8 @@ func TestLocalSkills_DiscoversACPProviderRoots(t *testing.T) {
 			if tc.provider == "grok" {
 				t.Setenv("GROK_HOME", "")
 			}
-			if tc.provider == "qwen" {
-				t.Setenv("QWEN_HOME", "")
-			}
-			if tc.provider == "reasonix" {
-				t.Setenv("REASONIX_HOME", "")
-			}
 			if tc.provider == "dsh" {
 				t.Setenv("DSH_HOME", "")
-			}
-			if tc.provider == "hermes" {
-				t.Setenv("HERMES_HOME", "")
-				root = filepath.Join(testDefaultHermesHome(home), "skills")
-				wantPath = relativizeHomePath(filepath.Join(root, "review-helper"))
 			}
 
 			writeTestLocalSkill(t, root, "review-helper", map[string]string{
@@ -425,113 +241,6 @@ func TestLocalSkills_DiscoversACPProviderRoots(t *testing.T) {
 	}
 }
 
-// Hermes discovery must scan the home a Hermes task actually runs against, not
-// a hardcoded ~/.hermes: otherwise the skills Hermes loads never appear in the
-// Skills tab or the import dialog (GH #8310). The Windows default
-// (%LOCALAPPDATA%\hermes) comes from the same resolver and is covered by
-// execenv's TestPlatformDefaultHermesHome.
-func TestListRuntimeLocalSkills_HermesFollowsTaskHome(t *testing.T) {
-	tests := []struct {
-		name string
-		// setup configures the Hermes home and returns the skills dir a task
-		// would read; "" means no provider root should be scanned.
-		setup func(t *testing.T, hermesHome string) string
-	}{
-		{
-			name: "explicit HERMES_HOME",
-			setup: func(t *testing.T, _ string) string {
-				hermesHome := filepath.Join(t.TempDir(), "custom-hermes")
-				t.Setenv("HERMES_HOME", hermesHome)
-				return filepath.Join(hermesHome, "skills")
-			},
-		},
-		{
-			name: "sticky active profile",
-			setup: func(t *testing.T, hermesHome string) string {
-				writeTestHermesActiveProfile(t, hermesHome, "work")
-				return filepath.Join(hermesHome, "profiles", "work", "skills")
-			},
-		},
-		{
-			// Hermes refuses to start under a reserved sticky profile, so there
-			// is no home whose skills it would load.
-			name: "invalid sticky active profile",
-			setup: func(t *testing.T, hermesHome string) string {
-				writeTestHermesActiveProfile(t, hermesHome, "hermes")
-				return ""
-			},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			home := t.TempDir()
-			setTestUserHome(t, home)
-			t.Setenv("HERMES_HOME", "")
-			hermesHome := testDefaultHermesHome(home)
-			skillsDir := tc.setup(t, hermesHome)
-
-			// A skill in the default Hermes home that the task-side resolver does
-			// not read must not be surfaced when another home/profile is selected.
-			writeTestLocalSkill(t, filepath.Join(hermesHome, "skills"), "wrong-home", map[string]string{
-				"SKILL.md": "---\nname: Wrong Home\n---\n# Wrong\n",
-			})
-			writeTestLocalSkill(t, filepath.Join(home, ".agents", "skills"), "shared-helper", map[string]string{
-				"SKILL.md": "---\nname: Shared Helper\n---\n# Shared\n",
-			})
-			wantKeys := []string{"shared-helper"}
-			if skillsDir != "" {
-				writeTestLocalSkill(t, skillsDir, "review-helper", map[string]string{
-					"SKILL.md": "---\nname: Hermes Home Review\n---\n# Review\n",
-				})
-				wantKeys = []string{"review-helper", "shared-helper"}
-			}
-
-			skills, supported, err := listRuntimeLocalSkills("hermes")
-			if err != nil {
-				t.Fatalf("listRuntimeLocalSkills: %v", err)
-			}
-			if !supported {
-				t.Fatal("hermes should be supported")
-			}
-			gotKeys := make([]string, 0, len(skills))
-			for _, s := range skills {
-				gotKeys = append(gotKeys, s.Key)
-			}
-			if !reflect.DeepEqual(gotKeys, wantKeys) {
-				t.Fatalf("keys = %v, want %v", gotKeys, wantKeys)
-			}
-			if skillsDir == "" {
-				return
-			}
-			if skills[0].Root != localSkillRootProvider {
-				t.Fatalf("root = %q, want %q", skills[0].Root, localSkillRootProvider)
-			}
-			if want := relativizeHomePath(filepath.Join(skillsDir, "review-helper")); skills[0].SourcePath != want {
-				t.Fatalf("source_path = %q, want %q", skills[0].SourcePath, want)
-			}
-
-			bundle, supported, err := loadRuntimeLocalSkillBundle("hermes", "review-helper")
-			if err != nil {
-				t.Fatalf("loadRuntimeLocalSkillBundle: %v", err)
-			}
-			if !supported || bundle == nil || bundle.Name != "Hermes Home Review" {
-				t.Fatalf("unexpected bundle: supported=%v bundle=%+v", supported, bundle)
-			}
-		})
-	}
-}
-
-func writeTestHermesActiveProfile(t *testing.T, hermesHome, name string) {
-	t.Helper()
-	if err := os.MkdirAll(hermesHome, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(hermesHome, "active_profile"), []byte(name+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestListRuntimeLocalSkills_GrokUsesGROKHOME(t *testing.T) {
 	home := t.TempDir()
 	grokHome := filepath.Join(t.TempDir(), "custom-grok-home")
@@ -563,41 +272,6 @@ func TestListRuntimeLocalSkills_GrokUsesGROKHOME(t *testing.T) {
 		t.Fatalf("loadRuntimeLocalSkillBundle: %v", err)
 	}
 	if !supported || bundle == nil || bundle.Name != "Grok Home Review" {
-		t.Fatalf("unexpected bundle: supported=%v bundle=%+v", supported, bundle)
-	}
-}
-
-func TestListRuntimeLocalSkills_QwenUsesQWENHOME(t *testing.T) {
-	home := t.TempDir()
-	qwenHome := filepath.Join(t.TempDir(), "custom-qwen-home")
-	redirectTestHome(t, home)
-	t.Setenv("QWEN_HOME", qwenHome)
-	writeTestLocalSkill(t, filepath.Join(qwenHome, "skills"), "review-helper", map[string]string{
-		"SKILL.md": "---\nname: Qwen Home Review\ndescription: Review code\n---\n# Review\n",
-	})
-	writeTestLocalSkill(t, filepath.Join(home, ".qwen", "skills"), "wrong-home", map[string]string{
-		"SKILL.md": "---\nname: Wrong Home\n---\n# Wrong\n",
-	})
-
-	skills, supported, err := listRuntimeLocalSkills("qwen")
-	if err != nil {
-		t.Fatalf("listRuntimeLocalSkills: %v", err)
-	}
-	if !supported {
-		t.Fatal("qwen should be supported")
-	}
-	if len(skills) != 1 || skills[0].Key != "review-helper" {
-		t.Fatalf("expected only QWEN_HOME skill, got %+v", skills)
-	}
-	if skills[0].SourcePath != filepath.ToSlash(filepath.Join(qwenHome, "skills", "review-helper")) {
-		t.Fatalf("source_path = %q, want custom QWEN_HOME path", skills[0].SourcePath)
-	}
-
-	bundle, supported, err := loadRuntimeLocalSkillBundle("qwen", "review-helper")
-	if err != nil {
-		t.Fatalf("loadRuntimeLocalSkillBundle: %v", err)
-	}
-	if !supported || bundle == nil || bundle.Name != "Qwen Home Review" {
 		t.Fatalf("unexpected bundle: supported=%v bundle=%+v", supported, bundle)
 	}
 }
@@ -806,58 +480,6 @@ func TestLoadRuntimeLocalSkillBundle_OpenCode(t *testing.T) {
 		t.Fatalf("unexpected second file: %+v", bundle.Files[1])
 	}
 	if bundle.SourcePath != "~/.config/opencode/skills/release/reporter" {
-		t.Fatalf("source_path = %q", bundle.SourcePath)
-	}
-}
-
-func TestListRuntimeLocalSkills_OpenClaw(t *testing.T) {
-	home := t.TempDir()
-	redirectTestHome(t, home)
-
-	writeTestLocalSkill(t, filepath.Join(home, ".openclaw", "skills"), "planner", map[string]string{
-		"SKILL.md": "# Planner\n",
-	})
-
-	skills, supported, err := listRuntimeLocalSkills("openclaw")
-	if err != nil {
-		t.Fatalf("listRuntimeLocalSkills: %v", err)
-	}
-	if !supported {
-		t.Fatal("openclaw should be supported")
-	}
-	if len(skills) != 1 {
-		t.Fatalf("expected 1 skill, got %d", len(skills))
-	}
-	if skills[0].SourcePath != "~/.openclaw/skills/planner" {
-		t.Fatalf("source_path = %q", skills[0].SourcePath)
-	}
-}
-
-func TestLoadRuntimeLocalSkillBundle_Cursor(t *testing.T) {
-	home := t.TempDir()
-	redirectTestHome(t, home)
-
-	writeTestLocalSkill(t, filepath.Join(home, ".cursor", "skills"), "docs-helper", map[string]string{
-		"SKILL.md":         "---\nname: Docs Helper\n---\n# Docs Helper\n",
-		"notes/tips.md":    "tips",
-		"examples/a.txt":   "example",
-		".hidden/skip.txt": "ignore",
-	})
-
-	bundle, supported, err := loadRuntimeLocalSkillBundle("cursor", "docs-helper")
-	if err != nil {
-		t.Fatalf("loadRuntimeLocalSkillBundle: %v", err)
-	}
-	if !supported {
-		t.Fatal("cursor should be supported")
-	}
-	if bundle.Name != "Docs Helper" {
-		t.Fatalf("name = %q", bundle.Name)
-	}
-	if len(bundle.Files) != 2 {
-		t.Fatalf("expected 2 files, got %d", len(bundle.Files))
-	}
-	if bundle.SourcePath != "~/.cursor/skills/docs-helper" {
 		t.Fatalf("source_path = %q", bundle.SourcePath)
 	}
 }

@@ -2,8 +2,6 @@
 export const CHANNEL_INTEGRATIONS = [
   "lark",
   "slack",
-  "dingtalk",
-  "wecom",
   "telegram",
 ] as const;
 
@@ -26,9 +24,8 @@ export interface SettingsLocation {
 /**
  * Resolve a settings URL, including links that predate the current layout.
  * Server redirects still point at some of them — the GitHub App install flow
- * returns to `?tab=github` / `?tab=repositories` and the Composio OAuth flow to
- * `?tab=integrations&connected=…` — so these mappings are part of the URL
- * contract, not bookmarks we can drop.
+ * returns to `?tab=github` / `?tab=repositories` — so these mappings are part
+ * of the URL contract, not bookmarks we can drop.
  */
 export function resolveSettingsLocation(
   params: URLSearchParams,
@@ -47,12 +44,6 @@ export function resolveSettingsLocation(
     case "repositories":
       return { tab: "code", section: section ?? "repositories", integration: null };
     case "integrations": {
-      const composioCallback =
-        params.has("connected") ||
-        params.get("error") === "composio_connect_failed";
-      if (composioCallback || integration === "composio") {
-        return { tab: "apps", section: null, integration: null };
-      }
       if (integration === "github") {
         return { tab: "code", section: null, integration: null };
       }

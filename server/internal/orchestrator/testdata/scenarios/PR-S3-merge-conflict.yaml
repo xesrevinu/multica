@@ -1,0 +1,13 @@
+name: PR-S3 approved PR becomes CONFLICTING after a sibling merged; owner merges main
+recorded: ATT-53
+issue: {key: ATT-53}
+steps:
+  - expect: {tid: T1_start}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
+    expect: {tid: T2_review}
+  - do: {run: completed, meta: {verdict: approve, reviewed_sha: h1}, merge: {ok: false, kind: conflict, detail: "GitHub mergeable=CONFLICTING"}}
+    expect: {tid: T3_rework, meta: {blocked_reason: "conflict: GitHub mergeable=CONFLICTING"}}
+  - do: {run: completed, head: h2, meta: {phase: review_requested, head_sha: h2}, merge: {ok: true, kind: merged, sha: m2}}
+    expect: {tid: T2_review}
+  - do: {run: completed, meta: {verdict: approve, reviewed_sha: h2}}
+    expect: {tid: T4_done, meta: {merged_sha: m2}}

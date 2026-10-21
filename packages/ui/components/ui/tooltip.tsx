@@ -22,13 +22,16 @@ function Tooltip({ ...props }: TooltipPrimitive.Root.Props) {
 }
 
 function TooltipTrigger({
-  nativeButton,
+  // base-ui 1.3 triggers have no `nativeButton` prop: forwarding it lands
+  // on the DOM node as an unknown attribute (React warns on every page).
+  // Accepted and dropped so existing call sites keep compiling.
+  nativeButton: _nativeButton,
   ...props
 }: TooltipPrimitive.Trigger.Props & { nativeButton?: boolean }) {
   return (
     <TooltipPrimitive.Trigger
       data-slot="tooltip-trigger"
-      {...({ ...props, nativeButton } as TooltipPrimitive.Trigger.Props)}
+      {...props}
     />
   )
 }

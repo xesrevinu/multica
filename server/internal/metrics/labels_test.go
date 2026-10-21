@@ -7,15 +7,15 @@ func TestNormalizeRuntimeProviderRecognizesKnownProviders(t *testing.T) {
 		input string
 		want  string
 	}{
-		{input: "QWEN", want: "qwen"},
-		{input: "Qoder", want: "qoder"},
-		{input: "QODERCLICN", want: "qoderclicn"},
-		{input: "TraeCLI", want: "traecli"},
-		{input: "Reasonix", want: "reasonix"},
+		{input: "Claude", want: "claude"},
+		{input: "CODEX", want: "codex"},
+		{input: "OpenCode", want: "opencode"},
+		{input: "Pi", want: "pi"},
+		{input: "OMP", want: "omp"},
 		{input: "DSH", want: "dsh"},
-		{input: "Dim", want: "dim"},
-		{input: "ZeroClaw", want: "zeroclaw"},
-		{input: "CodeArts", want: "codearts"},
+		{input: "Grok", want: "grok"},
+		{input: "gbot", want: "gbot"},
+		{input: "Yielded", want: "yielded"},
 	}
 	for _, tt := range tests {
 		if got := NormalizeRuntimeProvider(tt.input); got != tt.want {
@@ -27,6 +27,9 @@ func TestNormalizeRuntimeProviderRecognizesKnownProviders(t *testing.T) {
 func TestNormalizeLabelsCollapseUnknownValues(t *testing.T) {
 	if got := NormalizeRuntimeProvider("provider-from-user-input"); got != "other" {
 		t.Fatalf("NormalizeRuntimeProvider unknown = %q, want other", got)
+	}
+	if got := NormalizeRuntimeProvider("hermes"); got != "other" {
+		t.Fatalf("NormalizeRuntimeProvider removed provider = %q, want other", got)
 	}
 	if got := NormalizeRuntimeMode("workspace-123"); got != "unknown" {
 		t.Fatalf("NormalizeRuntimeMode unknown = %q, want unknown", got)

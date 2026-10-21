@@ -1,0 +1,11 @@
+name: blocked takes precedence over T9 - an agent writing phase=implementing does not leave blocked
+issue: {key: ATT-70, status: blocked, assignee: lead, meta: {phase: blocked, blocked_reason: "impl attempts exhausted", owner: a, attempt_impl: "3"}}
+steps:
+  - note: before the fix T9 moved it to todo -> owner with exhausted counters
+    do: {meta: {phase: implementing}}
+    expect: {wait: phase=unblocked}
+  - do: {meta: {phase: changes_requested}}
+    expect: {wait: phase=unblocked}
+  - note: the lead's real answer still works
+    do: {meta: {phase: unblocked}}
+    expect: {tid: T7_unblock, status: todo, assignee: a, meta: {attempt_impl: "1", unblock_count: "1"}}

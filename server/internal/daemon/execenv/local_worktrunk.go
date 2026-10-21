@@ -38,6 +38,9 @@ func addWorktrunkWorktree(gitRoot string, plan taskBranchPlan, taskID string, lo
 	if err != nil {
 		return "", "", false, err
 	}
+	if checkedOut && plan.exclusive {
+		return "", "", false, branchOccupied(gitRoot, plan.name, "")
+	}
 	if checkedOut {
 		if logger != nil {
 			logger.Info("execenv: conversation branch is already checked out; forking a task branch",
@@ -52,6 +55,9 @@ func addWorktrunkWorktree(gitRoot string, plan taskBranchPlan, taskID string, lo
 	}
 	if plan.continues || plan.reset {
 		path, err = switchWorktrunk(gitRoot, plan.name, "", false, logger)
+		if err != nil && branchUnavailable(err.Error()) && plan.exclusive {
+			return "", "", false, branchOccupied(gitRoot, plan.name, err.Error())
+		}
 		if err != nil && branchUnavailable(err.Error()) {
 			return createWorktrunkBranch(gitRoot, plan.altName(taskID), plan.base, logger)
 		}
@@ -61,6 +67,9 @@ func addWorktrunkWorktree(gitRoot string, plan taskBranchPlan, taskID string, lo
 		return path, plan.name, !plan.continues, nil
 	}
 	path, err = switchWorktrunk(gitRoot, plan.name, plan.base, true, logger)
+	if err != nil && branchUnavailable(err.Error()) && plan.exclusive {
+		return "", "", false, branchOccupied(gitRoot, plan.name, err.Error())
+	}
 	if err != nil && branchUnavailable(err.Error()) {
 		return createWorktrunkBranch(gitRoot, plan.altName(taskID), plan.base, logger)
 	}
@@ -144,6 +153,7 @@ func runWorktrunk(timeout time.Duration, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "wt", args...)
+	cmd.Env = worktrunkEnv(os.Environ())
 	cmd.WaitDelay = 5 * time.Second
 	out, err := cmd.CombinedOutput()
 	return string(out), err
@@ -186,4 +196,48 @@ func addedWorktreePaths(before, after map[string]struct{}) []string {
 		}
 	}
 	return added
+}
+
+// worktrunkEnv returns env with the user's personal bin dirs appended to PATH.
+// wt runs the user's own hooks (~/.config/worktrunk/config.toml) through sh,
+// and those hooks name helpers by bare command (wt-worktree-excludes,
+// zvec-worktree) that live in ~/.local/bin. A launchd/systemd daemon starts
+// with a minimal PATH that lacks it, so a pre-start hook exits 127 and the
+// task fails in Prepare. Appending (not prepending) keeps the daemon's own
+// resolution order for everything it already found.
+func worktrunkEnv(env []string) []string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return env
+	}
+	extra := []string{filepath.Join(home, ".local", "bin"), filepath.Join(home, ".nix-profile", "bin")}
+	out := make([]string, 0, len(env)+1)
+	found := false
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "PATH=") {
+			found = true
+			kv = "PATH=" + appendPathDirs(strings.TrimPrefix(kv, "PATH="), extra)
+		}
+		out = append(out, kv)
+	}
+	if !found {
+		out = append(out, "PATH="+appendPathDirs("", extra))
+	}
+	return out
+}
+
+func appendPathDirs(path string, dirs []string) string {
+	parts := filepath.SplitList(path)
+	have := make(map[string]struct{}, len(parts))
+	for _, p := range parts {
+		have[p] = struct{}{}
+	}
+	for _, d := range dirs {
+		if _, ok := have[d]; ok {
+			continue
+		}
+		parts = append(parts, d)
+		have[d] = struct{}{}
+	}
+	return strings.Join(parts, string(os.PathListSeparator))
 }

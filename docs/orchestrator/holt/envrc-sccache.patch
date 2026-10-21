@@ -1,0 +1,11 @@
+--- a/.envrc
++++ b/.envrc
+@@ -1,2 +1,8 @@
+ watch_file flake.nix flake.lock
+ use flake
++# Shared Rust compile cache across wt worktrees (each keeps its own target/).
++if command -v sccache >/dev/null 2>&1; then
++  export RUSTC_WRAPPER=sccache
++  export SCCACHE_DIR="$HOME/.cache/sccache-holt"
++  export SCCACHE_CACHE_SIZE=40G
++fi

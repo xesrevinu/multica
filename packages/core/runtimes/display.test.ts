@@ -63,15 +63,6 @@ describe("runtimeDisplayLabel", () => {
   });
 
   it("uses the daemon's provider display name for overridden slugs", () => {
-    // CodeArts, DSH, Qoder CN, Trae, Qwen Code, and QwenPaw use display names that differ from
-    // title-cased slugs; aliases must match the daemon's no-alias names.
-    expect(
-      runtimeDisplayLabel({
-        name: "CodeArts (host)",
-        custom_name: "box",
-        provider: "codearts",
-      }),
-    ).toBe("box (CodeArts)");
     expect(
       runtimeDisplayLabel({
         name: "DeepSeek Harness (host)",
@@ -81,46 +72,11 @@ describe("runtimeDisplayLabel", () => {
     ).toBe("box (DeepSeek Harness)");
     expect(
       runtimeDisplayLabel({
-        name: "Qoder CN (host)",
+        name: "Yielded (host)",
         custom_name: "box",
-        provider: "qoderclicn",
+        provider: "yielded",
       }),
-    ).toBe("box (Qoder CN)");
-    expect(
-      runtimeDisplayLabel({
-        name: "Trae (host)",
-        custom_name: "box",
-        provider: "traecli",
-      }),
-    ).toBe("box (Trae)");
-    expect(
-      runtimeDisplayLabel({
-        name: "Qwen Code (host)",
-        custom_name: "box",
-        provider: "qwen",
-      }),
-    ).toBe("box (Qwen Code)");
-    expect(
-      runtimeDisplayLabel({
-        name: "QwenPaw (host)",
-        custom_name: "box",
-        provider: "qwenpaw",
-      }),
-    ).toBe("box (QwenPaw)");
-    expect(
-      runtimeDisplayLabel({
-        name: "MiniMax Code (host)",
-        custom_name: "box",
-        provider: "mcode",
-      }),
-    ).toBe("box (MiniMax Code)");
-    expect(
-      runtimeDisplayLabel({
-        name: "ZeroClaw (host)",
-        custom_name: "box",
-        provider: "zeroclaw",
-      }),
-    ).toBe("box (ZeroClaw)");
+    ).toBe("box (Yielded)");
   });
 
   it("first-letter-capitalizes non-overridden slugs, matching the daemon", () => {
@@ -129,11 +85,11 @@ describe("runtimeDisplayLabel", () => {
     // the daemon (e.g. no-alias name is "Openclaw (host)").
     expect(
       runtimeDisplayLabel({
-        name: "Openclaw (host)",
+        name: "Grok (host)",
         custom_name: "box",
-        provider: "openclaw",
+        provider: "grok",
       }),
-    ).toBe("box (Openclaw)");
+    ).toBe("box (Grok)");
     expect(
       runtimeDisplayLabel({
         name: "Codex (host)",

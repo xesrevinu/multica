@@ -1,0 +1,12 @@
+name: PR-S1 happy path (GitHub, PR opened by the pre-check)
+recorded: ATT-38
+issue: {key: ATT-38}
+steps:
+  - expect: {tid: T1_start, assignee: a}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}, precheck: {ok: true, kind: dry, pr: "https://github.com/x/y/pull/9"}}
+    expect: {tid: T2_review, assignee: rev, meta: {pr: "https://github.com/x/y/pull/9"}}
+  - note: CI still running when the merge gate is asked
+    do: {run: completed, meta: {verdict: approve, reviewed_sha: h1}, merge: {pending: true, detail: "checks pending: test"}}
+    expect: {wait: checks pending}
+  - do: {merge: {ok: true, kind: merged, sha: m1}}
+    expect: {tid: T4_done, meta: {merged_sha: m1}}

@@ -13,6 +13,7 @@ const sessionTabs = vi.hoisted(() => ({ enabled: false }));
 
 vi.mock("@multica/views/layout/session-tabs", () => ({
   useSessionTabsEnabled: () => sessionTabs.enabled,
+  SessionTabsProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 const router = vi.hoisted(() => ({

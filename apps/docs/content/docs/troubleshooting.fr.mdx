@@ -109,7 +109,7 @@ Pour rétablir l'accès :
 2. Pour un Mac sans surveillance, accordez l'accès complet au disque au nouveau binaire. Affichez son chemin avec `realpath "$(command -v multica)"`, puis dans **Réglages Système → Confidentialité et sécurité → Accès complet au disque**, supprimez l'ancienne entrée `multica` et ajoutez ce chemin (appuyez sur ⌘⇧G dans le sélecteur de fichiers pour le coller).
 3. Redémarrez le daemon de la même façon que vous l'avez lancé : `multica daemon restart`, ou `launchctl kickstart -k gui/$(id -u)/<label>` pour un LaunchAgent.
 
-Répétez ces étapes après chaque mise à jour du CLI. La mise à jour automatique n'est activée par défaut que pour les daemons connectés à Multica Cloud ; démarrez le daemon avec `--no-auto-update` pour que les mises à jour n'aient lieu que lorsque vous les lancez. Le CLI intégré à [Multica Desktop](/desktop-app) est signé avec un Developer ID, ses autorisations survivent donc aux mises à jour.
+Répétez ces étapes après chaque mise à jour du CLI. La mise à jour automatique n'est activée par défaut que pour les daemons connectés à Multica Cloud ; démarrez le daemon avec `--no-auto-update` pour que les mises à jour n'aient lieu que lorsque vous les lancez.
 
 ## Les mises à jour en temps réel ne fonctionnent plus
 

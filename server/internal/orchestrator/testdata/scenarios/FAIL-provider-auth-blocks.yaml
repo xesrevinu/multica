@@ -1,0 +1,10 @@
+name: provider auth/access failure blocks at once with a clear reason
+spec:
+  roles: {lead: lead, reviewer: rev, owners: [a, b]}
+  repo: {mode: github, slug: x/y}
+issue: {key: ATT-81}
+steps:
+  - expect: {tid: T1_start}
+  - do: {run: failed, reason: agent_error.provider_auth_or_access}
+    expect: {tid: T6_block, status: blocked, assignee: lead}
+  - expect: {wait: phase=unblocked}

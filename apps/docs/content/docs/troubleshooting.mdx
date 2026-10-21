@@ -109,7 +109,7 @@ To restore access:
 2. For a Mac that runs unattended, grant Full Disk Access to the new binary. Print its path with `realpath "$(command -v multica)"`, then under **System Settings → Privacy & Security → Full Disk Access** remove the stale `multica` entry and add that path (press ⌘⇧G in the file picker to paste it).
 3. Restart the daemon the same way you started it: `multica daemon restart`, or `launchctl kickstart -k gui/$(id -u)/<label>` for a LaunchAgent.
 
-Repeat this after every CLI upgrade. Auto-update is on by default only for daemons connected to Multica Cloud; start the daemon with `--no-auto-update` so upgrades happen only when you run them. The CLI bundled with [Multica Desktop](/desktop-app) is signed with a Developer ID, so its grants survive upgrades.
+Repeat this after every CLI upgrade. Auto-update is on by default only for daemons connected to Multica Cloud; start the daemon with `--no-auto-update` so upgrades happen only when you run them.
 
 ## Realtime updates stop working
 
@@ -161,7 +161,7 @@ multica --debug login
 GODEBUG=tlsmlkem=0 multica --debug login
 ```
 
-If that succeeds, set `GODEBUG=tlsmlkem=0` permanently for the user that runs the CLI and the daemon — on Windows, run `[Environment]::SetEnvironmentVariable('GODEBUG', 'tlsmlkem=0', 'User')` and open a new terminal — then restart the daemon or the desktop app. Raising `MULTICA_HTTP_TIMEOUT` does not help: it does not govern the handshake. The permanent fix is on the network side: update or reconfigure the device or software that drops split TLS handshakes.
+If that succeeds, set `GODEBUG=tlsmlkem=0` permanently for the user that runs the CLI and the daemon — on Windows, run `[Environment]::SetEnvironmentVariable('GODEBUG', 'tlsmlkem=0', 'User')` and open a new terminal — then restart the daemon. Raising `MULTICA_HTTP_TIMEOUT` does not help: it does not govern the handshake. The permanent fix is on the network side: update or reconfigure the device or software that drops split TLS handshakes.
 
 ## Verification code and invitation emails not delivered
 

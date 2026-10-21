@@ -1,0 +1,26 @@
+name: unknown verdicts re-review (not rework); stale probes wait at T2, T10 and merge; re-reviews get last_reviewed_sha
+issue: {key: ATT-84, labels: [needs-acceptance]}
+steps:
+  - expect: {tid: T1_start}
+  - note: GitHub has not seen the pushed head yet - T2 waits instead of reviewing
+    do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}, precheck: {kind: stale, pending: true, detail: "PR head h0 != h1"}}
+    expect: {wait: "stale: PR head h0 != h1"}
+  - do: {precheck: {ok: true, kind: dry}}
+    expect: {tid: T2_review}
+  - note: a legacy/non-standard verdict is not a request for changes
+    do: {run: completed, meta: {verdict: lgtm, reviewed_sha: h1}}
+    expect: {tid: T3b_rereview, assignee: rev, meta: {last_reviewed_sha: h1, reviewed_sha: ""}}
+  - note: verdict case is normalised
+    do: {run: completed, meta: {verdict: Changes, reviewed_sha: h1}}
+    expect: {tid: T3_rework, assignee: a}
+  - do: {run: completed, head: h2, meta: {phase: review_requested, head_sha: h2}}
+    expect: {tid: T2_review, meta: {last_reviewed_sha: h1}}
+  - note: T10 pre-check waits on stale too
+    do: {run: completed, meta: {verdict: approve, reviewed_sha: h2}, precheck: {kind: stale, pending: true, detail: "snapshot head h1"}}
+    expect: {wait: "stale: snapshot head h1"}
+  - do: {precheck: {ok: true, kind: dry}}
+    expect: {tid: T10_await_acceptance}
+  - do: {meta: {acceptance: ok}, merge: {kind: stale, pending: true, detail: "PR head h1 != h2"}}
+    expect: {wait: "stale: PR head h1 != h2"}
+  - do: {merge: {ok: true, kind: merged, sha: m1}}
+    expect: {tid: T4_done}

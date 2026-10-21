@@ -1,0 +1,21 @@
+name: lead unblocks are capped by limits.unblocks; past it the human decides and only flow unblock resets
+spec:
+  roles: {lead: lead, reviewer: rev, owners: [a, b]}
+  repo: {mode: github, slug: x/y}
+  limits: {impl: 1, unblocks: 1}
+issue: {key: ATT-71, status: blocked, meta: {phase: blocked, blocked_reason: x, owner: a}}
+steps:
+  - do: {meta: {phase: unblocked}}
+    expect: {tid: T7_unblock, assignee: a, meta: {unblock_count: "1"}}
+  - do: {run: completed}
+    expect: {tid: T6_block, status: blocked, assignee: lead}
+  - note: second lead unblock is past the limit - escalate, counters untouched
+    do: {meta: {phase: unblocked}}
+    expect: {tid: T7b_unblock_escalate, assignee: "@human", meta: {phase: blocked, unblock_escalated: "true"}}
+  - expect: {wait: phase=unblocked}
+  - note: the lead tries again - still waits for a member
+    do: {meta: {phase: unblocked}}
+    expect: {wait: lead unblock limit 1 reached}
+  - note: multica flow unblock (member) resets everything
+    do: {meta: {unblock_confirmed: "true"}}
+    expect: {tid: T7_unblock, assignee: a, meta: {unblock_count: "0", unblock_escalated: "", attempt_impl: "1"}}

@@ -29,7 +29,7 @@ export function createKoDict(
       cta: "무료로 시작하기",
       downloadDesktop: "데스크톱 다운로드",
       talkToSales: "영업팀에 문의",
-      worksWith: "20개 이상의 AI 코딩 도구 지원",
+      worksWith: "Claude Code, Codex, OpenCode, Pi 등 지원",
       imageAlt: "사람과 AI 에이전트가 함께 태스크를 관리하는 Multica 보드 화면",
     },
     features: {
@@ -121,7 +121,7 @@ export function createKoDict(
           {
             title: "처음 실행할 때 자동 등록",
             description:
-              "Multica는 Antigravity, Claude Code, CodeBuddy, CodeArts, Codex, Copilot, Cursor, DeepSeek Harness, DevEco Code, Dim, Grok, Hermes, Kimi, Kiro CLI, MiniMax Code, Oh-My-Pi, OpenClaw, OpenCode, Pi, Qoder, Qoder CN, Qwen Code, QwenPaw, Reasonix, Trae CLI, ZeroClaw 등 26개 지원 도구를 스캔해 이미 설치된 것을 런타임으로 자동 등록합니다.",
+              "Multica는 Claude Code, Codex, OpenCode, Pi, Oh-My-Pi, Grok, Grok Bot, DeepSeek Harness, Yielded를 스캔해 이미 설치된 것을 런타임으로 자동 등록합니다.",
           },
         ],
       },
@@ -197,7 +197,7 @@ export function createKoDict(
         {
           question: "Multica는 어떤 코딩 에이전트를 지원하나요?",
           answer:
-            "Multica는 Antigravity, Claude Code, CodeBuddy, CodeArts, Codex, Copilot, Cursor, DeepSeek Harness, DevEco Code, Dim, Grok, Hermes, Kimi, Kiro CLI, MiniMax Code, Oh-My-Pi, OpenClaw, OpenCode, Pi, Qoder, Qoder CN, Qwen Code, QwenPaw, Reasonix, Trae CLI, ZeroClaw 등 26개 코딩 도구를 기본 지원합니다. 데몬이 이미 설치된 CLI를 자동으로 찾아 각각 런타임으로 등록합니다. 소스 코드가 공개되어 있으므로 직접 백엔드를 추가할 수도 있습니다.",
+            "Multica는 Claude Code, Codex, OpenCode, Pi, Oh-My-Pi, Grok, Grok Bot, DeepSeek Harness, Yielded를 기본 지원합니다. 데몬이 이미 설치된 CLI를 자동으로 찾아 각각 런타임으로 등록합니다. 소스 코드가 공개되어 있으므로 직접 백엔드를 추가할 수도 있습니다.",
         },
         {
           question: "셀프 호스팅만 가능한가요, 클라우드 버전도 있나요?",
@@ -2094,11 +2094,10 @@ export function createKoDict(
         {
           version: "0.3.31",
           date: "2026-06-26",
-          title: "워크스페이스 간 미확인 점, Composio 툴킷 기반, 더 편한 에디터",
+          title: "워크스페이스 간 미확인 점, 더 편한 에디터",
           changes: [],
           features: [
             "워크스페이스 전환기에서 다른 워크스페이스에 미확인 인박스가 있으면 점이 표시됩니다.",
-            "곧 도입될 서드파티 툴킷 연동을 위한 Composio 기반이 추가되었습니다.",
             "여러 체크아웃에서 데스크톱 개발 환경을 동시에 실행해도 충돌이 없습니다.",
             "중국어 문서 홈에 짧은 소개 영상이 추가되었습니다.",
           ],
@@ -3411,7 +3410,7 @@ export function createKoDict(
             "PostHog: 제품 분석 및 충돌 보고서",
             "Google: Google 로그인을 선택한 경우",
             "대규모 언어 모델 제공자: 위에서 설명한 AI 기능",
-            "여러분이 연결한 연동 서비스(Slack, Lark, DingTalk, WeCom, Telegram, GitHub, GitLab, Composio로 연결한 앱 등): 여러분이 이를 통해 주고받는 데이터이며, 각 서비스의 약관도 적용됩니다",
+            "여러분이 연결한 연동 서비스(Slack, Lark, DingTalk, WeCom, Telegram, GitHub, GitLab 등): 여러분이 이를 통해 주고받는 데이터이며, 각 서비스의 약관도 적용됩니다",
           ],
         },
         {

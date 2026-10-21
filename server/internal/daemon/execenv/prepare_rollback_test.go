@@ -17,8 +17,8 @@ import (
 // every human-local multica command in that directory tree until someone deleted
 // the file by hand.
 //
-// The induced failure is a pre-existing .cursor/mcp.json, which the managed
-// cursor MCP path refuses to overwrite. It is a pure filesystem failure that
+// The induced failure is a pre-existing .omp/mcp.json, which the managed
+// omp MCP path refuses to overwrite. It is a pure filesystem failure that
 // needs no agent CLI on the machine, and it lands after the marker is written.
 func TestPrepareRollsBackSidecarsWhenPrepareFailsInPlace(t *testing.T) {
 	workspacesRoot := t.TempDir()
@@ -26,11 +26,11 @@ func TestPrepareRollsBackSidecarsWhenPrepareFailsInPlace(t *testing.T) {
 
 	// The user's own content: the file that makes Prepare fail, plus a plain
 	// file that must survive the rollback untouched.
-	cursorDir := filepath.Join(userDir, ".cursor")
-	if err := os.MkdirAll(cursorDir, 0o755); err != nil {
-		t.Fatalf("create .cursor: %v", err)
+	ompDir := filepath.Join(userDir, ".omp")
+	if err := os.MkdirAll(ompDir, 0o755); err != nil {
+		t.Fatalf("create .omp: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(cursorDir, "mcp.json"), []byte(`{"mine":true}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(ompDir, "mcp.json"), []byte(`{"mine":true}`), 0o644); err != nil {
 		t.Fatalf("seed user mcp.json: %v", err)
 	}
 	userFile := filepath.Join(userDir, "README.md")
@@ -43,7 +43,7 @@ func TestPrepareRollsBackSidecarsWhenPrepareFailsInPlace(t *testing.T) {
 		WorkspaceID:    "ws-rollback-001",
 		TaskID:         "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 		AgentName:      "Test Agent",
-		Provider:       "cursor",
+		Provider:       "omp",
 		LocalWorkDir:   userDir,
 		McpConfig:      json.RawMessage(`{"fetch":{"command":"uvx","args":["mcp-server-fetch"]}}`),
 		Task: TaskContextForEnv{
@@ -52,7 +52,7 @@ func TestPrepareRollsBackSidecarsWhenPrepareFailsInPlace(t *testing.T) {
 		},
 	}, testLogger())
 	if err == nil {
-		t.Fatal("Prepare succeeded; expected the pre-existing .cursor/mcp.json to fail it")
+		t.Fatal("Prepare succeeded; expected the pre-existing .omp/mcp.json to fail it")
 	}
 
 	markerPath := filepath.Join(userDir, TaskContextMarkerRelPath)
@@ -69,7 +69,7 @@ func TestPrepareRollsBackSidecarsWhenPrepareFailsInPlace(t *testing.T) {
 	if data, readErr := os.ReadFile(userFile); readErr != nil || string(data) != "user content" {
 		t.Fatalf("rollback touched user content: data=%q err=%v", string(data), readErr)
 	}
-	if data, readErr := os.ReadFile(filepath.Join(cursorDir, "mcp.json")); readErr != nil || string(data) != `{"mine":true}` {
+	if data, readErr := os.ReadFile(filepath.Join(ompDir, "mcp.json")); readErr != nil || string(data) != `{"mine":true}` {
 		t.Fatalf("rollback touched the user's mcp.json: data=%q err=%v", string(data), readErr)
 	}
 }

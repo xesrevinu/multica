@@ -551,7 +551,8 @@
     "wakeup_checkin_coalesced_one": "{{count}} vérification silencieuse · dernière : {{note}}",
     "wakeup_checkin_coalesced_other": "{{count}} vérifications silencieuses · dernière : {{note}}",
     "wakeup_chip_created_by": "Réveil de {{name}}",
-    "wakeup_chip_system": "Règle système"
+    "wakeup_chip_system": "Règle système",
+    "orchestrator_transition": "flux {{tid}} {{why}}"
   },
   "comment": {
     "add_reaction": "Ajouter une réaction",
@@ -1748,5 +1749,28 @@
         }
       }
     }
+  },
+  "orchestrator": {
+    "section": "Flux",
+    "current": "Actuel",
+    "next": "Suivant",
+    "waiting": "En attente",
+    "blocked": "Bloqué car",
+    "paused": "En pause",
+    "failures": "Échecs du moteur",
+    "attempts": "Tentatives",
+    "impl": "impl",
+    "review": "revue",
+    "infra": "infra",
+    "recent": "Transitions",
+    "acceptance": "En attente de votre acceptation",
+    "teams": "Équipes de l'orchestrateur",
+    "pause": "Pause",
+    "resume": "Reprendre",
+    "no_teams": "Aucun projet orchestré dans cet espace.",
+    "phase": "Phase",
+    "accept": "Accepter",
+    "reject": "Refuser",
+    "reject_reason": "Raison (lue par le responsable)"
   }
 }

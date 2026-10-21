@@ -109,7 +109,7 @@ Homebrew でインストールした `multica` CLI が `brew upgrade`、`multica
 2. 無人で動かす Mac では、新しいバイナリにフルディスクアクセスを付与します。`realpath "$(command -v multica)"` でパスを表示し、**システム設定 → プライバシーとセキュリティ → フルディスクアクセス**で古い `multica` の項目を削除してそのパスを追加します（ファイル選択画面で ⌘⇧G を押すとパスを貼り付けられます）。
 3. デーモンを起動したときと同じ方法で再起動します。通常は `multica daemon restart`、LaunchAgent の場合は `launchctl kickstart -k gui/$(id -u)/<label>` です。
 
-CLI をアップグレードするたびにこの手順を繰り返してください。自動更新がデフォルトで有効なのは Multica Cloud に接続したデーモンだけです。`--no-auto-update` を付けてデーモンを起動すると、手動で実行したときだけアップグレードされます。[Multica Desktop](/desktop-app) に同梱の CLI は Developer ID で署名されているため、アップグレード後も許可が維持されます。
+CLI をアップグレードするたびにこの手順を繰り返してください。自動更新がデフォルトで有効なのは Multica Cloud に接続したデーモンだけです。`--no-auto-update` を付けてデーモンを起動すると、手動で実行したときだけアップグレードされます。
 
 ## リアルタイム更新が届かない
 
@@ -161,7 +161,7 @@ multica --debug login
 GODEBUG=tlsmlkem=0 multica --debug login
 ```
 
-これで成功する場合は、CLI とデーモンを実行するユーザーに対して `GODEBUG=tlsmlkem=0` を恒久的に設定し（Windows では `[Environment]::SetEnvironmentVariable('GODEBUG', 'tlsmlkem=0', 'User')` を実行して新しいターミナルを開く）、デーモンまたはデスクトップアプリを再起動してください。`MULTICA_HTTP_TIMEOUT` を大きくしても効果はありません。ハンドシェイクはこの設定の対象外です。根本的な解決はネットワーク側で行います。分割された TLS ハンドシェイクを破棄する機器やソフトウェアを更新または再設定してください。
+これで成功する場合は、CLI とデーモンを実行するユーザーに対して `GODEBUG=tlsmlkem=0` を恒久的に設定し（Windows では `[Environment]::SetEnvironmentVariable('GODEBUG', 'tlsmlkem=0', 'User')` を実行して新しいターミナルを開く）、デーモンを再起動してください。`MULTICA_HTTP_TIMEOUT` を大きくしても効果はありません。ハンドシェイクはこの設定の対象外です。根本的な解決はネットワーク側で行います。分割された TLS ハンドシェイクを破棄する機器やソフトウェアを更新または再設定してください。
 
 ## 認証コードや招待メールが届かない
 

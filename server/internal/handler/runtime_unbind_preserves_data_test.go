@@ -307,8 +307,7 @@ func TestUnbindAgentsAndDeleteRuntime_RedactsAgentBroadcast(t *testing.T) {
 	agentID := createCascadeFixtureAgent(t, ctx, runtimeID, "Unbind Broadcast Agent")
 	if _, err := testPool.Exec(ctx, `
 		UPDATE agent
-		SET mcp_config = '{"servers":{"private":{"token":"secret"}}}'::jsonb,
-		    composio_toolkit_allowlist = ARRAY['github']::text[]
+		SET mcp_config = '{"servers":{"private":{"token":"secret"}}}'::jsonb
 		WHERE id = $1
 	`, agentID); err != nil {
 		t.Fatalf("seed secret-bearing agent fields: %v", err)
@@ -338,12 +337,7 @@ func TestUnbindAgentsAndDeleteRuntime_RedactsAgentBroadcast(t *testing.T) {
 	if !broadcast.McpConfigRedacted {
 		t.Fatal("broadcast must mark mcp_config as redacted")
 	}
-	if broadcast.ComposioToolkitAllowlist != nil {
-		t.Fatalf("broadcast leaked Composio allowlist: %v", broadcast.ComposioToolkitAllowlist)
-	}
-	if !broadcast.ComposioToolkitAllowlistRedacted {
-		t.Fatal("broadcast must mark Composio allowlist as redacted")
-	}
+
 }
 
 // TestUnbindAgentsAndDeleteRuntime_DeletesSystemAgents: system agents are

@@ -37,6 +37,7 @@ import { NoAgentBanner } from "./components/no-agent-banner";
 import { ArchivedAgentBanner } from "./components/archived-agent-banner";
 import { AgentAccessRevokedBanner } from "./components/agent-access-revoked-banner";
 import { RuntimeRequiredBanner } from "./components/runtime-required-banner";
+import { MobileIssueHome } from "../orch/mobile-home";
 
 /**
  * Chat tab — the first-class two-pane surface (thread list on the left,
@@ -390,7 +391,10 @@ export function ChatPage() {
     return (
       <div className="flex flex-1 flex-col min-h-0">
         {listHeader}
-        <div className="flex-1 min-h-0 overflow-y-auto">{listBody}</div>
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <MobileIssueHome />
+          {listBody}
+        </div>
       </div>
     );
   }

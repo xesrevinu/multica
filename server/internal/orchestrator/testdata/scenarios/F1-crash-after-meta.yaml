@@ -1,0 +1,9 @@
+name: F1 actuator crashed after the metadata commit of T1 (todo, nobody assigned yet)
+recorded: ATT-45
+issue: {key: ATT-45, status: todo, meta: {phase: implementing, owner: a, attempt_impl: "1"}}
+steps:
+  - expect: {tid: T9_reconcile, status: todo, assignee: a}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
+    expect: {tid: T2_review}
+  - do: {run: completed, meta: {verdict: approve, reviewed_sha: h1}}
+    expect: {tid: T4_done}

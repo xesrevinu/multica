@@ -301,7 +301,7 @@ func (b *grokBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 			if msg.Type == MessageToolUse {
 				// Re-normalise capitalised titles ("Read file: …") the same way
 				// kimi/traecli do so the UI sees consistent snake_case names.
-				msg.Tool = kimiToolNameFromTitle(msg.Tool)
+				msg.Tool = acpTitleToolName(msg.Tool)
 			}
 			deliverable.observe(msg)
 			msgStream.send(msg)

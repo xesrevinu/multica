@@ -1,0 +1,17 @@
+name: ATT-65 daemon lost provider keys; runs fail fast, infra block, unblock after the fix
+recorded: ATT-65
+issue: {key: ATT-65}
+steps:
+  - expect: {tid: T1_start}
+  - do: {run: failed}
+    expect: {tid: T5_rerun, meta: {attempt_infra: "1"}}
+  - do: {run: failed}
+    expect: {tid: T5_rerun, meta: {attempt_infra: "2"}}
+  - do: {run: failed}
+    expect: {tid: T6_block, meta: {blocked_reason: "infra attempts exhausted (2/2)"}}
+  - do: {meta: {phase: unblocked}}
+    expect: {tid: T7_unblock, assignee: a}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
+    expect: {tid: T2_review}
+  - do: {run: completed, meta: {verdict: approve, reviewed_sha: h1}}
+    expect: {tid: T4_done}

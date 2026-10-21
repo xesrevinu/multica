@@ -10,12 +10,8 @@ describe("sidebar nav groups", () => {
     ]);
   });
 
-  it("puts runtimes with squads and skills in the AI team group", () => {
-    expect(aiTeamNav.map((item) => item.key)).toEqual([
-      "runtimes",
-      "squads",
-      "skills",
-    ]);
+  it("puts runtimes with skills in the AI team group", () => {
+    expect(aiTeamNav.map((item) => item.key)).toEqual(["runtimes", "skills"]);
   });
 
   it("keeps usage and settings in the utility strip", () => {

@@ -39,8 +39,6 @@
     "./runtimes": "./runtimes/index.ts",
     "./billing": "./billing/index.ts",
     "./dashboard": "./dashboard/index.ts",
-    "./squads": "./squads/index.ts",
-    "./squads/components": "./squads/components/index.ts",
     "./workspace/workspace-avatar": "./workspace/workspace-avatar.tsx",
     "./workspace/no-access-page": "./workspace/no-access-page.tsx",
     "./workspace/use-workspace-seen": "./workspace/use-workspace-seen.ts",
@@ -56,8 +54,6 @@
     "./settings/lark-tab": "./settings/components/lark-tab.tsx",
     "./lark": "./lark/index.ts",
     "./slack": "./slack/index.ts",
-    "./dingtalk": "./dingtalk/index.ts",
-    "./wecom": "./wecom/index.ts",
     "./telegram": "./telegram/index.ts",
     "./invite": "./invite/index.ts",
     "./invitations": "./invitations/index.ts",
@@ -139,7 +135,7 @@
   },
   "devDependencies": {
     "@multica/eslint-config": "workspace:*",
-    "@multica/plugin-sdk": "workspace:*",
+
     "@multica/tsconfig": "workspace:*",
     "@testing-library/jest-dom": "catalog:",
     "@testing-library/react": "catalog:",

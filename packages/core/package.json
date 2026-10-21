@@ -87,8 +87,6 @@
     "./agents/use-agent-presence": "./agents/use-agent-presence.ts",
     "./agents/visibility-label": "./agents/visibility-label.ts",
     "./agents/stores": "./agents/stores/index.ts",
-    "./squads": "./squads/index.ts",
-    "./squads/stores": "./squads/stores/index.ts",
     "./permissions": "./permissions/index.ts",
     "./search/cancelled-rank": "./search/cancelled-rank.ts",
     "./search-index": "./search-index/index.ts",
@@ -131,14 +129,9 @@
     "./vcs/queries": "./vcs/queries.ts",
     "./lark": "./lark/index.ts",
     "./lark/queries": "./lark/queries.ts",
-    "./composio": "./composio/index.ts",
-    "./composio/queries": "./composio/queries.ts",
+
     "./slack": "./slack/index.ts",
     "./slack/queries": "./slack/queries.ts",
-    "./dingtalk": "./dingtalk/index.ts",
-    "./dingtalk/queries": "./dingtalk/queries.ts",
-    "./wecom": "./wecom/index.ts",
-    "./wecom/queries": "./wecom/queries.ts",
     "./telegram": "./telegram/index.ts",
     "./telegram/queries": "./telegram/queries.ts",
     "./feedback": "./feedback/index.ts",
@@ -171,7 +164,8 @@
     "./skills/frontmatter": "./skills/frontmatter.ts",
     "./skills/pack-archive": "./skills/pack-archive.ts",
     "./skills/stores": "./skills/stores/index.ts",
-    "./autopilots/stores": "./autopilots/stores/index.ts"
+    "./autopilots/stores": "./autopilots/stores/index.ts",
+    "./orchestrator": "./orchestrator/index.ts"
   },
   "dependencies": {
     "@formatjs/intl-localematcher": "catalog:",

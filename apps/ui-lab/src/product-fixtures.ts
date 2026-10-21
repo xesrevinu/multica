@@ -165,7 +165,6 @@ export function createFixtureApi(getLocale: () => LabLocale = () => "en") {
     listWorkspaces: async () => [workspace],
     getWorkspace: async () => workspace,
     listMembers: async () => members,
-    listSquads: async () => [],
     listAgents: async () => [],
     listRuntimes: async () => [],
     listProjects: async () => ({ projects: [], total: 0 }),

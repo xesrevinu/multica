@@ -2,10 +2,10 @@
  * Attachment sequence — the ordered list of attachments one surface exposes
  * to the preview viewer's prev / next navigation (MUL-5752, MUL-7642).
  *
- * `collectAttachmentSequence` takes the inclusion rule from the caller: web /
- * desktop page through every previewable kind (images, PDFs, video, Markdown,
- * HTML, text), so an issue reads as one run of files. `collectImageSequence`
- * is the images-only rule mobile's lightbox is built on.
+ * `collectAttachmentSequence` takes the inclusion rule from the caller: the
+ * page walks every previewable kind (images, PDFs, video, Markdown, HTML,
+ * text), so an issue reads as one run of files. `collectImageSequence` is
+ * the images-only rule.
  *
  * The sequence is built from DATA, not from the DOM: both the issue timeline
  * and the chat message list are virtualized, so a registry of mounted <img>
@@ -14,8 +14,7 @@
  * order identical to what the reader sees without depending on what is
  * currently painted.
  *
- * Pure — no React, no DOM, no platform APIs. Mobile shares it (see
- * apps/mobile/CLAUDE.md: pure functions from @multica/core are importable).
+ * Pure — no React, no DOM, no platform APIs.
  */
 
 import type { Attachment } from "../types/attachment";

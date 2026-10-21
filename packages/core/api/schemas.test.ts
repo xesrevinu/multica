@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   AppConfigSchema,
-  WecomInstallationSchema,
-  ListWecomInstallationsResponseSchema,
-  RedeemWecomBindingTokenResponseSchema,
-  EMPTY_WECOM_INSTALLATION,
-  EMPTY_LIST_WECOM_INSTALLATIONS_RESPONSE,
-  EMPTY_REDEEM_WECOM_BINDING_TOKEN_RESPONSE,
   TelegramInstallationSchema,
   ListTelegramInstallationsResponseSchema,
   RedeemTelegramBindingTokenResponseSchema,
@@ -1357,12 +1351,12 @@ describe("AppConfigSchema cdn_signed drift", () => {
   it("parses frontend feature flag decisions", () => {
     const parsed = AppConfigSchema.parse({
       feature_flags: {
-        composio_mcp_apps: true,
+        plugins_v1: true,
         malformed_future_flag: "yes",
       },
     });
     expect(parsed.feature_flags).toEqual({
-      composio_mcp_apps: true,
+      plugins_v1: true,
       malformed_future_flag: false,
     });
   });
@@ -1934,69 +1928,7 @@ describe("IssueViewSchema", () => {
   });
 });
 
-// WeCom smart-bot installation schemas. These gate UI affordances (the Connect
-// dialog, the "ask your operator" state, the revoked-vs-active badge), so a
-// malformed response must degrade to the safe state rather than a broken one.
-describe("WeCom installation schemas", () => {
-  it("parses a well-formed installation", () => {
-    const parsed = WecomInstallationSchema.parse({
-      id: "i1",
-      workspace_id: "w1",
-      agent_id: "a1",
-      bot_id: "aibot_xyz",
-      installer_user_id: "u1",
-      status: "active",
-    });
-    expect(parsed.bot_id).toBe("aibot_xyz");
-    expect(parsed.status).toBe("active");
-  });
-
-  it("defaults a missing status to 'revoked', never 'active'", () => {
-    // A broken read must not render a bot as connected when it may not be.
-    const parsed = WecomInstallationSchema.parse({ id: "i1" });
-    expect(parsed.status).toBe("revoked");
-    expect(parsed.bot_id).toBe("");
-  });
-
-  it("keeps unknown forward-compat fields (loose) instead of failing the parse", () => {
-    const parsed = WecomInstallationSchema.parse({ id: "i1", future_field: "keep" });
-    expect((parsed as unknown as { future_field?: string }).future_field).toBe("keep");
-  });
-
-  it("defaults 'configured' to false so a malformed list renders the operator state", () => {
-    const parsed = ListWecomInstallationsResponseSchema.parse({});
-    expect(parsed.configured).toBe(false);
-    expect(parsed.installations).toEqual([]);
-  });
-
-  it("falls back to the empty list when the response is not an object", () => {
-    const parsed = parseWithFallback(
-      "not json",
-      ListWecomInstallationsResponseSchema,
-      EMPTY_LIST_WECOM_INSTALLATIONS_RESPONSE,
-      { endpoint: "GET /api/workspaces/:id/wecom/installations" },
-    );
-    expect(parsed).toEqual(EMPTY_LIST_WECOM_INSTALLATIONS_RESPONSE);
-    expect(parsed.configured).toBe(false);
-  });
-
-  it("falls back on a malformed installation and redeem response", () => {
-    const inst = parseWithFallback(42, WecomInstallationSchema, EMPTY_WECOM_INSTALLATION, {
-      endpoint: "POST /api/workspaces/:id/wecom/install/byo",
-    });
-    expect(inst).toEqual(EMPTY_WECOM_INSTALLATION);
-
-    const redeem = parseWithFallback(
-      null,
-      RedeemWecomBindingTokenResponseSchema,
-      EMPTY_REDEEM_WECOM_BINDING_TOKEN_RESPONSE,
-      { endpoint: "POST /api/wecom/binding/redeem" },
-    );
-    expect(redeem).toEqual(EMPTY_REDEEM_WECOM_BINDING_TOKEN_RESPONSE);
-  });
-});
-
-// Telegram drives the same connect/disabled/revoked UI decisions as WeCom.
+// Telegram drives the connect/disabled/revoked UI decisions.
 // Keep its wire-contract fallbacks explicit so malformed or older responses
 // cannot render a bot as connected or report a binding success.
 describe("Telegram installation schemas", () => {

@@ -303,3 +303,39 @@ func applyACPEffortOption(
 		"level", effectiveLevel,
 	)
 }
+
+type acpConfigOptionState struct {
+	ID                string `json:"id"`
+	CurrentValue      string `json:"currentValue"`
+	CurrentValueSnake string `json:"current_value"`
+}
+
+// findACPConfigOption returns one exact config-id match from an ACP response.
+func findACPConfigOption(raw json.RawMessage, configID string) (acpConfigOptionState, bool) {
+	var response struct {
+		ConfigOptions      []acpConfigOptionState `json:"configOptions"`
+		ConfigOptionsSnake []acpConfigOptionState `json:"config_options"`
+	}
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return acpConfigOptionState{}, false
+	}
+	options := append(response.ConfigOptions, response.ConfigOptionsSnake...)
+	for _, option := range options {
+		if option.ID == configID {
+			return option, true
+		}
+	}
+	return acpConfigOptionState{}, false
+}
+
+func acpConfigOptionCurrentValue(raw json.RawMessage, configID string) (string, bool) {
+	option, ok := findACPConfigOption(raw, configID)
+	if !ok {
+		return "", false
+	}
+	value := strings.TrimSpace(option.CurrentValue)
+	if value == "" {
+		value = strings.TrimSpace(option.CurrentValueSnake)
+	}
+	return value, value != ""
+}

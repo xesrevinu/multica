@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ArrowRight, Blocks, Loader2, Plug, Plus, Server } from "lucide-react";
+import { ArrowRight, Blocks, Loader2, Plus, Server } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -39,7 +39,7 @@ import {
   SettingsTab,
 } from "./settings-layout";
 import { AppLink, useOptionalNavigation } from "../../navigation";
-import { useComposioAvailable } from "./connected-apps-tab";
+
 import { settingsHref } from "./settings-navigation";
 
 /**
@@ -362,7 +362,7 @@ export function McpTab() {
 function ToolSourcesOverview() {
   const { t } = useT("settings");
   const navigation = useOptionalNavigation();
-  const appsAvailable = useComposioAvailable();
+
   const tabHref = (tab: string) =>
     navigation
       ? settingsHref(navigation.pathname, navigation.searchParams, tab)
@@ -376,17 +376,7 @@ function ToolSourcesOverview() {
       description: t(($) => $.mcp_sources.mcp),
       href: null,
     },
-    ...(appsAvailable
-      ? [
-          {
-            key: "apps",
-            icon: Plug,
-            title: t(($) => $.page.tabs.apps),
-            description: t(($) => $.mcp_sources.apps),
-            href: tabHref("apps"),
-          },
-        ]
-      : []),
+
     ...(pluginsEnabled
       ? [
           {

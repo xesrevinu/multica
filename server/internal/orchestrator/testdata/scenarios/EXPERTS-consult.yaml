@@ -1,0 +1,20 @@
+name: consult expert writes a finding and the owner is assigned next
+spec:
+  roles: {lead: lead, reviewer: rev, owners: [heavy]}
+  experts:
+    - name: research
+      agents: [gbot]
+      when: {labels: [area:research]}
+      mode: consult
+  repo: {mode: github, slug: x/y}
+issue: {key: ATT-23, labels: [area:research]}
+steps:
+  - note: research runs before implementation
+    expect: {tid: T1_start, assignee: gbot, meta: {expert: research, owner: gbot}}
+  - note: one finding, no branch; the engine assigns the default owner
+    do: {status: in_progress, run: completed, meta: {phase: review_requested}}
+    expect:
+      tid: T_expert_consulted
+      status: todo
+      assignee: heavy
+      meta: {expert_done: research, owner: heavy, phase: implementing, expert: ""}

@@ -1,19 +1,13 @@
-import Image from "next/image";
-import { cn } from "@multica/ui/lib/utils";
-
-import { GitHubMark } from "./shared";
-
 /**
  * Monochrome marks for the providers shown in the hero "works with" row.
  *
  * The product renders each vendor's full-colour app icon
  * (`packages/views/runtimes/components/provider-logo.tsx`), which is right for
- * a settings list and wrong here: fourteen brand palettes over the photographic
+ * a settings list and wrong here: several brand palettes over the photographic
  * hero backdrop read as noise. These are the same official marks reduced to one
- * colour — the app tile dropped so the glyph inherits `currentColor`, or, for
- * the two vendors that publish raster art only, the artwork itself flattened to
- * white. Adding a provider to the runtime catalog does not add it here: the row
- * is a curated sample and the count beside it carries the full claim.
+ * colour — the app tile dropped so the glyph inherits `currentColor`.
+ * Adding a provider to the runtime catalog does not add it here: the row
+ * is a curated sample.
  */
 
 function ClaudeCodeMark({ className }: { className?: string }) {
@@ -42,69 +36,7 @@ function CodexMark({ className }: { className?: string }) {
   );
 }
 
-// Cursor — official cube from the Cursor brand assets, lifted off its dark app
-// tile. The five faces keep their relative lightness as opacity steps so the
-// cube still reads as a cube in a single colour.
-function CursorMark({ className }: { className?: string }) {
-  return (
-    <svg viewBox="655 355 290 290" aria-hidden="true" className={className} fill="currentColor">
-      <path fillOpacity="0.5" d="M800.004 500L923.821 571.486C923.061 572.804 921.957 573.929 920.591 574.716L804.863 641.531C801.858 643.266 798.151 643.266 795.146 641.531L679.417 574.716C678.052 573.929 676.948 572.804 676.188 571.486L800.004 500Z" />
-      <path fillOpacity="0.38" d="M800.005 357.168V500L676.188 571.486C675.427 570.168 675.004 568.647 675.004 567.072V432.928C675.004 429.774 676.686 426.865 679.418 425.285L795.141 358.47C796.646 357.602 798.323 357.168 799.999 357.168H800.005Z" />
-      <path fillOpacity="0.28" d="M923.815 428.515C923.055 427.197 921.951 426.072 920.586 425.285L804.857 358.47C803.357 357.602 801.68 357.168 800.004 357.168V500L923.821 571.486C924.581 570.168 925.005 568.647 925.005 567.072V432.928C925.005 431.348 924.587 429.838 923.821 428.515H923.815Z" />
-      <path fillOpacity="0.8" d="M915.156 433.518C915.857 434.728 915.954 436.281 915.156 437.663L802.764 632.323C802.008 633.641 800 633.1 800 631.584V503.311C800 502.287 799.727 501.302 799.229 500.44L915.15 433.512H915.156V433.518Z" />
-      <path d="M915.155 433.518L799.233 500.445C798.741 499.588 798.023 498.86 797.134 498.345L686.049 434.209C684.731 433.453 685.272 431.445 686.788 431.445H911.566C913.162 431.445 914.459 432.307 915.155 433.518Z" />
-    </svg>
-  );
-}
 
-// GitHub Copilot CLI — the GitHub mark, the same stand-in the runtime list uses
-// for this provider.
-function CopilotMark({ className }: { className?: string }) {
-  return <GitHubMark className={className} />;
-}
-
-function AntigravityMark({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-      className={className}
-      fill="currentColor"
-    >
-      <path d="M21.751 22.607c1.34 1.005 3.35.335 1.508-1.508C17.73 15.74 18.904 1 12.037 1 5.17 1 6.342 15.74.815 21.1c-2.01 2.009.167 2.511 1.507 1.506 5.192-3.517 4.857-9.714 9.715-9.714 4.857 0 4.522 6.197 9.714 9.715z" />
-    </svg>
-  );
-}
-
-// Qwen Code — official mark from QwenLM/qwen-code's brand assets.
-function QwenMark({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 141.38 140"
-      aria-hidden="true"
-      className={className}
-      fill="currentColor"
-    >
-      <path d="m140.93 85-16.35-28.33-1.93-3.34 8.66-15a3.323 3.323 0 0 0 0-3.34l-9.62-16.67c-.3-.51-.72-.93-1.22-1.22s-1.07-.45-1.67-.45H82.23l-8.66-15a3.33 3.33 0 0 0-2.89-1.67H51.43c-.59 0-1.17.16-1.66.45-.5.29-.92.71-1.22 1.22L32.19 29.98l-1.92 3.33H12.96c-.59 0-1.17.16-1.66.45-.5.29-.93.71-1.22 1.22L.45 51.66a3.323 3.323 0 0 0 0 3.34l18.28 31.67-8.66 15a3.32 3.32 0 0 0 0 3.34l9.62 16.67c.3.51.72.93 1.22 1.22s1.07.45 1.67.45h36.56l8.66 15a3.35 3.35 0 0 0 2.89 1.67h19.25a3.34 3.34 0 0 0 2.89-1.67l18.28-31.67h17.32c.6 0 1.17-.16 1.67-.45s.92-.71 1.22-1.22l9.62-16.67a3.323 3.323 0 0 0 0-3.34ZM51.44 3.33 61.07 20l-9.63 16.66h76.98l-9.62 16.66H45.67l-11.54-20zM57.21 120H22.58l9.63-16.67h19.25l-38.5-66.67h19.25l9.62 16.67L68.78 100l-11.55 20Zm61.59-33.34-9.62-16.67-38.49 66.67-9.63-16.67 9.63-16.66 26.94-46.67h23.1l17.32 30z" />
-    </svg>
-  );
-}
-
-// Kimi CLI (Moonshot AI) — the "K" logotype off its purple tile.
-function KimiMark({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox="6.6 5.4 11 13.2"
-      aria-hidden="true"
-      className={className}
-      fill="currentColor"
-    >
-      <path d="M7.2 6h2.4v5.1l4.3-5.1h2.9l-4.4 5.1L17 18h-2.9l-3.2-5.2-1.3 1.5V18H7.2V6z" />
-    </svg>
-  );
-}
-
-// DeepSeek Harness — official mark from deepseek-ai/deepseek-harness.
 function DeepSeekMark({ className }: { className?: string }) {
   return (
     <svg
@@ -118,79 +50,6 @@ function DeepSeekMark({ className }: { className?: string }) {
   );
 }
 
-// MiniMax Code — official mark from the MiniMax Code docs.
-function MiniMaxMark({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox="2.1 2 27.9 28"
-      aria-hidden="true"
-      className={className}
-      fill="currentColor"
-    >
-      <path d="M27.0157 5.80436C27.867 5.80448 28.5567 6.49502 28.5567 7.34635V20.7487C28.5567 21.2424 28.3347 21.7099 27.9522 22.0221L23.4102 25.7311C23.1167 25.9708 22.7491 26.1021 22.3702 26.1022H5.12508C4.27367 26.1022 3.58308 25.4116 3.58308 24.5602V11.5592C3.58308 11.0643 3.80649 10.5951 4.19051 10.2829L9.24519 6.17253C9.53831 5.93433 9.90459 5.80436 10.2823 5.80436H27.0157ZM11.0587 8.88053C10.8705 8.88052 10.6884 8.94584 10.5421 9.06413L6.99519 11.9313C6.80216 12.0874 6.69051 12.3227 6.69051 12.571V22.4987C6.69073 22.7823 6.92051 23.0124 7.20418 23.0124H9.7491V17.6745C9.74924 17.2206 10.1175 16.8524 10.5714 16.8522H12.5245C12.9784 16.8523 13.3466 17.2206 13.3468 17.6745V23.0124H15.1964V17.6745C15.1965 17.2205 15.5647 16.8522 16.0186 16.8522H17.9718C18.4256 16.8524 18.7939 17.2206 18.794 17.6745V23.0124H21.5587C21.7476 23.0124 21.9306 22.947 22.0772 22.8278L25.17 20.3112C25.3618 20.1551 25.4736 19.9208 25.4737 19.6735V9.40104C25.4736 9.11741 25.2437 8.8875 24.96 8.88737L11.0587 8.88053Z" />
-    </svg>
-  );
-}
-
-// CodeBuddy (Tencent) — the claw glyph off its dark tile; the artwork
-// overflows the 24×24 box exactly as the official icon does and is cropped by
-// the SVG viewport instead of the tile.
-function CodeBuddyMark({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" className={className} fill="currentColor">
-      <path fillRule="evenodd" clipRule="evenodd" d="M18.3558 1.87667C18.5907 1.666 18.6047 1.65742 18.7769 1.64707C19.0564 1.62665 19.3132 1.76029 19.749 2.15706C20.7674 3.08246 22.1851 4.98576 23.0667 6.61049L23.4069 7.24066L23.8889 7.47992C24.3535 7.71467 25.1155 8.19627 25.4337 8.45431C25.5772 8.57302 25.5976 8.57504 25.7472 8.51687C26.4225 8.25409 27.3897 8.60307 28.2428 9.42149C29.011 10.1577 29.7468 11.4159 30.0286 12.4657C30.0698 12.6348 30.1247 12.9979 30.1446 13.2682C30.2089 14.2179 29.904 14.9765 29.3175 15.3199C29.1976 15.3891 29.189 15.4079 29.1924 15.7068C29.2194 17.1293 28.8365 18.5491 28.0662 19.9338C27.1967 21.4886 25.6481 23.097 23.5527 24.6123C22.4273 25.4312 19.7654 26.982 18.5618 27.5265C15.6785 28.8246 13.367 29.3226 11.3592 29.0767C10.1618 28.9316 8.80631 28.4643 8.00415 27.9217C7.79297 27.7758 7.75862 27.7666 7.59727 27.8127C6.73865 28.0591 5.61445 27.5518 4.65922 26.4914C4.27824 26.0674 3.66368 25.0274 3.46425 24.4705C3.00307 23.167 3.09427 21.9907 3.70857 21.2882C3.86727 21.1073 3.87248 21.0995 3.8378 20.7953C3.78057 20.2973 3.75451 19.5606 3.78064 19.0849L3.80119 18.6401L3.13361 17.4603C2.10069 15.6224 1.44471 14.0785 1.19159 12.8994C1.05803 12.253 1.06635 11.966 1.23046 11.7538C1.33035 11.6257 1.6579 11.493 2.05265 11.4201C3.04693 11.2455 5.2159 11.4037 7.62846 11.8296L7.87915 11.8732L8.43005 11.386C9.34424 10.5762 9.95159 10.1217 11.0713 9.42358C12.2382 8.69349 13.5553 8.09254 15.0383 7.61696L15.5144 7.465L15.7755 6.77862C16.7121 4.30622 17.6719 2.48301 18.3558 1.87667ZM10.5102 14.5456C9.4521 15.1565 8.92313 15.4625 8.53428 15.8048C6.95941 17.1916 6.37074 19.3885 7.04122 21.377C7.20679 21.8679 7.5119 22.3973 8.12283 23.4554C8.73397 24.514 9.04008 25.0433 9.38253 25.4322C10.7693 27.0071 12.9663 27.5958 14.9547 26.9253C15.4456 26.7597 15.9746 26.4537 17.0327 25.8428L23.1219 22.3272C24.1804 21.7161 24.7103 21.4108 25.0992 21.0683C26.674 19.6816 27.2627 17.4846 26.5922 15.4962C26.4267 15.0052 26.1204 14.4758 25.5093 13.4173C24.8984 12.3593 24.5933 11.8298 24.2509 11.4409C22.8642 9.86609 20.6672 9.27746 18.6788 9.94787C18.1878 10.1134 17.658 10.4188 16.5995 11.03L10.5102 14.5456Z" />
-      <rect
-        x="11.0972"
-        y="18.8006"
-        width="2.40542"
-        height="4.99588"
-        rx="1.20271"
-        transform="rotate(-30 11.0972 18.8006)"
-      />
-      <rect
-        x="17.5869"
-        y="15.0537"
-        width="2.40542"
-        height="4.99588"
-        rx="1.20271"
-        transform="rotate(-30 17.5869 15.0537)"
-      />
-    </svg>
-  );
-}
-
-// Trae (ByteDance) — official mark. The source artwork is a flat brand-green
-// PNG on transparency, so the filter pair turns it into the same white glyph
-// the vector marks render as.
-function TraeMark({ className }: { className?: string }) {
-  return (
-    <Image
-      src="/images/providers/trae.png"
-      alt=""
-      aria-hidden
-      width={48}
-      height={48}
-      className={cn("brightness-0 invert", className)}
-    />
-  );
-}
-
-// Hermes (Nous Research) — official mascot icon. It ships only as an opaque
-// raster with no vector or single-colour variant, so this is that artwork with
-// its luminance mapped to alpha over white: the line work survives and the mark
-// stops being the one colour photo in a row of glyphs.
-function HermesMark({ className }: { className?: string }) {
-  return (
-    <Image
-      src="/images/providers/hermes.png"
-      alt=""
-      aria-hidden
-      width={48}
-      height={48}
-      className={className}
-    />
-  );
-}
 
 // Pi — official pixel-art wordmark off its near-black tile.
 function PiMark({ className }: { className?: string }) {
@@ -228,8 +87,8 @@ export interface HeroProvider {
   Mark: (props: { className?: string }) => React.ReactElement;
   /**
    * Optical size. No two vendors agree on how much of the icon box their glyph
-   * should fill, so one shared size lets the dense marks (GitHub, Kimi) shout
-   * while the airy ones (Claude) recede. These are tuned by eye so every mark
+   * should fill, so one shared size lets a dense mark shout while an airy one
+   * (Claude) recedes. These are tuned by eye so every mark
    * carries the same weight; the 24px default covers the ones already sitting
    * right.
    */
@@ -244,16 +103,7 @@ export interface HeroProvider {
 export const HERO_PROVIDERS: HeroProvider[] = [
   { name: "Claude Code", Mark: ClaudeCodeMark, size: "size-[26px]" },
   { name: "Codex", Mark: CodexMark },
-  { name: "Cursor", Mark: CursorMark, size: "size-[25px]" },
-  { name: "GitHub Copilot", Mark: CopilotMark, size: "size-[21px]" },
-  { name: "Antigravity", Mark: AntigravityMark, size: "size-[22px]" },
-  { name: "Qwen Code", Mark: QwenMark, size: "size-[23px]" },
-  { name: "Kimi CLI", Mark: KimiMark, size: "size-[21px]" },
-  { name: "DeepSeek Harness", Mark: DeepSeekMark, size: "size-[25px]" },
-  { name: "MiniMax Code", Mark: MiniMaxMark, size: "size-[23px]" },
-  { name: "CodeBuddy", Mark: CodeBuddyMark, size: "size-[22px]" },
-  { name: "Trae", Mark: TraeMark, size: "size-[22px]" },
-  { name: "Hermes", Mark: HermesMark, size: "size-[23px]" },
-  { name: "Pi", Mark: PiMark, size: "size-[22px]" },
   { name: "OpenCode", Mark: OpenCodeMark, size: "size-[21px]" },
+  { name: "Pi", Mark: PiMark, size: "size-[22px]" },
+  { name: "DeepSeek Harness", Mark: DeepSeekMark, size: "size-[25px]" },
 ];

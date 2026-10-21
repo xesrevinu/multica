@@ -110,6 +110,7 @@ import { ThreadMinimap, type ThreadMinimapThread } from "./thread-minimap";
 import { collectThreadParticipants, collectThreadReplies, deriveThreadResolution } from "./thread-utils";
 import { IssueAgentHeaderChip } from "./issue-agent-header-chip";
 import { IssueWakeupHeaderChip } from "./issue-wakeup-header-chip";
+import { FlowCard } from "./flow-card";
 import { ExecutionLogSection } from "./execution-log-section";
 import { WakeupsSection } from "./wakeups-section";
 import { QuickActionsSection } from "./quick-actions-section";
@@ -321,7 +322,7 @@ function statusLabel(
   return status;
 }
 
-function formatActivity(
+export function formatActivity(
   entry: TimelineEntry,
   t: ActivityT,
   locale: string,
@@ -412,6 +413,8 @@ function formatActivity(
       return t(($) => $.activity.task_completed, { count: entry.coalesced_count ?? 1 });
     case "task_failed":
       return t(($) => $.activity.task_failed, { count: entry.coalesced_count ?? 1 });
+    case "orchestrator_transition":
+      return t(($) => $.activity.orchestrator_transition, { tid: details.tid ?? "", why: details.why ?? "" });
     case "squad_leader_evaluated": {
       const reason = details.reason?.trim();
       switch (details.outcome) {
@@ -1675,6 +1678,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     // Duplicate marks name a different issue on every row.
     const NEVER_COALESCE_ACTIONS = new Set([
       "squad_leader_evaluated",
+      "orchestrator_transition",
       "wakeup_created",
       "wakeup_triggered",
       "wakeup_timed_out",
@@ -2930,6 +2934,9 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           own token spend, with the issue total on the section header.
           Self-contained; owns its own collapse state and WS subscriptions.
           Hides itself when there are no runs to show. */}
+      {/* Orchestrator flow — only for issues in an orchestrated project. */}
+      <FlowCard identifier={issue.identifier} />
+
       <ExecutionLogSection issueId={id} identifier={issue.identifier} issueTitle={issue.title} />
 
       {/* Details — creator and timestamps. Sits below the execution log

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/multica-ai/multica/server/internal/orchestrator"
 	"log/slog"
 	"math"
 	"net/http"
@@ -26,13 +27,10 @@ import (
 	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
-	composio "github.com/multica-ai/multica/server/internal/integrations/composio"
-	"github.com/multica-ai/multica/server/internal/integrations/dingtalk"
 	"github.com/multica-ai/multica/server/internal/integrations/ghsnapshot"
 	"github.com/multica-ai/multica/server/internal/integrations/lark"
 	"github.com/multica-ai/multica/server/internal/integrations/slack"
 	"github.com/multica-ai/multica/server/internal/integrations/telegram"
-	"github.com/multica-ai/multica/server/internal/integrations/wecom"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
@@ -201,6 +199,8 @@ type RuntimeRecoveryNotifier interface {
 }
 
 type Handler struct {
+	// Orchestrator is the in-app state machine (nil = disabled).
+	Orchestrator           *orchestrator.Service
 	Queries                *db.Queries
 	ReadSelector           *dbreader.Selector
 	DB                     dbExecutor
@@ -289,10 +289,6 @@ type Handler struct {
 	// UI consults IsConfigured() to decide whether to surface install
 	// entry points.
 	LarkAPIClient lark.APIClient
-	// Composio integration (MUL-3720). Nil when COMPOSIO_API_KEY is unset;
-	// the composio HTTP handlers return 403 in that case. Wired in
-	// cmd/server/router.go after handler.New.
-	Composio *composio.Service
 	// ChannelSupervisor owns the per-installation supervisor goroutines
 	// that hold the §4.4 WS lease and drive each channel.Channel
 	// (MUL-3620 generalized the Feishu-only Hub into this channel-agnostic
@@ -328,36 +324,11 @@ type Handler struct {
 	// "link your Slack account" prompt (MUL-3666). Nil unless Slack is
 	// configured (MULTICA_SLACK_SECRET_KEY set).
 	SlackBindingTokens *slack.BindingTokenService
-	// DingTalkInstall owns the bring-your-own-app DingTalk lifecycle. It is nil
-	// unless MULTICA_DINGTALK_SECRET_KEY is configured.
-	DingTalkInstall *dingtalk.InstallService
-	// DingTalkBindingTokens mints and redeems the single-use account-link tokens.
-	DingTalkBindingTokens *dingtalk.BindingTokenService
 	// SlackHistory backs the agent-facing `multica chat history` command: it
 	// reads a chat session's bound Slack conversation on demand (MUL-3871). Nil
 	// unless Slack is configured; GetChatChannelHistory then reports "no channel
 	// integration". A future platform satisfies the same reader interface.
 	SlackHistory ChatChannelHistoryReader
-	// WecomStore is the read/write handle over channel_installation rows scoped
-	// to channel_type='wecom'. Nil disables the wecom Web-UI endpoints (they
-	// return 403) and prevents boot from wiring the smart-bot supervisor.
-	WecomStore *wecom.Store
-	// WecomCredentials unseals a wecom installation's smart-bot secret for the
-	// WebSocket subscribe frame. Nil disables the wecom integration.
-	WecomCredentials wecom.CredentialsResolver
-	// WecomBindingTokens mints/redeems the user-binding tokens behind the
-	// "link your Multica account" prompt sent to first-time WeCom users
-	// (their aibot userid is a "T"-prefixed anonymized id with no relation
-	// to their real userid or email, so an explicit binding is required —
-	// see wecom/binding.go). Nil disables the redeem endpoint (returns 403)
-	// and the OutboundReplier's binding-prompt path.
-	WecomBindingTokens WecomBindingRedeemer
-
-	// WecomCredentialProbe overrides the install-time control check. Nil in
-	// production, which gets the real handshake probe; tests inject a fake so
-	// the install path runs without a socket.
-	WecomCredentialProbe wecom.CredentialProbe
-
 	// TelegramInstall owns the Telegram bot install lifecycle (register a
 	// pasted BotFather token / list / revoke) and the at-rest encryption of
 	// each bot's token. Nil unless MULTICA_TELEGRAM_SECRET_KEY is set.

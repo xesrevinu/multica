@@ -1,0 +1,10 @@
+name: member pause - a paused issue only waits (even with a finished run); resume continues where it was
+issue: {key: ATT-70}
+steps:
+  - expect: {tid: T1_start}
+  - do: {meta: {paused: "true"}}
+    expect: {wait: paused by a member}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
+    expect: {wait: paused by a member}
+  - do: {meta: {paused: ""}}
+    expect: {tid: T2_review, meta: {attempt_review: "1"}}

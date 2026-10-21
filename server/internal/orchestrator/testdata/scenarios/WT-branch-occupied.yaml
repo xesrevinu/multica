@@ -1,0 +1,19 @@
+name: agent/<key> held by another worktree - the daemon fails instead of forking, the engine blocks with the occupying path
+issue: {key: ATT-62}
+steps:
+  - expect: {tid: T1_start}
+  - note: a herdr worker made agent-att-62 at the same wt path; the daemon refuses to fork
+    do:
+      run: failed
+      reason: environment_prepare_failed
+      error: "execenv: prepare: [branch_occupied] orchestrator branch agent/att-62 is held by the worktree at /Users/kee/.cursor/worktrees/multica/agent-att-62; not forking a task branch and not touching it (wt: worktree at the expected path)"
+    expect:
+      tid: T6_block
+      status: blocked
+      assignee: lead
+      meta:
+        blocked_reason: "agent/att-62 is checked out by another worktree at /Users/kee/.cursor/worktrees/multica/agent-att-62: the orchestrator owns this branch and never forks or takes it over; free it (finish or remove that worktree, and do not use the agent/ prefix or an agent-<key> path for other work), then `multica flow unblock ATT-62`"
+  - note: no infra attempt was burnt on it
+    expect: {wait: phase=unblocked}
+  - do: {meta: {unblock_confirmed: "true", phase: unblocked}}
+    expect: {tid: T7_unblock, assignee: a, meta: {attempt_infra: "0"}}

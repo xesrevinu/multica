@@ -1,0 +1,11 @@
+name: PR-S5 first CI attempt red; the gate re-runs it once (inside the prober) and waits
+recorded: ATT-59
+issue: {key: ATT-59}
+steps:
+  - expect: {tid: T1_start}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
+    expect: {tid: T2_review}
+  - do: {run: completed, meta: {verdict: approve, reviewed_sha: h1}, merge: {pending: true, detail: "re-ran failed checks once (test)"}}
+    expect: {wait: re-ran failed checks}
+  - do: {merge: {ok: true, kind: merged, sha: m1}}
+    expect: {tid: T4_done}

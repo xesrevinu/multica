@@ -83,3 +83,12 @@ func TestPrepareYieldedMcpConfigIgnoresOtherProviders(t *testing.T) {
 		t.Fatalf(".mcp.json should not exist for pi, stat err=%v", err)
 	}
 }
+
+func filePerm(t *testing.T, path string) os.FileMode {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	return info.Mode().Perm()
+}

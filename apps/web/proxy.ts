@@ -17,6 +17,7 @@ const LEGACY_ROUTE_SEGMENTS = new Set([
   "agents",
   "squads",
   "inbox",
+  "chat",
   "my-issues",
   "autopilots",
   "runtimes",
@@ -102,7 +103,7 @@ export function proxy(req: NextRequest) {
     !isOfficialMarketingHost(req.nextUrl.hostname)
   ) {
     const url = req.nextUrl.clone();
-    url.pathname = `/${lastSlug}/issues`;
+    url.pathname = `/${lastSlug}/chat`;
     return NextResponse.redirect(url);
   }
 

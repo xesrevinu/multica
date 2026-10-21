@@ -1,0 +1,19 @@
+name: a busy expert waits and does not fall back to owners
+spec:
+  roles:
+    lead: lead
+    reviewer: rev
+    owners: [heavy]
+    routes:
+      - {labels: [area:hard], owners: [heavy]}
+  experts:
+    - name: deep-work
+      agents: [gbot]
+      when: {labels: [area:hard]}
+  repo: {mode: github, slug: x/y}
+issue: {key: ATT-24, labels: [area:hard]}
+steps:
+  - do: {busy: {gbot: true}}
+    expect: {wait: expert deep-work busy}
+  - do: {busy: {gbot: false}}
+    expect: {tid: T1_start, assignee: gbot, meta: {expert: deep-work}}

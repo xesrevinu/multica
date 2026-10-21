@@ -1,0 +1,11 @@
+name: T3c negative - the head moved with a different patch after approval (during acceptance), so the verdict is void
+issue: {key: ATT-2, labels: [needs-acceptance]}
+steps:
+  - expect: {tid: T1_start}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
+    expect: {tid: T2_review}
+  - do: {run: completed, meta: {verdict: approve, reviewed_sha: h1}}
+    expect: {tid: T10_await_acceptance}
+  - note: a member pushes a real change while the PR waits for acceptance
+    do: {head: h2}
+    expect: {tid: T3b_rereview, assignee: rev, meta: {review_started_sha: h2}}

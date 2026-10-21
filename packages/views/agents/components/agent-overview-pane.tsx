@@ -8,13 +8,10 @@ import type {
   MemberWithUser,
 } from "@multica/core/types";
 import { providerSupportsMcpConfig } from "@multica/core/agents";
-import { useFeatureEnabled } from "@multica/core/config";
-import { COMPOSIO_MCP_APPS_FLAG } from "@multica/core/feature-flags";
+
 import { useWorkspaceId } from "@multica/core/hooks";
 import { larkInstallationsOptions } from "@multica/core/lark";
 import { slackInstallationsOptions } from "@multica/core/slack";
-import { dingtalkInstallationsOptions } from "@multica/core/dingtalk";
-import { wecomInstallationsOptions } from "@multica/core/wecom";
 import { telegramInstallationsOptions } from "@multica/core/telegram";
 import {
   AlertDialog,
@@ -34,9 +31,9 @@ import { SkillsTab } from "./tabs/skills-tab";
 import { EnvTab } from "./tabs/env-tab";
 import { CustomArgsTab } from "./tabs/custom-args-tab";
 import { McpConfigTab } from "./tabs/mcp-config-tab";
-import { AgentMcpTab } from "./tabs/agent-mcp-tab";
+
 import { IntegrationsTab } from "./tabs/integrations-tab";
-import { RuntimeConfigTab } from "./tabs/runtime-config-tab";
+
 import { AgentDetailInspector } from "./agent-detail-inspector";
 import { AgentAccessSettings } from "./agent-access-settings";
 import { AgentOverviewSummary } from "./agent-overview-summary";
@@ -52,13 +49,11 @@ export type DetailTab =
   | "instructions"
   | "skills"
   | "mcp_config"
-  | "composio_mcp"
   | "integrations"
   | "general"
   | "access"
   | "env"
-  | "custom_args"
-  | "runtime_config";
+  | "custom_args";
 
 type SecondaryTab = {
   id: DetailTab;
@@ -66,20 +61,17 @@ type SecondaryTab = {
     | "instructions"
     | "skills"
     | "mcp_config"
-    | "composio_mcp"
     | "integrations"
     | "general"
     | "access"
     | "environment"
-    | "custom_args"
-    | "runtime_config";
+    | "custom_args";
 };
 
 const CAPABILITY_TABS: SecondaryTab[] = [
   { id: "instructions", labelKey: "instructions" },
   { id: "skills", labelKey: "skills" },
   { id: "mcp_config", labelKey: "mcp_config" },
-  { id: "composio_mcp", labelKey: "composio_mcp" },
   { id: "integrations", labelKey: "integrations" },
 ];
 
@@ -88,7 +80,6 @@ const SETTINGS_TABS: SecondaryTab[] = [
   { id: "access", labelKey: "access" },
   { id: "env", labelKey: "environment" },
   { id: "custom_args", labelKey: "custom_args" },
-  { id: "runtime_config", labelKey: "runtime_config" },
 ];
 
 const TOP_TABS: { id: DetailSection; labelKey: DetailSection }[] = [
@@ -156,10 +147,7 @@ export function AgentOverviewPane({
   const wsId = useWorkspaceId();
   const navigation = useNavigation();
   const urlView = navigation.searchParams.get("view");
-  const composioMCPAppsEnabled = useFeatureEnabled(
-    COMPOSIO_MCP_APPS_FLAG,
-    false,
-  );
+
   const [activeView, setActiveView] = useState<DetailTab>(() =>
     isDetailTab(urlView) ? urlView : "overview",
   );
@@ -175,13 +163,6 @@ export function AgentOverviewPane({
     ...slackInstallationsOptions(wsId),
     enabled: !!wsId,
   });
-  const { data: dingtalkListing } = useQuery({
-    ...dingtalkInstallationsOptions(wsId),
-  });
-  const { data: wecomListing } = useQuery({
-    ...wecomInstallationsOptions(wsId),
-    enabled: !!wsId,
-  });
   const { data: telegramListing } = useQuery({
     ...telegramInstallationsOptions(wsId),
     enabled: !!wsId,
@@ -190,33 +171,19 @@ export function AgentOverviewPane({
   const integrationsConfigured =
     larkListing?.configured === true ||
     slackListing?.configured === true ||
-    dingtalkListing?.configured === true ||
-    wecomListing?.configured === true ||
     telegramListing?.configured === true;
 
   const visibleCapabilityTabs = useMemo(() => {
     const showMcp = runtime
       ? providerSupportsMcpConfig(runtime.provider)
       : true;
-    const showComposioMcp =
-      composioMCPAppsEnabled &&
-      !!currentUserId &&
-      !!agent.owner_id &&
-      agent.owner_id === currentUserId;
 
     return CAPABILITY_TABS.filter((tab) => {
       if (tab.id === "mcp_config") return showMcp;
-      if (tab.id === "composio_mcp") return showComposioMcp;
       if (tab.id === "integrations") return integrationsConfigured;
       return true;
     });
-  }, [
-    agent.owner_id,
-    composioMCPAppsEnabled,
-    currentUserId,
-    integrationsConfigured,
-    runtime,
-  ]);
+  }, [integrationsConfigured, runtime]);
 
   const visibleSettingsTabs = useMemo(
     () =>
@@ -227,10 +194,9 @@ export function AgentOverviewPane({
         // showing the tab to anyone else guarantees a 403 on "Reveal & edit".
         // The server stays the boundary; this only removes a dead entry point.
         if (tab.id === "env") return canEdit;
-        if (tab.id === "runtime_config") return runtime?.provider === "openclaw";
         return true;
       }),
-    [canEdit, runtime?.provider],
+    [canEdit],
   );
 
   const visibleViews = useMemo(
@@ -473,9 +439,7 @@ export function AgentOverviewPane({
                       onDirtyChange={setActiveDirty}
                     />
                   )}
-                  {effectiveView === "composio_mcp" && (
-                    <AgentMcpTab agent={agent} />
-                  )}
+
                   {effectiveView === "integrations" && (
                     <IntegrationsTab agent={agent} />
                   )}
@@ -510,13 +474,7 @@ export function AgentOverviewPane({
                       onDirtyChange={setActiveDirty}
                     />
                   )}
-                  {effectiveView === "runtime_config" && (
-                    <RuntimeConfigTab
-                      agent={agent}
-                      onSave={(updates) => onUpdate(agent.id, updates)}
-                      onDirtyChange={setActiveDirty}
-                    />
-                  )}
+
                 </div>
               </div>
             </section>

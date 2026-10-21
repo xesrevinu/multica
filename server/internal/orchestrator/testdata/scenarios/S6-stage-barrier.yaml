@@ -1,0 +1,14 @@
+name: S6 / PR-S6 a stage-2 child waits for every stage-1 sibling; deps likewise
+recorded: ATT-57
+issue: {key: ATT-57, parentid: P, stage: 2, meta: {deps: ATT-54}}
+steps:
+  - do: {siblings: [{key: ATT-54, status: done}, {key: ATT-55, status: in_review, parentid: P, stage: 1}, {key: ATT-56, status: done, parentid: P, stage: 1}]}
+    expect: {tid: none}
+  - do: {siblings: [{key: ATT-54, status: in_progress}, {key: ATT-55, status: done, parentid: P, stage: 1}, {key: ATT-56, status: done, parentid: P, stage: 1}]}
+    expect: {tid: none}
+  - do: {siblings: [{key: ATT-54, status: done}, {key: ATT-55, status: done, parentid: P, stage: 1}, {key: ATT-56, status: cancelled, parentid: P, stage: 1}]}
+    expect: {tid: T1_start}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
+    expect: {tid: T2_review}
+  - do: {run: completed, meta: {verdict: approve, reviewed_sha: h1}}
+    expect: {tid: T4_done}

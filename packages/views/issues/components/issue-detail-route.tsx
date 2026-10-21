@@ -6,6 +6,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useNavigation } from "../../navigation";
 import { IssueDetail, IssueDetailSkeleton, IssueNotFound } from "./issue-detail";
+import { IssueChatView } from "../../orch/issue-chat/issue-chat-view";
 
 interface IssueDetailRouteProps {
   /**
@@ -78,6 +79,7 @@ export function IssueDetailRoute({ routeId, onDelete }: IssueDetailRouteProps) {
   const wsId = useWorkspaceId();
   const { canonicalId, issue, isResolving, notFound } = useCanonicalIssue(wsId, routeId);
   const highlight = useCommentHighlightHash();
+  const view = useNavigation().searchParams.get("view");
 
   useCanonicalIssueUrl(routeId, issue?.identifier, highlight.hash);
 
@@ -89,6 +91,12 @@ export function IssueDetailRoute({ routeId, onDelete }: IssueDetailRouteProps) {
   // unbounded request loop that never settles. See `CanonicalIssue.notFound`.
   if (notFound || !canonicalId) return <IssueNotFound showBackLink={!onDelete} />;
 
+  // The issue-centric chat view is the default; `?view=classic` (linked
+  // from the details drawer) keeps the document page for full editing, and
+  // deep links to a comment still land on the page that can highlight it.
+  if (view !== "classic" && !highlight.commentId) {
+    return <IssueChatView issueId={canonicalId} />;
+  }
   return (
     <IssueDetail
       issueId={canonicalId}

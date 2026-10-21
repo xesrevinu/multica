@@ -38,8 +38,6 @@ What it can actually do is still limited by the agent's configuration, the runti
 
 During the run, the agent manages the issue's status by judging what its work changes: starting on the issue's own ask moves it to `in_progress` right away, delivery moves it to `in_review`, work continuing beyond the turn keeps it `in_progress`, and consultation or discussion leaves the status untouched — these actions appear under the agent's identity in the timeline. Run lifecycle and issue status are separate: a run completing does not by itself change the issue status.
 
-When the assignee is a [squad](/squads), the same rule applies: Multica enqueues the leader, and dispatching members is not delivery — a dispatch turn leaves the parent issue `in_progress`, and the leader only moves it to `in_review` once the overall goal is met.
-
 ## Assign without starting
 
 **Don't start yet** in the confirmation dialog saves the assignee without creating a run this time. Use it to settle ownership first and start once the background or dependencies are ready.
@@ -85,4 +83,3 @@ Use `--no-start` when the assignment should record ownership without creating a 
 
 - [@-mention agents in comments](/mentioning-agents) — handle a new question without changing the assignee.
 - [Runs](/tasks) — queueing, retry, and stop rules.
-- [Squads](/squads) — have a leader coordinate multiple agents.

@@ -1,86 +1,39 @@
 ---
 name: multica-platform
-description: "Use for Multica platform actions the runtime brief does not fully cover: issue and PR contracts, charts and files in comments, mentions, agents, squads, autopilots, projects, runtimes, skill import. Not for the product code you are working on."
+description: "Use for Multica platform actions the runtime brief does not cover: orchestrated (team-run) projects, issue and PR contracts, wakeups, mentions, agents, autopilots, projects, runtimes, skill import. Not for the product code you are working on."
 user-invocable: false
 allowed-tools: Bash(multica *), Bash(git *), Bash(gh *)
 ---
 
 # Operating Multica
 
-Your runtime brief owns the per-turn workflow: which issue you are on, when to
-comment, what status to write. This skill owns the platform contracts behind
-it — what a command actually does, what the server validates, and which writes
-have consequences you cannot take back.
+The runtime brief owns the turn. `multica <command> --help` documents every
+flag; this skill keeps only what `--help` will not tell you. Open a reference
+only when the task needs it.
 
-Read the invariants below, then open the reference(s) your task actually needs
-— usually one, sometimes a few. Do not read them all.
-
-## Routing
-
-| Open | When the task is about |
+| Open | When |
 |---|---|
-| `references/issues.md` | Issues: PR linking, reading a linked PR's state, custom properties, status side effects, sub-issues and stages, who else is running, wakeups (events, conditions, timers, check-ins), charts vs attached files in a comment |
-| `references/mentions.md` | Writing a `mention://` link: which types enqueue a run, which are inert, why one silently did nothing |
-| `references/agents.md` | Creating, copying or debugging an agent definition: fields, secrets, MCP config, skill binding |
-| `references/squads.md` | Squads: leader routing, roster, recording leader activity, why a squad did or did not run |
-| `references/autopilots.md` | Autopilots: schedule / webhook / manual triggers, `create_issue` vs `run_only`, why one did not fire |
-| `references/projects.md` | Projects and their durable resources (`github_repo`, `local_directory`, worktree mode); project workflows — status columns, handoffs, a `[Project workflow]` block in your prompt |
-| `references/runtimes.md` | Runtimes, daemons, `repo checkout`, and the task CLI boundary |
-| `references/skill-import.md` | Importing a skill into this workspace from a URL or a local archive |
+| `references/orchestrated.md` | The issue's project has a team (`multica team status`): hand-over, review, experts, blocked |
+| `references/issues.md` | Issues outside a team: PR linking, status side effects, sub-issues and stages, wakeups, charts |
+| `references/workspace.md` | Mentions, agents, autopilots, projects, runtimes, skill import |
 
-Open what the task needs. A single-domain task usually needs one; a task that
-crosses domains needs each domain it touches — creating a squad, assigning it an
-issue, then writing a mention needs `squads.md`, `issues.md` and `mentions.md`,
-and skipping one of those means acting on a contract you have not read.
+## Rules
 
-What is never right is reading all eight because you are not sure. Each
-reference states its own contracts in full and none depends on another, so
-pick by domain and skip the rest.
+1. **Orchestrated project: never write status, assignee or engine metadata.**
+   The orchestrator assigns, routes review, merges (squash) and closes. You
+   hand over with metadata. `orchestrator_owned` is the contract, not a
+   permission bug: do not retry it or look for another route.
+2. **A name is not an id.** Every `--*-id` flag and mention takes a UUID from
+   `list --output json`. Never invent one.
+3. **Parse stdout only.** `--output json` writes stdout, warnings go to stderr;
+   `2>&1` into a parser makes a successful write look failed.
+4. **Writes are real.** They change shared state or start paid runs. Read
+   (`get`/`list`) before you write; never write to see what happens.
+5. **Bounded comment reads.** `multica issue comment list <id> --roots-only
+   --summary --compact`, then `--thread <id> --tail 30`.
+6. **Stay in your checkout.** Context comes from `multica issue get`, comments,
+   metadata and `multica flow show <key>`, not from searching the disk.
 
-## Invariants
-
-These hold across every reference and are not repeated there.
-
-**Read before you write.** Start with the read-only commands the reference you
-opened names — most domains have a `list` and a `get` that take `--output json`
-and have no side effects. Run those before any mutation. When a command's shape
-is unclear, `multica <command> --help` beats guessing at flags.
-
-**A name is not an id.** Mention links, assignment, and every `--*-id` flag take
-a real UUID from the matching `list --output json`. Never type a display name
-where an id belongs, and never invent a UUID: an id that is well-formed but
-belongs to nothing fails in ways that read like a permission error, which sends
-you debugging access when the real problem was the id.
-
-**`--output json` writes to stdout; warnings and confirmations go to stderr.**
-Do not merge them (`2>&1`) into anything that parses the output — that makes a
-write which SUCCEEDED look like it failed, and invites a duplicate retry.
-
-**Writes are real.** Creating, updating, deleting, assigning, commenting,
-mentioning, triggering and status changes mutate durable workspace state or
-start agent runs that cost real budget. Never run one to see what happens. When
-the user has not asked for a specific mutation, propose it instead of making it.
-
-**Status keys identify workflow states; categories describe lifecycle only.**
-Custom statuses do not inherit built-in automation behavior. For status side
-effects and API field meanings, read `references/issues.md`.
-
-**Comment reads stay bounded.** Scan the threads cheaply
-(`--roots-only --summary --compact`), then expand only what matters
-(`--thread <thread-id> --tail 30`). Never one unbounded pull — a wide read on a
-busy issue costs more than the answer is worth and still buries the reply
-bodies where triggers and instructions actually live. One exception, and it is
-narrower than it looks: when the per-turn message hands you a `--since` delta
-read, that read is the bounded scan — the server already computed which
-comments are new, so running it returns exactly those and nothing else.
-
-## When behavior looks wrong
-
-Classify before concluding: expected behavior, a configuration problem, a
-product limitation, or an actual bug. Explain what the platform currently does
-rather than defending it; when the behavior is technically correct but bad for
-the user, say so and propose a scoped change.
-
-Do not silently alter routing, briefing, or trigger behavior to make a complaint
-go away. Those are product contracts, and changing one without confirmation
-moves the surprise to somebody else.
+When behavior looks wrong, say whether it is expected, configuration, a
+product limit or a bug, and propose a scoped change. Do not quietly change
+routing, triggers or team specs.

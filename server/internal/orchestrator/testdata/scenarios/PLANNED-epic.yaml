@@ -1,0 +1,4 @@
+name: planned epic waits forever; its children carry the work
+issue: {key: ATT-4, meta: {phase: planned}}
+steps:
+  - expect: {wait: planned epic}

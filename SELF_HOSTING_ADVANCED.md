@@ -127,8 +127,8 @@ Block Public Access, R2, MinIO), the API instead serves avatars from
 `/api/avatars/<signature>/<key>` and resolves each request through
 `ATTACHMENT_DOWNLOAD_MODE` — a presigned redirect, a CloudFront-signed
 redirect, or a proxied body. The signature in the path is what authorizes the
-read: an auth-gated URL cannot be used as an `<img src>` from the Desktop app
-or a split-origin frontend, because the session cookie is `SameSite=Strict`.
+read: an auth-gated URL cannot be used as an `<img src>` from a page that
+does not send the session cookie, because that cookie is `SameSite=Strict`.
 
 Only image objects resolve through this route, and only ones that are
 *avatar-class*: a standalone upload not attached to an issue, comment, chat, or
@@ -243,30 +243,6 @@ Things to know:
   not cover the host name in the URL, is still rejected; fix the certificate
   itself.
 
-### WeCom frame tracing
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MULTICA_WECOM_TRACE` | empty (off) | `1` records every WeCom frame the backend reads and writes, including the first 120 runes of each message body. Anything else is off. |
-
-Turn it on for a debugging session and unset it when the session ends. Before
-you do:
-
-- **It is read at boot, so changing it needs a backend restart** — `docker compose -f docker-compose.selfhost.yml up -d backend`. There is no runtime toggle. While it is on, the backend logs a warning on every startup saying so.
-- **Anyone who can read the backend's logs can read the traced message text.** That is a wider audience than the WeCom chat it came from: your `docker logs` / journald / log shipper, and whoever administers them. The smart-bot secret is never read, and `token=` / `access_token=` / `code=` parameters are redacted out of message text — but user message content is not, and **an attachment's `Content-Disposition` and the filename read out of it are written verbatim**, up to 2048 runes and past the redactor. That line exists to show exactly how the storage backend encoded a name, and a redacted or truncated copy of it answers nothing; it also means an attachment's filename reaches your logs as sent.
-- **Retention is your log stack's, not the application's.** The backend writes to stderr and keeps nothing itself, so how long the traced text survives is whatever your Docker logging driver or shipper is set to. If that is "forever", decide about it before enabling rather than after.
-
-Each outbound frame produces two lines that share a `seq`: `dir=out` when it is
-about to be written, and `dir=out.done` with `ok=true` / `ok=false` once the
-socket has answered. `seq` is the frame's position in the write order, so the
-pair tells you what this backend sent and in which order; an attempt with no
-matching outcome is a write that never returned.
-
-`ok=true` means the frame reached the socket, not that WeCom accepted it. For
-the platform's verdict, match the frame's `req_id` against the `dir=in` line
-answering it and read that line's `errcode` — a frame can be written
-successfully and still be rejected there.
-
 ### CLI / Daemon
 
 These are configured on each user's machine, not on the server:
@@ -287,23 +263,19 @@ Agent-specific overrides:
 | `MULTICA_CLAUDE_MODEL` | Override the Claude model used |
 | `MULTICA_CODEX_PATH` | Custom path to the `codex` binary |
 | `MULTICA_CODEX_MODEL` | Override the Codex model used |
-| `MULTICA_COPILOT_PATH` | Custom path to the `copilot` (GitHub Copilot CLI) binary |
-| `MULTICA_COPILOT_MODEL` | Override the Copilot model used (note: GitHub Copilot routes models through your account entitlement, so this may not be honoured) |
 | `MULTICA_OPENCODE_PATH` | Custom path to the `opencode` binary |
 | `MULTICA_OPENCODE_MODEL` | Override the OpenCode model used |
-| `MULTICA_CODEARTS_PATH` | Custom path to the `codearts` launcher or binary |
-| `MULTICA_CODEARTS_MODEL` | Override the CodeArts model used |
-| `MULTICA_OPENCLAW_PATH` | Custom path to the `openclaw` binary |
-| `MULTICA_OPENCLAW_MODEL` | Override the OpenClaw model used |
-| `MULTICA_OPENCLAW_CLI_TIMEOUT` | Deadline for each `openclaw config ...` call during task preparation (default 30s; accepts `45s` or `45`). Raise it when the local CLI is slow to start; the daemon also reads it from `backends.openclaw.cli_timeout` in the CLI config |
-| `MULTICA_HERMES_PATH` | Custom path to the `hermes` binary |
-| `MULTICA_HERMES_MODEL` | Override the Hermes model used |
 | `MULTICA_PI_PATH` | Custom path to the `pi` binary |
 | `MULTICA_PI_MODEL` | Override the Pi model used |
-| `MULTICA_CURSOR_PATH` | Custom path to the `cursor-agent` binary |
-| `MULTICA_CURSOR_MODEL` | Override the Cursor Agent model used |
+| `MULTICA_OMP_PATH` | Custom path to the `omp` binary |
+| `MULTICA_OMP_MODEL` | Override the Oh-My-Pi model used |
 | `MULTICA_GROK_PATH` | Custom path to the `grok` binary |
 | `MULTICA_GROK_MODEL` | Override the Grok model used (e.g. `grok-4.5`) |
+| `MULTICA_GBOT_PATH` | Custom path to the `gbot` binary |
+| `MULTICA_DSH_PATH` | Custom path to the `dsh` binary |
+| `MULTICA_DSH_MODEL` | Override the DeepSeek Harness model used |
+| `MULTICA_YIELDED_PATH` | Custom path to the `yielded-agent` binary |
+| `MULTICA_YIELDED_MODEL` | Override the Yielded model used |
 
 ## Database Setup
 

@@ -7,16 +7,12 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useCurrentMember } from "@multica/core/permissions";
 import { larkInstallationsOptions } from "@multica/core/lark";
 import { slackInstallationsOptions } from "@multica/core/slack";
-import { dingtalkInstallationsOptions } from "@multica/core/dingtalk";
-import { wecomInstallationsOptions } from "@multica/core/wecom";
 import { telegramInstallationsOptions } from "@multica/core/telegram";
 import { cn } from "@multica/ui/lib/utils";
 import { AppLink, useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
 import { LarkTab } from "./lark-tab";
 import { SlackTab } from "./slack-tab";
-import { DingTalkTab } from "./dingtalk-tab";
-import { WecomTab } from "./wecom-tab";
 import { TelegramTab } from "./telegram-tab";
 import { SettingsCard, SettingsTab } from "./settings-layout";
 import { IntegrationChannelIcon } from "./integration-channel-icon";
@@ -49,8 +45,7 @@ const hasActiveInstallation = (data: {
 
 /**
  * Messaging channels: a directory of the chat apps agents can be reached
- * from, each opening its own detail page. Code hosting lives on the Code page
- * and account-level app connections on Connected apps.
+ * from, each opening its own detail page. Code hosting lives on the Code page.
  */
 export function ChannelsTab() {
   const { t } = useT("settings");
@@ -68,16 +63,6 @@ export function ChannelsTab() {
   });
   const slack = useQuery({
     ...slackInstallationsOptions(wsId),
-    enabled: canView,
-    select: hasActiveInstallation,
-  });
-  const dingtalk = useQuery({
-    ...dingtalkInstallationsOptions(wsId),
-    enabled: canView,
-    select: hasActiveInstallation,
-  });
-  const wecom = useQuery({
-    ...wecomInstallationsOptions(wsId),
     enabled: canView,
     select: hasActiveInstallation,
   });
@@ -100,20 +85,6 @@ export function ChannelsTab() {
       description: t(($) => $.slack.page_description),
       content: <SlackTab />,
       state: slack,
-    },
-    {
-      id: "dingtalk",
-      label: t(($) => $.dingtalk.section_title),
-      description: t(($) => $.dingtalk.page_description),
-      content: <DingTalkTab />,
-      state: dingtalk,
-    },
-    {
-      id: "wecom",
-      label: t(($) => $.wecom.section_title),
-      description: t(($) => $.wecom.page_description),
-      content: <WecomTab />,
-      state: wecom,
     },
     {
       id: "telegram",

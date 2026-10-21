@@ -81,7 +81,8 @@
     "quick_create_unconfirmed": "Create with agent unconfirmed",
     "autopilot_paused": "Autopilot paused",
     "children_done": "Sub-issues finished",
-    "autopilot_quota_exceeded": "Autopilot run limit reached"
+    "autopilot_quota_exceeded": "Autopilot run limit reached",
+    "orchestrator_alert": "Orchestrator"
   },
   "labels": {
     "set_status_to": "Set status to",

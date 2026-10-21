@@ -74,8 +74,8 @@ vi.mock("./steps/step-workspace", () => ({
   ),
 }));
 
-vi.mock("./steps/step-runtime-connect", () => ({
-  StepRuntimeConnect: ({
+vi.mock("./steps/step-platform-fork", () => ({
+  StepPlatformFork: ({
     onNext,
   }: {
     onNext: (rt: null) => Promise<void>;

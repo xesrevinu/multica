@@ -103,6 +103,11 @@ var workspaceDeletionManifest = map[string]workspaceDeleteAction{
 	"agent_mcp_server":                   workspaceDelete,
 	"workspace_mcp_server":               workspaceDelete,
 	"notification_preference":            workspaceDelete,
+	"orchestrator_ci_retry":              workspaceDeleteKeep, // Global once-per-head CI re-run claim keyed by sha, no workspace column.
+	"orchestrator_event":                 workspaceDelete,
+	"orchestrator_issue_state":           workspaceDelete,
+	"orchestrator_team":                  workspaceDelete,
+	"orchestrator_transition":            workspaceDelete,
 	"personal_access_token":              workspaceDeleteKeep,
 	"pinned_item":                        workspaceDelete,
 	"plugin_installation":                workspaceDelete,

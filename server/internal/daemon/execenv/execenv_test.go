@@ -1832,58 +1832,6 @@ func TestWriteContextFilesInjectsNameIntoNamelessFrontmatter(t *testing.T) {
 	}
 }
 
-// OpenClaw's native skill scanner reads {workspaceDir}/skills/. The daemon
-// pairs writeContextFiles with a per-task synthesized openclaw-config.json
-// (see openclaw_config.go) that pins agents.defaults.workspace to workDir,
-// so writing skills to {workDir}/skills/ is what the CLI actually scans.
-// This test pins the post-MUL-2219 write path; the previous fallback into
-// .agent_context/skills/ was a dead drop the openclaw scanner never read.
-func TestWriteContextFilesOpenclawNativeSkills(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-
-	ctx := TaskContextForEnv{
-		IssueID: "openclaw-skill-test",
-		AgentSkills: []SkillContextForEnv{
-			{
-				Name:    "Go Conventions",
-				Content: "Follow Go conventions.",
-				Files: []SkillFileContextForEnv{
-					{Path: "templates/example.go", Content: "package main"},
-				},
-			},
-		},
-	}
-
-	if err := writeContextFiles(dir, "openclaw", ctx, nil, nil); err != nil {
-		t.Fatalf("writeContextFiles failed: %v", err)
-	}
-
-	skillMd, err := os.ReadFile(filepath.Join(dir, "skills", "go-conventions", "SKILL.md"))
-	if err != nil {
-		t.Fatalf("failed to read skills/go-conventions/SKILL.md: %v", err)
-	}
-	if !strings.Contains(string(skillMd), "Follow Go conventions.") {
-		t.Error("SKILL.md missing content")
-	}
-
-	supportFile, err := os.ReadFile(filepath.Join(dir, "skills", "go-conventions", "templates", "example.go"))
-	if err != nil {
-		t.Fatalf("failed to read supporting file: %v", err)
-	}
-	if string(supportFile) != "package main" {
-		t.Errorf("supporting file content = %q, want %q", string(supportFile), "package main")
-	}
-
-	// The pre-MUL-2219 fallback path must NOT be written: openclaw never scans it.
-	if _, err := os.Stat(filepath.Join(dir, ".agent_context", "skills")); !os.IsNotExist(err) {
-		t.Error(".agent_context/skills/ MUST NOT be written for openclaw — the scanner does not read that path")
-	}
-	if _, err := os.Stat(filepath.Join(dir, ".openclaw", "skills")); !os.IsNotExist(err) {
-		t.Error(".openclaw/skills/ MUST NOT be written — openclaw never scans that path; writing there is a dead drop")
-	}
-}
-
 func TestWriteContextFilesKiroNativeSkills(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -1962,33 +1910,6 @@ func TestWriteContextFilesQoderCNNativeSkills(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".agent_context", "skills")); !os.IsNotExist(err) {
 		t.Error("expected .agent_context/skills/ to NOT exist for Qoder CN provider")
-	}
-}
-
-func TestWriteContextFilesQwenNativeSkills(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-
-	ctx := TaskContextForEnv{
-		IssueID: "qwen-skill-test",
-		AgentSkills: []SkillContextForEnv{
-			{Name: "Go Conventions", Content: "Follow Go conventions."},
-		},
-	}
-
-	if err := writeContextFiles(dir, "qwen", ctx, nil, nil); err != nil {
-		t.Fatalf("writeContextFiles failed: %v", err)
-	}
-
-	skillMd, err := os.ReadFile(filepath.Join(dir, ".qwen", "skills", "go-conventions", "SKILL.md"))
-	if err != nil {
-		t.Fatalf("failed to read .qwen/skills/go-conventions/SKILL.md: %v", err)
-	}
-	if !strings.Contains(string(skillMd), "Follow Go conventions.") {
-		t.Error("SKILL.md missing content")
-	}
-	if _, err := os.Stat(filepath.Join(dir, ".agent_context", "skills")); !os.IsNotExist(err) {
-		t.Error("expected .agent_context/skills/ to NOT exist for Qwen provider")
 	}
 }
 
@@ -2113,46 +2034,6 @@ func TestInjectRuntimeConfigQoderCN(t *testing.T) {
 	}
 }
 
-// TestInjectRuntimeConfigAntigravity pins that AGENTS.md for Antigravity
-// advertises native skill discovery (rather than the .agent_context fallback)
-// — the CLI inherits Gemini CLI's workspace skill layout at .agents/skills/.
-func TestInjectRuntimeConfigAntigravity(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-
-	ctx := TaskContextForEnv{
-		IssueID:     "test-issue-id",
-		AgentSkills: []SkillContextForEnv{{Name: "Coding", Content: "Write good code."}},
-	}
-
-	if _, err := InjectRuntimeConfig(dir, "antigravity", ctx); err != nil {
-		t.Fatalf("InjectRuntimeConfig failed: %v", err)
-	}
-
-	content, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
-	if err != nil {
-		t.Fatalf("failed to read AGENTS.md: %v", err)
-	}
-
-	s := string(content)
-	if !strings.Contains(s, "Multica Agent Runtime") {
-		t.Error("AGENTS.md missing meta skill header")
-	}
-	// Listed by on-disk slug rather than the display name (MUL-5529).
-	if !strings.Contains(s, "coding") {
-		t.Error("AGENTS.md missing skill name")
-	}
-	if !strings.Contains(s, "discovered automatically") {
-		t.Error("AGENTS.md for Antigravity should advertise native skill discovery")
-	}
-	if strings.Contains(s, ".agent_context/skills/") {
-		t.Error("AGENTS.md for Antigravity must not reference the .agent_context/skills/ fallback")
-	}
-}
-
-// TestInjectRuntimeConfigDim verifies that the runtime brief is delivered to
-// Dim via AGENTS.md (review #1/#6). Dim reads AGENTS.md from the session cwd,
-// so InjectRuntimeConfig must write the brief there.
 func TestInjectRuntimeConfigDim(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -2180,38 +2061,6 @@ func TestInjectRuntimeConfigDim(t *testing.T) {
 	}
 	if !strings.Contains(s, "discovered automatically") {
 		t.Error("AGENTS.md for Dim should advertise native skill discovery")
-	}
-}
-
-// TestWriteContextFilesAntigravityNativeSkills pins that skills for the
-// antigravity provider land in {workDir}/.agents/skills/<slug>/, matching the
-// CLI's native workspace discovery path (Gemini CLI lineage).
-func TestWriteContextFilesAntigravityNativeSkills(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-
-	ctx := TaskContextForEnv{
-		IssueID: "antigravity-skill-test",
-		AgentSkills: []SkillContextForEnv{
-			{Name: "Go Conventions", Content: "Follow Go conventions."},
-		},
-	}
-
-	if err := writeContextFiles(dir, "antigravity", ctx, nil, nil); err != nil {
-		t.Fatalf("writeContextFiles failed: %v", err)
-	}
-
-	skillMd, err := os.ReadFile(filepath.Join(dir, ".agents", "skills", "go-conventions", "SKILL.md"))
-	if err != nil {
-		t.Fatalf("failed to read .agents/skills/go-conventions/SKILL.md: %v", err)
-	}
-	if !strings.Contains(string(skillMd), "Follow Go conventions.") {
-		t.Error("SKILL.md missing content")
-	}
-	// The fallback path must NOT be written — Antigravity's scanner reads
-	// .agents/skills/, not .agent_context/skills/.
-	if _, err := os.Stat(filepath.Join(dir, ".agent_context", "skills")); !os.IsNotExist(err) {
-		t.Error(".agent_context/skills/ MUST NOT be written for antigravity — its scanner does not read that path")
 	}
 }
 
@@ -2621,84 +2470,6 @@ func TestInjectRuntimeConfigUnknownProvider(t *testing.T) {
 	entries, _ := os.ReadDir(dir)
 	if len(entries) != 0 {
 		t.Fatalf("expected empty dir for unknown provider, got %d entries", len(entries))
-	}
-}
-
-func TestInjectRuntimeConfigHermes(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-
-	ctx := TaskContextForEnv{
-		IssueID:     "test-issue-id",
-		AgentSkills: []SkillContextForEnv{{Name: "Coding", Content: "Write good code."}},
-	}
-
-	if _, err := InjectRuntimeConfig(dir, "hermes", ctx); err != nil {
-		t.Fatalf("InjectRuntimeConfig failed: %v", err)
-	}
-
-	// Hermes uses AGENTS.md.
-	content, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
-	if err != nil {
-		t.Fatalf("failed to read AGENTS.md: %v", err)
-	}
-
-	s := string(content)
-	if !strings.Contains(s, "Multica Agent Runtime") {
-		t.Error("AGENTS.md missing meta skill header")
-	}
-	// Listed by on-disk slug rather than the display name (MUL-5529).
-	if !strings.Contains(s, "coding") {
-		t.Error("AGENTS.md missing skill name")
-	}
-	// Hermes now discovers skills from the daemon-seeded per-task
-	// HERMES_HOME/skills (see hermes_home.go), so AGENTS.md must use the
-	// "discovered automatically" framing and must NOT point the agent at the
-	// old .agent_context/skills/ fallback it never read (issue #5242).
-	if !strings.Contains(s, "discovered automatically") {
-		t.Error("AGENTS.md for Hermes should describe skills as discovered automatically")
-	}
-	if strings.Contains(s, ".agent_context/skills/") {
-		t.Error("AGENTS.md for Hermes should not reference the .agent_context/skills/ fallback path")
-	}
-
-	// CLAUDE.md should NOT exist.
-	if _, err := os.Stat(filepath.Join(dir, "CLAUDE.md")); !os.IsNotExist(err) {
-		t.Error("expected CLAUDE.md to NOT exist for Hermes provider")
-	}
-}
-
-// TestWriteContextFilesHermesSkipsWorkdirSkills asserts that Hermes skills are
-// NOT materialized into the workdir. Hermes has no workspace-relative skill
-// discovery; the daemon seeds them into a per-task HERMES_HOME/skills instead
-// (see prepareHermesHome / TestPrepareHermesHome). Writing the old
-// .agent_context/skills/ fallback was pure dead weight the CLI never read
-// (issue #5242).
-func TestWriteContextFilesHermesSkipsWorkdirSkills(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-
-	ctx := TaskContextForEnv{
-		IssueID: "hermes-skill-test",
-		AgentSkills: []SkillContextForEnv{
-			{Name: "Go Conventions", Content: "Follow Go conventions."},
-		},
-	}
-
-	if err := writeContextFiles(dir, "hermes", ctx, nil, nil); err != nil {
-		t.Fatalf("writeContextFiles failed: %v", err)
-	}
-
-	// No skills dir should be created in the workdir for Hermes — not the old
-	// fallback, and not an empty leftover directory either.
-	if _, err := os.Stat(filepath.Join(dir, ".agent_context", "skills")); !os.IsNotExist(err) {
-		t.Errorf("expected no .agent_context/skills/ for Hermes, got err=%v", err)
-	}
-
-	// And no .agent_context at all: the sidecar brief that used to justify
-	// the directory is gone (MUL-6984), so Hermes leaves the workdir clean.
-	if _, err := os.Stat(filepath.Join(dir, ".agent_context")); !os.IsNotExist(err) {
-		t.Errorf(".agent_context created for Hermes; stat err = %v, want not-exist", err)
 	}
 }
 

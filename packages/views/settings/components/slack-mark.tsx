@@ -24,11 +24,9 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-// The Slack brand mark. lucide-react carries no brand icons, so the Settings →
-// Integrations channel icon fell back to the generic MessagesSquare speech
-// bubble — the same glyph WeCom used before WecomMark landed (#6585), and it
-// failed here for the same reason: nothing on the row said which platform it
-// was. Bootstrap Icons ships Slack's own mark under MIT with currentColor
+// The Slack brand mark. lucide-react carries no brand icons, so a generic
+// MessagesSquare speech bubble failed here: nothing on the row said which
+// platform it was. Bootstrap Icons ships Slack's own mark under MIT with currentColor
 // already on the root. The 16x16 viewBox scales to whatever `className` sets,
 // exactly like the 24x24 and 48x48 marks next door.
 export function SlackMark({ className }: { className?: string }) {

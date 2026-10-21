@@ -1,0 +1,18 @@
+name: reviewer risk=high forces human acceptance without a label; round cap blocks to lead
+spec:
+  roles: {lead: lead, reviewer: rev, owners: [o1]}
+  repo: {mode: github, slug: x/y}
+  limits: {impl: 2}
+issue: {key: ATT-9}
+steps:
+  - expect: {tid: T1_start, assignee: o1}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
+    expect: {tid: T2_review}
+  - note: findings → one rework round
+    do: {run: completed, meta: {verdict: changes, reviewed_sha: h1}}
+    expect: {tid: T3_rework, assignee: o1}
+  - do: {run: completed, head: h2, meta: {phase: review_requested, head_sha: h2}}
+    expect: {tid: T2_review}
+  - note: second changes verdict exceeds limits.impl=2 (start counts as attempt 1) → lead reconsiders
+    do: {run: completed, meta: {verdict: changes, reviewed_sha: h2}}
+    expect: {tid: T6_block, assignee: lead}

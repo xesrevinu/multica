@@ -99,8 +99,8 @@ diff，全都挂在同一个任务下——没人需要重新捋一遍上下文�
 - **[工作区](https://multica.ai/docs/zh/workspaces) →** 按团队隔离智能体、任务和设置。
 - **[角色](https://multica.ai/docs/zh/members-roles)与[使用权限](https://multica.ai/docs/zh/agents#权限与-access) →** `owner`、`admin`、`member`，再精确到谁能跑哪些智能体。
 - **[安全模型](https://multica.ai/docs/zh/security-model) →** 智能体碰得到什么，碰不到什么。
-- **[Slack、飞书/Lark、钉钉、企业微信、Telegram](https://multica.ai/docs/zh/channels) →** 在团队本来就在聊天的地方，触发和跟进智能体的工作。飞书/Lark 目前只开放中国大陆飞书的新连接；钉钉、企业微信和 Telegram 由[社区维护](https://multica.ai/docs/zh/community-maintained)。
-- **Web、[桌面端](https://multica.ai/docs/zh/desktop-app)、[移动端](https://multica.ai/docs/zh/mobile-app) →** macOS、Windows、Linux、iPhone、iPad，打开都是同一个工作区——iOS App 现在要自己从源码编译安装，还没上 App Store。
+- **[Slack、飞书/Lark、Telegram](https://multica.ai/docs/zh/channels) →** 在团队本来就在聊天的地方，触发和跟进智能体的工作。飞书/Lark 目前只开放中国大陆飞书的新连接；Telegram 由[社区维护](https://multica.ai/docs/zh/community-maintained)。
+- **Web →** 浏览器里打开同一个工作区，macOS、Windows、Linux、手机和平板都行。Web 是响应式 PWA。
 - **[CLI 与 API](https://multica.ai/docs/zh/cli) →** 界面上能点的，CLI 和 API 里都能调。智能体操作 Multica，用的就是你那套 CLI。
 
 ---
@@ -108,8 +108,7 @@ diff，全都挂在同一个任务下——没人需要重新捋一遍上下文�
 ## 开始使用
 
 - **云端**——直接在 **[multica.ai](https://multica.ai)** 注册，不用打开终端。
-- **桌面端**——下载 **[Multica 桌面端](https://multica.ai/download)**（macOS / Windows / Linux）。打开它，
-  这台电脑就自动成了一个运行时。
+
 - **自托管**——整套跑在你自己的基础设施上，见下方。
 
 唯一的前提：跑智能体的那台机器上，得装好、登录好至少一个[受支持的智能体 CLI](#运行时)——
@@ -138,8 +137,7 @@ Windows 上先设 `$env:MULTICA_MODE="with-server"`，再跑 PowerShell 安装�
 
 ### 五分钟跑通第一个智能体
 
-**1. 接入一台电脑。** 所谓*运行时*，就是智能体干活用的机器——你的笔记本，或者一台云主机。用桌面端，
-这一步是自动的：它会注册好这台电脑，顺便检测装了哪些智能体 CLI。用网页版、或者想再接一台机器，就
+**1. 接入一台电脑。** 所谓*运行时*，就是智能体干活用的机器——你的笔记本，或者一台云主机。
 打开侧边栏的**运行时**，点右上角的**添加电脑**，把弹窗里的两条命令粘到那台机器的终端里。
 
 **2. 创建智能体。** 打开侧边栏的**智能体**，点**新建智能体**。选中刚接入的运行时，选一个提供方，
@@ -154,24 +152,15 @@ Windows 上先设 `$env:MULTICA_MODE="with-server"`，再跑 PowerShell 安装�
 
 ## 运行时
 
-Multica 不自带模型。它驱动的是你本来就装好、登录好的那些智能体 CLI——目前支持 26 种——所以换提供方
-就是切个下拉框，谈不上迁移。
+Multica 不自带模型。它驱动的是你本来就装好、登录好的那些智能体 CLI，所以换提供方就是切个下拉框，谈不上迁移。
 
 | Provider | CLI | Provider | CLI |
 | --- | --- | --- | --- |
 | Claude Code | `claude` | OpenAI Codex | `codex` |
-| Cursor Agent | `cursor-agent` | GitHub Copilot CLI | `copilot` |
-| OpenCode | `opencode` | OpenClaw | `openclaw` |
-| Hermes | `hermes` | Pi | `pi` |
-| Antigravity | `agy` | CodeBuddy | `codebuddy` |
-| DevEco Code | `deveco` | Grok | `grok` |
-| Kimi | `kimi` | Kiro CLI | `kiro-cli` |
-| Qoder CLI | `qodercli` | Qoder CN | `qoderclicn` |
-| Qwen Code | `qwen` | QwenPaw | `qwenpaw` |
-| Reasonix | `reasonix` | Trae CLI | `traecli` |
-| DeepSeek Harness | `dsh` | Oh-My-Pi | `omp` |
-| MiniMax Code | `mcode` | Dim | `dim` |
-| 华为云 CodeArts | `codearts` | ZeroClaw | `zeroclaw` |
+| OpenCode | `opencode` | Pi | `pi` |
+| Oh-My-Pi | `omp` | Grok | `grok` |
+| Grok Bot | `gbot` | DeepSeek Harness | `dsh` |
+| Yielded | `yielded-agent` | | |
 
 怎么装、怎么登录：[安装智能体运行时](https://multica.ai/docs/zh/install-agent-runtime) ·
 [AI 编程工具对照](https://multica.ai/docs/zh/providers)
@@ -201,15 +190,16 @@ Multica 不自带模型。它驱动的是你本来就装好、登录好的那些
 ## 架构
 
 ```
-   Web（浏览器）        桌面端（Electron）        iPhone · iPad（Expo）
-         │                      │                          │
-         ▼                      │                          │
-  ┌──────────────┐              │                          │
-  │   Next.js    │              │                          │
-  │  页面与 API  │              │                          │
-  │     代理     │              │                          │
-  └──────┬───────┘              │  HTTPS + WebSocket       │
-         ▼                      ▼                          ▼
+   Web（浏览器，响应式 PWA）
+         │
+         ▼
+  ┌──────────────┐
+  │   Next.js    │
+  │  页面与 API  │
+  │     代理     │
+  └──────┬───────┘
+         │  HTTPS + WebSocket
+         ▼
   ┌───────────────────────────────────────────────────────────┐   ┌───────────────┐
   │                 Go 后端（Chi + WebSocket）                │──>│ PostgreSQL 17 │
   └─────────────────────────────┬─────────────────────────────┘   └───────────────┘
@@ -225,9 +215,7 @@ Multica 不自带模型。它驱动的是你本来就装好、登录好的那些
 
 | 层级 | 技术栈 |
 | --- | --- |
-| Web | Next.js 16 (App Router) |
-| 桌面端 | Electron，复用 Web 的 UI 包 |
-| 移动端 | Expo / React Native（iPhone 与 iPad） |
+| Web | Next.js 16 (App Router)，响应式 PWA |
 | 后端 | Go (Chi router, sqlc, gorilla/websocket) |
 | 数据库 | PostgreSQL 17（`pgcrypto` + `pg_trgm`） |
 | 智能体运行时 | 本地守护进程拉起任意一种[受支持的智能体 CLI](#运行时) |
@@ -248,8 +236,7 @@ make dev
 跑迁移，最后把所有服务拉起来。
 
 完整的开发流程、worktree 支持、测试和问题排查见 [CONTRIBUTING.md](CONTRIBUTING.md)。
-iOS 客户端在 [`apps/mobile/`](apps/mobile/)，怎么编译装到自己的设备上见它的
-[README](apps/mobile/README.md)。
+Web 应用保持响应式 PWA（manifest 与 service worker）。
 
 我们几乎每个工作日都发版，`main` 走得很快——记得常拉最新代码。
 

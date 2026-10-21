@@ -157,22 +157,8 @@ func TestIsBlockedEnvKey(t *testing.T) {
 		{key: "tmp", want: true},
 		{key: "TEMP", want: true},
 		{key: "CODEX_HOME", want: true},
-		{key: "REASONIX_STATE_HOME", want: true},
-		{key: "CURSOR_DATA_DIR", want: true},
-		{key: "cursor_data_dir", want: true},
-		{key: "CURSOR_MCP_AUTH_SOURCE", want: true},
-		{key: "OPENCLAW_CONFIG_PATH", want: true},
-		{key: "OPENCLAW_INCLUDE_ROOTS", want: true},
 		{key: "ANTHROPIC_API_KEY", want: false},
-		{key: "CURSOR_AGENT", want: false},
-		// HERMES_HOME is intentionally NOT blocked: a skill-less Hermes task
-		// must be able to honor a user-set profile/home, and when skills are
-		// bound the per-task overlay overrides it after custom_env is layered.
-		{key: "HERMES_HOME", want: false},
-		{key: "hermes_home", want: false},
-		// Reasonix credentials/config remain tool-owned and may use a custom
-		// home; only the daemon-owned state overlay is blocked above.
-		{key: "REASONIX_HOME", want: false},
+		{key: "GROK_HOME", want: false},
 	}
 
 	for _, tt := range tests {
@@ -182,28 +168,6 @@ func TestIsBlockedEnvKey(t *testing.T) {
 				t.Fatalf("isBlockedEnvKey(%q) = %v, want %v", tt.key, got, tt.want)
 			}
 		})
-	}
-}
-
-func TestPrepareReasonixTaskStateHome(t *testing.T) {
-	home := t.TempDir()
-	redirectTestHome(t, home)
-	t.Setenv("USERPROFILE", home)
-
-	got, err := prepareReasonixTaskStateHome("work", "runtime-1", "agent_2")
-	if err != nil {
-		t.Fatalf("prepareReasonixTaskStateHome: %v", err)
-	}
-	want := filepath.Join(home, ".multica", "profiles", "work", "reasonix-state", "runtime-1", "agent_2")
-	if got != want {
-		t.Fatalf("state home = %q, want %q", got, want)
-	}
-	info, err := os.Stat(got)
-	if err != nil {
-		t.Fatalf("stat state home: %v", err)
-	}
-	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o700 {
-		t.Fatalf("state home mode = %o, want 700", info.Mode().Perm())
 	}
 }
 
@@ -226,21 +190,6 @@ func TestPrepareDshTaskSessionRoot(t *testing.T) {
 	}
 	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o700 {
 		t.Fatalf("session root mode = %o, want 700", info.Mode().Perm())
-	}
-}
-
-func TestLayerCustomEnvKeepsReasonixCredentialsHomeButBlocksStateHome(t *testing.T) {
-	t.Parallel()
-	agentEnv := map[string]string{}
-	layerCustomEnvAndHermesHome(agentEnv, map[string]string{
-		"REASONIX_HOME":       "/operator/reasonix-home",
-		"REASONIX_STATE_HOME": "/unsafe/shared-state",
-	}, "", nil)
-	if got := agentEnv["REASONIX_HOME"]; got != "/operator/reasonix-home" {
-		t.Fatalf("REASONIX_HOME = %q, want operator-owned home", got)
-	}
-	if _, ok := agentEnv["REASONIX_STATE_HOME"]; ok {
-		t.Fatal("daemon-owned REASONIX_STATE_HOME accepted a custom override")
 	}
 }
 
@@ -758,24 +707,14 @@ func TestProviderNeedsInlineSystemPrompt(t *testing.T) {
 		provider string
 		want     bool
 	}{
-		{provider: "openclaw", want: true},
-		// Hermes ACP starts in the task cwd and loads AGENTS.md / .agent_context
-		// directly. Inlining the full runtime brief duplicates that context and
-		// can trip upstream provider safety filters on otherwise harmless tasks.
-		{provider: "hermes", want: false},
-		// Kiro CLI loads a root AGENTS.md in ACP sessions. Inlining the same
-		// runtime brief duplicates it at the start of every user turn.
-		{provider: "kiro", want: false},
-		{provider: "kimi", want: true},
-		// Reasonix loads AGENTS.md from the ACP session cwd.
-		{provider: "reasonix", want: false},
-		// DSH loads AGENTS.md from the agent session cwd.
-		{provider: "dsh", want: false},
-		{provider: "traecli", want: true},
-		// Qwen Code loads the per-task QWEN.md file natively.
-		{provider: "qwen", want: false},
-		{provider: "codex", want: false},
 		{provider: "claude", want: false},
+		{provider: "codex", want: false},
+		{provider: "opencode", want: false},
+		{provider: "pi", want: false},
+		{provider: "dsh", want: false},
+		{provider: "grok", want: false},
+		{provider: "gbot", want: false},
+		{provider: "yielded", want: false},
 	}
 
 	for _, tc := range cases {
@@ -2144,106 +2083,6 @@ func TestGateCodexResumeAcrossLocalWorktrees(t *testing.T) {
 	}
 }
 
-// Hermes resumes from HERMES_HOME, independently of the task's cwd (#9062).
-func TestGateHermesResumeToSessionHome(t *testing.T) {
-	t.Parallel()
-	for _, tt := range []struct {
-		name        string
-		sameWorkdir bool
-		history     bool
-		envReused   bool
-		noStore     bool
-		want        bool
-	}{
-		{name: "changed worktree with history", history: true, want: true},
-		{name: "in place with history", sameWorkdir: true, history: true, want: true},
-		{name: "changed worktree with unavailable history"},
-		{name: "in place with unavailable history", sameWorkdir: true},
-		{name: "empty store despite reused environment", sameWorkdir: true, envReused: true},
-		{name: "unmounted store in fresh environment", noStore: true},
-		{name: "task local history in reused environment", sameWorkdir: true, noStore: true, envReused: true, want: true},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			priorDir, workDir := t.TempDir(), t.TempDir()
-			if tt.sameWorkdir {
-				workDir = priorDir
-			}
-			env := &execenv.Environment{HermesSessionStore: "conversation-store", HermesSessionHistoryPresent: tt.history}
-			if tt.noStore {
-				env.HermesSessionStore = ""
-			}
-			task := Task{PriorSessionID: "session-1", PriorWorkDir: priorDir}
-			taskCtx := execenv.TaskContextForEnv{PriorSessionResumed: true}
-			got := gateResumeToReachableSession(&task, &taskCtx, "hermes", workDir,
-				sessionHomeReachable("hermes", env, tt.envReused), false, false, slog.Default())
-			if got != tt.want || (task.PriorSessionID == "session-1") != tt.want || taskCtx.PriorSessionResumed != tt.want {
-				t.Fatalf("resume = %v, session = %q, resumed = %v; want %v", got, task.PriorSessionID, taskCtx.PriorSessionResumed, tt.want)
-			}
-			if task.PriorSessionResumeUnavailable != !tt.want || taskCtx.PriorSessionResumeUnavailable != !tt.want {
-				t.Fatal("session continuity notice does not match reachability")
-			}
-		})
-	}
-}
-
-func TestHermesPreparedSessionReachability(t *testing.T) {
-	// Keep profile/store resolution inside synthetic homes, never the user's.
-	t.Setenv("MULTICA_TASK_CONFIG_ROOT", "")
-	home := t.TempDir()
-	redirectTestHome(t, home)
-	t.Setenv("USERPROFILE", home)
-	sourceHome, root := t.TempDir(), t.TempDir()
-	taskNumber := 0
-	prepare := func(t *testing.T, agentID, issueID string) *execenv.Environment {
-		t.Helper()
-		taskCtx := execenv.TaskContextForEnv{AgentID: agentID, IssueID: issueID,
-			AgentSkills: []execenv.SkillContextForEnv{{Name: "fixture", Content: "synthetic skill"}},
-		}
-		taskNumber++
-		env, err := execenv.Prepare(execenv.PrepareParams{
-			WorkspacesRoot: root, WorkspaceID: "workspace-1", TaskID: fmt.Sprintf("task-%012d", taskNumber),
-			Provider: "hermes", HermesSourceHome: sourceHome, Task: taskCtx,
-			HermesSessionStore: execenv.HermesSessionStorePath("", agentID, sourceHome, taskCtx),
-		}, slog.Default())
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = env.Cleanup(true) })
-		return env
-	}
-	first := prepare(t, "agent-1", "issue-1")
-	if first.HermesSessionStore == "" {
-		if runtime.GOOS == "windows" {
-			t.Skip("host cannot mount Hermes session stores")
-		}
-		t.Fatal("Hermes session store was not mounted")
-	}
-	if err := os.WriteFile(filepath.Join(first.HermesHome, "state.db"), []byte("synthetic transcript"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for _, tt := range []struct {
-		name, agentID, issueID string
-		want                   bool
-	}{
-		{"same conversation in fresh workdir", "agent-1", "issue-1", true},
-		{"different issue", "agent-1", "issue-2", false},
-		{"different agent", "agent-2", "issue-1", false},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			env := prepare(t, tt.agentID, tt.issueID)
-			if sameExistingDir(first.WorkDir, env.WorkDir) {
-				t.Fatal("fixture must prepare a different task workdir")
-			}
-			task := Task{PriorSessionID: "session-1", PriorWorkDir: first.WorkDir}
-			taskCtx := execenv.TaskContextForEnv{PriorSessionResumed: true}
-			if got := gateResumeToReachableSession(&task, &taskCtx, "hermes", env.WorkDir,
-				sessionHomeReachable("hermes", env, false), false, false, slog.Default()); got != tt.want {
-				t.Fatalf("reachable = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestGatePiResumeToSessionFile(t *testing.T) {
 	t.Parallel()
 
@@ -2645,81 +2484,6 @@ func TestShouldRetryPiRefusedResume(t *testing.T) {
 	}
 }
 
-func TestSessionHomeReachable(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name       string
-		provider   string
-		env        *execenv.Environment
-		envReused  bool
-		wantReturn bool
-	}{
-		{
-			// Every non-Hermes backend keys its sessions by cwd (or resolves
-			// its own store), so this predicate must not narrow their gate.
-			name:       "cwd-keyed provider is always reachable",
-			provider:   "claude",
-			env:        &execenv.Environment{},
-			wantReturn: true,
-		},
-		{
-			name:     "hermes with a mounted store holding history",
-			provider: "hermes",
-			env: &execenv.Environment{
-				HermesSessionStore:          "/profile/hermes-sessions/a/default/issue-1",
-				HermesSessionHistoryPresent: true,
-			},
-			wantReturn: true,
-		},
-		{
-			// Mounted onto nothing: a first turn, a store the GC reclaimed
-			// between turns, a switched profile, or a dangling link. Reading
-			// "mounted" as "resumable" here would forward a dead session id.
-			name:       "hermes with a mounted but empty session store",
-			provider:   "hermes",
-			env:        &execenv.Environment{HermesSessionStore: "/profile/hermes-sessions/a/default/issue-1"},
-			wantReturn: false,
-		},
-		{
-			// A store is mounted, so the env-reuse fallback must not override
-			// the store's own answer — the transcript lives in the store now.
-			name:       "hermes with an empty store is not rescued by env reuse",
-			provider:   "hermes",
-			env:        &execenv.Environment{HermesSessionStore: "/profile/hermes-sessions/a/default/issue-1"},
-			envReused:  true,
-			wantReturn: false,
-		},
-		{
-			// No store, but the prior task's env root — and therefore its
-			// overlay's task-local state.db — carried over.
-			name:       "hermes on a reused env root",
-			provider:   "hermes",
-			env:        &execenv.Environment{},
-			envReused:  true,
-			wantReturn: true,
-		},
-		{
-			// The GH #6806 shape: a fresh overlay with an empty state.db, so
-			// no session recorded by a prior task can be found here.
-			name:       "hermes on a fresh overlay with no store",
-			provider:   "hermes",
-			env:        &execenv.Environment{},
-			wantReturn: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := sessionHomeReachable(tt.provider, tt.env, tt.envReused); got != tt.wantReturn {
-				t.Fatalf("sessionHomeReachable() = %v, want %v", got, tt.wantReturn)
-			}
-		})
-	}
-}
-
-// newCodexStoreGuardDaemon builds a Daemon with only the per-issue Codex session
-// store guard initialised — enough to exercise the reserve-vs-mark protocol.
 func newCodexStoreGuardDaemon() *Daemon {
 	d := &Daemon{
 		activeStores:   map[string]int{},
@@ -3466,7 +3230,7 @@ func TestShouldRetryWithFreshSession(t *testing.T) {
 				ResumeRejected: true,
 			},
 			priorSessionID: "27d8031c-9fea-4bda-9d42-37c36fa9aebf",
-			provider:       "qoder",
+			provider:       "grok",
 			want:           true,
 		},
 		{
@@ -3478,7 +3242,7 @@ func TestShouldRetryWithFreshSession(t *testing.T) {
 			name:           "unflagged resume failure does not retry",
 			result:         agent.Result{Status: "failed", Error: "qoder session/resume failed: session/resume: Invalid params: mcpServers[0] transport unreachable (code=-32602)"},
 			priorSessionID: "27d8031c-9fea-4bda-9d42-37c36fa9aebf",
-			provider:       "qoder",
+			provider:       "grok",
 			want:           false,
 		},
 		{
@@ -3532,14 +3296,14 @@ func TestShouldRetryWithFreshSession(t *testing.T) {
 			name:           "undetectable backend with no session established retries",
 			result:         agent.Result{Status: "failed", Error: "agent exited before dispatching"},
 			priorSessionID: "stale-id",
-			provider:       "copilot",
+			provider:       "opencode",
 			want:           true,
 		},
 		{
 			name:           "undetectable backend that established a session does not retry",
 			result:         agent.Result{Status: "failed", Error: "agent exited before dispatching", SessionID: "live-sess"},
 			priorSessionID: "stale-id",
-			provider:       "copilot",
+			provider:       "opencode",
 			want:           false,
 		},
 		{
@@ -3549,7 +3313,7 @@ func TestShouldRetryWithFreshSession(t *testing.T) {
 			name:           "undetectable backend network drop does not retry",
 			result:         agent.Result{Status: "failed", Error: "API Error: Connection closed mid-response"},
 			priorSessionID: "stale-id",
-			provider:       "cursor",
+			provider:       "opencode",
 			want:           false,
 		},
 		{
@@ -3561,14 +3325,14 @@ func TestShouldRetryWithFreshSession(t *testing.T) {
 				Error:  "cursor-agent exited with error: exit status 1 (result_seen=false, exit_code=1, scanner_error=false, event_count=0, invalid_event_count=0, last_event_type=none); actions completed before finalization may already have taken effect; cursor stderr: Error: [unavailable] connect ETIMEDOUT 192.0.2.1:443",
 			},
 			priorSessionID: "existing-cursor-session",
-			provider:       "cursor",
+			provider:       "opencode",
 			want:           false,
 		},
 		{
 			name:           "undetectable backend rate limit does not retry",
 			result:         agent.Result{Status: "failed", Error: "API Error: 429 rate limit exceeded"},
 			priorSessionID: "stale-id",
-			provider:       "deveco",
+			provider:       "opencode",
 			want:           false,
 		},
 
@@ -3579,7 +3343,7 @@ func TestShouldRetryWithFreshSession(t *testing.T) {
 			name:           "missing config does not retry",
 			result:         agent.Result{Status: "failed", Error: "missing environment variable: ANTHROPIC_API_KEY"},
 			priorSessionID: "stale-id",
-			provider:       "copilot",
+			provider:       "opencode",
 			want:           false,
 		},
 		{
@@ -3593,14 +3357,14 @@ func TestShouldRetryWithFreshSession(t *testing.T) {
 			name:           "missing executable does not retry",
 			result:         agent.Result{Status: "failed", Error: "cursor-agent: executable not found"},
 			priorSessionID: "stale-id",
-			provider:       "cursor",
+			provider:       "opencode",
 			want:           false,
 		},
 		{
 			name:           "unsupported runtime version does not retry",
 			result:         agent.Result{Status: "failed", Error: "installed CLI is below the minimum supported version"},
 			priorSessionID: "stale-id",
-			provider:       "antigravity",
+			provider:       "opencode",
 			want:           false,
 		},
 		{
@@ -3778,7 +3542,7 @@ func TestShouldRetryWithFreshSession(t *testing.T) {
 				SessionID: "ses_resumed",
 			},
 			priorSessionID: "ses_resumed",
-			provider:       "hermes",
+			provider:       "grok",
 			want:           true,
 		},
 		{
@@ -3795,7 +3559,7 @@ func TestShouldRetryWithFreshSession(t *testing.T) {
 				SessionID: "ses_resumed",
 			},
 			priorSessionID: "ses_resumed",
-			provider:       "hermes",
+			provider:       "grok",
 			want:           true,
 		},
 		{
@@ -3811,7 +3575,7 @@ func TestShouldRetryWithFreshSession(t *testing.T) {
 			},
 			priorSessionID: "ses_resumed",
 			tools:          1,
-			provider:       "hermes",
+			provider:       "grok",
 			want:           false,
 		},
 		{
@@ -3826,7 +3590,7 @@ func TestShouldRetryWithFreshSession(t *testing.T) {
 				Error:  `hermes provider error: "Could not resolve authentication method. Expected either api_key or auth_token to be set."`,
 			},
 			priorSessionID: "",
-			provider:       "hermes",
+			provider:       "grok",
 			want:           false,
 		},
 		{
@@ -3842,7 +3606,7 @@ func TestShouldRetryWithFreshSession(t *testing.T) {
 				SessionID: "ses_resumed",
 			},
 			priorSessionID: "ses_resumed",
-			provider:       "hermes",
+			provider:       "grok",
 			want:           false,
 		},
 	}
@@ -3873,7 +3637,7 @@ func TestShouldRetryWithFreshSession_CompatPathIsBackendScoped(t *testing.T) {
 	// the compat path exists to catch.
 	result := agent.Result{Status: "failed", Error: "exit status 1"}
 
-	undetectable := []string{"antigravity", "codearts", "copilot", "cursor", "deveco", "opencode"}
+	undetectable := []string{"opencode"}
 	for _, provider := range undetectable {
 		t.Run(provider+" retries", func(t *testing.T) {
 			t.Parallel()
@@ -3883,7 +3647,7 @@ func TestShouldRetryWithFreshSession_CompatPathIsBackendScoped(t *testing.T) {
 		})
 	}
 
-	detectable := []string{"claude", "codebuddy", "qwen", "codex", "grok", "hermes", "kimi", "reasonix", "dsh", "kiro", "qoder", "qoderclicn", "traecli", "pi", "omp", "openclaw"}
+	detectable := []string{"claude", "codex", "grok", "dsh", "gbot", "pi", "omp", "yielded"}
 	for _, provider := range detectable {
 		t.Run(provider+" does not retry", func(t *testing.T) {
 			t.Parallel()
@@ -6426,42 +6190,6 @@ func TestSanitizeAgentEnv(t *testing.T) {
 	}
 }
 
-// TestHermesLaunchArgsAndEnvByScenario covers the profile chain end to end at
-// the decision level: the final launch args + the final HERMES_HOME the child
-// sees, for a skill-less vs. an overlay-active task that both set a profile.
-func TestHermesLaunchArgsAndEnvByScenario(t *testing.T) {
-	t.Parallel()
-	customArgs := []string{"-p", "research", "--yolo"}
-	customEnv := map[string]string{"HERMES_HOME": "/home/u/.hermes"}
-
-	// No overlay (skill-less): runTask never strips, so the profile flag passes
-	// through, and the user's HERMES_HOME passes through — behavior unchanged.
-	noOverlayArgs := customArgs
-	if len(noOverlayArgs) != 3 || noOverlayArgs[0] != "-p" || noOverlayArgs[1] != "research" {
-		t.Errorf("skill-less task must keep its profile flags, got %v", noOverlayArgs)
-	}
-	noOverlayEnv := map[string]string{}
-	layerCustomEnvAndHermesHome(noOverlayEnv, customEnv, "", nil)
-	if noOverlayEnv["HERMES_HOME"] != "/home/u/.hermes" {
-		t.Errorf("skill-less task must keep the user HERMES_HOME, got %q", noOverlayEnv["HERMES_HOME"])
-	}
-
-	// Overlay active: profile flag is stripped, and HERMES_HOME is the overlay.
-	_, overlayArgs := agent.StripHermesProfileSelectors(nil, customArgs, slog.Default())
-	if len(overlayArgs) != 1 || overlayArgs[0] != "--yolo" {
-		t.Errorf("overlay task must strip profile flags, got %v", overlayArgs)
-	}
-	overlayEnv := map[string]string{}
-	layerCustomEnvAndHermesHome(overlayEnv, customEnv, "/task/hermes-home", nil)
-	if overlayEnv["HERMES_HOME"] != "/task/hermes-home" {
-		t.Errorf("overlay task must redirect HERMES_HOME to the overlay, got %q", overlayEnv["HERMES_HOME"])
-	}
-}
-
-// TestHandleTask_AcksCancelAfterPollCancelled verifies the daemon posts
-// cancel-ack when the poll goroutine interrupts the run — by then
-// runner.run has returned, so the transcript flush is complete and the
-// server may settle its deferred chat finalization (#5219).
 func TestHandleTask_AcksCancelAfterPollCancelled(t *testing.T) {
 	t.Parallel()
 
@@ -6803,44 +6531,5 @@ func TestBuildPromptSquadLeaderMultiThreadCarvesOutNoAction(t *testing.T) {
 	}
 	if strings.Contains(ordinary, "Unless your outcome is") || strings.Contains(ordinary, "skip this ENTIRE fan-out block") {
 		t.Fatalf("ordinary multi-thread prompt leaked the leader carve-out\n---\n%s", ordinary)
-	}
-}
-
-// TestHermesProfileChainCoversLaunchPrefix is the daemon half of GH #7046's
-// Hermes regression. A custom runtime profile's fixed_args are no longer folded
-// into custom_args — they become the launch prefix and reach hermes ahead of
-// custom_args, which in turn precede the backend's own `acp` token.
-//
-// Both halves of the profile chain therefore have to run against the argv the
-// backend really assembles. Resolving or stripping against a hand-built
-// approximation reads a different profile than the process does, and the
-// overlay gets seeded from the wrong home.
-func TestHermesProfileChainCoversLaunchPrefix(t *testing.T) {
-	t.Parallel()
-
-	// A prefix ending in a bare `-p`: the selection straddles the two regions,
-	// so only the assembled argv shows which profile hermes sees.
-	launchPrefix := []string{"-p"}
-	customArgs := []string{"research", "--yolo"}
-
-	sel := agent.ParseHermesProfileArgs(
-		agent.HermesLaunchArgv(launchPrefix, customArgs, slog.Default()))
-	if !sel.Found || sel.Name != "research" {
-		t.Fatalf("effective profile = %+v, want the `research` hermes actually selects", sel)
-	}
-
-	// Overlay active: both regions are stripped together, and the launched argv
-	// can no longer redirect HERMES_HOME out of the overlay.
-	strippedPrefix, strippedCustom := agent.StripHermesProfileSelectors(
-		launchPrefix, customArgs, slog.Default())
-	if sel := agent.ParseHermesProfileArgs(
-		agent.HermesLaunchArgv(strippedPrefix, strippedCustom, slog.Default())); sel.Found {
-		t.Fatalf("the launched argv can still redirect HERMES_HOME: %+v", sel)
-	}
-	if len(strippedPrefix) != 0 {
-		t.Errorf("prefix = %v, want the straddling `-p` removed", strippedPrefix)
-	}
-	if strings.Join(strippedCustom, "\x00") != "--yolo" {
-		t.Errorf("custom = %v, want only the selector's value removed", strippedCustom)
 	}
 }

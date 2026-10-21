@@ -84,9 +84,9 @@ describe("StepPlatformFork", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders the three fork options at rest", () => {
+  it("renders the fork options at rest", () => {
     renderFork();
-    expect(screen.getByText(/^use this computer$/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^use this computer$/i)).not.toBeInTheDocument();
     expect(screen.getByText(/^connect from the terminal$/i)).toBeInTheDocument();
     expect(screen.getByText(/^use a cloud computer$/i)).toBeInTheDocument();
     // Cloud option is a "Coming soon" preview — not yet wired up.
@@ -121,30 +121,6 @@ describe("StepPlatformFork", () => {
     expect(onNext).toHaveBeenCalledWith(null);
   });
 
-  it("opens the download page and claims nothing about the outcome", async () => {
-    // mockReturnValue(null) is the honest simulation: with `noopener`,
-    // window.open returns null by spec whether the tab opened or a popup
-    // blocker ate it. The card used to flip to "Opened in a new tab." on
-    // this exact path, which it had no way to know.
-    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
-    const user = userEvent.setup();
-    renderFork();
-
-    await user.click(screen.getByText(/^use this computer$/i));
-
-    // Routes to the new /download page (not GitHub releases) so the
-    // user lands on the OS auto-detect surface.
-    expect(openSpy).toHaveBeenCalledWith(
-      "/download",
-      "_blank",
-      "noopener,noreferrer",
-    );
-    // The card states its intent up front and does not change afterwards, so
-    // there is no post-click claim to be wrong and no stuck "Opening…" state.
-    expect(screen.getByText(/^use this computer$/i)).toBeInTheDocument();
-    expect(screen.queryByText(/opening the download page/i)).toBeNull();
-    expect(screen.queryByText(/opened in a new tab/i)).toBeNull();
-  });
 
   it("CLI dialog: opens with instructions + 'waiting' and a disabled Connect button", async () => {
     const user = userEvent.setup();
@@ -188,9 +164,8 @@ describe("StepPlatformFork", () => {
     expect(connect).toBeEnabled();
     await user.click(connect);
     expect(onNext).toHaveBeenCalledTimes(1);
-    // The web CLI path now carries a model alongside the runtime, like the
-    // desktop step does. Nothing was picked here, so it stays undefined and
-    // the runtime's own default applies.
+    // The CLI path carries a model alongside the runtime. Nothing was
+    // picked here, so it stays undefined and the runtime's own default applies.
     expect(onNext).toHaveBeenCalledWith(rt, undefined);
   });
 

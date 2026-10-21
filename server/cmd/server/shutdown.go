@@ -4,13 +4,12 @@ package main
 // order statements happen to appear in main().
 //
 // It is a type because one of the orderings is load-bearing and invisible at
-// the call site. The WeCom cross-replica dispatcher delivers over the
-// WebSockets the channel supervisor owns, and every supervised connection
-// clears its sender from the registry as it exits. The supervisor starts
-// exiting the moment its context is cancelled — not when it is joined — so
-// "stop the relay before joining the supervisor" is not enough: by then the
-// registry is already empty and the dispatcher's drain finds no socket for any
-// installation and discards everything it exists to save.
+// the call site. Cross-replica outbound still delivers over sockets the
+// channel supervisor owns, and every supervised connection clears its sender
+// as it exits. The supervisor starts exiting the moment its context is
+// cancelled — not when it is joined — so "stop the relay before joining the
+// supervisor" is not enough: by then the registry is already empty and the
+// drain finds no socket for any installation.
 //
 // So the relay stop has to come before the cancel, and a comment saying so is
 // exactly the kind of claim that quietly stops being true. TestShutdownSequence

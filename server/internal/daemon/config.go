@@ -16,7 +16,6 @@ import (
 	"github.com/mattn/go-shellwords"
 
 	"github.com/multica-ai/multica/server/internal/cli"
-	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
@@ -77,9 +76,7 @@ const (
 	DefaultGCOrphanTTL                    = 72 * time.Hour      // 3 days — orphans with no meta (crashes, pre-GC leftovers)
 	DefaultGCArtifactTTL                  = 12 * time.Hour      // 12h — drop regenerable artifacts once a task has been completed this long
 	DefaultGCCodexSessionTTL              = 14 * 24 * time.Hour // 14 days — reclaim per-issue Codex session stores untouched this long
-	DefaultGCHermesMemoryTTL              = 90 * 24 * time.Hour // 90 days — reclaim per-agent Hermes memory stores untouched this long (long: reclaiming these is visible amnesia, and they are a few markdown files)
-	DefaultGCHermesSessionTTL             = 14 * 24 * time.Hour // 14 days — reclaim per-conversation Hermes session stores untouched this long (matches Codex: these hold transcripts, and losing an idle one restarts the thread rather than the agent's notes)
-	DefaultGCYieldedSessionTTL            = 14 * 24 * time.Hour // 14 days — reclaim yielded-agent session databases untouched this long (same reasoning as Codex/Hermes: these hold transcripts, and losing an idle one starts a fresh thread instead of resuming a stale one)
+	DefaultGCYieldedSessionTTL            = 14 * 24 * time.Hour // 14 days — reclaim yielded-agent session databases untouched this long (these hold transcripts, and losing an idle one starts a fresh thread instead of resuming a stale one)
 	DefaultGCRepoTTL                      = 30 * 24 * time.Hour // 30 days — evict a bare repo cache no task has checked out this long
 	// DefaultGCTaskTempLegacyTTL is 0 — disabled. Per-task temp dirs left by a
 	// daemon predating the temp dir execution lock carry no liveness signal at
@@ -112,7 +109,7 @@ type Config struct {
 	CLICommit                      string                // full build revision embedded in the running CLI; empty/unknown if unavailable
 	LaunchedBy                     string                // "desktop" when spawned by the Electron app, empty for standalone
 	Profile                        string                // profile name (empty = default)
-	Agents                         map[string]AgentEntry // keyed by provider: claude, codebuddy, codex, copilot, opencode, codearts, deveco, openclaw, hermes, pi, cursor, kimi, reasonix, dsh, kiro, antigravity, qoder, qoderclicn, traecli, grok, qwen, qwenpaw, mcode, dim, zeroclaw (plus built-in runtime identities from agent.BuiltinRuntimes, e.g. omp)
+	Agents                         map[string]AgentEntry // keyed by provider: claude, codex, opencode, pi, dsh, grok, gbot, yielded (plus built-in runtime identities from agent.BuiltinRuntimes, e.g. omp)
 	WorkspacesRoot                 string                // base path for execution envs (default: ~/multica_workspaces)
 	KeepEnvAfterTask               bool                  // preserve env after task for debugging
 	HealthPort                     int                   // local HTTP port for health checks (default: 19514)
@@ -127,8 +124,6 @@ type Config struct {
 	GCRepoTTL                      time.Duration         // evict a cached bare repo under .repos once no task has created a worktree from it for this long, it has no worktrees left, and it is no longer attached to any watched workspace (default: 30d, set 0 to disable)
 	GCRepoMaintenanceEnabled       bool                  // run reflog expiry and git gc after stale agent refs are removed (default: true; disable independently as an operational kill switch)
 	GCCodexSessionTTL              time.Duration         // reclaim a per-issue Codex session store (~/.codex/multica-sessions/<agent>/<issue>) untouched for at least this long, so a done/abandoned issue's conversation history does not accumulate forever (default: 14d, set 0 to disable)
-	GCHermesMemoryTTL              time.Duration         // reclaim a per-agent Hermes memory store (<profile dir>/hermes-state/<agent>/<profile>) untouched for at least this long, so a deleted agent's memory does not sit on disk forever (default: 90d, set 0 to disable)
-	GCHermesSessionTTL             time.Duration         // reclaim a per-conversation Hermes session store (<profile dir>/hermes-sessions/<agent>/<profile>/<conversation>) untouched for at least this long, so a done or abandoned conversation's transcript does not accumulate forever (default: 14d, set 0 to disable)
 	GCYieldedSessionTTL            time.Duration         // reclaim a yielded-agent session database (~/.local/state/yielded-agent/sessions/<id>.sqlite) untouched for at least this long, so a finished issue stops resuming an ever-growing transcript (default: 14d, set 0 to disable)
 	GCTaskTempLegacyTTL            time.Duration         // reclaim a per-task temp dir (<temp base>/multica-task-*) that carries no execution lock — i.e. left by a daemon predating the lock — once nothing inside it has been touched for this long. Dirs that DO carry the lock are reclaimed on liveness, never on age, so this knob does not apply to them. Neither does it reclaim a dir holding no task content — an old empty leftover, or a shell left by a daemon that died between creating the dir and publishing its lock — because holding no content is exactly what a dir currently being published looks like (default: 0, disabled — see DefaultGCTaskTempLegacyTTL)
 	AutoUpdateEnabled              bool                  // periodically check for a newer CLI release and self-update when idle (default: true on Multica Cloud, false on self-host)
@@ -157,9 +152,6 @@ type Config struct {
 	AgentToolWatchdog           time.Duration // force-stop a run when a single tool call stays in flight (silent) this long (0 = never force-stop during a tool call, which now also covers a live Cursor background shell); defaults to AgentIdleWatchdog, so operators tune one number unless they deliberately want a wider tool budget
 	ClaudeArgs                  []string
 	CodexArgs                   []string
-	CodebuddyArgs               []string
-	QwenArgs                    []string
-	QwenpawArgs                 []string
 
 	// ProfileCommandOverrides maps a custom runtime profile_id -> the absolute
 	// executable path to use for that profile on THIS machine (MUL-3284).
@@ -216,40 +208,11 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		return Config{}, err
 	}
 
-	// Apply backend overrides from the CLI config file (issue #3875).
-	//
-	// CLIConfig.Backends.OpenClaw lets users record "which OpenClaw on this
-	// machine, and where its state lives" in a versioned, UI-editable file
-	// instead of a launchctl env hack. We translate those fields into the
-	// same env vars the rest of LoadConfig already honors:
-	//
-	//   - MULTICA_OPENCLAW_PATH: read by probe() via envOrDefault for the
-	//     binary lookup; pre-existing path.
-	//   - OPENCLAW_STATE_DIR:    OpenClaw's own env var; the daemon already
-	//     forwards it to spawned children via mergeEnv (server/pkg/agent/...).
-	//   - MULTICA_OPENCLAW_CLI_TIMEOUT: read by execenv when it sets the
-	//     deadline on each `openclaw config ...` call during task prep.
-	//
-	// Precedence is "env wins over config wins over default" — same shape
-	// users already get with MULTICA_OPENCLAW_PATH today. We achieve it with
-	// LookupEnv guards: if the user already exported the env var (in their
-	// shell, via launchctl, or via the systemd unit), we leave it alone;
-	// otherwise we Setenv from the config file. This keeps every downstream
-	// consumer (probe, buildEnv, child processes) on the existing code path
-	// without inventing a new plumbing channel.
-	//
-	// Errors loading CLIConfig are non-fatal: a missing or malformed config
-	// file should not prevent daemon startup, since the daemon can still run
-	// purely from env-var configuration. We log a warning and proceed with
-	// no overrides.
 	var profileCommandOverrides map[string]string
 	if cliCfg, err := cli.LoadCLIConfigForProfile(overrides.Profile); err != nil {
-		slog.Warn("could not load CLI config for backend overrides; proceeding without",
+		slog.Warn("could not load CLI config; proceeding without profile command overrides",
 			"profile", overrides.Profile, "err", err)
 	} else {
-		if oc := openclawOverrideFrom(cliCfg); oc != nil {
-			applyOpenclawOverride(oc)
-		}
 		// Per-machine custom-runtime command path overrides (MUL-3284).
 		// Copy into our own map so later mutation of the loaded config can't
 		// alias daemon state, and so an empty map normalizes to nil.
@@ -268,7 +231,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	// can re-run the same discovery on a live daemon (MUL-5439).
 	agents := probeAgentCLIs()
 	if len(agents) == 0 && !overrides.AllowNoAgents {
-		return Config{}, fmt.Errorf("no agent CLI found: install claude, codebuddy, codearts, codex, copilot, opencode, deveco, openclaw, hermes, pi, omp, cursor-agent, kimi, reasonix, dsh, kiro-cli, agy, qodercli, qoderclicn, traecli, grok, qwen, qwenpaw, mcode, dim, zeroclaw, or yielded-agent and ensure it is on PATH")
+		return Config{}, fmt.Errorf("no agent CLI found: install claude, codex, opencode, pi, omp, dsh, grok, gbot, or yielded-agent and ensure it is on PATH")
 	}
 
 	claudeArgs, err := shellArgsFromEnv("MULTICA_CLAUDE_ARGS")
@@ -279,19 +242,6 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	codebuddyArgs, err := shellArgsFromEnv("MULTICA_CODEBUDDY_ARGS")
-	if err != nil {
-		return Config{}, err
-	}
-	qwenArgs, err := shellArgsFromEnv("MULTICA_QWEN_ARGS")
-	if err != nil {
-		return Config{}, err
-	}
-	qwenpawArgs, err := shellArgsFromEnv("MULTICA_QWENPAW_ARGS")
-	if err != nil {
-		return Config{}, err
-	}
-
 	// Host info
 	host, err := os.Hostname()
 	if err != nil || strings.TrimSpace(host) == "" {
@@ -578,14 +528,6 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	gcHermesMemoryTTL, err := durationFromEnv("MULTICA_GC_HERMES_MEMORY_TTL", DefaultGCHermesMemoryTTL)
-	if err != nil {
-		return Config{}, err
-	}
-	gcHermesSessionTTL, err := durationFromEnv("MULTICA_GC_HERMES_SESSION_TTL", DefaultGCHermesSessionTTL)
-	if err != nil {
-		return Config{}, err
-	}
 	gcYieldedSessionTTL, err := durationFromEnv("MULTICA_GC_YIELDED_SESSION_TTL", DefaultGCYieldedSessionTTL)
 	if err != nil {
 		return Config{}, err
@@ -649,8 +591,6 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		GCRepoTTL:                       gcRepoTTL,
 		GCRepoMaintenanceEnabled:        gcRepoMaintenanceEnabled,
 		GCCodexSessionTTL:               gcCodexSessionTTL,
-		GCHermesMemoryTTL:               gcHermesMemoryTTL,
-		GCHermesSessionTTL:              gcHermesSessionTTL,
 		GCYieldedSessionTTL:             gcYieldedSessionTTL,
 		GCTaskTempLegacyTTL:             gcTaskTempLegacyTTL,
 		AutoUpdateEnabled:               autoUpdateEnabled,
@@ -672,9 +612,6 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		AgentToolWatchdog:               agentToolWatchdog,
 		ClaudeArgs:                      claudeArgs,
 		CodexArgs:                       codexArgs,
-		CodebuddyArgs:                   codebuddyArgs,
-		QwenArgs:                        qwenArgs,
-		QwenpawArgs:                     qwenpawArgs,
 		ProfileCommandOverrides:         profileCommandOverrides,
 	}, nil
 }
@@ -980,8 +917,7 @@ func isExecutableFile(path string) bool {
 // descriptor registry (agent.BuiltinRuntimeCommands) so adding a new fork
 // doesn't require editing this list by hand.
 var defaultAgentCommandNames = append([]string{
-	"claude", "codex", "opencode", "codearts", "deveco", "openclaw", "hermes",
-	"pi", "cursor-agent", "copilot", "kimi", "reasonix", "dsh", "kiro-cli", "codebuddy", "agy", "qodercli", "qoderclicn", "traecli", "gbot", "grok", "qwen", "qwenpaw", "mcode", "dim", "zeroclaw", "yielded-agent",
+	"claude", "codex", "opencode", "pi", "dsh", "gbot", "grok", "yielded-agent",
 }, agent.BuiltinRuntimeCommands()...)
 
 // codexDesktopAppBundlePaths returns candidate macOS app-bundle locations for
@@ -1467,53 +1403,4 @@ func isSafeAgentName(s string) bool {
 		}
 	}
 	return true
-}
-
-// openclawOverrideFrom returns the OpenClaw override block from a loaded
-// CLIConfig, or nil when no override is configured. Centralized here so
-// the LoadConfig path and tests share one navigation predicate over the
-// nullable-pointer chain.
-func openclawOverrideFrom(cfg cli.CLIConfig) *cli.OpenClawOverride {
-	if cfg.Backends == nil {
-		return nil
-	}
-	return cfg.Backends.OpenClaw
-}
-
-// applyOpenclawOverride translates the config-file overrides into process
-// env vars, which the existing probe() / buildEnv code paths already honor.
-// Env-set-by-user wins over config-set-by-file: we only Setenv when the var
-// is not already present, preserving the back-compat contract documented
-// on cli.OpenClawOverride.
-//
-// Side-effecting on os.Setenv is intentional and scoped:
-//
-//   - The three vars touched (MULTICA_OPENCLAW_PATH, OPENCLAW_STATE_DIR,
-//     MULTICA_OPENCLAW_CLI_TIMEOUT) are
-//     OpenClaw-specific. Other backends do not read them; setting them in the
-//     daemon process has no observable effect on, e.g., Claude Code or Codex
-//     spawn behavior.
-//   - LoadConfig runs once during daemon startup, before any backend Execute.
-//     Concurrent reads of os.Environ() in spawned children see a stable view.
-//   - We deliberately do not unset on later reload: the daemon's lifecycle is
-//     "exit and respawn" (cmd_daemon.go), not in-process reconfigure.
-func applyOpenclawOverride(oc *cli.OpenClawOverride) {
-	if oc == nil {
-		return
-	}
-	if oc.BinaryPath != "" {
-		if _, set := os.LookupEnv("MULTICA_OPENCLAW_PATH"); !set {
-			_ = os.Setenv("MULTICA_OPENCLAW_PATH", oc.BinaryPath)
-		}
-	}
-	if oc.StateDir != "" {
-		if _, set := os.LookupEnv("OPENCLAW_STATE_DIR"); !set {
-			_ = os.Setenv("OPENCLAW_STATE_DIR", oc.StateDir)
-		}
-	}
-	if oc.CLITimeout != "" {
-		if _, set := os.LookupEnv(execenv.OpenclawCLITimeoutEnv); !set {
-			_ = os.Setenv(execenv.OpenclawCLITimeoutEnv, oc.CLITimeout)
-		}
-	}
 }

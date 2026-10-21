@@ -190,30 +190,14 @@ import type {
   BeginLarkInstallResponse,
   LarkInstallStatusResponse,
   RedeemLarkBindingTokenResponse,
-  ComposioToolkit,
-  ComposioConnection,
-  ComposioConnectInitResponse,
   SlackInstallation,
   ListSlackInstallationsResponse,
   RegisterSlackBYORequest,
   RedeemSlackBindingTokenResponse,
-  DingTalkInstallation,
-  ListDingTalkInstallationsResponse,
-  ListDingTalkGroupsResponse,
-  ListDingTalkGroupsParams,
-  RegisterDingTalkBYORequest,
-  RedeemDingTalkBindingTokenResponse,
-  WecomInstallation,
-  ListWecomInstallationsResponse,
-  RegisterWecomBYORequest,
-  RedeemWecomBindingTokenResponse,
   TelegramInstallation,
   ListTelegramInstallationsResponse,
   RegisterTelegramRequest,
   RedeemTelegramBindingTokenResponse,
-  Squad,
-  SquadMember,
-  SquadMemberStatusListResponse,
   BillingBalance,
   BillingTransactionsPage,
   BillingBatchesPage,
@@ -307,9 +291,6 @@ import {
   EMPTY_LIST_ISSUES_RESPONSE,
   EMPTY_SEARCH_ISSUES_RESPONSE,
   EMPTY_SEARCH_PROJECTS_RESPONSE,
-  EMPTY_SQUAD,
-  EMPTY_SQUAD_LIST,
-  EMPTY_SQUAD_MEMBER_STATUS_LIST,
   EMPTY_TIMELINE_ENTRIES,
   EMPTY_USER,
   EMPTY_LIST_WEBHOOK_DELIVERIES_RESPONSE,
@@ -346,9 +327,6 @@ import {
   SearchIndexManifestSchema,
   SearchIndexSnapshotPageSchema,
   SearchIndexChangesSchema,
-  SquadSchema,
-  SquadListSchema,
-  SquadMemberStatusListResponseSchema,
   SubscribersListSchema,
   TaskMessageListSchema,
   TimelineEntriesSchema,
@@ -370,20 +348,6 @@ import {
   WorkspaceSeatPurchasePreviewSchema,
   PurchaseWorkspaceSeatsResponseSchema,
   CreateWorkspaceSubscriptionPortalResponseSchema,
-  DingTalkInstallationSchema,
-  ListDingTalkInstallationsResponseSchema,
-  ListDingTalkGroupsResponseSchema,
-  RedeemDingTalkBindingTokenResponseSchema,
-  EMPTY_DINGTALK_INSTALLATION,
-  EMPTY_LIST_DINGTALK_INSTALLATIONS_RESPONSE,
-  EMPTY_LIST_DINGTALK_GROUPS_RESPONSE,
-  EMPTY_REDEEM_DINGTALK_BINDING_TOKEN_RESPONSE,
-  WecomInstallationSchema,
-  ListWecomInstallationsResponseSchema,
-  RedeemWecomBindingTokenResponseSchema,
-  EMPTY_WECOM_INSTALLATION,
-  EMPTY_LIST_WECOM_INSTALLATIONS_RESPONSE,
-  EMPTY_REDEEM_WECOM_BINDING_TOKEN_RESPONSE,
   TelegramInstallationSchema,
   ListTelegramInstallationsResponseSchema,
   RedeemTelegramBindingTokenResponseSchema,
@@ -733,16 +697,6 @@ function workspaceHeader(
   slug?: string,
 ): Record<string, string> | undefined {
   return slug ? { "X-Workspace-Slug": slug } : undefined;
-}
-
-function dingTalkGroupSearch(params: ListDingTalkGroupsParams): string {
-  const search = new URLSearchParams();
-  if (params.activity) search.set("activity", params.activity);
-  if (params.installationId) search.set("installation_id", params.installationId);
-  if (params.offset !== undefined) search.set("offset", String(params.offset));
-  if (params.limit !== undefined) search.set("limit", String(params.limit));
-  const encoded = search.toString();
-  return encoded ? `?${encoded}` : "";
 }
 
 // The server's exact wording for a rejected CSRF token
@@ -1402,6 +1356,97 @@ export class ApiClient {
 
   async disableIssueWakeup(issueId: string, wakeupId: string): Promise<void> {
     await this.fetch(`/api/issues/${encodeURIComponent(issueId)}/wakeups/${encodeURIComponent(wakeupId)}/disable`, { method: "POST" });
+  }
+
+  // In-app orchestrator (server/internal/orchestrator). Returns null when the
+  // issue is not in an orchestrated project (server answers 409).
+  async getOrchestratorFlow(key: string): Promise<OrchestratorFlow | null> {
+    try {
+      return await this.fetch<OrchestratorFlow>(`/api/orchestrator/flow/${encodeURIComponent(key)}`);
+    } catch {
+      return null;
+    }
+  }
+
+  async acceptOrchestratorFlow(key: string): Promise<unknown> {
+    return this.fetch<unknown>(`/api/orchestrator/flow/${encodeURIComponent(key)}/accept`, { method: "POST", body: "{}" });
+  }
+
+  async rejectOrchestratorFlow(key: string, reason: string): Promise<unknown> {
+    return this.fetch<unknown>(`/api/orchestrator/flow/${encodeURIComponent(key)}/reject`, { method: "POST", body: JSON.stringify({ reason }) });
+  }
+
+  // Issue-centric UI views (raw JSON; parsed by @multica/core/orchestrator).
+  async listOrchIssues(params?: { settledLimit?: number; project?: string }): Promise<unknown> {
+    const q = new URLSearchParams();
+    if (params?.settledLimit !== undefined) q.set("settled_limit", String(params.settledLimit));
+    if (params?.project) q.set("project", params.project);
+    const qs = q.toString();
+    return this.fetch<unknown>(`/api/orchestrator/issues${qs ? `?${qs}` : ""}`);
+  }
+
+  async getOrchIssueTimeline(key: string): Promise<unknown> {
+    return this.fetch<unknown>(`/api/orchestrator/issues/${encodeURIComponent(key)}/timeline`);
+  }
+
+  async getOrchIssuePR(key: string, number?: number): Promise<unknown> {
+    const q = number ? `?number=${number}` : "";
+    return this.fetch<unknown>(`/api/orchestrator/issues/${encodeURIComponent(key)}/pr${q}`);
+  }
+
+  async orchFlowAction(key: string, action: "accept" | "reject" | "unblock" | "cancel" | "pause" | "resume" | "replay", body?: { reason?: string }): Promise<unknown> {
+    return this.fetch<unknown>(`/api/orchestrator/flow/${encodeURIComponent(key)}/${action}`, { method: "POST", body: JSON.stringify(body ?? {}) });
+  }
+
+  // PUT/DELETE /api/issues/{id}/metadata/{key} (the write guard validates
+  // engine-owned keys and values such as risk).
+  async setIssueMetadataKey(issueId: string, key: string, value: string | null): Promise<void> {
+    const path = `/api/issues/${encodeURIComponent(issueId)}/metadata/${encodeURIComponent(key)}`;
+    if (value === null) {
+      await this.fetch(path, { method: "DELETE" });
+      return;
+    }
+    await this.fetch(path, { method: "PUT", body: JSON.stringify({ value }) });
+  }
+
+  async orchPROp(
+    key: string,
+    op: "update-branch" | "rerun-checks" | "merge" | "sync-labels" | "delete-branch",
+    number?: number,
+    headSha?: string,
+  ): Promise<unknown> {
+    const q = number ? `?number=${number}` : "";
+    // head_sha: the head the member saw, so GitHub refuses a stale action.
+    return this.fetch<unknown>(`/api/orchestrator/issues/${encodeURIComponent(key)}/pr/${op}${q}`, {
+      method: "POST",
+      body: JSON.stringify(headSha ? { head_sha: headSha } : {}),
+    });
+  }
+
+  async listOrchIssuePRs(key: string): Promise<unknown> {
+    return this.fetch<unknown>(`/api/orchestrator/issues/${encodeURIComponent(key)}/prs`);
+  }
+
+  async getOrchIssuePRFiles(key: string, number?: number): Promise<unknown> {
+    const q = number ? `?number=${number}` : "";
+    return this.fetch<unknown>(`/api/orchestrator/issues/${encodeURIComponent(key)}/pr/files${q}`);
+  }
+
+  async listOrchWorktrees(issueKey?: string): Promise<unknown> {
+    const q = issueKey ? `?issue=${encodeURIComponent(issueKey)}` : "";
+    return this.fetch<unknown>(`/api/orchestrator/worktrees${q}`);
+  }
+
+  async removeOrchWorktree(path: string, force = false): Promise<unknown> {
+    return this.fetch<unknown>(`/api/orchestrator/worktrees/remove`, { method: "POST", body: JSON.stringify({ path, force }) });
+  }
+
+  async listOrchestratorTeams(): Promise<{ teams: OrchestratorTeam[] }> {
+    return this.fetch<{ teams: OrchestratorTeam[] }>(`/api/orchestrator/teams`);
+  }
+
+  async setOrchestratorTeamPaused(project: string, paused: boolean): Promise<unknown> {
+    return this.fetch<unknown>(`/api/orchestrator/teams/${encodeURIComponent(project)}/${paused ? "pause" : "resume"}`, { method: "POST" });
   }
 
   async getIssue(id: string, options?: { signal?: AbortSignal }): Promise<Issue> {
@@ -4640,66 +4685,6 @@ export class ApiClient {
     });
   }
 
-  // Squads
-  async listSquads(): Promise<Squad[]> {
-    const raw = await this.fetch<unknown>(`/api/squads`);
-    return parseWithFallback(raw, SquadListSchema, EMPTY_SQUAD_LIST, {
-      endpoint: "GET /api/squads",
-    }) as Squad[];
-  }
-
-  async getSquad(id: string): Promise<Squad> {
-    const raw = await this.fetch<unknown>(`/api/squads/${id}`);
-    return parseWithFallback(raw, SquadSchema, EMPTY_SQUAD, {
-      endpoint: "GET /api/squads/:id",
-    }) as Squad;
-  }
-
-  async createSquad(data: { name: string; description?: string; leader_id: string; avatar_url?: string }): Promise<Squad> {
-    const raw = await this.fetch<unknown>("/api/squads", { method: "POST", body: JSON.stringify(data) });
-    return parseWithFallback(raw, SquadSchema, EMPTY_SQUAD, {
-      endpoint: "POST /api/squads",
-    }) as Squad;
-  }
-
-  async updateSquad(id: string, data: { name?: string; description?: string; instructions?: string; leader_id?: string; avatar_url?: string }): Promise<Squad> {
-    const raw = await this.fetch<unknown>(`/api/squads/${id}`, { method: "PUT", body: JSON.stringify(data) });
-    return parseWithFallback(raw, SquadSchema, EMPTY_SQUAD, {
-      endpoint: "PUT /api/squads/:id",
-    }) as Squad;
-  }
-
-  async deleteSquad(id: string): Promise<void> {
-    await this.fetch(`/api/squads/${id}`, { method: "DELETE" });
-  }
-
-  async listSquadMembers(squadId: string): Promise<SquadMember[]> {
-    return this.fetch(`/api/squads/${squadId}/members`);
-  }
-
-  async addSquadMember(squadId: string, data: { member_type: string; member_id: string; role?: string }): Promise<SquadMember> {
-    return this.fetch(`/api/squads/${squadId}/members`, { method: "POST", body: JSON.stringify(data) });
-  }
-
-  async removeSquadMember(squadId: string, data: { member_type: string; member_id: string }): Promise<void> {
-    await this.fetch(`/api/squads/${squadId}/members`, { method: "DELETE", body: JSON.stringify(data) });
-  }
-
-  async updateSquadMemberRole(squadId: string, data: { member_type: string; member_id: string; role: string }): Promise<SquadMember> {
-    return this.fetch(`/api/squads/${squadId}/members/role`, { method: "PATCH", body: JSON.stringify(data) });
-  }
-
-  // Per-squad members status snapshot: one row per member with derived
-  // working/idle/offline/unstable plus the issues each agent is currently
-  // running. Parsed with a lenient schema so a new server-side status
-  // value or extra field can't white-screen the Squad page (#2143).
-  async getSquadMemberStatus(squadId: string): Promise<SquadMemberStatusListResponse> {
-    const raw = await this.fetch<unknown>(`/api/squads/${squadId}/members/status`);
-    return parseWithFallback(raw, SquadMemberStatusListResponseSchema, EMPTY_SQUAD_MEMBER_STATUS_LIST, {
-      endpoint: "GET /api/squads/:id/members/status",
-    }) as SquadMemberStatusListResponse;
-  }
-
   // Autopilots
   async listAutopilots(params?: { status?: string }): Promise<ListAutopilotsResponse> {
     const search = new URLSearchParams();
@@ -5082,38 +5067,6 @@ export class ApiClient {
     });
   }
 
-  // Composio integration (MUL-3720). All routes are user-scoped (a connection
-  // belongs to a user, not a workspace), so none take a workspaceId.
-
-  /** The project's connectable Composio toolkits (those with an enabled auth
-   * config). Since MUL-4009 the backend filters out non-connectable toolkits,
-   * so every entry has `connectable: true`. A resolver/upstream failure is a
-   * 502 rather than an empty list. */
-  async listComposioToolkits(): Promise<ComposioToolkit[]> {
-    return this.fetch(`/api/integrations/composio/toolkits`);
-  }
-
-  /** The caller's active Composio connections. */
-  async listComposioConnections(): Promise<ComposioConnection[]> {
-    return this.fetch(`/api/integrations/composio/connections`);
-  }
-
-  /** Starts a hosted Composio connect flow for a toolkit and returns the
-   * redirect URL the browser should be sent to. */
-  async beginComposioConnect(toolkitSlug: string): Promise<ComposioConnectInitResponse> {
-    return this.fetch(`/api/integrations/composio/connect/init`, {
-      method: "POST",
-      body: JSON.stringify({ toolkit_slug: toolkitSlug }),
-    });
-  }
-
-  /** Disconnects a Composio connection the caller owns. */
-  async deleteComposioConnection(connectionId: string): Promise<void> {
-    await this.fetch(`/api/integrations/composio/connections/${connectionId}`, {
-      method: "DELETE",
-    });
-  }
-
   // Slack integration (MUL-3666)
   async listSlackInstallations(workspaceId: string): Promise<ListSlackInstallationsResponse> {
     return this.fetch(`/api/workspaces/${workspaceId}/slack/installations`);
@@ -5145,188 +5098,6 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify({ token }),
     });
-  }
-
-  // DingTalk integration
-  async listDingTalkInstallations(
-    workspaceId: string,
-  ): Promise<ListDingTalkInstallationsResponse> {
-    const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/dingtalk/installations`);
-    return parseWithFallback(
-      raw,
-      ListDingTalkInstallationsResponseSchema,
-      EMPTY_LIST_DINGTALK_INSTALLATIONS_RESPONSE,
-      { endpoint: "GET /api/workspaces/:id/dingtalk/installations" },
-    );
-  }
-
-  async listDingTalkGroups(
-    workspaceId: string,
-    params: ListDingTalkGroupsParams = {},
-  ): Promise<ListDingTalkGroupsResponse> {
-    let raw: unknown;
-    try {
-      const search = dingTalkGroupSearch(params);
-      raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/dingtalk/groups${search}`);
-    } catch (error) {
-      // Installed clients can be newer than the server they reconnect to. A
-      // backend predating group discovery 404s this additive endpoint. The
-      // first admin-only version returns 403 to members; both mean this client
-      // cannot use the workspace inventory, while real failures stay visible.
-      if (
-        error instanceof ApiError &&
-        (error.status === 404 || error.status === 403)
-      ) {
-        return EMPTY_LIST_DINGTALK_GROUPS_RESPONSE;
-      }
-      throw error;
-    }
-    return parseWithFallback(
-      raw,
-      ListDingTalkGroupsResponseSchema,
-      EMPTY_LIST_DINGTALK_GROUPS_RESPONSE,
-      { endpoint: "GET /api/workspaces/:id/dingtalk/groups" },
-    );
-  }
-
-  async listAgentDingTalkGroups(
-    agentId: string,
-    params: ListDingTalkGroupsParams = {},
-  ): Promise<ListDingTalkGroupsResponse> {
-    let raw: unknown;
-    try {
-      const search = dingTalkGroupSearch(params);
-      raw = await this.fetch<unknown>(`/api/agents/${agentId}/dingtalk/groups${search}`);
-    } catch (error) {
-      // Keep installed clients compatible with servers that predate agent-
-      // scoped group discovery. Authorization failures must remain visible.
-      if (error instanceof ApiError && error.status === 404) {
-        return EMPTY_LIST_DINGTALK_GROUPS_RESPONSE;
-      }
-      throw error;
-    }
-    return parseWithFallback(
-      raw,
-      ListDingTalkGroupsResponseSchema,
-      EMPTY_LIST_DINGTALK_GROUPS_RESPONSE,
-      { endpoint: "GET /api/agents/:id/dingtalk/groups" },
-    );
-  }
-
-  async forgetDingTalkGroup(
-    workspaceId: string,
-    installationId: string,
-    conversationId: string,
-  ): Promise<void> {
-    await this.fetch(
-      `/api/workspaces/${workspaceId}/dingtalk/installations/${installationId}/groups/${encodeURIComponent(conversationId)}`,
-      { method: "DELETE" },
-    );
-  }
-
-  // registerDingTalkBYO performs a bring-your-own-app install: the agent owner
-  // or a workspace owner/admin pastes the AppKey (client id) + AppSecret
-  // (client secret) of the DingTalk Stream-mode robot they created, and the
-  // backend validates + persists it, returning the new installation.
-  async registerDingTalkBYO(
-    workspaceId: string,
-    agentId: string,
-    body: RegisterDingTalkBYORequest,
-  ): Promise<DingTalkInstallation> {
-    const search = new URLSearchParams({ agent_id: agentId });
-    const raw = await this.fetch<unknown>(
-      `/api/workspaces/${workspaceId}/dingtalk/install/byo?${search.toString()}`,
-      {
-        method: "POST",
-        body: JSON.stringify(body),
-      },
-    );
-    return parseWithFallback(raw, DingTalkInstallationSchema, EMPTY_DINGTALK_INSTALLATION, {
-      endpoint: "POST /api/workspaces/:id/dingtalk/install/byo",
-    });
-  }
-
-  async deleteDingTalkInstallation(workspaceId: string, installationId: string): Promise<void> {
-    await this.fetch(`/api/workspaces/${workspaceId}/dingtalk/installations/${installationId}`, {
-      method: "DELETE",
-    });
-  }
-
-  async redeemDingTalkBindingToken(
-    token: string,
-  ): Promise<RedeemDingTalkBindingTokenResponse> {
-    const raw = await this.fetch<unknown>(`/api/dingtalk/binding/redeem`, {
-      method: "POST",
-      body: JSON.stringify({ token }),
-    });
-    return parseWithFallback(
-      raw,
-      RedeemDingTalkBindingTokenResponseSchema,
-      EMPTY_REDEEM_DINGTALK_BINDING_TOKEN_RESPONSE,
-      { endpoint: "POST /api/dingtalk/binding/redeem" },
-    );
-  }
-  // WeCom smart-bot ("智能机器人" / aibot) integration. The bot dials a
-  // WebSocket long connection to wss://openws.work.weixin.qq.com and stays
-  // authenticated with (bot_id, secret); no public callback URL is required.
-  // These three methods drive the Settings-page BYO Connect dialog + list +
-  // disconnect only — the inbound WebSocket loop runs entirely server-side.
-  async listWecomInstallations(workspaceId: string): Promise<ListWecomInstallationsResponse> {
-    const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/wecom/installations`);
-    return parseWithFallback(
-      raw,
-      ListWecomInstallationsResponseSchema,
-      EMPTY_LIST_WECOM_INSTALLATIONS_RESPONSE,
-      { endpoint: "GET /api/workspaces/:id/wecom/installations" },
-    );
-  }
-
-  // registerWecomBYO performs a bring-your-own-app install: the admin pastes
-  // the bot id and long-connection secret from the WeCom admin console,
-  // and the backend seals the secret with MULTICA_WECOM_SECRET_KEY before
-  // persisting, returning the new installation.
-  async registerWecomBYO(
-    workspaceId: string,
-    agentId: string,
-    body: RegisterWecomBYORequest,
-  ): Promise<WecomInstallation> {
-    const search = new URLSearchParams({ agent_id: agentId });
-    const raw = await this.fetch<unknown>(
-      `/api/workspaces/${workspaceId}/wecom/install/byo?${search.toString()}`,
-      {
-        method: "POST",
-        body: JSON.stringify(body),
-      },
-    );
-    return parseWithFallback(raw, WecomInstallationSchema, EMPTY_WECOM_INSTALLATION, {
-      endpoint: "POST /api/workspaces/:id/wecom/install/byo",
-    });
-  }
-
-  async deleteWecomInstallation(workspaceId: string, installationId: string): Promise<void> {
-    await this.fetch(`/api/workspaces/${workspaceId}/wecom/installations/${installationId}`, {
-      method: "DELETE",
-    });
-  }
-
-  // redeemWecomBindingToken binds the WeCom aibot userid carried by the
-  // token to the logged-in Multica user. Called by the /wecom/bind redeem
-  // page after the user clicks through the "link your Multica account"
-  // prompt the bot sent in WeCom. Status codes:
-  //   410 Gone      → invalid / expired / already consumed
-  //   409 Conflict  → the WeCom user is already bound to a different user
-  //   403 Forbidden → the logged-in user is not a workspace member
-  async redeemWecomBindingToken(token: string): Promise<RedeemWecomBindingTokenResponse> {
-    const raw = await this.fetch<unknown>(`/api/wecom/binding/redeem`, {
-      method: "POST",
-      body: JSON.stringify({ token }),
-    });
-    return parseWithFallback(
-      raw,
-      RedeemWecomBindingTokenResponseSchema,
-      EMPTY_REDEEM_WECOM_BINDING_TOKEN_RESPONSE,
-      { endpoint: "POST /api/wecom/binding/redeem" },
-    );
   }
 
   async listTelegramInstallations(
@@ -5377,4 +5148,46 @@ export class ApiClient {
       { endpoint: "POST /api/telegram/binding/redeem" },
     );
   }
+}
+
+export interface OrchestratorDecision {
+  tid: string;
+  status?: string;
+  assignee?: string;
+  why?: string;
+  wait?: string;
+}
+
+export interface OrchestratorTransition {
+  id: number;
+  tid: string;
+  state: string;
+  error?: string;
+  source: string;
+  decision: OrchestratorDecision | null;
+  created_at: string;
+}
+
+export interface OrchestratorFlow {
+  key: string;
+  status: string;
+  metadata: Record<string, string> | null;
+  labels: string[] | null;
+  needs_acceptance: boolean;
+  paused: string;
+  next: OrchestratorDecision | null;
+  failures: number;
+  backoff_until: string | null;
+  last_error: string;
+  waiting: string;
+  recent: OrchestratorTransition[] | null;
+}
+
+export interface OrchestratorTeam {
+  project_id: string;
+  paused: boolean;
+  paused_reason: string;
+  human_user_id: string;
+  spec: { preset?: string; roles?: Record<string, unknown>; limits?: Record<string, number> } & Record<string, unknown>;
+  updated_at: string;
 }

@@ -117,6 +117,13 @@ type LocalWorktreeParams struct {
 	// ungated, which is the same "no setting published yet" default as a
 	// bare-cache checkout.
 	CoAuthorStatePath string
+	// ExclusiveBranch is the branch the orchestrator owns for this issue
+	// (agent/<key>), "" when the issue is not orchestrated. When the task's
+	// plan lands on it, a branch or path held by another worktree is an
+	// error naming the occupant instead of a fork onto a task branch: the
+	// orchestrator only ever reads agent/<key>, so a fork would strand the
+	// owner's work where nobody looks.
+	ExclusiveBranch string
 	// HolderPID is the daemon process that runs the agent after prepare
 	// returns. The prepare helper's own pid is already dead by then, so an
 	// active hold records this one. Zero means there is no separate holder;
@@ -543,7 +550,8 @@ func PrepareLocalWorktree(params LocalWorktreeParams, logger *slog.Logger) (*Loc
 	}
 
 	// Note on keeping sidecars out of the delivered branch: we deliberately do
-	// NOT write .git/info/exclude here. A linked worktree reads info/exclude
+	// NOT write .git/info/exclude here (per-worktree excludes are set by
+	// excludeWorktreeSidecars in Prepare; see worktree_excludes.go). A linked worktree reads info/exclude
 	// from the repo's COMMON git dir, so the only file that would take effect
 	// is the user's own .git/info/exclude — editing it would change what `git
 	// status` shows in the user's checkout, which is theirs, not ours. Instead
@@ -939,6 +947,7 @@ func worktreeIsDirty(worktreePath string) (bool, error) {
 // deletes its directory. The branch is deliberately left alone — it is the
 // task's deliverable.
 func removeLocalWorktreeDir(gitRoot, worktreePath string, logger *slog.Logger) error {
+	defer removeWorktreeExcludes(gitRoot, worktreePath)
 	if worktrunkConfigPresent(gitRoot) {
 		if err := removeViaWorktrunk(gitRoot, worktreePath, logger); err == nil {
 			return nil
@@ -1280,6 +1289,9 @@ type taskBranchPlan struct {
 	tracksState bool
 	// owner is the identity the branch is recorded under.
 	owner branchOwner
+	// exclusive: name is the orchestrator's branch (ExclusiveBranch); never
+	// fall back to altName for it.
+	exclusive bool
 }
 
 // altName disambiguates a branch a live sibling already holds.
@@ -1312,6 +1324,12 @@ func (p taskBranchPlan) altName(taskID string) string {
 // own follow-ups continue it — and, if that is somehow taken too, onto a
 // task-scoped branch that continues nothing.
 func resolveTaskBranch(gitRoot string, params LocalWorktreeParams, headSHA string, logger *slog.Logger) taskBranchPlan {
+	plan := resolveTaskBranchPlan(gitRoot, params, headSHA, logger)
+	plan.exclusive = params.ExclusiveBranch != "" && plan.name == params.ExclusiveBranch
+	return plan
+}
+
+func resolveTaskBranchPlan(gitRoot string, params LocalWorktreeParams, headSHA string, logger *slog.Logger) taskBranchPlan {
 	taskScoped := taskBranchPlan{name: "agent/" + taskKey(params.TaskID), base: headSHA}
 
 	owner := params.owner()
@@ -1428,6 +1446,9 @@ func addLocalWorktree(gitRoot, worktreePath string, plan taskBranchPlan, taskID 
 	if !branchUnavailable(out) {
 		return "", false, fmt.Errorf("execenv: git worktree add: %s: %w", strings.TrimSpace(out), err)
 	}
+	if plan.exclusive {
+		return "", false, branchOccupied(gitRoot, plan.name, out)
+	}
 	alt := plan.altName(taskID)
 	if out, err := runGit(gitRoot, "worktree", "add", "-b", alt, worktreePath, plan.base); err != nil {
 		return "", false, fmt.Errorf("execenv: git worktree add: %s: %w", strings.TrimSpace(out), err)
@@ -1441,7 +1462,11 @@ func branchUnavailable(out string) bool {
 	lower := strings.ToLower(out)
 	return strings.Contains(lower, "already exists") ||
 		strings.Contains(lower, "already checked out") ||
-		strings.Contains(lower, "already used by worktree")
+		strings.Contains(lower, "already used by worktree") ||
+		// wt: a preserved (detached) worktree still sits at the branch's
+		// path, e.g. kept for recovery after a refused delivery. Leave it and
+		// fork a task branch at a fresh path instead of failing the task.
+		strings.Contains(lower, "worktree at the expected path")
 }
 
 // replayResult is what the replay left in the worktree.

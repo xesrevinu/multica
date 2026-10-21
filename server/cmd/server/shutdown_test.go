@@ -6,8 +6,8 @@ import (
 )
 
 // The order teardown runs in is a contract, and one link in it is the kind that
-// a comment can claim while the code does the opposite: the WeCom cross-replica
-// dispatcher delivers over sockets the channel supervisor owns, each supervised
+// a comment can claim while the code does the opposite: cross-replica
+// outbound delivers over sockets the channel supervisor owns, each supervised
 // connection clears its sender as it exits, and the supervisor starts exiting
 // the moment its context is cancelled — not when it is joined.
 //

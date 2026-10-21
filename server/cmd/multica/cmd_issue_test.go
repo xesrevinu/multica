@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -1601,10 +1602,8 @@ func TestFormatAssignee(t *testing.T) {
 		state: &actorDisplayLookupState{
 			members:       map[string]string{"abcdefgh-1234": "Alice"},
 			agents:        map[string]string{"xyz": "CodeBot"},
-			squads:        map[string]string{"sq-1": "Super Human"},
 			membersLoaded: true,
 			agentsLoaded:  true,
-			squadsLoaded:  true,
 		},
 	}
 	tests := []struct {
@@ -1617,7 +1616,7 @@ func TestFormatAssignee(t *testing.T) {
 		{"no id", map[string]any{"assignee_type": "member"}, ""},
 		{"member", map[string]any{"assignee_type": "member", "assignee_id": "abcdefgh-1234"}, "member:Alice"},
 		{"agent", map[string]any{"assignee_type": "agent", "assignee_id": "xyz"}, "agent:CodeBot"},
-		{"squad", map[string]any{"assignee_type": "squad", "assignee_id": "sq-1"}, "squad:Super Human"},
+		{"squad shows raw id", map[string]any{"assignee_type": "squad", "assignee_id": "sq-1"}, "squad:sq-1"},
 		{"unknown fallback", map[string]any{"assignee_type": "agent", "assignee_id": "missing"}, "agent:missing"},
 	}
 	for _, tt := range tests {
@@ -2139,36 +2138,6 @@ func TestResolveAssignee(t *testing.T) {
 	// MUL-2165: squad names must resolve to (squad, <id>) so the autopilot
 	// quick-create prompt can route work to a squad (e.g. "Super Human")
 	// instead of falling through to "Unrecognized assignee".
-	t.Run("match squad by exact name", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "Super Human", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "squad" || aID != "squad-4444" {
-			t.Errorf("got (%q, %q), want (squad, squad-4444)", aType, aID)
-		}
-	})
-
-	t.Run("match squad by case-insensitive substring", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "super", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "squad" || aID != "squad-4444" {
-			t.Errorf("got (%q, %q), want (squad, squad-4444)", aType, aID)
-		}
-	})
-
-	t.Run("match squad by bare @ display name", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "@Super Human", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "squad" || aID != "squad-4444" {
-			t.Errorf("got (%q, %q), want (squad, squad-4444)", aType, aID)
-		}
-	})
-
 	t.Run("no match", func(t *testing.T) {
 		_, _, err := resolveAssignee(ctx, client, "nobody", issueAssigneeKinds)
 		if err == nil {
@@ -2365,15 +2334,6 @@ func TestResolveAssigneeRespectsKinds(t *testing.T) {
 		}
 	})
 
-	t.Run("issueAssigneeKinds still resolves the same squad name (control)", func(t *testing.T) {
-		aType, aID, err := resolveAssignee(ctx, client, "Super Human", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "squad" || aID != "ccccccc1-2222-3333-4444-555555555555" {
-			t.Errorf("got (%q, %q), want (squad, ccccccc1-...)", aType, aID)
-		}
-	})
 }
 
 // TestResolveAssigneeExactMatchWins covers the substring-collision scenario from
@@ -2585,16 +2545,6 @@ func TestResolveAssigneeByIDStrict(t *testing.T) {
 	// MUL-2165: --assignee-id <squad-uuid> must resolve to (squad, <id>) so
 	// scripts that read the squad list and pin its UUID can assign work to a
 	// squad in a single deterministic call.
-	t.Run("UUID resolves a squad", func(t *testing.T) {
-		aType, aID, err := resolveAssigneeByID(ctx, client, "ccccccc1-2222-3333-4444-555555555555", issueAssigneeKinds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if aType != "squad" || aID != "ccccccc1-2222-3333-4444-555555555555" {
-			t.Errorf("got (%q, %q), want squad Super Human", aType, aID)
-		}
-	})
-
 	t.Run("non-UUID input is rejected without name fallback", func(t *testing.T) {
 		_, _, err := resolveAssigneeByID(ctx, client, "Alice", issueAssigneeKinds)
 		if err == nil {
@@ -2617,7 +2567,7 @@ func TestResolveAssigneeByIDStrict(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for missing entity")
 		}
-		if !strings.Contains(err.Error(), "no member, agent, or squad") {
+		if !strings.Contains(err.Error(), "no member or agent") {
 			t.Errorf("expected not-found error, got: %v", err)
 		}
 	})
@@ -3857,6 +3807,7 @@ func newIssueAssignTestCmd() *cobra.Command {
 	cmd.Flags().String("to-id", "", "")
 	cmd.Flags().Bool("unassign", false, "")
 	cmd.Flags().Bool("no-start", false, "")
+	cmd.Flags().Bool("force", false, "")
 	cmd.Flags().String("output", "json", "")
 	return cmd
 }
@@ -4160,6 +4111,70 @@ func TestRunIssueAssignNoStartSendsSuppressRun(t *testing.T) {
 	}
 	if got := body["suppress_run"]; got != true {
 		t.Fatalf("suppress_run = %#v, want true", got)
+	}
+}
+
+// In an orchestrated project the orchestrator owns the assignee, so the server
+// keeps refusing `issue assign --no-start` with 403 orchestrator_owned; the CLI
+// says why and how to override, and --force sends the override header.
+func TestRunIssueAssignOrchestratorOwnedHintAndForce(t *testing.T) {
+	const agentID = "5fb87ac7-23b5-4a7a-81fa-ed295a54545d"
+	var override string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/issues/MUL-1":
+			json.NewEncoder(w).Encode(map[string]any{"id": "issue-1", "identifier": "MUL-1", "status": "todo"})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/workspaces/ws-1/members":
+			json.NewEncoder(w).Encode([]map[string]any{})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/agents":
+			json.NewEncoder(w).Encode([]map[string]any{{"id": agentID, "name": "CodeBot"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/squads":
+			json.NewEncoder(w).Encode([]map[string]any{})
+		case r.Method == http.MethodPut && r.URL.Path == "/api/issues/issue-1":
+			override = r.Header.Get("X-Orchestrator-Override")
+			if override != "1" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				json.NewEncoder(w).Encode(map[string]any{"code": "orchestrator_owned", "error": "this project is run by the orchestrator, which owns status and assignee (refused: assignee change)."})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]any{"id": "issue-1", "identifier": "MUL-1", "status": "todo"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	setCLITestServerEnv(t, srv.URL)
+	t.Setenv("MULTICA_TASK_CONFIG_ROOT", t.TempDir())
+	t.Setenv("MULTICA_TOKEN", "mat_test-token")
+
+	cmd := newIssueAssignTestCmd()
+	_ = cmd.Flags().Set("to-id", agentID)
+	_ = cmd.Flags().Set("no-start", "true")
+	err := runIssueAssign(cmd, []string{"MUL-1"})
+	if err == nil {
+		t.Fatal("want the orchestrator refusal")
+	}
+	var he *cli.HTTPError
+	if !errors.As(err, &he) || he.StatusCode != http.StatusForbidden {
+		t.Fatalf("want a 403 HTTPError underneath, got %v", err)
+	}
+	msg := cli.FormatError(err, false)
+	for _, want := range []string{"orchestrator_owned", "refused: assignee change", "--no-start only skips the agent run", "--force"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message %q misses %q", msg, want)
+		}
+	}
+
+	cmd = newIssueAssignTestCmd()
+	_ = cmd.Flags().Set("to-id", agentID)
+	_ = cmd.Flags().Set("no-start", "true")
+	_ = cmd.Flags().Set("force", "true")
+	if err := runIssueAssign(cmd, []string{"MUL-1"}); err != nil {
+		t.Fatalf("--force: %v", err)
+	}
+	if override != "1" {
+		t.Fatalf("--force must send X-Orchestrator-Override: 1, got %q", override)
 	}
 }
 

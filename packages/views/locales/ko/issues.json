@@ -539,7 +539,8 @@
     "wakeup_checkin": "조용한 확인: {{note}}",
     "wakeup_checkin_coalesced_other": "조용한 확인 {{count}}회 · 최근: {{note}}",
     "wakeup_chip_created_by": "{{name}} 생성",
-    "wakeup_chip_system": "시스템 규칙"
+    "wakeup_chip_system": "시스템 규칙",
+    "orchestrator_transition": "플로우 {{tid}} {{why}}"
   },
   "comment": {
     "add_reaction": "반응 추가",
@@ -1683,5 +1684,28 @@
         }
       }
     }
+  },
+  "orchestrator": {
+    "section": "플로우",
+    "current": "현재",
+    "next": "다음",
+    "waiting": "대기 중",
+    "blocked": "차단 사유",
+    "paused": "일시 중지됨",
+    "failures": "엔진 실패",
+    "attempts": "시도 횟수",
+    "impl": "구현",
+    "review": "리뷰",
+    "infra": "인프라",
+    "recent": "전환",
+    "acceptance": "수락 대기 중",
+    "teams": "오케스트레이터 팀",
+    "pause": "일시 중지",
+    "resume": "재개",
+    "no_teams": "오케스트레이션된 프로젝트가 없습니다.",
+    "phase": "단계",
+    "accept": "수락",
+    "reject": "거절",
+    "reject_reason": "사유 (담당자가 읽습니다)"
   }
 }

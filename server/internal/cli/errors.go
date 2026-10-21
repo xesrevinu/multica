@@ -517,6 +517,12 @@ func userMessage(err error, lang Language) string {
 	if errors.As(err, &um) {
 		return um.Msg
 	}
+	// Orchestrator refusals are actionable as-is: show the server's guidance
+	// and the machine-readable code instead of the generic 403 copy.
+	var he *HTTPError
+	if errors.As(err, &he) && strings.Contains(he.Body, `"orchestrator_owned"`) {
+		return he.Error()
+	}
 
 	// Transport-layer failure.
 	var netErr *NetworkError

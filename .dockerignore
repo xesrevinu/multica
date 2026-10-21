@@ -39,15 +39,10 @@ coverage
 /docs/
 *.md
 
-# Dockerfile.web needs the web workspace and root dependency patch inputs.
+# Dockerfile.web needs only the web workspace from apps/.
 # Default-exclude other app files so they do not enter the build context.
 /apps/*
 !/apps/web/
-!/apps/mobile/
-/apps/mobile/*
-# The root lockfile's patchedDependencies hash this patch while installing the
-# web workspace, so the one directory has to stay in the build context.
-!/apps/mobile/patches/
 apps/web/.next
 apps/web/.next/**
 apps/web/node_modules

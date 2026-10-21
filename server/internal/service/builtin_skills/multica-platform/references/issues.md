@@ -1,5 +1,8 @@
 # Issues
 
+In an orchestrated project (`references/orchestrated.md`) never write status or
+assignee; the status rules below apply to projects without a team.
+
 Product contracts the runtime brief does not fully encode.
 
 - [PR linking](#pr-linking)
@@ -240,9 +243,6 @@ archived statuses remain readable via an explicit status filter.
   planning, and review all count as the work exactly when they are what the
   issue asks for (a review-the-PR issue is being worked the moment reviewing
   starts). Questions, discussion, or acknowledgements never move the status.
-  Squad leaders: dispatching members is not delivery — a dispatch turn
-  leaves the parent `in_progress`, and it moves to `in_review` only when a
-  later re-trigger confirms the overall goal is met.
 - **`in_review`** is an accepted issue status. Some workflows use it while a PR
   is open and awaiting review; moving to it is an explicit mutation.
 - **`done`** on a child issue can wake its parent's assignee (see Stages).
@@ -268,7 +268,7 @@ archived statuses remain readable via an explicit status filter.
   status write on the agent-run path.
 - **Project workflows** can limit which statuses an issue takes and turn a
   status change into a handoff to another agent. When the per-turn prompt
-  carries a `[Project workflow]` block, read `references/projects.md`.
+  carries a `[Project workflow]` block, read `references/workspace.md`.
 
 ## Who else is running right now
 
@@ -449,7 +449,7 @@ multica issue wakeup create <issue> --until-issue <other-issue-id> --until-issue
 - `--until-pr checks` — a linked pull request's checks finished, passing or failing, on its current head. `--until-pr merged` — a linked pull request merged. With several linked pull requests, any one satisfies it. Both conditions inspect only PRs linked directly to this issue; they do not inherit a parent issue's PRs. Check evaluation also requires server-side GitHub snapshots. A missing link or snapshot is recorded in the rule's `last_error` and retried automatically rather than rejecting the rule.
 - `--until-children-done` — every sub-issue, staged or not, is closed (`done` or `cancelled`). With `--stage N` it waits only for staged sub-issues up to stage N, and stage N must have at least one. A parent with no sub-issues never fires. The parent's assignee already gets the sub-issue wakeup described under Stages; do not add this condition for the same wake.
 - `--until-issue ISSUE` — another issue in this workspace (identifier or UUID) reaches `--until-issue-state`: `done` (default), `ended` (done or cancelled), or `in_review`.
-- The same form also accepts `--until-assignee member|agent|squad:ID`, `--until-label LABEL_ID`, and `--until-property PROPERTY_ID=VALUE` (VALUE may be JSON). `multica issue wakeup create --help` lists them.
+- The same form also accepts `--until-assignee member|agent:ID`, `--until-label LABEL_ID`, and `--until-property PROPERTY_ID=VALUE` (VALUE may be JSON). `multica issue wakeup create --help` lists them.
 - `wakeup create <issue> --kind at --after 10m --instruction-file ./instruction.md` schedules one run. Alternatively use `--at <RFC3339>`.
 - `wakeup create <issue> --kind every --every 1h --instruction-file ./instruction.md` schedules a repeating check. Or use `--kind cron --cron '0 * * * *' --timezone Asia/Shanghai`.
 - `--max-fires N` (1–1000) caps how many runs a repeating rule starts: every, cron, or `--mode continuous`. A once rule rejects it. Continuous event rules, conditions included, default to 20. The run that reaches the cap is still created, then the rule pauses with `paused_reason=max_fires`. Turning the rule back on clears the pause and restarts the count.

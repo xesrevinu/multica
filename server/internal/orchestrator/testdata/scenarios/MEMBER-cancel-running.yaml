@@ -1,0 +1,6 @@
+name: member cancel - an implementing issue with a live run is cancelled at once and its run is stopped
+issue: {key: ATT-71}
+steps:
+  - expect: {tid: T1_start}
+  - do: {run: running, meta: {cancel_requested: "true"}}
+    expect: {tid: T8b_member_cancel, status: cancelled, meta: {phase: cancelled, cancel_requested: ""}}

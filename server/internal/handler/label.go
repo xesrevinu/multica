@@ -453,6 +453,9 @@ func (h *Handler) AttachLabel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "issue label not found")
 		return
 	}
+	if h.refuseOrchestratorLabel(w, r, userID, issue, label.Name, true) {
+		return
+	}
 
 	attached, err := wakeupWrite(h, r, func(q *db.Queries) (db.AttachLabelToIssueRow, error) {
 		return q.AttachLabelToIssue(r.Context(), db.AttachLabelToIssueParams{
@@ -527,6 +530,9 @@ func (h *Handler) DetachLabel(w http.ResponseWriter, r *http.Request) {
 	}
 	if label.ResourceType != "issue" {
 		writeError(w, http.StatusNotFound, "issue label not found")
+		return
+	}
+	if h.refuseOrchestratorLabel(w, r, userID, issue, label.Name, false) {
 		return
 	}
 

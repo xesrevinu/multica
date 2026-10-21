@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/orchestrator"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -181,6 +182,10 @@ func (h *Handler) SetIssueMetadataKey(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if msg := h.orchestratorMetaGuard(r, userID, issue, key, req.Value, false); msg != "" {
+		writeErrorCode(w, http.StatusForbidden, orchestrator.ErrCodeOwned, msg)
+		return
+	}
 
 	// Enforce the key-count cap in the handler. The DB only guards size,
 	// and a clear 4xx for "too many keys" beats a CHECK violation that
@@ -264,6 +269,10 @@ func (h *Handler) DeleteIssueMetadataKey(w http.ResponseWriter, r *http.Request)
 	}
 	userID, ok := requireUserID(w, r)
 	if !ok {
+		return
+	}
+	if msg := h.orchestratorMetaGuard(r, userID, issue, key, nil, true); msg != "" {
+		writeErrorCode(w, http.StatusForbidden, orchestrator.ErrCodeOwned, msg)
 		return
 	}
 

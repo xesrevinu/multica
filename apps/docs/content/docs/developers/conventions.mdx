@@ -26,7 +26,7 @@ Always live under `/{slug}/{section}` — `/{slug}/issues`, `/{slug}/agents`, `/
 
 ### Session tabs
 
-Web and desktop share **session tabs** (in-app document tabs, one mounted session per workspace group). The store lives in `@multica/core/tabs`; the strip lives in `@multica/views/layout`. Below the compact breakpoint (1024px) the strip is hidden and modifier-clicks are browser tabs. Do not call this "mobile" — that word is reserved for the Expo app, which does not host session tabs. See `docs/adr/0001-web-session-tabs.md`.
+The web app uses **session tabs** (in-app document tabs, one mounted session per workspace group). The store lives in `@multica/core/tabs`; the strip lives in `@multica/views/layout`. Below the compact breakpoint (1024px) the strip is hidden and modifier-clicks are browser tabs. Phones and tablets use this responsive web layout. See `docs/adr/0001-web-session-tabs.md`.
 
 ### Packages and modules
 
@@ -38,10 +38,8 @@ The monorepo enforces strict package boundaries:
 | `packages/ui` | nothing | `@multica/core`, business logic |
 | `packages/views` | `core/`, `ui/` | `next/*`, `react-router-dom`, stores |
 | `apps/web/platform/` | `next/*` | other apps |
-| `apps/desktop/.../platform/` | `react-router-dom`, electron | other apps |
-| `apps/mobile/` | types and pure functions from `@multica/core` | Web/Desktop React pages, stores, and platform implementations |
 
-If logic appears in both apps, it MUST be extracted to a shared package. There are no exceptions for "small" duplication. Mobile owns a separate UI, data layer, and release process; it shares only types and pure functions.
+Logic shared by more than one app MUST live in a shared package. There are no exceptions for "small" duplication.
 
 ### Files and components
 
@@ -281,13 +279,12 @@ Examples:
 - `inbox.empty.title`
 - `settings.preferences.language.title`
 
-### Web-only / desktop-only copy
+### Web-only copy
 
 - Shared copy: top level of the namespace JSON
 - Web-only: `web` section
-- Desktop-only: `desktop` section
 
-See `auth.json` for the canonical example (the `web` section contains `prefer_desktop` / `desktop_handoff.*`).
+See `auth.json` for the canonical example.
 
 ---
 
@@ -317,7 +314,7 @@ Descriptions are optional and omitted by default. Before adding one, ask: **What
 - Keep permissions, cost, destructive consequences, execution prerequisites, input constraints, and error recovery visible when relevant. Do not hide them in hover-only help.
 - Show introductory guidance only where it is needed. Put advanced usage and diagnostics in explicit, accessible help rather than the default page body.
 - Preserve input labels, accessible names, and necessary description associations. Do not move redundant visible prose wholesale into screen-reader-only text.
-- Review English and translated copy together, including mobile's independent strings. In PR review, check the added information, same-screen repetition, display conditions, and preserved constraints. Length is a review signal, not an automatic deletion rule.
+- Review English and translated copy together. In PR review, check the added information, same-screen repetition, display conditions, and preserved constraints. Length is a review signal, not an automatic deletion rule.
 
 Shared settings components already accept optional descriptions. Examples and new call sites should omit them unless justified; do not add required description props or a separate copy policy.
 

@@ -6,7 +6,6 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@multica/ui/lib/utils";
 import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
 import { AppLink, useNavigation } from "../navigation";
-import { JoinDiscordCard } from "./join-discord-card";
 import {
   DndContext,
   PointerSensor,
@@ -30,7 +29,6 @@ import { WorkspaceAvatar } from "../workspace/workspace-avatar";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@multica/ui/components/ui/collapsible";
-import { CappedNumberFlow } from "@multica/ui/components/ui/number-flow";
 import { StatusIcon } from "../issues/components/status-icon";
 import { useIssueDraftStore } from "@multica/core/issues/stores/draft-store";
 import { openCreateIssueWithPreference } from "@multica/core/issues/stores/create-mode-store";
@@ -69,7 +67,6 @@ import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { inboxUnreadSummaryOptions, useInboxUnreadCount, hasOtherWorkspaceUnread, unreadWorkspaceIds } from "@multica/core/inbox/queries";
 import { chatSessionsOptions } from "@multica/core/chat/queries";
-import { countUnreadChatMessages } from "@multica/core/chat/unread";
 import { useChatStore } from "@multica/core/chat";
 import { api, ApiError } from "@multica/core/api";
 import { useConfigStore } from "@multica/core/config";
@@ -80,9 +77,10 @@ import { projectDetailOptions } from "@multica/core/projects/queries";
 import type { PinnedItem } from "@multica/core/types";
 import { useLogout } from "../auth";
 import { ProjectIcon } from "../projects/components/project-icon";
-import { ActiveWorkSection } from "./active-work-section";
 import { routeIconForPath } from "./route-icon-components";
-import { aiTeamNav, personalNav, utilityNav, workNav } from "./sidebar-nav";
+import { secondaryNav } from "./sidebar-nav";
+import { AgentDmSection, IssueAttentionList } from "../orch";
+import { orchIssuesOptions } from "@multica/core/orchestrator";
 import { useT } from "../i18n";
 import {
   useShortcut,
@@ -372,7 +370,7 @@ interface AppSidebarProps {
 
 export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }: AppSidebarProps = {}) {
   const { t } = useT("layout");
-  const { pathname, push } = useNavigation();
+  const { pathname, push, searchParams } = useNavigation();
   const user = useAuthStore((s) => s.user);
   const userId = useAuthStore((s) => s.user?.id);
   const logout = useLogout();
@@ -424,9 +422,11 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
     appForeground && (floatingChatOpen || isNavActive(pathname, chatHref))
       ? activeChatSessionId
       : null;
-  const chatUnreadCount = React.useMemo(
-    () => countUnreadChatMessages(chatSessions, viewedChatSessionId),
-    [chatSessions, viewedChatSessionId],
+  const { data: orchList } = useQuery({ ...orchIssuesOptions(wsId ?? ""), enabled: !!wsId });
+  const orchIssues = orchList?.issues;
+  const busyAgentIds = React.useMemo(
+    () => new Set((orchIssues ?? []).flatMap((i) => (i.running ? [i.running.agent_id] : []))),
+    [orchIssues],
   );
   // Cross-workspace unread summary backs the workspace-switcher dot. One
   // shared cache entry across workspaces; gated on an active workspace since
@@ -482,10 +482,6 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
   const visiblePinned = localPinnedWsId === (wsId ?? null) ? localPinned : EMPTY_PINS;
   const pinsExpanded = expandedPinsWorkspaceId === wsId;
   const displayedPinned = pinsExpanded ? visiblePinned : visiblePinned.slice(0, PINNED_PREVIEW_LIMIT);
-  // View pins are absent here (their href resolves async): while a view
-  // pin is active the plain nav row for its surface stays highlighted too.
-  // Accepted — suppressing it would need every view detail lifted up here.
-  const isActivePinnedRoute = displayedPinned.some((pin) => pathname === getPinHref(pin));
 
   const handleDragStart = useCallback(() => {
     isDraggingRef.current = true;
@@ -524,7 +520,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
         ? list.find((w) => w.id === invitation.workspace_id)
         : null;
       if (joined) {
-        push(paths.workspace(joined.slug).issues());
+        push(paths.workspace(joined.slug).root());
       }
     },
     onError: () => {
@@ -606,7 +602,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                       <DropdownMenuItem
                         key={ws.id}
                         render={
-                          <AppLink href={paths.workspace(ws.slug).issues()} />
+                          <AppLink href={paths.workspace(ws.slug).root()} />
                         }
                       >
                         <WorkspaceAvatar name={ws.name} avatarUrl={ws.avatar_url} size="sm" />
@@ -703,42 +699,22 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                 ) : null}
               </SidebarMenuButton>
             </SidebarMenuItem>
-            {personalNav.map((item) => {
-              const href = p[item.key]();
-              const Icon = routeIconForPath(href);
-              const isActive = isNavActive(pathname, href);
-              return (
-                <SidebarMenuItem key={item.key}>
-                  <SidebarMenuButton
-                    isActive={isActive}
-                    render={<AppLink href={href} />}
-                    className={SIDEBAR_ITEM_CLASS}
-                  >
-                    <Icon />
-                    <span>{t(($) => $.nav[item.labelKey])}</span>
-                    {item.key === "inbox" && unreadCount > 0 && (
-                      <CappedNumberFlow
-                        value={unreadCount}
-                        animated={false}
-                        className="ml-auto text-caption"
-                      />
-                    )}
-                    {item.key === "chat" && chatUnreadCount > 0 && (
-                      <CappedNumberFlow
-                        value={chatUnreadCount}
-                        animated={false}
-                        className="ml-auto text-caption"
-                      />
-                    )}
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              );
-            })}
           </SidebarMenu>
         </SidebarHeader>
 
         {/* Navigation */}
         <SidebarContent ref={sidebarScrollRef} style={sidebarFadeStyle}>
+          {wsId && (
+            <AgentDmSection
+              wsId={wsId}
+              chatHref={chatHref}
+              chatSessions={chatSessions}
+              viewedSessionId={viewedChatSessionId}
+              activeSessionId={isNavActive(pathname, chatHref) ? (searchParams.get("session") ?? activeChatSessionId ?? null) : null}
+              activeAgentId={isNavActive(pathname, chatHref) ? searchParams.get("agent") : null}
+              busyAgentIds={busyAgentIds}
+            />
+          )}
 
           {visiblePinned.length > 0 && (
             <Collapsible defaultOpen>
@@ -789,92 +765,46 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
             </Collapsible>
           )}
 
-          <SidebarGroup>
-            <SidebarGroupLabel>{t(($) => $.sidebar.work_group)}</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu className="gap-0.5">
-                {workNav.map((item) => {
-                  const href = p[item.key]();
-                  const Icon = routeIconForPath(href);
-                  const isActive = !isActivePinnedRoute && isNavActive(pathname, href);
-                  return (
-                    <SidebarMenuItem key={item.key}>
-                      <SidebarMenuButton
-                        isActive={isActive}
-                        render={<AppLink href={href} />}
-                        className={SIDEBAR_ITEM_CLASS}
-                      >
-                        <Icon />
-                        <span>{t(($) => $.nav[item.labelKey])}</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  );
-                })}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-
-          <SidebarGroup>
-            <SidebarGroupLabel>{t(($) => $.sidebar.ai_team_group)}</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu className="gap-0.5">
-                {aiTeamNav.map((item) => {
-                  const href = p[item.key]();
-                  const Icon = routeIconForPath(href);
-                  // Agents merged into Runtimes: keep the configure row lit on
-                  // /agents (list, create, detail) as well as /runtimes.
-                  const isActive =
-                    item.key === "runtimes"
-                      ? isNavActive(pathname, href) ||
-                        isNavActive(pathname, p.agents())
-                      : isNavActive(pathname, href);
-                  return (
-                    <SidebarMenuItem key={item.key}>
-                      <SidebarMenuButton
-                        isActive={isActive}
-                        render={<AppLink href={href} />}
-                        className={SIDEBAR_ITEM_CLASS}
-                      >
-                        <Icon />
-                        <span>{t(($) => $.nav[item.labelKey])}</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  );
-                })}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-
-          {/* Live work sits under AI Team because that is where agents live:
-              the group answers "who exists", this section answers "who is
-              busy right now". Renders nothing when the workspace is idle. */}
-          <ActiveWorkSection />
+          {wsId && <IssueAttentionList wsId={wsId} pathname={pathname} issueHref={p.issueDetail} />}
         </SidebarContent>
 
         <SidebarFooter className="p-2">
-          <SidebarMenu className="gap-0.5">
-            {utilityNav.map((item) => {
+          <nav className="flex flex-wrap items-center gap-0.5" data-testid="orch-secondary-nav" aria-label={t(($) => $.sidebar.work_group)}>
+            {secondaryNav.map((item) => {
               const href = p[item.key]();
               const Icon = routeIconForPath(href);
+              const isActive =
+                item.key === "runtimes"
+                  ? isNavActive(pathname, href) || isNavActive(pathname, p.agents())
+                  : item.key === "issues"
+                    ? pathname === href
+                    : isNavActive(pathname, href);
+              const label = t(($) => $.nav[item.labelKey]);
               return (
-                <SidebarMenuItem key={item.key}>
-                  <SidebarMenuButton
-                    isActive={isNavActive(pathname, href)}
-                    render={<AppLink href={href} />}
-                    className={cn(SIDEBAR_ITEM_CLASS, "text-caption")}
+                <Tooltip key={item.key}>
+                  <TooltipTrigger
+                    render={
+                      <AppLink
+                        href={href}
+                        aria-label={label}
+                        data-active={isActive || undefined}
+                        className="relative flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-sidebar-accent/70 hover:text-foreground data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground [&_svg]:size-4"
+                      />
+                    }
                   >
                     <Icon />
-                    <span>{t(($) => $.nav[item.labelKey])}</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
+                    {item.key === "inbox" && unreadCount > 0 && (
+                      <span data-testid="inbox-unread-dot" className="absolute top-1 right-1 size-1.5 rounded-full bg-brand" />
+                    )}
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    {label}
+                    {item.key === "inbox" && unreadCount > 0 ? ` · ${unreadCount}` : ""}
+                  </TooltipContent>
+                </Tooltip>
               );
             })}
-          </SidebarMenu>
-          {/* Discord fills the strip while visible; once dismissed, help
-              aligns with the navigation icons above. */}
-          <div className="flex items-center gap-1">
-            <JoinDiscordCard />
-          </div>
+          </nav>
         </SidebarFooter>
         <SidebarRail />
       </Sidebar>
