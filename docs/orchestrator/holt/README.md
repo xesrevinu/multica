@@ -2,11 +2,11 @@
 
 | 文件 | 内容 |
 |---|---|
-| `multica-orchestrator.patch` | 改 holt 的 `.multica/`：Pocket / Studio Parts 两个项目加 `orchestrator:` 段（保留已绑定的 `github_repo` 资源）；删掉 `squads:`（squads 概念已移除）；lead 只做规划和 blocked 处理；gbot 改为专家；workflow.md 重写为引擎流程 + 区域/owner/检查表；新 skill `pocket-checks`；新 `REVIEW.md` |
+| `multica-orchestrator.patch` | 改 holt 的 `.multica/`：Pocket / Studio Parts 两个项目加 `orchestrator:` 段（保留已绑定的 `github_repo` 资源）；删掉 `squads:`（squads 概念已移除）；lead 只做规划和 blocked 处理；gbot 改为专家，人设改为 `gbot_instructions`（创建时写入 bot，sync 用 `gbot bots update --instructions-file` 管理）；**删除 workflow.md**；删除 `avatars/*.manifest.json` 和 `avatars/prompts/`（已移到 `~/.cursor/artifacts/holt/avatars/`）；agent 加 `avatar:`；AGENTS.md / studio/AGENTS.md 去掉 squad 和 workflow.md 引用；新 skill `pocket-checks`；新 `REVIEW.md` |
 | `project.yaml.proposed` | patch 应用后的完整 `.multica/project.yaml`，便于直接阅读 |
 | `envrc-sccache.patch` | `.envrc`：有 sccache 时设置 `RUSTC_WRAPPER`、共享 `SCCACHE_DIR=$HOME/.cache/sccache-holt`、40G 上限 |
 
-基线：holt main `6c2b188d`。两个 patch 都 `git apply --check` 通过（2026-10-21）；两段 `orchestrator:` 用 `multica team preset render -f` 校验通过。
+基线：holt main `6c2b188d`（提案分支 `herdr/multica-proposal` @ `35463802`）。两个 patch 都 `git apply --check` 通过（2026-10-21）；两段 `orchestrator:` 用 `multica team preset render -f` 校验通过。
 
 ## 决定（Ray，2026-10-21）
 - GitHub CI 保持关闭：`required_checks: [review-verdict]`，靠本地 pocket-checks / verify-gates。
@@ -50,3 +50,19 @@
 - CI 恢复后可在 `required_checks` 里加回真实 check 名。
 - 两个项目共用一个 hub 和仓库，worktree 都在 `~/.cursor/worktrees/holt/agent-<key>`。
 - 分支命名：`agent/<key>`（worktree `agent-<key>`）只给编排器用；herdr worker 用 `herdr/<task>`，不要用 `agent/<task>`，否则会占住编排分支，issue 被 `[branch_occupied]` 阻塞。
+
+## 头像映射（待 Ray 确认）
+| agent | avatar |
+|---|---|
+| yielded-lead | team-lead.png |
+| yielded-researcher | researcher.png |
+| yielded-engineer | codex-engineer.png |
+| heavy-engineer | claude-engineer.png |
+| yielded-reviewer | reviewer.png |
+| code-auditor | code-auditor.png |
+| frontend-engineer | frontend-engineer.png |
+
+gbot、control-plane-engineer 没有头像。
+
+## 已知问题
+- 提案里 lead 的 `plan-split` 等 pstack 技能不在 sync 的技能目录里，`sync.ts` 会报 `references unknown skill: plan-split`。需要先把这些技能加进 global.yaml / workspaces 目录，或者从 agent `skills:` 里拿掉（引擎的 pstack 另行注入）。

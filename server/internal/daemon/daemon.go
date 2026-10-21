@@ -8423,6 +8423,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 				agentEnv["MULTICA_GBOT_BOT"] = strings.TrimSpace(arg[len(prefix):])
 			}
 		}
+		if task.IssueIdentifier != "" {
+			agentEnv["MULTICA_ISSUE_IDENTIFIER"] = task.IssueIdentifier
+		}
 	}
 	// Quick-create marker — when set, the multica CLI's `issue create`
 	// command stamps the new issue with origin_type=quick_create +

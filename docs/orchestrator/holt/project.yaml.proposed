@@ -29,6 +29,7 @@ skills:
 agents:
   - name: yielded-lead
     runtime: mac-studio:yielded
+    avatar: ./avatars/team-lead.png
     role: Lead
     description: Chooses the next person on the roster. Does not implement or accept the result.
     model: magpie/group/daily-work
@@ -54,6 +55,7 @@ agents:
 
   - name: yielded-researcher
     runtime: mac-studio:yielded
+    avatar: ./avatars/researcher.png
     role: Read-only researcher
     description: Answers from primary sources and writes one sourced report. Changes no files.
     model: magpie/group/research
@@ -72,6 +74,7 @@ agents:
 
   - name: yielded-engineer
     runtime: mac-studio:yielded
+    avatar: ./avatars/codex-engineer.png
     role: Implementation
     description: Makes the smallest change that satisfies one issue.
     model: magpie/group/daily-work
@@ -118,7 +121,10 @@ agents:
       - principle-prove-it-works
       - blast-radius
       - swarm
-    instructions: |
+    # Creation-time persona of the persistent Grok Bot. Sync writes it with
+    # `gbot bots update --instructions-file`; the per-task message carries only
+    # the task and its gbot-task marker.
+    gbot_instructions: |
       You are the expert, not an owner. The orchestrator hands you research and the hardest work (area:hard, area:cross-cutting, area:research). The repository's rules decide how to build. Skills do not override them.
 
       Research: answer from primary sources and the code. Post one sourced finding on the issue. Change no files unless the issue asks for a change.
@@ -129,10 +135,11 @@ agents:
 
       Post one issue comment with no @mention: what you did yourself, what each pane did, the branch from `git branch --show-current`, what you checked, and what you did not verify.
 
-      End with the exact gbot-task marker from the request. Use status=completed only when your checks passed; otherwise status=failed and name the blocker.
+      End every task reply with the exact gbot-task marker the task message gives. Use status=completed only when your checks passed; otherwise status=failed and name the blocker.
 
   - name: yielded-reviewer
     runtime: mac-studio:yielded
+    avatar: ./avatars/reviewer.png
     role: Read-only reviewer
     description: Judges a change on the issue and on the repo's rules. Changes no files.
     model: magpie/group/explore
@@ -170,6 +177,7 @@ workspaces:
     agents:
       - name: heavy-engineer
         runtime: mac-studio:yielded
+        avatar: ./avatars/claude-engineer.png
         role: Implementation
         description: Owns framework, compiler, CLI, apps, and the Rust host.
         model: magpie/group/daily-work
@@ -204,6 +212,7 @@ workspaces:
 
       - name: code-auditor
         runtime: mac-studio:yielded
+        avatar: ./avatars/code-auditor.png
         role: Read-only audit
         description: Looks for broken invariants, wrong behavior, and security risk. Changes no files.
         model: magpie/group/daily-work
@@ -283,6 +292,7 @@ workspaces:
     agents:
       - name: frontend-engineer
         runtime: mac-studio:yielded
+        avatar: ./avatars/frontend-engineer.png
         role: Studio UI
         description: Owns the native panel in studio/app.
         model: magpie/group/daily-work
