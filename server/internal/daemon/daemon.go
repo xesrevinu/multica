@@ -8457,6 +8457,15 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if env.CodexHome != "" {
 		agentEnv["CODEX_HOME"] = env.CodexHome
 	}
+	// The worktree's allowed .envrc (repo toolchain) — what an interactive
+	// shell's direnv hook would load. Falls back to the daemon env on any error.
+	{
+		keepFirst := ""
+		if selfBin, err := resolveSelfExecutable(); err == nil {
+			keepFirst = filepath.Dir(selfBin)
+		}
+		execenv.LoadDirenvEnv(env.WorkDir, agentEnv, keepFirst, taskLog)
+	}
 	// HOME and the XDG base dirs are deliberately not touched here: provider
 	// tools such as gh, aws, kubectl, and npm continue resolving the daemon
 	// user's existing state (MUL-5578). The Multica CLI is the exception:
