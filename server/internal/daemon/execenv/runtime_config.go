@@ -181,12 +181,36 @@ func formatProjectResource(r ProjectResourceForEnv) string {
 // For Qwen:        writes {workDir}/QWEN.md (Qwen Code's native context file; it also reads AGENTS.md, but QWEN.md avoids cross-runtime ambiguity)
 func InjectRuntimeConfig(workDir, provider string, ctx TaskContextForEnv) (string, error) {
 	content := buildMetaSkillContent(provider, ctx)
+	if BriefDeliveredInline(provider) {
+		// The backend appends the brief to the system prompt, so the tracked
+		// AGENTS.md stays byte-identical to the commit. Strip a block an
+		// older daemon may have left in a reused worktree.
+		return content, CleanupRuntimeConfig(workDir, provider)
+	}
 	path := runtimeConfigPath(workDir, provider)
 	if path == "" {
 		// Unknown provider — skip config injection, prompt-only mode.
 		return content, nil
 	}
 	return content, writeRuntimeConfigFile(path, content)
+}
+
+// BriefDeliveredInline reports whether provider receives the runtime brief
+// through its CLI's append-system-prompt flag instead of a file in the
+// workdir. Writing AGENTS.md into a task worktree dirties a tracked file
+// (the repo's own AGENTS.md), and an agent that runs `git add -A` commits
+// the brief. Pi (and its omp fork) take --append-system-prompt, yielded-agent
+// takes --append-system; both still load the repository's own AGENTS.md.
+// Probed with a canary on pi 1.3.0 and yielded-agent (2026-10-21).
+func BriefDeliveredInline(provider string) bool {
+	if desc, ok := agent.BuiltinRuntimeByID(provider); ok {
+		provider = desc.ProtocolFamily
+	}
+	switch provider {
+	case "pi", "yielded":
+		return true
+	}
+	return false
 }
 
 // runtimeConfigPath returns the absolute path to the runtime config file that

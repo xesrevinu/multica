@@ -6475,7 +6475,9 @@ func providerDisplayName(name string) string {
 // into the turn itself. kiro was confirmed earlier by a kiro-cli
 // 2.13.0 ACP smoke — see the call site. Still unprobed: grok, qoder, codebuddy.
 func providerNeedsInlineSystemPrompt(provider string) bool {
-	return false
+	// pi/omp/yielded: the brief goes inline so the tracked AGENTS.md in a
+	// task worktree is never modified (see execenv.BriefDeliveredInline).
+	return execenv.BriefDeliveredInline(provider)
 }
 
 // gateResumeToReachableSession clears the task's prior session unless this run

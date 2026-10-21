@@ -1133,10 +1133,12 @@ func buildPiArgs(sessionPath string, opts ExecOptions, logger *slog.Logger) []st
 	// silently filters out extension-registered tools (#2379).
 	// Users who want to restrict tools can do so via custom_args.
 	//
-	// SystemPrompt is intentionally not forwarded as --append-system-prompt:
-	// Pi loads the per-task AGENTS.md the daemon writes into the workdir, so
-	// inlining the same runtime brief would duplicate it on every turn.
-	// Verified against Pi 0.67.2 (MUL-5392).
+	// The daemon no longer writes the runtime brief into the workdir's
+	// AGENTS.md for pi (that dirtied the repo's tracked file); it arrives as
+	// SystemPrompt and is appended here. Pi still loads the repo's AGENTS.md.
+	if sp := strings.TrimSpace(opts.SystemPrompt); sp != "" {
+		args = append(args, "--append-system-prompt", opts.SystemPrompt)
+	}
 	args = append(args, filterPiCustomArgs(opts.CustomArgs, logger)...)
 	// The extension is explicit, so Pi loads it without trusting the project.
 	// It stays after custom args so the managed path cannot be mistaken for the

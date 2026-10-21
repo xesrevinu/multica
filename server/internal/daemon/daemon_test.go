@@ -710,11 +710,12 @@ func TestProviderNeedsInlineSystemPrompt(t *testing.T) {
 		{provider: "claude", want: false},
 		{provider: "codex", want: false},
 		{provider: "opencode", want: false},
-		{provider: "pi", want: false},
+		{provider: "pi", want: true},
+		{provider: "omp", want: true},
 		{provider: "dsh", want: false},
 		{provider: "grok", want: false},
 		{provider: "gbot", want: false},
-		{provider: "yielded", want: false},
+		{provider: "yielded", want: true},
 	}
 
 	for _, tc := range cases {

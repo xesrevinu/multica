@@ -1076,8 +1076,6 @@ func TestInjectRuntimeConfigPreservesUserContent(t *testing.T) {
 		{"codearts", "AGENTS.md"},
 		{"openclaw", "AGENTS.md"},
 		{"hermes", "AGENTS.md"},
-		{"pi", "AGENTS.md"},
-		{"omp", "AGENTS.md"},
 		{"cursor", "AGENTS.md"},
 		{"kimi", "AGENTS.md"},
 		{"reasonix", "AGENTS.md"},
@@ -2390,5 +2388,46 @@ func TestEveryBriefThatTeachesJSONOutputAlsoWarnsAgainstMergingStderr(t *testing
 		if !strings.Contains(brief, wantWhy) {
 			t.Errorf("%s brief states %q without %q; a rule with no reason is the first one dropped under pressure", name, wantRule, wantWhy)
 		}
+	}
+}
+
+// pi, omp and yielded get the brief inline; their workdir AGENTS.md (the
+// repo's tracked file in a task worktree) must stay byte-identical, and a
+// block left by an older daemon is stripped.
+func TestInjectRuntimeConfigInlineProvidersLeaveAgentsMDUntouched(t *testing.T) {
+	t.Parallel()
+	for _, provider := range []string{"pi", "omp", "yielded"} {
+		provider := provider
+		t.Run(provider, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "AGENTS.md")
+			user := "# Repo rules\n\nkeep me\n"
+			if err := os.WriteFile(path, []byte(user), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			brief, err := InjectRuntimeConfig(dir, provider, TaskContextForEnv{IssueID: "i-1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if brief == "" {
+				t.Fatal("brief must still be returned for inline delivery")
+			}
+			got, _ := os.ReadFile(path)
+			if string(got) != user {
+				t.Fatalf("AGENTS.md changed:\n%s", got)
+			}
+			// Legacy block from an older daemon is removed.
+			if err := writeRuntimeConfigFile(path, brief); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := InjectRuntimeConfig(dir, provider, TaskContextForEnv{IssueID: "i-1"}); err != nil {
+				t.Fatal(err)
+			}
+			got, _ = os.ReadFile(path)
+			if string(got) != user {
+				t.Fatalf("legacy block not stripped:\n%s", got)
+			}
+		})
 	}
 }

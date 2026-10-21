@@ -110,17 +110,22 @@ func TestBuildPiArgsDisablesSkillDiscovery(t *testing.T) {
 	}
 }
 
-func TestBuildPiArgsIgnoresSystemPrompt(t *testing.T) {
+func TestBuildPiArgsAppendsSystemPrompt(t *testing.T) {
 	args := buildPiArgs("/tmp/s.jsonl", ExecOptions{
 		SystemPrompt: "the entire multica runtime brief",
 	}, slog.Default())
-
-	for _, a := range args {
-		if a == "--append-system-prompt" {
-			t.Fatalf("unexpected --append-system-prompt in args: %v", args)
+	for i, a := range args {
+		if a == "--append-system-prompt" && i+1 < len(args) && args[i+1] == "the entire multica runtime brief" {
+			return
 		}
-		if a == "the entire multica runtime brief" {
-			t.Fatalf("SystemPrompt leaked into args: %v", args)
+	}
+	t.Fatalf("runtime brief not forwarded as --append-system-prompt: %v", args)
+}
+
+func TestBuildPiArgsOmitsEmptySystemPrompt(t *testing.T) {
+	for _, a := range buildPiArgs("/tmp/s.jsonl", ExecOptions{}, slog.Default()) {
+		if a == "--append-system-prompt" {
+			t.Fatal("unexpected --append-system-prompt without a SystemPrompt")
 		}
 	}
 }

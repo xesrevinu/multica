@@ -74,6 +74,10 @@ func (b *yieldedBackend) Execute(ctx context.Context, prompt string, opts ExecOp
 	if id := strings.TrimSpace(opts.ResumeSessionID); id != "" {
 		args = append(args, "--session", id)
 	}
+	if sp := strings.TrimSpace(opts.SystemPrompt); sp != "" {
+		// Runtime brief inline: the tracked AGENTS.md in the worktree stays clean.
+		args = append(args, "--append-system", opts.SystemPrompt)
+	}
 	args = append(args, filterCustomArgs(opts.CustomArgs, yieldedBlockedArgs, b.cfg.Logger)...)
 	cmd := b.cfg.commandAt(execPath).exec(runCtx, args...)
 	hideAgentWindow(cmd)
