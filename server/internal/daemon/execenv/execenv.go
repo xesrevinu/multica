@@ -460,6 +460,7 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 		if err := os.MkdirAll(workDir, 0o755); err != nil {
 			return nil, fmt.Errorf("execenv: create worktree workdir %s: %w", workDir, err)
 		}
+		excludeWorktreeSidecars(localWorktree, workDir, params.Provider, logger)
 	}
 
 	env := &Environment{

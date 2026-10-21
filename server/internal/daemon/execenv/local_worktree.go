@@ -550,7 +550,8 @@ func PrepareLocalWorktree(params LocalWorktreeParams, logger *slog.Logger) (*Loc
 	}
 
 	// Note on keeping sidecars out of the delivered branch: we deliberately do
-	// NOT write .git/info/exclude here. A linked worktree reads info/exclude
+	// NOT write .git/info/exclude here (per-worktree excludes are set by
+	// excludeWorktreeSidecars in Prepare; see worktree_excludes.go). A linked worktree reads info/exclude
 	// from the repo's COMMON git dir, so the only file that would take effect
 	// is the user's own .git/info/exclude — editing it would change what `git
 	// status` shows in the user's checkout, which is theirs, not ours. Instead
@@ -946,6 +947,7 @@ func worktreeIsDirty(worktreePath string) (bool, error) {
 // deletes its directory. The branch is deliberately left alone — it is the
 // task's deliverable.
 func removeLocalWorktreeDir(gitRoot, worktreePath string, logger *slog.Logger) error {
+	defer removeWorktreeExcludes(gitRoot, worktreePath)
 	if worktrunkConfigPresent(gitRoot) {
 		if err := removeViaWorktrunk(gitRoot, worktreePath, logger); err == nil {
 			return nil

@@ -42,7 +42,12 @@ const preparationHelperTestMode = "execenv-preparation-helper"
 func TestMain(m *testing.M) {
 	os.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
 	os.Unsetenv(cli.TaskConfigRootEnv)
+	// Per-worktree excludes files land under the artifact root; keep the
+	// suite's out of the developer's ~/.cursor/artifacts.
+	artifacts, _ := os.MkdirTemp("", "execenv-artifacts-")
+	os.Setenv(ArtifactRootEnv, artifacts)
 	code := m.Run()
+	os.RemoveAll(artifacts)
 	if testRepoTemplate.dir != "" {
 		os.RemoveAll(testRepoTemplate.dir)
 	}
