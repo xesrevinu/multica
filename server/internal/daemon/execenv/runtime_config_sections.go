@@ -867,8 +867,11 @@ func writeOutput(b *strings.Builder, kind taskKind, ctx TaskContextForEnv) {
 // Workflow, Always Use CLI, Output — are shared by every kind and emitted
 // unconditionally (or gated by their own data preconditions).
 func buildMetaSkillContentSlim(provider string, ctx TaskContextForEnv) string {
-	var b strings.Builder
 	kind := classifyTask(ctx)
+	if kind == kindIssue && ctx.OrchestratedBranch != "" {
+		return buildCompactIssueBrief(ctx)
+	}
+	var b strings.Builder
 
 	// Session Continuity Notice, Task Initiator (now On Behalf Of) and
 	// Connected Apps used to be rendered here. They are per-run values, so
