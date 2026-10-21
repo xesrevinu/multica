@@ -58,7 +58,7 @@ skills:
   tdd: {action: keep}
   teach: {action: operator, note: "Interactive tutoring for a live human."}
   technical-writing: {action: keep}
-  typescript-best-practices: {action: keep}
+  typescript-best-practices: {action: adapt, note: "Upstream is a TypeScript-only rule table. This copy adds the Effect (v4) decision table, the rules for composing Effect code, and four references: an Effect playbook, HttpApi/SQL/platform services, Atom state, and verified v3/v4 API corrections. Verify APIs against the local v4 checkout at ~/.local/share/references-repos/effect, not against memory or other skill packs."}
   unslop: {action: keep}
   why: {action: adapt, note: "Source-digging subagents optional (contract 6); external sources (Datadog, Slack) only if the runtime already has access."}
 agents:
@@ -70,7 +70,9 @@ roles:
     max_skills: 7
     skills: [in-your-own-words, figure-it-out, principle-attack-the-premise, principle-sequence-verifiable-units, principle-outcome-oriented-execution, sharpen, principle-guard-the-context-window]
   owner:
-    budget_bytes: 46500
+    # 51575 used: the typescript-best-practices SKILL.md grew from 2.8 KB to
+    # 7.9 KB when it took on the Effect decision table and coding rules.
+    budget_bytes: 52000
     max_skills: 8
     skills: [tdd, principle-prove-it-works, principle-fix-root-causes, principle-subtract-before-you-add, principle-test-behavior-not-implementation, blast-radius, principle-boundary-discipline, typescript-best-practices]
   reviewer:

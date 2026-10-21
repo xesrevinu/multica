@@ -1,7 +1,8 @@
 # pstack in the orchestrator
 
-All 55 pstack skills and 2 agents (MIT, Lauren Tan, cursor/plugins @ 6b78e9f4) are vendored verbatim in
-`server/internal/orchestrator/preset/impl-review-merge/pstack/`. `manifest.yaml` maps each one to roles and an action;
+All 55 pstack skills and 2 agents (MIT, Lauren Tan, cursor/plugins @ 6b78e9f4) are vendored in
+`server/internal/orchestrator/preset/impl-review-merge/pstack/`; all but `typescript-best-practices` are verbatim (that one is
+rewritten to carry Effect guidance, see the action table). `manifest.yaml` maps each one to roles and an action;
 `CONTRACT.md` (workspace scope, metadata handoff, no human mid-run, append-only history with merge-main, engine owns landing,
 optional subagents) is appended to every exported SKILL.md. `multica team preset render` attaches the mapped skills per role;
 `export` writes the adapted files (dropped skills are not exported). `TestPstackManifestCoversEverySkill` fails if an upstream
@@ -19,9 +20,9 @@ every mounted SKILL.md as exported, all loaded) and a max pstack skill count; `T
 
 | role | pstack skills | context bytes / budget | before (skills, ~bytes) |
 |---|---|---|---|
-| lead | 7 | 31.6k / 32k | 23, ~124k |
-| owner | 8 | 45.8k / 46.5k | 33, ~187k |
-| reviewer | 5 | 37.1k / 38.5k | 20, ~123k |
+| lead | 7 | 31.7k / 32k | 23, ~124k |
+| owner | 8 | 51.6k / 52k | 33, ~187k |
+| reviewer | 5 | 39.7k / 40.5k | 20, ~123k |
 | acceptance | 2 | 10.4k / 11k | 4, ~20k |
 
 The reviewer runs a multi-dimension review: correctness, security, tests and API design lenses in parallel; only
@@ -82,7 +83,7 @@ Screenshot acceptance is a PocketJS-side convention and out of scope here.
 | tdd | keep | owner |  |
 | teach | operator |  | Interactive tutoring for a live human. |
 | technical-writing | keep | library |  |
-| typescript-best-practices | keep | owner |  |
+| typescript-best-practices | adapt | owner | Upstream is a TypeScript-only rule table. This copy is rewritten end to end around Effect (v4): a decision table for when the hard part needs Effect, the coding rules, and four references: `effect.md`, `effect-platform.md` (HttpApi, SQL, platform), `effect-atom.md` (Atom state), `effect-corrections.md` (verified API corrections). API claims are checked against `~/.local/share/references-repos/effect` (4.0.1). |
 | unslop | keep | library |  |
 | why | adapt | library | Source-digging subagents optional (contract 6); external sources (Datadog, Slack) only if the runtime already has access. |
 | comment-sicko (agent) | adapt | reviewer | Use as a reviewer lens (comment hygiene) inside interrogate, not a separate agent. |

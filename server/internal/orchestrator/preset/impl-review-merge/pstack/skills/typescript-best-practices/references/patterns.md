@@ -2,6 +2,8 @@
 
 Code examples for each rule in `SKILL.md`. The underlying principles are language-agnostic. See the **type-system-discipline** and **boundary-discipline** principle skills.
 
+In Effect code, `Schema` owns validation, branding, and variants, and `Match` owns exhaustive branching. The sections below show both spellings; `references/effect.md` covers the effectful side (services, errors, concurrency, resources).
+
 ## Branded types
 
 Brand primitives so they can't be mixed up. Validate once at the boundary. Downstream code trusts the type.
@@ -25,6 +27,17 @@ function focusAgent(id: AgentId): void {
 
 Match the `readonly __brand: 'X'` shape. Don't invent a new convention.
 
+In Effect code the brand comes from `Schema`, so one decoder both validates and brands:
+
+```ts
+const AgentIdSchema = Schema.String.pipe(Schema.brand("AgentId"));
+type AgentId = typeof AgentIdSchema.Type;
+
+const decodeAgentId = Schema.decodeUnknownSync(AgentIdSchema);
+```
+
+Do not maintain a `Schema.brand` and a hand-written `__brand` intersect for the same id.
+
 ## Discriminated unions
 
 Model variants with a literal discriminant. Every variant shares the field name and each variant's value is unique, so impossible combos can't be represented.
@@ -40,7 +53,27 @@ type DiffState =
   | { kind: "error"; error: string };
 ```
 
-Pick one discriminant name (`kind`, `type`, `tag`) and stick to it.
+Pick one discriminant name (`kind`, `type`, `_tag`) and stick to it.
+
+Effect's schema classes already use `_tag`, so in Effect code define variants with `Schema.TaggedClass` and branch with `Match` instead of `switch`:
+
+```ts
+class Loading extends Schema.TaggedClass<Loading>()("Loading", {}) {}
+class Ready extends Schema.TaggedClass<Ready>()("Ready", { diff: GitDiff }) {}
+class Failed extends Schema.TaggedClass<Failed>()("Failed", { error: Schema.String }) {}
+
+const DiffState = Schema.Union([Loading, Ready, Failed]);
+type DiffState = typeof DiffState.Type;
+
+const render = (state: DiffState) =>
+  Match.valueTags(state, {
+    Loading: () => "loading",
+    Ready: ({ diff }) => diff.summary,
+    Failed: ({ error }) => error
+  });
+```
+
+`Match.valueTags` is exhaustive by construction: adding a variant fails the build.
 
 ## Constructive modeling
 
@@ -152,6 +185,8 @@ function parseUser(input: unknown): User {
 
 Use `safeParse` when failure is an expected branch. Use the equivalent inference helper when the repository uses another schema library. Do not add a new schema dependency for one guard. This rule prefers the schema system the codebase already trusts.
 
+In Effect code the schema library is `effect/Schema`, and failure is a typed channel rather than a thrown error: `Schema.decodeUnknownEffect(User)` for effectful decoding, `Schema.decodeUnknownSync(User)` at a synchronous edge. See `references/effect.md`.
+
 ## No `as` casts
 
 Every `as` is a potential runtime crash. Cast only after the type system has verified the claim.
@@ -257,6 +292,16 @@ function handle(s: Shape): void {
 ```
 
 Return-style in value-returning switches, void-style in statement switches.
+
+In Effect code, `Match.exhaustive` replaces the sentinel because the matcher fails to compile when a variant is missing:
+
+```ts
+const area = Match.type<Shape>().pipe(
+  Match.tag("Circle", (s) => Math.PI * s.radius ** 2),
+  Match.tag("Rect", (s) => s.width * s.height),
+  Match.exhaustive
+);
+```
 
 ## `satisfies` over `as`
 
