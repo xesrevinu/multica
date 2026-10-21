@@ -1,46 +1,45 @@
 # Orchestrated projects
 
-A project with an orchestrator team (`multica team status`) is run by a
-deterministic state machine inside the server. It is the only writer of
-status and assignee. You work, write metadata, and write one result comment.
+A project with a team (`multica team status`) is run by a state machine in the
+server, the only writer of status, assignee and engine metadata. Agents work,
+write hand-over metadata, and leave one result comment.
+
+**Routing.** The lead plans epics into staged `backlog` children with area
+labels. The first matching `routes` entry picks the owner pool; `experts`
+(label-matched, e.g. `area:research`, `area:hard`) are checked first. A
+`consult` expert answers and hands back (`expert_done` records it); an
+`implement` expert owns the issue. `needs:<slot>` labels (e.g. `needs:cargo`)
+queue the issue while that slot is full. No @mentions start work.
 
 ## What you may write
 
+`multica issue metadata set <KEY> --key <k> --value <v>`. Quote shas as JSON
+strings (`--value "\"$SHA\""`) and write the signal key (`phase`/`verdict`) last.
+
 | You are | Write | Effect |
 |---|---|---|
-| owner | `multica issue status <key> in_progress` (from todo only) | shows you started |
-| owner | push `agent/<KEY>` (open the PR on GitHub projects), then `head_sha=<pushed sha>`, then `phase=review_requested` last | orchestrator pre-checks (merge + checks), finds or opens the PR, records `pr`, assigns the reviewer |
-| reviewer | `verdict=approve` or `verdict=changes`, `reviewed_sha=<the sha you ran>` | approve@head + green CI → merge (or human acceptance); changes → back to owner |
-| anyone | `phase=blocked`, `blocked_reason=<one line: what is missing, who can give it>` | issue goes to the lead, the human is notified |
-| lead | `phase=unblocked` or `phase=cancel_proposed` on a blocked issue | back to the owner (counters reset) or cancelled |
+| owner | `multica issue status <KEY> in_progress` (from todo only) | shows you started |
+| owner | push `agent/<KEY>`, then `head_sha=<sha>`, then `phase=review_requested` | pre-check (merge + CI), PR found/opened, reviewer assigned |
+| reviewer | `reviewed_sha=<sha you ran>`, then `verdict=approve` or `verdict=changes` | approve@head + green CI → squash merge (or human acceptance); changes → owner |
+| anyone | `blocked_reason=<what is missing, who can give it>`, then `phase=blocked` | lead gets it, human notified |
+| lead | `phase=unblocked` or `phase=cancel_proposed` on a blocked issue | back to owner, or cancelled |
 
-Write metadata with `multica issue metadata set <KEY> --key <name> --value <value>`;
-quote shas as JSON strings (`--value "\"$SHA\""`) and write the signal key
-(`phase` / `verdict`) last. Everything else (`owner`, `attempt_*`, `pr`,
-`pr_number`, `merged_sha`, `acceptance`) belongs to the orchestrator; writing it
-is refused with `orchestrator_owned`.
+Engine-owned (refused with `orchestrator_owned`): `owner`, `expert_done`, `attempt_*`, `pr`, `pr_number`,
+`merged_sha`, `acceptance`, `acceptance_required`, and the other bookkeeping keys.
 
-## Rules that keep the machine deterministic
+## Gotchas
 
-- **One writer per branch.** Only the owner pushes `agent/<KEY>`; stay on it.
-  Rebase your own branch with `git push --force-with-lease` only.
-- **One verdict per head.** A verdict counts only for `reviewed_sha == head`.
-  A new push needs a new review; the orchestrator asks for it.
-- **The reviewer never wrote the code.** Re-run the gates on the exact sha,
-  exercise the change the way a user would, then judge the diff. Green CI is
-  not a verdict.
-- **End every run with a hand-over or a block.** A run that ends without one
-  is re-run, and after the attempt limit the issue blocks.
-- **Do not merge, close, or move the issue.** The orchestrator merges with
-  `--match-head-commit` after the gates and deletes the branch.
-- **CI red:** the orchestrator re-runs failed CI once; a second red comes back
-  to the owner with the failing checks in `blocked_reason`.
-
-## Reading why something happened
-
-`multica flow show <key>` prints status, metadata, the next decision and the
-recent transitions with their reasons. `blocked_reason` always explains the
-latest rework or block. Humans steer with `multica flow unblock|cancel|accept|
-reject|replay`; agents do not use `multica flow`.
-
-- **Workspace scope (hard rule)**: search, read and write only inside the run's working directory (git worktree). Use `rg <pattern> .` or `git grep`; never run recursive grep/find/rg over `$HOME`, `/`, `/Users` or parent directories. Issue context comes from `multica issue get`, comments, metadata (`blocked_reason`, `acceptance`) and `multica flow show`; if it is missing, report blocked instead of searching the disk.
+- Only the owner pushes `agent/<KEY>`. Rebase with `--force-with-lease` only.
+  Never create an `agent/<KEY>` branch by hand for another issue.
+- A verdict counts only for `reviewed_sha == head`; a new push needs a new review.
+- The reviewer re-runs the gates on that sha and exercises the change. Green CI
+  is not a verdict; the verdict goes in metadata, not status.
+- End every run with a hand-over or a block. A run that ends with neither is
+  re-run, and after the attempt limit the issue blocks.
+- Never merge, close or move the issue; the orchestrator merges with
+  `--match-head-commit` and deletes the branch. A PR merged by hand is noticed
+  only when the issue reaches its merge step.
+- CI red is re-run once; a second red returns to the owner with the checks in
+  `blocked_reason`.
+- `multica flow show <KEY>` explains the last decision. `multica flow …` and
+  `multica team …` are for humans, not agents.

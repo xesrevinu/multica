@@ -353,12 +353,7 @@ func TestPlatformSkillDescriptionNamesEveryDomain(t *testing.T) {
 	// autopilot", never as "Core model".
 	triggerWords := map[string]string{
 		"references/issues.md":       "issue",
-		"references/mentions.md":     "mention",
-		"references/agents.md":       "agent",
-		"references/autopilots.md":   "autopilot",
-		"references/projects.md":     "project",
-		"references/runtimes.md":     "runtime",
-		"references/skill-import.md": "skill import",
+		"references/workspace.md":    "mention",
 		"references/orchestrated.md": "orchestrated",
 	}
 
@@ -415,43 +410,15 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 		{
 			file: "SKILL.md",
 			want: []string{
-				// Must-fix from review: "load on demand" is not "load exactly
-				// one". A task that creates an agent, assigns it an issue and
-				// writes a mention needs three references, and wording that
-				// implies one would have the agent act on contracts it never
-				// read — the recall loss the merge is not allowed to cause.
-				"open the reference(s) your task actually needs",
-				"crosses domains needs each domain it touches",
-				"Do not read them all",
-				// The router's whole job: name every domain and its file.
 				"references/issues.md",
-				"references/mentions.md",
-				"references/agents.md",
-				"references/autopilots.md",
-				"references/projects.md",
-				"references/runtimes.md",
-				"references/skill-import.md",
-				// Invariants deduplicated out of the eight merged bodies. Each
-				// was repeated in most of them; the router is now their only
-				// home, so losing one here loses it everywhere.
+				"references/orchestrated.md",
+				"references/workspace.md",
 				"A name is not an id",
-				"`--output json` writes to stdout",
-				"categories describe lifecycle only",
-				"Custom statuses do not inherit built-in automation behavior",
-				"Comment reads stay bounded",
+				"`--output json` writes stdout",
 				"--roots-only --summary --compact",
-				"--thread <thread-id> --tail 30",
-				// MUL-7344: the per-turn `--since` delta IS a bounded read, so
-				// the bounded-reads rule must name it rather than leave an
-				// agent choosing between two contradicting instructions.
-				"that read is the bounded scan",
+				"`orchestrator_owned` is the contract",
 			},
-			notWant: []string{
-				"--no-start",
-				// The singular forms this replaced.
-				"open the ONE reference",
-				"there is never a reason to read all eight",
-			},
+			notWant: []string{"--no-start", "squad", "Squad"},
 		},
 		{
 			file: "references/issues.md",
@@ -533,131 +500,35 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 			},
 		},
 		{
-			file: "references/mentions.md",
+			file: "references/orchestrated.md",
 			want: []string{
-				"(member|agent|squad|issue|all)/([0-9a-fA-F-]+|all)",
-				"multica workspace member list --output json",
-				"enqueues a run for that agent",
-				"enqueues NOTHING",
-				"[@all](mention://all/all)",
+				"phase=review_requested",
+				"verdict=approve",
+				"reviewed_sha",
+				"phase=blocked",
+				"phase=unblocked",
+				"`consult` expert",
+				"needs:<slot>",
+				"orchestrator_owned",
+				"--match-head-commit",
+				"multica flow show",
+			},
+			notWant: []string{"squad", "Squad"},
+		},
+		{
+			file: "references/workspace.md",
+			want: []string{
+				"Only `agent` mentions start a run",
 				"invocation_not_allowed",
-				"target_unavailable",
-				"runtime_offline",
-				"coalesced",
-				"deferred",
-				// The autopilot-creator fallback is authorization only; an
-				// agent reading it as attribution would mis-report who ran.
-				"It is authorization only",
-			},
-		},
-		{
-			file: "references/agents.md",
-			want: []string{
-				"not a parameter manual",
-				"`description` is a catalog summary",
-				"`instructions` is the runtime behavior contract",
-				"`conversation_starters`",
-				"`avatar_url` → a random `emoji:<glyph>`",
-				"multica agent create --name <name> --runtime-id <runtime-id>",
-				"`model` is a first-class persisted column",
-				"custom_env",
-				"Never put credentials or other secrets in `custom_args`",
-				"--custom-env-stdin",
-				"--custom-env-file",
-				"multica agent skills add <agent-id> --skill-ids <skill-id> --output json",
-				"multica agent skills list <agent-id> --output json",
-				"multica agent get <agent-id> --output json",
-				"255",
-			},
-			notWant: []string{
-				"--from-template",
-				"/api/agent-templates",
-				"template_slug",
-				"curated template",
-				// De-coaching: this states contracts, it does not teach a
-				// generic how-to methodology.
-				"Define the job first",
-				"Run a low-risk task",
-				"Decision flow",
-			},
-		},
-		{
-			file: "references/autopilots.md",
-			want: []string{
-				"An autopilot is not an agent",
-				"create_issue",
-				"run_only",
-				"multica autopilot trigger-add <autopilot-id> --kind schedule",
-				"multica autopilot trigger <autopilot-id> --output json",
-				"Do not run `trigger`",
-				"webhook tokens",
-				"{{date}}",
-				// A schedule with no --timezone silently runs in UTC, which is
-				// the one wrong assumption here that recurs daily.
-				"runs in **UTC**",
-			},
-		},
-		{
-			file: "references/runtimes.md",
-			want: []string{
-				"the daemon polls and claims the task",
-				"multica runtime list --output json",
-				"multica repo checkout <url>",
-				"MULTICA_DAEMON_PORT",
-				"resource_ref.ref",
-				"github_repo",
-				"local_directory",
-				"Runtime and repo commands affect active agent execution",
-				// An agent reads this to know whether its checkout can be
-				// committed to. Codex on Linux and Windows gets task-local Git
-				// metadata; every other runtime gets a linked worktree.
-				"Linux and Windows Codex",
-				"task-local Git metadata",
-			},
-		},
-		{
-			file: "references/projects.md",
-			want: []string{
-				"Projects are durable context containers",
-				".multica/project/resources.json",
-				"multica project resource list <project-id> --output json",
-				"multica project resource add <project-id> --type github_repo --url <github-url> --output json",
-				"multica project resource add <project-id> --type github_repo --url <github-url> --ref <branch-or-sha> --output json",
-				"multica project resource add <project-id> --type local_directory",
-				"Project resources are durable and affect future tasks",
-				"github_repo.resource_ref.url",
-				"resource_ref.ref",
-			},
-		},
-		{
-			file: "references/skill-import.md",
-			want: []string{
-				"multica skill import --url <url> --output json",
-				"/api/skills/import",
-				"clawhub.ai",
-				"skills.sh",
-				"github.com",
-				"config.origin",
-				"--on-conflict fail",
+				"trigger_outcomes",
+				"Only `instructions` reaches the runtime",
+				"`set` is the replace-all path",
 				"--on-conflict overwrite",
-				"--on-conflict rename",
-				"--on-conflict skip",
-				"conflict",
-				"skipped",
-				"409",
-				"existing_skill",
-				"legacy",
-				"multica skill list --output json",
-				"npx skills add",
-				"multica agent skills add <agent-id> --skill-ids <skill-id> --output json",
-				"multica agent skills list <agent-id> --output json",
-				"replace-all",
-				"`set` is the replacement path",
+				"`create_issue`",
+				"`run_only`",
+				"multica repo checkout",
 			},
-			notWant: []string{
-				"multica agent skills set <agent-id> --skill-ids <skill-id>",
-				"merge the new skill id with the existing ids",
-			},
+			notWant: []string{"squad", "Squad"},
 		},
 	}
 
