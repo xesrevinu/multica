@@ -1419,3 +1419,21 @@ func (c *Client) InvokeAgentPluginHook(ctx context.Context, daemonToken, taskID,
 	}
 	return response.Output, nil
 }
+
+// IssueTaskGitHubToken asks the server for a short-lived GitHub App token
+// scoped to repoURL for a running task. The token must never be logged.
+func (c *Client) IssueTaskGitHubToken(ctx context.Context, taskID, repoURL string) (string, time.Time, error) {
+	var resp struct {
+		Token     string `json:"token"`
+		ExpiresAt string `json:"expires_at"`
+	}
+	path := fmt.Sprintf("/api/daemon/tasks/%s/github-token", url.PathEscape(taskID))
+	if err := c.postJSON(ctx, path, map[string]string{"repo": repoURL}, &resp); err != nil {
+		return "", time.Time{}, err
+	}
+	if resp.Token == "" {
+		return "", time.Time{}, errors.New("server returned no github token")
+	}
+	exp, _ := time.Parse(time.RFC3339, resp.ExpiresAt)
+	return resp.Token, exp, nil
+}

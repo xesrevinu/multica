@@ -12,6 +12,7 @@ func TestLocalWorktreeCoAuthorTrailerSkipsTheUsersOwnCommits(t *testing.T) {
 	requireGit(t)
 	t.Setenv("MULTICA_CO_AUTHOR_NAME", "woolpup[bot]")
 	t.Setenv("MULTICA_CO_AUTHOR_EMAIL", "187665180+woolpup[bot]@users.noreply.github.com")
+	t.Setenv("MULTICA_AGENT_GITHUB_APP", "0") // legacy: bot co-author, no App identity
 	t.Setenv("MULTICA_TASK_ID", "task-coauthor")
 
 	repo := newTestRepo(t)

@@ -8487,6 +8487,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		agentCustomEnv = task.Agent.CustomEnv
 	}
 	layerCustomEnvAndHermesHome(agentEnv, agentCustomEnv, "", d.logger)
+	d.applyAgentGitHubIdentity(ctx, task.ID, env.WorkDir, agentEnv, taskLog)
 	if provider == "dsh" {
 		dshSessionRoot, err := prepareDshTaskSessionRoot(d.cfg.Profile, task.RuntimeID, task.AgentID)
 		if err != nil {

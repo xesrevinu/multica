@@ -1178,6 +1178,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// The broker asks for an mcp hook's credential at connection time, so
 		// a secret never sits in a task record.
 		r.Get("/tasks/{id}/plugin-mcp/{contributionId}/credential", h.ResolvePluginMCPCredential)
+		// Short-lived GitHub App token for the task's repo (agent gh/git identity).
+		r.Post("/tasks/{id}/github-token", h.IssueTaskGitHubToken)
 
 		r.Post("/runtimes/{runtimeId}/tasks/claim", h.ClaimTaskByRuntime)
 		// Canonical machine-level batch claim (MUL-4257). `/claim` is a

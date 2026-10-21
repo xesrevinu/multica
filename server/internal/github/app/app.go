@@ -12,6 +12,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -331,4 +332,56 @@ func setHeaders(req *http.Request, bearer string) {
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("Authorization", "Bearer "+bearer)
+}
+
+// ScopedToken is a short-lived installation token narrowed to one repository
+// and a fixed permission set. It is minted fresh, never cached or logged.
+type ScopedToken struct {
+	Token     string
+	ExpiresAt time.Time
+}
+
+// MintScoped mints an installation token limited to repo (name only, no
+// owner) and perms, e.g. {"contents":"write","pull_requests":"write"}. GitHub
+// refuses a permission the installation was not granted.
+func (c *Client) MintScoped(ctx context.Context, installationID int64, repo string, perms map[string]string) (ScopedToken, error) {
+	if !c.Enabled() {
+		return ScopedToken{}, ErrDisabled
+	}
+	jwtStr, err := c.JWT()
+	if err != nil {
+		return ScopedToken{}, err
+	}
+	reqBody, err := json.Marshal(map[string]any{"repositories": []string{repo}, "permissions": perms})
+	if err != nil {
+		return ScopedToken{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/app/installations/%d/access_tokens", c.apiBase, installationID), bytes.NewReader(reqBody))
+	if err != nil {
+		return ScopedToken{}, err
+	}
+	setHeaders(req, jwtStr)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return ScopedToken{}, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		// Never echo a token-mint body.
+		return ScopedToken{}, fmt.Errorf("github scoped installation token: unexpected status %d", resp.StatusCode)
+	}
+	var p struct {
+		Token     string `json:"token"`
+		ExpiresAt string `json:"expires_at"`
+	}
+	if err := json.Unmarshal(body, &p); err != nil || p.Token == "" {
+		return ScopedToken{}, errors.New("github scoped installation token: malformed response")
+	}
+	exp := c.now().Add(time.Hour)
+	if t, err := time.Parse(time.RFC3339, p.ExpiresAt); err == nil {
+		exp = t
+	}
+	return ScopedToken{Token: p.Token, ExpiresAt: exp}, nil
 }
