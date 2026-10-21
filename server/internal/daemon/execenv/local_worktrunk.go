@@ -210,7 +210,7 @@ func worktrunkEnv(env []string) []string {
 	if err != nil || home == "" {
 		return env
 	}
-	extra := []string{filepath.Join(home, ".local", "bin"), filepath.Join(home, ".nix-profile", "bin")}
+	extra := UserBinDirs(home)
 	out := make([]string, 0, len(env)+1)
 	found := false
 	for _, kv := range env {
@@ -240,4 +240,39 @@ func appendPathDirs(path string, dirs []string) string {
 		have[d] = struct{}{}
 	}
 	return strings.Join(parts, string(os.PathListSeparator))
+}
+
+// UserBinDirs are the per-user tool directories an interactive login shell has
+// on PATH but a launchd/systemd daemon does not: ~/.local/bin (wt helpers,
+// multica), the nix profile, and on nix-darwin the per-user and system
+// profiles (direnv, bun, git).
+func UserBinDirs(home string) []string {
+	cands := []string{
+		filepath.Join(home, ".local", "bin"),
+		filepath.Join(home, ".nix-profile", "bin"),
+	}
+	if u := os.Getenv("USER"); u != "" {
+		cands = append(cands, filepath.Join("/etc/profiles/per-user", u, "bin"))
+	} else {
+		cands = append(cands, filepath.Join("/etc/profiles/per-user", filepath.Base(home), "bin"))
+	}
+	cands = append(cands, "/run/current-system/sw/bin", "/nix/var/nix/profiles/default/bin")
+	// The home dirs are always named (they may appear later); system profile
+	// dirs only when present on this host.
+	out := []string{cands[0], cands[1]}
+	for _, d := range cands[2:] {
+		if st, err := os.Stat(d); err == nil && st.IsDir() {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// AppendUserBinDirs appends UserBinDirs to a PATH value, keeping its order.
+func AppendUserBinDirs(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	return appendPathDirs(path, UserBinDirs(home))
 }

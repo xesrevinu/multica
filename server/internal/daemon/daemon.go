@@ -8468,6 +8468,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			keepFirst = filepath.Dir(selfBin)
 		}
 		execenv.LoadDirenvEnv(env.WorkDir, agentEnv, keepFirst, taskLog)
+		// The agent runs wt, whose user hooks name ~/.local/bin helpers and
+		// project hooks need direnv/bun: give it the login shell's user bins.
+		agentEnv["PATH"] = execenv.AppendUserBinDirs(agentEnv["PATH"])
 	}
 	// HOME and the XDG base dirs are deliberately not touched here: provider
 	// tools such as gh, aws, kubectl, and npm continue resolving the daemon
