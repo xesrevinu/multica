@@ -108,8 +108,10 @@ func switchWorktrunk(gitRoot, branch, base string, create bool, logger *slog.Log
 	}
 	args = append(args, branch)
 	out, runErr := runWorktrunk(worktrunkSwitchTimeout, args...)
-	after, listErr := worktreePathSet(gitRoot)
-	added := addedWorktreePaths(before, after)
+	after, listErr := worktreeBranches(gitRoot)
+	// Other tasks run wt in the same repository concurrently, so "new since
+	// before" is not "ours": pick the new worktree that has our branch.
+	added := addedWorktreeForBranch(before, after, branch)
 	if runErr != nil {
 		for _, path := range added {
 			if rmErr := removeViaWorktrunk(gitRoot, path, logger); rmErr != nil && logger != nil {
@@ -123,12 +125,53 @@ func switchWorktrunk(gitRoot, branch, base string, create bool, logger *slog.Log
 		return "", listErr
 	}
 	if len(added) != 1 {
-		return "", fmt.Errorf("execenv: wt switch %s created %d worktrees, want 1", branch, len(added))
+		return "", fmt.Errorf("execenv: wt switch %s created %d worktrees on that branch, want 1", branch, len(added))
 	}
 	if logger != nil {
 		logger.Info("execenv: worktree created with wt", "branch", branch, "path", added[0])
 	}
 	return added[0], nil
+}
+
+// worktreeBranches maps each worktree path to its checked-out branch name
+// ("" when detached).
+func worktreeBranches(gitRoot string) (map[string]string, error) {
+	out, err := runGit(gitRoot, "worktree", "list", "--porcelain")
+	if err != nil {
+		return nil, fmt.Errorf("execenv: list worktrees: %s: %w", strings.TrimSpace(out), err)
+	}
+	return parseWorktreeBranches(out), nil
+}
+
+func parseWorktreeBranches(porcelain string) map[string]string {
+	m := map[string]string{}
+	cur := ""
+	for _, line := range strings.Split(porcelain, "\n") {
+		if path, ok := strings.CutPrefix(line, "worktree "); ok {
+			cur = path
+			if cur != "" {
+				m[cur] = ""
+			}
+			continue
+		}
+		if b, ok := strings.CutPrefix(strings.TrimSpace(line), "branch refs/heads/"); ok && cur != "" {
+			m[cur] = b
+		}
+	}
+	return m
+}
+
+// addedWorktreeForBranch: worktrees absent from before that have branch
+// checked out. Worktrees another task created meanwhile are ignored.
+func addedWorktreeForBranch(before map[string]struct{}, after map[string]string, branch string) []string {
+	var added []string
+	for path, b := range after {
+		if _, ok := before[path]; ok || b != branch {
+			continue
+		}
+		added = append(added, path)
+	}
+	return added
 }
 
 func removeViaWorktrunk(gitRoot, worktreePath string, logger *slog.Logger) error {
@@ -186,16 +229,6 @@ func worktreePathSet(gitRoot string) (map[string]struct{}, error) {
 		}
 	}
 	return set, nil
-}
-
-func addedWorktreePaths(before, after map[string]struct{}) []string {
-	var added []string
-	for path := range after {
-		if _, ok := before[path]; !ok {
-			added = append(added, path)
-		}
-	}
-	return added
 }
 
 // worktrunkEnv returns env with the user's personal bin dirs appended to PATH.
