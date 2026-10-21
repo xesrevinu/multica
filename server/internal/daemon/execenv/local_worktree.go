@@ -877,7 +877,7 @@ func commitBaseline(worktreePath string, continued, dirty bool) (string, error) 
 	case !dirty:
 		message = "chore(agent): baseline — the task worktree started here"
 	}
-	if _, err := commitEverything(worktreePath, message, !dirty); err != nil {
+	if _, err := commitEverythingAs(worktreePath, message, !dirty, baselineIdentityArgs(worktreePath)); err != nil {
 		return "", err
 	}
 	tip, err := runGitTrimmed(worktreePath, "rev-parse", "--verify", "HEAD")
@@ -900,6 +900,12 @@ func (w *LocalWorktree) commitAll(logger *slog.Logger) (bool, error) {
 // commit" case and (false, err) for a real failure — the distinction callers
 // need to decide whether the tree is safe to discard.
 func commitEverything(worktreePath, message string, allowEmpty bool) (bool, error) {
+	return commitEverythingAs(worktreePath, message, allowEmpty, nil)
+}
+
+// commitEverythingAs is commitEverything with an explicit author and an
+// optional trailer. A nil identity keeps the repo's own (commitIdentityArgs).
+func commitEverythingAs(worktreePath, message string, allowEmpty bool, identity *commitIdentity) (bool, error) {
 	if out, err := runGit(worktreePath, "add", "-A"); err != nil {
 		return false, fmt.Errorf("git add: %s: %w", strings.TrimSpace(out), err)
 	}
@@ -908,7 +914,15 @@ func commitEverything(worktreePath, message string, allowEmpty bool) (bool, erro
 	// failure here would mean losing the agent's work to save a lint run. Note
 	// it does NOT disable commit.gpgSign, which is why the caller has to treat
 	// a commit failure as "keep the worktree" rather than a warning.
-	args := append(commitIdentityArgs(worktreePath), "commit", "--no-verify")
+	var args []string
+	if identity != nil {
+		args = append(args, "-c", "user.name="+identity.name, "-c", "user.email="+identity.email, "commit", "--no-verify")
+		if identity.trailer != "" {
+			args = append(args, "--trailer", identity.trailer)
+		}
+	} else {
+		args = append(commitIdentityArgs(worktreePath), "commit", "--no-verify")
+	}
 	if allowEmpty {
 		args = append(args, "--allow-empty")
 	}
