@@ -239,6 +239,7 @@ function DetailsTab({ wsId, issue, timeline, open }: { wsId: string; issue: Issu
         <Section title={t(($) => $.drawer.flow)}>
           <Row label={t(($) => $.drawer.phase)}>{v.phase ? phaseLabel(v.phase) : none}</Row>
           <Row label={t(($) => $.drawer.owner)}>{flow.owner || none}</Row>
+          {flow.expert && <Row label={t(($) => $.drawer.expert)}>{flow.expert}</Row>}
           <Row label={t(($) => $.drawer.verdict)}>{flow.verdict || none}</Row>
           <Row label={t(($) => $.drawer.head)}>
             <span className="font-mono">{shortSha(flow.head_sha) || none}</span>

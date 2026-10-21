@@ -81,3 +81,13 @@ roles:
     budget_bytes: 11000
     max_skills: 2
     skills: [principle-experience-first, principle-prove-it-works]
+  expert:
+    # design asked 40000. The mounted set is expert.md + team.md + 4 handoff
+    # skills + these 8, and each pstack skill is exported with CONTRACT.md,
+    # which measures about 43905 bytes. 45000 holds that set with the same
+    # slack the other roles use. Extra project.yaml skills warn at render.
+    budget_bytes: 45000
+    max_skills: 8
+    skills: [in-your-own-words, figure-it-out, principle-attack-the-premise,
+             principle-sequence-verifiable-units, principle-guard-the-context-window,
+             principle-prove-it-works, blast-radius, swarm]

@@ -214,6 +214,7 @@
     "flow": "流程",
     "phase": "阶段",
     "owner": "负责 agent",
+    "expert": "专家",
     "verdict": "评审结论",
     "head": "Head",
     "branch": "分支",

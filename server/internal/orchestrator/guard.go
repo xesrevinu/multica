@@ -59,7 +59,7 @@ func (s *Service) CheckWrite(in GuardInput) string {
 // EngineOwnedMetaKeys may only be written by the orchestrator (or a member
 // via `multica flow`); agents writing them would forge counters or gates.
 var EngineOwnedMetaKeys = map[string]bool{
-	"owner": true, "attempt_impl": true, "attempt_review": true, "attempt_infra": true, "attempt_quota": true,
+	"owner": true, "expert_done": true, "attempt_impl": true, "attempt_review": true, "attempt_infra": true, "attempt_quota": true,
 	"merged_sha": true, "pr_number": true, "pr": true, "acceptance": true, "acceptance_required": true, "review_started_sha": true,
 	"paused": true, "cancel_requested": true, "verdict_carried_from": true, "last_reviewed_sha": true,
 	// member confirmations and engine bookkeeping for blocked issues (T7/T7b/T8a/T8)

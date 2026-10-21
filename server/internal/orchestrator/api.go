@@ -120,7 +120,26 @@ func (s *Service) parseApply(w http.ResponseWriter, r *http.Request) (*applyReq,
 		writeErr(w, 422, "invalid_spec", err.Error())
 		return nil, "", nil, false
 	}
-	for _, a := range append([]string{sp.Roles.Lead, sp.Roles.Reviewer}, sp.Roles.Owners...) {
+	seen := map[string]bool{}
+	var names []string
+	addAgent := func(a string) {
+		if a == "" || seen[a] {
+			return
+		}
+		seen[a] = true
+		names = append(names, a)
+	}
+	addAgent(sp.Roles.Lead)
+	addAgent(sp.Roles.Reviewer)
+	for _, a := range sp.Roles.Owners {
+		addAgent(a)
+	}
+	for _, e := range sp.Experts {
+		for _, a := range e.Agents {
+			addAgent(a)
+		}
+	}
+	for _, a := range names {
 		if _, err := s.st.agentID(r.Context(), wsID(r), a); err != nil {
 			writeErr(w, 422, "invalid_spec", err.Error())
 			return nil, "", nil, false
@@ -140,7 +159,7 @@ func diffSpecs(a, b *Spec) []string {
 	jb, _ := json.Marshal(b)
 	_ = json.Unmarshal(ja, &am)
 	_ = json.Unmarshal(jb, &bm)
-	for _, k := range []string{"preset", "roles", "repo", "limits", "acceptance", "merge", "transitions"} {
+	for _, k := range []string{"preset", "roles", "experts", "repo", "limits", "acceptance", "merge", "transitions"} {
 		if !reflect.DeepEqual(am[k], bm[k]) {
 			x, _ := json.Marshal(am[k])
 			y, _ := json.Marshal(bm[k])

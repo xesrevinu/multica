@@ -13,14 +13,17 @@ import (
 var presetFS embed.FS
 
 // PresetRole is one rendered agent instruction: team contract + role file.
+// Expert is set on expert roles (one role per expert and agent).
+// Warn is a non-fatal context-budget note for per-expert skills.
 type PresetRole struct {
-	Role, Agent, Instructions string
-	Skills                    []string
+	Role, Agent, Expert, Instructions, Warn string
+	Skills                                  []string
 }
 
 // presetSkills: which preset skills each role gets attached.
 var presetSkills = map[string][]string{
 	"owner":    {"open-pr", "handoff-metadata", "rebase-conflict", "blocked-report"},
+	"expert":   {"open-pr", "handoff-metadata", "rebase-conflict", "blocked-report"},     // implement mode uses the owner's handoff skills
 	"reviewer": {"verify-gates", "review-verdict", "handoff-metadata", "blocked-report"}, // review-verdict step 8 writes metadata via handoff-metadata
 	"lead":     {"plan-split", "blocked-report"},
 }
@@ -68,15 +71,155 @@ func RenderPreset(sp *Spec, workspace string) ([]PresetRole, error) {
 	if err := add("lead", sp.Roles.Lead); err != nil {
 		return nil, err
 	}
+	if len(out) > 0 && out[0].Role == "lead" {
+		out[0].Instructions += routingSection(sp)
+	}
 	for _, o := range sp.Roles.Owners {
 		if err := add("owner", o); err != nil {
 			return nil, err
+		}
+	}
+	for _, e := range sp.Experts {
+		mode := e.Mode
+		if mode == "" {
+			mode = "implement"
+		}
+		for _, agent := range e.Agents {
+			x, err := role("expert", agent)
+			if err != nil {
+				return nil, err
+			}
+			x.Expert = e.Name
+			x.Skills = uniqAppend(x.Skills, e.Skills...)
+			x.Instructions += fmt.Sprintf("\n## This expert\n\nExpert: %s. Mode: %s.\n", e.Name, mode)
+			if strings.TrimSpace(e.Instructions) != "" {
+				x.Instructions += "\n" + strings.TrimSpace(e.Instructions) + "\n"
+			}
+			x.Warn = warnExpertBudget(x.Skills, e.Name, agent)
+			out = append(out, x)
 		}
 	}
 	if err := add("reviewer", sp.Roles.Reviewer); err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+func uniqAppend(base []string, more ...string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(base)+len(more))
+	for _, s := range append(append([]string{}, base...), more...) {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
+}
+
+// warnExpertBudget counts per-expert skills from project.yaml on top of the
+// expert role's mounted set. Over budget warns; render still succeeds.
+func warnExpertBudget(skills []string, expertName, agent string) string {
+	n, base, b, err := RoleContextBytes("", "expert")
+	if err != nil || b.BudgetBytes <= 0 {
+		return ""
+	}
+	have := map[string]bool{}
+	for _, s := range base {
+		have[s] = true
+	}
+	files, err := PresetFiles("")
+	if err != nil {
+		return ""
+	}
+	extra := 0
+	for _, s := range skills {
+		if have[s] {
+			continue
+		}
+		body := files["pstack/skills/"+s+"/SKILL.md"]
+		if body == "" {
+			body = files["skills/"+s+"/SKILL.md"]
+		}
+		extra += len(body)
+	}
+	if n+extra > b.BudgetBytes {
+		return fmt.Sprintf("expert %s (%s): skill context %d bytes > budget %d", expertName, agent, n+extra, b.BudgetBytes)
+	}
+	return ""
+}
+
+func routingSection(sp *Spec) string {
+	var b strings.Builder
+	b.WriteString("\n\n## Routing\n\nRouting (first match wins):\n")
+	if len(sp.Experts) > 0 {
+		parts := make([]string, 0, len(sp.Experts))
+		for _, e := range sp.Experts {
+			mode := e.Mode
+			if mode == "" {
+				mode = "implement"
+			}
+			parts = append(parts, fmt.Sprintf("%s ← %s (%s, %s)", e.Name, expertTrigger(e.When), strings.Join(e.Agents, ", "), mode))
+		}
+		b.WriteString("- experts: " + strings.Join(parts, "; ") + "\n")
+	}
+	if len(sp.Roles.Routes) > 0 {
+		parts := make([]string, 0, len(sp.Roles.Routes))
+		for _, r := range sp.Roles.Routes {
+			parts = append(parts, strings.Join(r.Labels, ", ")+" → "+strings.Join(r.Owners, ", "))
+		}
+		b.WriteString("- routes: " + strings.Join(parts, "; ") + "\n")
+	}
+	b.WriteString("- otherwise: " + strings.Join(sp.Roles.Owners, ", ") + "\n")
+	var tail []string
+	if len(sp.Limits.Slots) > 0 {
+		keys := make([]string, 0, len(sp.Limits.Slots))
+		for k := range sp.Limits.Slots {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		slots := make([]string, 0, len(keys))
+		for _, k := range keys {
+			slots = append(slots, fmt.Sprintf("needs:%s (%d)", k, sp.Limits.Slots[k]))
+		}
+		tail = append(tail, "Slots: "+strings.Join(slots, ", "))
+	}
+	if len(sp.Acceptance.Labels) > 0 || len(sp.Acceptance.DefaultForLabels) > 0 {
+		line := "Acceptance: " + strings.Join(sp.Acceptance.Labels, ", ")
+		if len(sp.Acceptance.DefaultForLabels) > 0 {
+			line += "; default for " + strings.Join(sp.Acceptance.DefaultForLabels, ", ")
+		}
+		tail = append(tail, line)
+	}
+	if len(tail) > 0 {
+		b.WriteString(strings.Join(tail, ". ") + ".\n")
+	}
+	return b.String()
+}
+
+func expertTrigger(w ExpertWhen) string {
+	var parts []string
+	if len(w.Labels) > 0 {
+		parts = append(parts, strings.Join(w.Labels, ", "))
+	}
+	if len(w.NotLabels) > 0 {
+		parts = append(parts, "not "+strings.Join(w.NotLabels, ", "))
+	}
+	if len(w.Metadata) > 0 {
+		keys := make([]string, 0, len(w.Metadata))
+		for k := range w.Metadata {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			parts = append(parts, fmt.Sprintf("meta %s=%s", k, w.Metadata[k]))
+		}
+	}
+	if len(parts) == 0 {
+		return "(none)"
+	}
+	return strings.Join(parts, " ")
 }
 
 // PresetFiles returns every file of the preset (docs + skills), for export.

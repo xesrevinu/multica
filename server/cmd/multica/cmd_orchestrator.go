@@ -135,7 +135,13 @@ func runFlowShow(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 	return printOut(cmd, out, func() {
-		fmt.Printf("%s  %s\n  status: %v   assignee: %v (%v)\n", out["key"], out["title"], out["status"], out["assignee"], out["assignee_type"])
+		expert := ""
+		if md, ok := out["metadata"].(map[string]any); ok {
+			if ex, _ := md["expert"].(string); ex != "" {
+				expert = "   expert: " + ex
+			}
+		}
+		fmt.Printf("%s  %s\n  status: %v   assignee: %v (%v)%s\n", out["key"], out["title"], out["status"], out["assignee"], out["assignee_type"], expert)
 		meta, _ := json.Marshal(out["metadata"])
 		fmt.Printf("  metadata: %s\n", meta)
 		if p, _ := out["paused"].(string); p != "" {
@@ -167,8 +173,13 @@ func printTransitions(v any) {
 		e, _ := l[i].(map[string]any)
 		d, _ := e["decision"].(map[string]any)
 		extra := ""
+		if meta, _ := d["meta"].(map[string]any); meta != nil {
+			if ex, _ := meta["expert"].(string); ex != "" {
+				extra = " expert=" + ex
+			}
+		}
 		if w, _ := d["why"].(string); w != "" {
-			extra = " — " + w
+			extra += " — " + w
 		}
 		if er, _ := e["error"].(string); er != "" {
 			extra += " ERROR: " + er

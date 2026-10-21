@@ -1,0 +1,16 @@
+name: an unlabelled issue never reaches an expert
+spec:
+  roles:
+    lead: lead
+    reviewer: rev
+    owners: [heavy]
+    routes:
+      - {labels: [area:hard], owners: [heavy]}
+  experts:
+    - name: deep-work
+      agents: [gbot]
+      when: {labels: [area:hard]}
+  repo: {mode: github, slug: x/y}
+issue: {key: ATT-21}
+steps:
+  - expect: {tid: T1_start, assignee: heavy, meta: {owner: heavy}}

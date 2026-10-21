@@ -46,7 +46,7 @@ type Snapshot struct {
 	LastRun   *Run            // newest finished task, if any
 	Head      string          // current sha of the issue branch ("" = not pushed)
 	Siblings  []Issue         // same project, for deps / stage barrier
-	Busy      map[string]bool // owner agents with todo/in_progress work across the workspace
+	Busy      map[string]bool // agents (owners and experts) with todo/in_progress work across the workspace
 	FreeGB    int
 	// SamePatch reports whether two commits carry the same change (git
 	// patch-id of each commit's diff against its merge-base with main). nil
@@ -128,7 +128,7 @@ func hasLabel(have, want []string) bool {
 }
 
 // OwnerPool is the owner list for the issue: the first route whose labels
-// match, else roles.owners.
+// match, else roles.owners. Experts are not part of this pool; use Assign.
 func (sp *Spec) OwnerPool(i *Issue) []string {
 	for _, r := range sp.Roles.Routes {
 		if hasLabel(i.Labels, r.Labels) {
@@ -136,6 +136,103 @@ func (sp *Spec) OwnerPool(i *Issue) []string {
 		}
 	}
 	return sp.Roles.Owners
+}
+
+// MatchExpert returns the first expert whose when matches, skipping any
+// expert already named in expert_done. Nil when none match. An issue with
+// no labels matches only an explicit metadata opt-in, never a label trigger.
+func (sp *Spec) MatchExpert(i *Issue) *Expert {
+	if i == nil {
+		return nil
+	}
+	for idx := range sp.Experts {
+		e := &sp.Experts[idx]
+		if expertDoneHas(i.Meta["expert_done"], e.Name) || !e.matches(i) {
+			continue
+		}
+		return e
+	}
+	return nil
+}
+
+func (e *Expert) matches(i *Issue) bool {
+	w := e.When
+	if len(w.NotLabels) > 0 && hasLabel(i.Labels, w.NotLabels) {
+		return false
+	}
+	for k, v := range w.Metadata {
+		if i.Meta[k] != v {
+			return false
+		}
+	}
+	if len(w.Labels) > 0 {
+		return hasLabel(i.Labels, w.Labels)
+	}
+	if len(w.Metadata) > 0 {
+		return true
+	}
+	// not_labels alone must not claim an unlabelled issue.
+	return len(i.Labels) > 0
+}
+
+// Assign picks the pool for an issue and, when an expert matched, that
+// expert's name. Experts win over routes; no match uses OwnerPool.
+func (sp *Spec) Assign(i *Issue) (pool []string, expert string) {
+	if e := sp.MatchExpert(i); e != nil {
+		return e.Agents, e.Name
+	}
+	return sp.OwnerPool(i), ""
+}
+
+func (sp *Spec) expertByName(name string) *Expert {
+	if name == "" {
+		return nil
+	}
+	for i := range sp.Experts {
+		if sp.Experts[i].Name == name {
+			return &sp.Experts[i]
+		}
+	}
+	return nil
+}
+
+// expertNameFor is the matched expert when agent is in its pool.
+func (sp *Spec) expertNameFor(i *Issue, agent string) string {
+	e := sp.MatchExpert(i)
+	if e == nil || !contains(e.Agents, agent) {
+		return ""
+	}
+	return e.Name
+}
+
+func expertDoneHas(cur, name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, p := range strings.Split(cur, ",") {
+		if strings.TrimSpace(p) == name {
+			return true
+		}
+	}
+	return false
+}
+
+func appendDone(cur, name string) string {
+	if expertDoneHas(cur, name) {
+		return cur
+	}
+	if strings.TrimSpace(cur) == "" {
+		return name
+	}
+	return cur + "," + name
+}
+
+func cloneMeta(m map[string]string) map[string]string {
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // slotWait returns a wait reason when a needs:<slot> resource is full.
@@ -163,9 +260,36 @@ func (sp *Spec) slotWait(s *Snapshot) string {
 	return ""
 }
 
+// expertWait is the per-expert cap, same shape as slotWait: siblings already
+// in todo or in_progress with expert=<name> count. Over the cap, T1 waits
+// instead of falling through to owners.
+func (sp *Spec) expertWait(s *Snapshot, e *Expert) string {
+	if e == nil || e.Limits.Concurrent <= 0 {
+		return ""
+	}
+	used := 0
+	for _, x := range s.Siblings {
+		if x.Key == s.Issue.Key {
+			continue
+		}
+		if (x.Status == StTodo || x.Status == StInProgress) && x.Meta["expert"] == e.Name {
+			used++
+		}
+	}
+	if used >= e.Limits.Concurrent {
+		return fmt.Sprintf("expert %s %d/%d", e.Name, used, e.Limits.Concurrent)
+	}
+	return ""
+}
+
 func (sp *Spec) isOwner(name string) bool {
 	for _, o := range sp.Roles.Owners {
 		if o == name {
+			return true
+		}
+	}
+	for _, e := range sp.Experts {
+		if contains(e.Agents, name) {
 			return true
 		}
 	}
@@ -282,6 +406,9 @@ func (sp *Spec) Decide(s *Snapshot, probe Prober) *Decision {
 	head := s.Head
 	if st == StTodo || st == StInProgress {
 		if m["phase"] == PhReviewRequested {
+			if d := sp.consulted(s); d != nil {
+				return d
+			}
 			if head == "" {
 				return &Decision{Tid: "T5_rerun_nobranch", Rerun: true, Why: "phase=review_requested but branch not pushed",
 					Meta: map[string]string{"phase": PhImplementing, "attempt_infra": itoa(num(m["attempt_infra"]) + 1)}}
@@ -604,16 +731,24 @@ func (sp *Spec) decideBlocked(s *Snapshot) *Decision {
 				Notify: fmt.Sprintf("%s: %s. `multica flow unblock %s` or `multica flow cancel %s`", i.Key, why, i.Key, i.Key)}
 		}
 		owner := m["owner"]
+		expertName := ""
 		if owner == "" {
-			owner = sp.OwnerPool(i)[0]
+			pool, ex := sp.Assign(i)
+			expertName = ex
+			if len(pool) > 0 {
+				owner = pool[0]
+			}
 		}
 		count := itoa(n + 1)
 		if member {
 			count = "0" // a person's unblock is a fresh start
 		}
-		return &Decision{Tid: "T7_unblock", Status: StTodo, AssigneeKind: "agent", Assignee: owner,
-			Meta: map[string]string{"phase": PhImplementing, "attempt_impl": "1", "attempt_review": "0", "attempt_infra": "0", "blocked_reason": "", "verdict": "", "acceptance": "",
-				"unblock_count": count, "unblock_confirmed": "", "unblock_escalated": "", "cancel_notified": "", "attempt_quota": ""}}
+		meta := map[string]string{"phase": PhImplementing, "attempt_impl": "1", "attempt_review": "0", "attempt_infra": "0", "blocked_reason": "", "verdict": "", "acceptance": "",
+			"unblock_count": count, "unblock_confirmed": "", "unblock_escalated": "", "cancel_notified": "", "attempt_quota": ""}
+		if expertName != "" {
+			meta["expert"] = expertName
+		}
+		return &Decision{Tid: "T7_unblock", Status: StTodo, AssigneeKind: "agent", Assignee: owner, Meta: meta}
 	case PhCancelProposed:
 		if m["cancel_confirmed"] == "true" {
 			return &Decision{Tid: "T8_cancel", Status: StCancelled, Meta: map[string]string{"phase": PhCancelled, "cancel_confirmed": ""}}
@@ -633,6 +768,20 @@ func (sp *Spec) decideBlocked(s *Snapshot) *Decision {
 // siblings and free disk only for these.
 func StartsHere(status string, meta map[string]string) bool {
 	return status == StTodo && (meta["phase"] == "" || meta["phase"] == PhPlanned)
+}
+
+// NeedsAssignBusy reports whether a snapshot has to know which agents are
+// already on todo/in_progress work: T1, and a consult handoff that is about
+// to assign the next owner.
+func (sp *Spec) NeedsAssignBusy(status string, meta map[string]string) bool {
+	if StartsHere(status, meta) {
+		return true
+	}
+	if (status != StTodo && status != StInProgress) || meta["phase"] != PhReviewRequested {
+		return false
+	}
+	e := sp.expertByName(meta["expert"])
+	return e != nil && e.Mode == "consult"
 }
 
 // decideStart is T1: a todo issue the engine has not started yet.
@@ -666,29 +815,42 @@ func (sp *Spec) decideStart(s *Snapshot) *Decision {
 		return &Decision{Wait: "waiting: " + w}
 	}
 	// Someone else already holds it: a member, or an agent outside the owner
-	// pool. Not ours to start.
+	// and expert pools. Not ours to start.
 	held := i.Assignee != "" && i.AssigneeType == "agent" && sp.isOwner(i.Assignee)
 	if i.Assignee != "" && !held {
 		return nil
 	}
 	if held && s.ActiveRun != nil {
 		// assigning an owner in todo already started its run: adopt it.
-		return &Decision{Tid: "T1_start", Meta: map[string]string{"owner": i.Assignee, "phase": PhImplementing, "attempt_impl": "1", "attempt_review": "0", "attempt_infra": "0"},
-			Why: "adopted the run that assigning " + i.Assignee + " started"}
+		meta := map[string]string{"owner": i.Assignee, "phase": PhImplementing, "attempt_impl": "1", "attempt_review": "0", "attempt_infra": "0"}
+		if ex := sp.expertNameFor(i, i.Assignee); ex != "" {
+			meta["expert"] = ex
+		}
+		return &Decision{Tid: "T1_start", Meta: meta, Why: "adopted the run that assigning " + i.Assignee + " started"}
+	}
+	if e := sp.MatchExpert(i); e != nil {
+		if w := sp.expertWait(s, e); w != "" {
+			return &Decision{Wait: "waiting: " + w}
+		}
 	}
 	owner := ""
+	expertName := ""
 	if o := m["owner"]; o != "" {
 		if s.Busy[o] {
 			return &Decision{Wait: "owner " + o + " busy"}
 		}
 		owner = o
+		expertName = sp.expertNameFor(i, o)
 	} else if held {
 		if s.Busy[i.Assignee] {
 			return &Decision{Wait: "owner " + i.Assignee + " busy"}
 		}
 		owner = i.Assignee
+		expertName = sp.expertNameFor(i, owner)
 	} else {
-		for _, o := range sp.OwnerPool(i) {
+		var pool []string
+		pool, expertName = sp.Assign(i)
+		for _, o := range pool {
 			if !s.Busy[o] {
 				owner = o
 				break
@@ -696,12 +858,84 @@ func (sp *Spec) decideStart(s *Snapshot) *Decision {
 		}
 	}
 	if owner == "" {
+		if expertName != "" {
+			return &Decision{Wait: "expert " + expertName + " busy"}
+		}
 		return &Decision{Wait: "all owners busy"}
+	}
+	meta := map[string]string{"owner": owner, "phase": PhImplementing, "attempt_impl": "1", "attempt_review": "0", "attempt_infra": "0"}
+	if expertName != "" {
+		meta["expert"] = expertName
 	}
 	return &Decision{Tid: "T1_start", Status: StTodo, AssigneeKind: "agent", Assignee: owner,
 		// the same assignee does not dispatch a run by itself
 		Rerun: i.AssigneeType == "agent" && i.Assignee == owner,
-		Meta:  map[string]string{"owner": owner, "phase": PhImplementing, "attempt_impl": "1", "attempt_review": "0", "attempt_infra": "0"}}
+		Meta:  meta}
+}
+
+// consulted handles a consult expert's handoff (phase=review_requested).
+// The issue returns to todo, expert_done records the expert, and assignment
+// runs again through routes and owners (that expert will not match). A busy
+// next pool waits; it does not fall back to a different pool.
+func (sp *Spec) consulted(s *Snapshot) *Decision {
+	i := &s.Issue
+	m := i.Meta
+	e := sp.expertByName(m["expert"])
+	if e == nil || e.Mode != "consult" {
+		return nil
+	}
+	ghost := *i
+	gm := cloneMeta(m)
+	gm["expert_done"] = appendDone(gm["expert_done"], e.Name)
+	delete(gm, "expert")
+	delete(gm, "owner")
+	delete(gm, "phase")
+	ghost.Meta = gm
+	ghost.Assignee, ghost.AssigneeType = "", ""
+	pool, next := sp.Assign(&ghost)
+	if next != "" {
+		if w := sp.expertWait(s, sp.expertByName(next)); w != "" {
+			return &Decision{Wait: "waiting: " + w}
+		}
+	}
+	owner := ""
+	for _, o := range pool {
+		if sp.agentFree(s, o) {
+			owner = o
+			break
+		}
+	}
+	if owner == "" {
+		why := "all owners busy"
+		if next != "" {
+			why = "expert " + next + " busy"
+		}
+		return &Decision{Wait: "consult " + e.Name + " done; " + why}
+	}
+	meta := map[string]string{
+		"phase": PhImplementing, "owner": owner, "expert": next,
+		"expert_done":    appendDone(m["expert_done"], e.Name),
+		"attempt_impl":   "1",
+		"attempt_review": "0",
+		"attempt_infra":  "0",
+		"verdict":        "",
+	}
+	return &Decision{
+		Tid: "T_expert_consulted", Status: StTodo, AssigneeKind: "agent", Assignee: owner, Meta: meta,
+		Why:   "consult " + e.Name + " finished; assigning " + owner,
+		Rerun: i.AssigneeType == "agent" && i.Assignee == owner,
+	}
+}
+
+// agentFree reports whether o can take this issue. The current assignee is
+// free for the reassignment: this issue is what made them look busy, and
+// their run has already finished.
+func (sp *Spec) agentFree(s *Snapshot, o string) bool {
+	if o == "" || !s.Busy[o] {
+		return o != ""
+	}
+	i := &s.Issue
+	return i.AssigneeType == "agent" && i.Assignee == o
 }
 
 func contains(xs []string, x string) bool {

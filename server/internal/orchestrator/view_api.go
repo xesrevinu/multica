@@ -77,7 +77,7 @@ func (s *Service) scanView(sc rowScanner, userID string) (*IssueView, error) {
 	if pr.Number > 0 {
 		v.PR = pr
 	}
-	v.Phase, v.Risk = m["phase"], m["risk"]
+	v.Phase, v.Risk, v.Expert = m["phase"], m["risk"], m["expert"]
 	v.Paused = m["paused"] == "true"
 	v.Attempts = attemptsOf(m)
 	if projID != "" {
@@ -212,7 +212,7 @@ func (s *Service) hIssueTimeline(w http.ResponseWriter, r *http.Request) {
 		rows.Close()
 	}
 	flow := map[string]string{}
-	for _, k := range []string{"verdict", "reviewed_sha", "head_sha", "acceptance", "blocked_reason", "unblock_note", "owner", "merged_sha"} {
+	for _, k := range []string{"verdict", "reviewed_sha", "head_sha", "acceptance", "blocked_reason", "unblock_note", "owner", "expert", "expert_done", "merged_sha"} {
 		if v.meta[k] != "" {
 			flow[k] = v.meta[k]
 		}

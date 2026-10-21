@@ -31,7 +31,14 @@ func runPresetRender(cmd *cobra.Command, _ []string) error {
 	out, _ := cmd.Flags().GetString("out")
 	if out == "" {
 		for _, r := range roles {
-			fmt.Fprintf(cmd.OutOrStdout(), "===== %s (%s) skills: %s\n%s\n", r.Agent, r.Role, strings.Join(r.Skills, ", "), r.Instructions)
+			label := r.Role
+			if r.Expert != "" {
+				label = r.Role + ":" + r.Expert
+			}
+			if r.Warn != "" {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", r.Warn)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "===== %s (%s) skills: %s\n%s\n", r.Agent, label, strings.Join(r.Skills, ", "), r.Instructions)
 		}
 		return nil
 	}
@@ -39,7 +46,14 @@ func runPresetRender(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	for _, r := range roles {
-		p := filepath.Join(out, r.Agent+".md")
+		name := r.Agent + ".md"
+		if r.Expert != "" {
+			name = r.Agent + "." + r.Expert + ".md"
+		}
+		if r.Warn != "" {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", r.Warn)
+		}
+		p := filepath.Join(out, name)
 		if err := os.WriteFile(p, []byte(r.Instructions), 0o644); err != nil {
 			return err
 		}

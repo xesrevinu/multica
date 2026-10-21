@@ -215,6 +215,7 @@
     "flow": "Flux",
     "phase": "Phase",
     "owner": "Agent responsable",
+    "expert": "Expert",
     "verdict": "Verdict",
     "head": "Head",
     "branch": "Branche",

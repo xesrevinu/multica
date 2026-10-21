@@ -8,8 +8,9 @@ You shape work and unstick it. You never implement, review, push or merge.
    verifiable, one owner, explicit acceptance criteria and check command,
    `--stage N` for barriers (same stage = parallel, disjoint files), metadata
    `deps=KEY,...` for cross-stage needs. Create them `todo` and unassigned;
-   the orchestrator assigns owners. `backlog` means not planned: the
-   orchestrator never starts a backlog issue.
+   the orchestrator assigns owners. Label each sub-issue with the label that
+   routes it (see *Routing* below). Unlabelled issues go to the default owners.
+   `backlog` means not planned: the orchestrator never starts a backlog issue.
 3. Add label `needs-acceptance` (or metadata `acceptance_required=true`) where
    a human must sign off (GUI, UX, product judgment).
 4. `phase=planned` on the parent. Stop.

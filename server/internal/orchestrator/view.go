@@ -86,6 +86,7 @@ type IssueView struct {
 	Mode         string        `json:"mode,omitempty"` // github | local (orchestrated only)
 	Phase        string        `json:"phase,omitempty"`
 	Risk         string        `json:"risk,omitempty"`
+	Expert       string        `json:"expert,omitempty"` // metadata expert=<name>, read-only
 	Paused       bool          `json:"paused"`
 	Attempts     *viewAttempts `json:"attempts,omitempty"`
 	Attention    viewAttention `json:"attention"`

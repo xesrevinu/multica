@@ -329,21 +329,24 @@ func (s *Service) snapshot(ctx context.Context, t *Team, rows []issueRow, row *i
 	if sn.ActiveRun, sn.LastRun, err = s.st.runs(ctx, row.ID); err != nil {
 		return nil, err
 	}
-	if StartsHere(row.Status, row.Meta) {
+	if t.Spec.NeedsAssignBusy(row.Status, row.Meta) {
+		// Owners and expert agents: anyone holding todo/in_progress work.
 		if sn.Busy, err = s.st.busyOwners(ctx, t.WorkspaceID); err != nil {
 			return nil, err
 		}
-		// T1 decisions in one pass must see the issues started earlier in the
-		// same pass (resource slots), so re-read the siblings here.
-		fresh, ferr := s.st.projectIssues(ctx, t.ProjectID)
-		if ferr != nil {
-			return nil, ferr
+		if StartsHere(row.Status, row.Meta) {
+			// T1 decisions in one pass must see the issues started earlier in the
+			// same pass (resource slots), so re-read the siblings here.
+			fresh, ferr := s.st.projectIssues(ctx, t.ProjectID)
+			if ferr != nil {
+				return nil, ferr
+			}
+			sn.Siblings = sn.Siblings[:0]
+			for _, r := range fresh {
+				sn.Siblings = append(sn.Siblings, r.Issue)
+			}
+			sn.FreeGB = freeGB(diskPath(t.Spec))
 		}
-		sn.Siblings = sn.Siblings[:0]
-		for _, r := range fresh {
-			sn.Siblings = append(sn.Siblings, r.Issue)
-		}
-		sn.FreeGB = freeGB(diskPath(t.Spec))
 	}
 	switch row.Status {
 	case StTodo, StInProgress, StInReview:

@@ -1,0 +1,15 @@
+name: an expert at its concurrent cap waits
+spec:
+  roles: {lead: lead, reviewer: rev, owners: [heavy]}
+  experts:
+    - name: deep-work
+      agents: [gbot]
+      when: {labels: [area:hard]}
+      limits: {concurrent: 1}
+  repo: {mode: github, slug: x/y}
+issue: {key: ATT-25, labels: [area:hard]}
+steps:
+  - do: {siblings: [{key: ATT-8, status: in_progress, meta: {expert: deep-work}}]}
+    expect: {wait: expert deep-work 1/1}
+  - do: {siblings: [{key: ATT-8, status: in_review, meta: {expert: deep-work}}]}
+    expect: {tid: T1_start, assignee: gbot, meta: {expert: deep-work}}

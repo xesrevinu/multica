@@ -1,0 +1,17 @@
+name: an expert matches before a route and the default owners
+spec:
+  roles:
+    lead: lead
+    reviewer: rev
+    owners: [heavy]
+    routes:
+      - {labels: [area:hard, area:host], owners: [heavy]}
+  experts:
+    - name: deep-work
+      agents: [gbot]
+      when: {labels: [area:hard]}
+  repo: {mode: github, slug: x/y}
+issue: {key: ATT-20, labels: [area:hard]}
+steps:
+  - note: area:hard is both an expert trigger and a route; the expert wins
+    expect: {tid: T1_start, assignee: gbot, meta: {expert: deep-work, owner: gbot}}

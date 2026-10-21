@@ -215,6 +215,7 @@
     "flow": "Flow",
     "phase": "Phase",
     "owner": "Owner",
+    "expert": "Expert",
     "verdict": "Verdict",
     "head": "Head",
     "branch": "Branch",

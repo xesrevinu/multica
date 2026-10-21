@@ -52,11 +52,15 @@ type Spec struct {
 	// CI reruns, no write guard. For trialling a spec on live issues.
 	Shadow      bool         `json:"shadow,omitempty" yaml:"shadow,omitempty"`
 	Roles       Roles        `json:"roles" yaml:"roles"`
+	Experts     []Expert     `json:"experts,omitempty" yaml:"experts,omitempty"`
 	Repo        RepoSpec     `json:"repo" yaml:"repo"`
 	Limits      Limits       `json:"limits" yaml:"limits"`
 	Acceptance  Acceptance   `json:"acceptance" yaml:"acceptance"`
 	Merge       MergeSpec    `json:"merge" yaml:"merge"`
 	Transitions []Transition `json:"transitions,omitempty" yaml:"transitions,omitempty"`
+	// authoredOwners is roles.owners before route owners are merged. Expert
+	// agents are never merged. Not serialized; Defaults fills it.
+	authoredOwners []string
 }
 
 type Roles struct {
@@ -75,6 +79,33 @@ type Roles struct {
 type Route struct {
 	Labels []string `json:"labels" yaml:"labels"`
 	Owners []string `json:"owners" yaml:"owners"`
+}
+
+// Expert is a label-routed pool that is not part of the default owners.
+// Checked before routes; an unlabelled issue never matches one unless its
+// when.metadata opt-in matches.
+type Expert struct {
+	Name         string       `json:"name" yaml:"name"`
+	Agents       []string     `json:"agents" yaml:"agents"`
+	When         ExpertWhen   `json:"when" yaml:"when"`
+	Mode         string       `json:"mode,omitempty" yaml:"mode,omitempty"` // implement (default) | consult
+	Skills       []string     `json:"skills,omitempty" yaml:"skills,omitempty"`
+	Instructions string       `json:"instructions,omitempty" yaml:"instructions,omitempty"`
+	Limits       ExpertLimits `json:"limits,omitempty" yaml:"limits,omitempty"`
+}
+
+// ExpertWhen is AND across the groups that are set. Labels are any-of,
+// case-insensitive, same as routes. not_labels reject a match. metadata
+// values must equal the issue metadata (explicit opt-in).
+type ExpertWhen struct {
+	Labels    []string          `json:"labels,omitempty" yaml:"labels,omitempty"`
+	NotLabels []string          `json:"not_labels,omitempty" yaml:"not_labels,omitempty"`
+	Metadata  map[string]string `json:"metadata,omitempty" yaml:"metadata,omitempty"`
+}
+
+// ExpertLimits caps how many project issues this expert may hold at once.
+type ExpertLimits struct {
+	Concurrent int `json:"concurrent,omitempty" yaml:"concurrent,omitempty"`
 }
 
 type RepoSpec struct {
@@ -262,6 +293,7 @@ func (s *Spec) Defaults() {
 	if s.Acceptance.Labels == nil {
 		s.Acceptance.Labels = []string{"needs-acceptance", "needs-GUI-Master", "needs-Ray-signoff"}
 	}
+	s.normalizeExperts()
 	for _, r := range s.Roles.Routes {
 		for _, o := range r.Owners {
 			if !contains(s.Roles.Owners, o) {
@@ -299,6 +331,9 @@ func (s *Spec) Validate() error {
 			return fmt.Errorf("owner %q cannot also be the reviewer (independent verifier)", o)
 		}
 	}
+	if err := s.validateExperts(); err != nil {
+		return err
+	}
 	switch s.Repo.Mode {
 	case "github":
 		if s.Repo.Slug == "" {
@@ -328,6 +363,71 @@ func (s *Spec) Validate() error {
 		for _, st := range t.To {
 			if (st == StDone || st == StCancelled) && t.Actor == "agent" {
 				return fmt.Errorf("transition %s: an agent can never move an issue to %s", t.ID, st)
+			}
+		}
+	}
+	return nil
+}
+
+// normalizeExperts defaults mode and remembers the owner pool before route
+// owners are merged into it. Expert agents are not added to that pool.
+func (s *Spec) normalizeExperts() {
+	if s.authoredOwners == nil {
+		s.authoredOwners = append([]string{}, s.Roles.Owners...)
+	}
+	for i := range s.Experts {
+		e := &s.Experts[i]
+		e.Name = strings.TrimSpace(e.Name)
+		e.Mode = strings.ToLower(strings.TrimSpace(e.Mode))
+		if e.Mode == "" {
+			e.Mode = "implement"
+		}
+		var agents []string
+		for _, a := range e.Agents {
+			a = strings.TrimSpace(a)
+			if a != "" && !contains(agents, a) {
+				agents = append(agents, a)
+			}
+		}
+		e.Agents = agents
+	}
+}
+
+func (s *Spec) validateExperts() error {
+	authored := s.authoredOwners
+	if authored == nil {
+		authored = s.Roles.Owners
+	}
+	seen := map[string]bool{}
+	expertAgent := map[string]bool{}
+	for _, e := range s.Experts {
+		if e.Name == "" || seen[e.Name] {
+			return fmt.Errorf("expert name %q empty or duplicated", e.Name)
+		}
+		seen[e.Name] = true
+		if len(e.Agents) == 0 {
+			return fmt.Errorf("expert %q needs at least one agent", e.Name)
+		}
+		if len(e.When.Labels) == 0 && len(e.When.NotLabels) == 0 && len(e.When.Metadata) == 0 {
+			return fmt.Errorf("expert %q when needs labels, not_labels, or metadata", e.Name)
+		}
+		if e.Mode != "implement" && e.Mode != "consult" {
+			return fmt.Errorf("expert %q mode must be implement or consult, not %q", e.Name, e.Mode)
+		}
+		if e.Limits.Concurrent < 0 {
+			return fmt.Errorf("expert %q limits.concurrent must be >= 0", e.Name)
+		}
+		for _, a := range e.Agents {
+			if a == s.Roles.Reviewer {
+				return fmt.Errorf("expert %q agent %q cannot also be the reviewer (independent verifier)", e.Name, a)
+			}
+			expertAgent[a] = true
+		}
+	}
+	for _, r := range s.Roles.Routes {
+		for _, o := range r.Owners {
+			if expertAgent[o] && !contains(authored, o) {
+				return fmt.Errorf("route owner %q is an expert agent and not a default owner; experts stay out of roles.routes (they would be merged into the default pool)", o)
 			}
 		}
 	}

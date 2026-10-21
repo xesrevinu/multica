@@ -134,7 +134,9 @@ func (s *store) issueByKey(ctx context.Context, workspaceID, key string) (*issue
 	return &r[0], nil
 }
 
-// busyOwners: agents with todo/in_progress issues anywhere in the workspace.
+// busyOwners: owner and expert agents with todo/in_progress issues anywhere
+// in the workspace. The query is every assigned agent; Assign only consults
+// names that are owners or experts, so other agents in the set are ignored.
 func (s *store) busyOwners(ctx context.Context, workspaceID string) (map[string]bool, error) {
 	rows, err := s.pool.Query(ctx, `SELECT DISTINCT a.name FROM issue i JOIN agent a ON a.id=i.assignee_id WHERE i.workspace_id=$1 AND i.assignee_type='agent' AND i.status IN ('todo','in_progress')`, workspaceID)
 	if err != nil {

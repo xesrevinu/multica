@@ -20,7 +20,7 @@ func TestPstackManifestCoversEverySkill(t *testing.T) {
 			t.Errorf("skill %s missing from manifest", d.Name())
 		}
 	}
-	valid := map[string]bool{"lead": true, "owner": true, "reviewer": true, "acceptance": true}
+	valid := map[string]bool{"lead": true, "owner": true, "reviewer": true, "acceptance": true, "expert": true}
 	for n, e := range m.Skills {
 		if !seen[n] {
 			t.Errorf("manifest skill %s not vendored", n)
@@ -78,7 +78,7 @@ func presetSkillSet() map[string]bool {
 // Every role mounts only its own skill set and stays inside an explicit
 // context budget (bytes of instructions + mounted SKILL.md, all loaded).
 func TestRoleContextBudget(t *testing.T) {
-	for _, role := range []string{"lead", "owner", "reviewer", "acceptance"} {
+	for _, role := range []string{"lead", "owner", "reviewer", "acceptance", "expert"} {
 		n, skills, b, err := RoleContextBytes("", role)
 		if err != nil {
 			t.Fatal(err)

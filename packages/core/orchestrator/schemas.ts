@@ -52,6 +52,7 @@ export const OrchIssueSchema = z.object({
   mode: optStr,
   phase: optStr,
   risk: optStr,
+  expert: optStr,
   paused: z.boolean().catch(false),
   attempts: z.object({ impl: num, review: num, infra: num }).nullish().transform((v) => v ?? undefined),
   attention: z

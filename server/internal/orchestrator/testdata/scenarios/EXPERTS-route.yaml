@@ -1,0 +1,16 @@
+name: a label that misses every expert still uses the route
+spec:
+  roles:
+    lead: lead
+    reviewer: rev
+    owners: [heavy]
+    routes:
+      - {labels: [area:host], owners: [heavy]}
+  experts:
+    - name: deep-work
+      agents: [gbot]
+      when: {labels: [area:hard]}
+  repo: {mode: github, slug: x/y}
+issue: {key: ATT-22, labels: [area:host]}
+steps:
+  - expect: {tid: T1_start, assignee: heavy, meta: {owner: heavy}}
