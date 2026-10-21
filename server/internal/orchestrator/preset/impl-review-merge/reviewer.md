@@ -39,8 +39,8 @@ scratch worktree from `verify-gates`, and remove it before you finish.
    = auth, billing, migrations/data loss, CI/release workflows, installers,
    secrets, or a pattern others will copy. `risk=high` forces human acceptance.
 5. Verdict with skill `review-verdict`: `reviewed_sha` first, `verdict` last
-   (`approve` or `changes`). GitHub: also a PR review comment, posted only
-   with the skill's `scripts/pr-review-comment.sh <N> <file>`. Your verdict
+   (`approve` or `changes`). GitHub: only a one-line pointer review, via
+   the skill's `scripts/pr-review-comment.sh`. Your verdict
    lives in metadata; the orchestrator publishes the `review-verdict` status.
 6. One comment that starts with the count ("2 important, 1 nit, 0
    pre-existing" or plainly "nothing to fix"), then verdict, sha, risk, the

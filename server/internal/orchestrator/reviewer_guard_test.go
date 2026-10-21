@@ -68,10 +68,7 @@ func TestReviewCommentScriptOnlyComments(t *testing.T) {
 	must(os.Mkdir(bin, 0o755))
 	log := filepath.Join(dir, "gh.log")
 	must(os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\necho \"$@\" >> "+log+"\n"), 0o755))
-	comment := filepath.Join(dir, "c.md")
-	must(os.WriteFile(comment, []byte("1 important\nverdict: changes @ abc\n"), 0o644))
-	empty := filepath.Join(dir, "e.md")
-	must(os.WriteFile(empty, nil, 0o644))
+	url := "https://multica.example/issues/OX-1"
 	run := func(args ...string) (int, string) {
 		cmd := exec.Command("bash", append([]string{script}, args...)...)
 		cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -81,22 +78,26 @@ func TestReviewCommentScriptOnlyComments(t *testing.T) {
 		}
 		return 0, string(out)
 	}
-	if code, out := run("9", comment); code != 0 {
-		t.Fatalf("valid comment: %d %s", code, out)
+	if code, out := run("9", "changes", "abcdef1234567890", url); code != 0 {
+		t.Fatalf("valid pointer: %d %s", code, out)
 	}
 	for _, args := range [][]string{
 		{"9"},
-		{"9", comment, "--approve"},
-		{"repos/o/r/statuses/abc", comment},
-		{"9;gh", comment},
-		{"9", empty},
+		{"9", "approve", "abcdef1"},
+		{"9", "--approve", "abcdef1", url},
+		{"9", "approve", "abcdef1", url, "--approve"},
+		{"repos/o/r/statuses/abc", "approve", "abcdef1", url},
+		{"9;gh", "approve", "abcdef1", url},
+		{"9", "approve", "not-a-sha", url},
+		{"9", "approve", "abcdef1", "file:///etc/passwd"},
+		{"9", "approve", "abcdef1", "https://x y"},
 	} {
 		if code, out := run(args...); code != 2 || !strings.Contains(out, "refused") {
 			t.Errorf("%v: want refusal, got %d %s", args, code, out)
 		}
 	}
 	got, _ := os.ReadFile(log)
-	if strings.TrimSpace(string(got)) != "pr review 9 --comment --body-file "+comment {
+	if strings.TrimSpace(string(got)) != "pr review 9 --comment --body Review verdict: **changes** on `abcdef123456`. Full verdict: "+url {
 		t.Fatalf("gh calls:\n%s", got)
 	}
 }

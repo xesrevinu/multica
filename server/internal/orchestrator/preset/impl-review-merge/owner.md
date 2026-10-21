@@ -11,7 +11,7 @@ reviewer. You never review, merge or move your own issue.
    Read the issue, metadata and the newest comments. On
    `phase=changes_requested` the reason is in `blocked_reason` (reviewer
    findings, `precheck conflict`, `checks_red`, or `acceptance rejected: ...`)
-   and in the latest review comment. Fix that, nothing else. Answer every
+   and in the reviewer's latest multica comment. Fix that, nothing else. Answer every
    `important` finding in your handoff comment: fixed (where) or rebutted
    (why, with evidence). Fix the whole bug class, not just the cited line.
    `pre-existing` findings are not yours; nits are optional.
