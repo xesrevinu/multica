@@ -183,3 +183,18 @@ func TestSquashCommitMessage(t *testing.T) {
 		t.Fatalf("empty body msg %q", msg)
 	}
 }
+
+func TestSquashCoAuthors(t *testing.T) {
+	bot := "Co-authored-by: b[bot] <1+b[bot]@users.noreply.github.com>"
+	ray := "Co-authored-by: Ray <ray@example.com>"
+	msgs := []string{"fix: a\n\n" + ray, "merge origin/main", "fix: b\n\n" + ray + "\n" + bot}
+	if got := SquashCoAuthors(msgs, bot); got != ray {
+		t.Fatalf("got %q", got)
+	}
+	if got := SquashCoAuthors([]string{"x"}, bot); got != bot {
+		t.Fatalf("fallback %q", got)
+	}
+	if _, msg := SquashCommitMessage("x", "", 3, SquashCoAuthors(msgs, bot)); !strings.HasSuffix(msg, ray) || strings.Contains(msg, "b[bot]") {
+		t.Fatalf("msg %q", msg)
+	}
+}

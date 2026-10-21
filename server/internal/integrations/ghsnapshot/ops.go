@@ -457,10 +457,24 @@ func (c *Client) SquashMerge(ctx context.Context, installationID int64, owner, r
 	if headSHA == "" {
 		headSHA = pr.Head.SHA
 	}
-	trailer := ""
+	botTrailer := ""
 	if b, err := c.app.Bot(ctx, installationID); err == nil {
-		trailer = b.CoAuthoredBy()
+		botTrailer = b.CoAuthoredBy()
 	}
+	// Agent commits are authored by the bot and credit the human; the squash
+	// keeps those credits instead of the bot co-authoring its own commit.
+	var commits []struct {
+		Commit struct {
+			Message string `json:"message"`
+		} `json:"commit"`
+	}
+	var messages []string
+	if err := c.REST(ctx, installationID, http.MethodGet, fmt.Sprintf("%s/pulls/%d/commits?per_page=100", repoPath(owner, repo), number), nil, &commits); err == nil {
+		for _, cm := range commits {
+			messages = append(messages, cm.Commit.Message)
+		}
+	}
+	trailer := SquashCoAuthors(messages, botTrailer)
 	title, msg := SquashCommitMessage(pr.Title, pr.Body, number, trailer)
 	body := map[string]any{"merge_method": "squash", "commit_title": title, "commit_message": msg}
 	if headSHA != "" {
@@ -474,6 +488,34 @@ func (c *Client) SquashMerge(ctx context.Context, installationID int64, owner, r
 		return "", err
 	}
 	return out.SHA, nil
+}
+
+// SquashCoAuthors returns the Co-authored-by trailers to put on a squash: the
+// distinct ones from the PR's commits, minus the bot's own; the bot trailer
+// only when the commits credit nobody else.
+func SquashCoAuthors(commitMessages []string, botTrailer string) string {
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range commitMessages {
+		for _, l := range strings.Split(strings.ReplaceAll(m, "\r\n", "\n"), "\n") {
+			t := strings.TrimSpace(l)
+			if !strings.HasPrefix(strings.ToLower(t), "co-authored-by:") {
+				continue
+			}
+			if botTrailer != "" && strings.EqualFold(t, botTrailer) {
+				continue
+			}
+			k := strings.ToLower(t)
+			if !seen[k] {
+				seen[k] = true
+				out = append(out, t)
+			}
+		}
+	}
+	if len(out) == 0 {
+		return botTrailer
+	}
+	return strings.Join(out, "\n")
 }
 
 var htmlComment = regexp.MustCompile(`(?s)<!--.*?-->`)
