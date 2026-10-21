@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
 )
 
 // These tests cover what a runtime teardown does to squads whose leader lives
@@ -271,88 +273,6 @@ func TestDeleteAgentRuntime_NoSquadsRegression(t *testing.T) {
 	}
 }
 
-func TestUpdateSquad_UnboundLeaderPausesOnlySquadAutopilots(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-
-	boundRuntimeID := seedIsolatedRuntime(t, "Bound Squad Leader Runtime")
-	boundLeaderID := seedAgentOnRuntime(t, boundRuntimeID, "Bound Squad Leader", false)
-	squadID := seedSquad(t, boundLeaderID, "Squad Leader Rotation", false)
-
-	unboundRuntimeID := seedIsolatedRuntime(t, "Unbound Squad Leader Runtime")
-	unboundLeaderID := seedAgentOnRuntime(t, unboundRuntimeID, "Unbound Squad Leader", false)
-	if _, err := testPool.Exec(ctx,
-		`UPDATE agent SET runtime_id = NULL WHERE id = $1`,
-		unboundLeaderID,
-	); err != nil {
-		t.Fatalf("unbind proposed leader: %v", err)
-	}
-
-	var squadAutopilotID, directAutopilotID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO autopilot (
-			workspace_id, title, assignee_type, assignee_id,
-			created_by_type, created_by_id, status, execution_mode
-		)
-		VALUES ($1, 'squad leader rotation pause', 'squad', $2,
-			'member', $3, 'active', 'run_only')
-		RETURNING id
-	`, testWorkspaceID, squadID, testUserID).Scan(&squadAutopilotID); err != nil {
-		t.Fatalf("seed squad autopilot: %v", err)
-	}
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO autopilot (
-			workspace_id, title, assignee_type, assignee_id,
-			created_by_type, created_by_id, status, execution_mode
-		)
-		VALUES ($1, 'unrelated direct autopilot', 'agent', $2,
-			'member', $3, 'active', 'run_only')
-		RETURNING id
-	`, testWorkspaceID, unboundLeaderID, testUserID).Scan(&directAutopilotID); err != nil {
-		t.Fatalf("seed direct autopilot: %v", err)
-	}
-	t.Cleanup(func() {
-		testPool.Exec(context.Background(),
-			`DELETE FROM autopilot WHERE id = ANY($1::uuid[])`,
-			[]string{squadAutopilotID, directAutopilotID},
-		)
-	})
-
-	w := httptest.NewRecorder()
-	testHandler.UpdateSquad(w, squadScopeReq(
-		"",
-		http.MethodPatch,
-		"/api/squads/"+squadID,
-		map[string]any{"leader_id": unboundLeaderID},
-		map[string]string{"id": squadID},
-	))
-	if w.Code != http.StatusOK {
-		t.Fatalf("UpdateSquad: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var squadStatus, pauseReason, directStatus string
-	if err := testPool.QueryRow(ctx,
-		`SELECT status, pause_reason FROM autopilot WHERE id = $1`,
-		squadAutopilotID,
-	).Scan(&squadStatus, &pauseReason); err != nil {
-		t.Fatalf("read squad autopilot: %v", err)
-	}
-	if err := testPool.QueryRow(ctx,
-		`SELECT status FROM autopilot WHERE id = $1`,
-		directAutopilotID,
-	).Scan(&directStatus); err != nil {
-		t.Fatalf("read direct autopilot: %v", err)
-	}
-	if squadStatus != "paused" || pauseReason != string(ReasonAgentRuntimeRequired) {
-		t.Fatalf("squad autopilot = (%q, %q), want (paused, agent_runtime_required)", squadStatus, pauseReason)
-	}
-	if directStatus != "active" {
-		t.Fatalf("unrelated direct autopilot status = %q, want active", directStatus)
-	}
-}
-
 // TestDeleteAgentRuntime_StillBlockedByActiveAgents preserves the existing 409
 // contract: a runtime with at least one ACTIVE agent must still refuse the
 // strict delete, so the user always sees and confirms which agents are about to
@@ -394,4 +314,18 @@ func agentRuntimeBound(t *testing.T, agentID string) bool {
 		t.Fatalf("read runtime_id for agent %s: %v", agentID, err)
 	}
 	return bound
+}
+func squadScopeReq(userID, method, path string, body any, params map[string]string) *http.Request {
+	var req *http.Request
+	if userID == "" {
+		req = newRequest(method, path, body)
+	} else {
+		req = newRequestAs(userID, method, path, body)
+	}
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("workspaceId", testWorkspaceID)
+	for k, v := range params {
+		rctx.URLParams.Add(k, v)
+	}
+	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 }

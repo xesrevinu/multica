@@ -4,7 +4,6 @@ import type { ReactNode } from "react";
 import { useModalStore } from "@multica/core/modals";
 import { CreateIssueDialog } from "./create-issue-dialog";
 import { CreateProjectModal } from "./create-project";
-import { CreateSquadModal } from "./create-squad";
 import { FeedbackModal } from "./feedback";
 import { SetParentIssueModal } from "./set-parent-issue";
 import { MarkDuplicateIssueModal } from "./mark-duplicate-issue";
@@ -43,9 +42,6 @@ export function ModalRegistry() {
       break;
     case "create-project":
       activeModal = <CreateProjectModal onClose={close} />;
-      break;
-    case "create-squad":
-      activeModal = <CreateSquadModal onClose={close} />;
       break;
     case "feedback":
       activeModal = <FeedbackModal onClose={close} data={data} />;

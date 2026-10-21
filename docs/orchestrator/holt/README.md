@@ -1,40 +1,42 @@
-# PocketJS 接入编排器（提案，未应用到 holt 仓库；本地 checkout ~/Workspace/boom/holt，旧路径 pocketjs 为软链）
+# holt 接入编排器（提案，未应用；本地 checkout ~/Workspace/boom/holt）
 
 | 文件 | 内容 |
 |---|---|
-| `multica-orchestrator.patch` | 改 pocketjs 的 `.multica/`：project.yaml 两个项目（Pocket / Studio Parts）加 `orchestrator:` 段并去掉 `github_repo` 资源；lead 指令改成只做规划和 blocked 处理；workflow.md 重写为引擎流程 + 区域/owner/检查表；新 skill `pocket-checks` |
-| （同一 patch）`.multica/REVIEW.md` | PocketJS 的评审规则：各区域"失败长什么样"、`risk` 分级（high 进 Ray 验收门）、finding 格式与跳过路径 |
-| `envrc-sccache.patch` | `.envrc`：有 sccache 时设置 `RUSTC_WRAPPER`、共享 `SCCACHE_DIR`、40G 上限 |
+| `multica-orchestrator.patch` | 改 holt 的 `.multica/`：Pocket / Studio Parts 两个项目加 `orchestrator:` 段（保留已绑定的 `github_repo` 资源）；删掉 `squads:`（squads 概念已移除）；lead 只做规划和 blocked 处理；gbot 改为专家；workflow.md 重写为引擎流程 + 区域/owner/检查表；新 skill `pocket-checks`；新 `REVIEW.md` |
+| `project.yaml.proposed` | patch 应用后的完整 `.multica/project.yaml`，便于直接阅读 |
+| `envrc-sccache.patch` | `.envrc`：有 sccache 时设置 `RUSTC_WRAPPER`、共享 `SCCACHE_DIR=$HOME/.cache/sccache-holt`、40G 上限 |
 
-基线：pocketjs `0344e315` 的真实 `.multica/project.yaml`（271 行），两个 patch 均 `git apply --check` 通过（2026-10-19），两段 `orchestrator:` 已单独用 `multica team preset render -f` 校验通过。
+基线：holt main `6c2b188d`。两个 patch 都 `git apply --check` 通过（2026-10-21）；两段 `orchestrator:` 用 `multica team preset render -f` 校验通过。
 
-## 本轮更新（pstack + 评审实践）
-- 各 agent 的 `skills:` 按角色加上 preset 技能和 pstack 技能：lead 10 个（plan-split、blocked-report、figure-it-out、sharpen、recall、reflect…），owner（gbot / heavy / frontend / control-plane）加 open-pr、handoff-metadata、rebase-conflict（内容是 merge）、tdd、prove-it-works、blast-radius、unslop 等，frontend 另加 create/maintain-verification-skill，reviewer 加 verify-gates、review-verdict、interrogate、swarm 等。researcher / yielded-engineer / code-auditor 不在编排器角色里，没改。
-- yielded-reviewer 指令加一段：读 REVIEW.md、先找再核实、important/nit/pre-existing、数量开头、复审只看增量 diff、写 `risk`。
-- workflow.md 加"评审规则"和"pstack 技能"两节（workspace 范围、metadata 交接、不 rebase/force-push、三轮不收敛交给 lead）。
-- 删掉了已实现功能上过时的"proposed"注释。
-- 前提：pstack 技能要先进 workspace（`multica team preset export <dir>` 后 `multica skill create`），否则 project.yaml 里引用的名字不存在。
+## 决定（Ray，2026-10-21）
+- GitHub CI 保持关闭：`required_checks: [review-verdict]`，靠本地 pocket-checks / verify-gates。
+- cargo 槽位：Pocket 2，Studio 1（合计最多 3）。
+- 不加显式截图技能：frontend-engineer 不挂 create/maintain-verification-skill、principle-experience-first。
+- 命名统一为 holt；品牌项（pocketjs.dev、pocket CLI、pocket-* crate、POCKETJS_* 环境变量）不变。
+- squads 移除：project.yaml 不再有 `squads:`，派活全由编排器按 area 标签路由。
+- gbot 不是 owner，是外部专家：`area:hard` / `area:cross-cutting` / `area:research` 路由给它。它可以自己改代码，或开 herdr pane 输入 `grok-pi-worker` 拆分（每个 pane 独立 worktree、分支 `herdr/<task>`），自己验收每一块，整合成一个分支 / PR 交回编排器，并关掉自己开的 pane。
 
-应用：在 holt 根目录 `git apply docs/.../multica-orchestrator.patch`（已 `git apply --check` 通过）。两段 `orchestrator:` 已用 `multica team preset render -f` 解析和校验通过（route owner 自动并入 owners、reviewer 不在 owner 池）。
+## 角色与技能
+| agent | 角色 | pstack 技能 |
+|---|---|---|
+| yielded-lead | lead | in-your-own-words, figure-it-out, attack-the-premise, sequence-verifiable-units, outcome-oriented-execution, sharpen, guard-the-context-window |
+| heavy-engineer / frontend-engineer / control-plane-engineer | owner | tdd, prove-it-works, fix-root-causes, subtract-before-you-add, test-behavior-not-implementation, blast-radius, boundary-discipline, typescript-best-practices（heavy 另保留 rust-best-practices） |
+| yielded-reviewer | reviewer | interrogate, blast-radius, prove-it-works, test-behavior-not-implementation, no-comments（+ handoff-metadata） |
+| gbot | 专家 | 研究：in-your-own-words, figure-it-out, attack-the-premise, sequence-verifiable-units, guard-the-context-window；验证/整合：prove-it-works, blast-radius, swarm（另有 pocket-checks、open-pr、handoff-metadata、rebase-conflict 等仓库技能） |
 
 ## 映射
-
-| area 标签 | owner 池（`roles.routes`） | 检查 | 资源 |
+| area 标签 | 池（`roles.routes`） | 检查 | 资源 |
 |---|---|---|---|
-| area:hard, area:cross-cutting | gbot | 涉及区域全部 | 视改动 |
-| area:host / compiler / framework / cli / apps | heavy-engineer, gbot | `pocket check`、`bun run test --project <area>`、`bun check` | host 带 `needs:cargo` |
-| area:studio-app | frontend-engineer | `pocket dev studio` + 截图到 `.build/validation/` | 默认验收门 |
+| area:hard, area:cross-cutting, area:research | gbot（专家） | 涉及区域全部 | 视改动 |
+| area:host / compiler / framework / cli / apps | heavy-engineer | `pocket check`、`bun run test --project <area>`、`bun check` | host 带 `needs:cargo` |
+| area:studio-app | frontend-engineer | `pocket dev studio` 验证点名界面 | 默认验收门 |
 | area:control-plane | control-plane-engineer | 包内测试 | — |
-| 无匹配标签 | `roles.owners`（OX: heavy-engineer, gbot；Studio: frontend, control-plane） | | |
+| 无匹配标签 | `roles.owners`（Pocket: heavy-engineer；Studio: frontend, control-plane） | | |
 
-- reviewer：yielded-reviewer（两个项目共用，独立于所有 owner）。lead：yielded-lead。
-- 验收门：`needs-GUI-Master` / `needs-acceptance` / `needs-Ray-signoff`，Studio 另有 `acceptance.default_for_labels: [area:studio-app]`。Ray 在 Flow 卡片或 `multica flow accept|reject` 决定，引擎在同一 head 上合并。
-- CI：Ray 暂停了 CI（Rust 编译慢，ci.yml 只剩 workflow_dispatch），所以 required_checks 目前只有 `review-verdict`（引擎以 App 发布）。目标集合是 6 个真实 check 名（vitest、cargo test (ubuntu-24.04)、cargo test (macos-latest)、note bundle (macos-app)、note bundle (linux-app)、format, types and clippy），在 `project.yaml.proposed` 里以注释保留；CI 恢复 pull_request 触发后再取消注释。
-
-## 构建资源
-- `limits.slots.cargo: 2`：带 `needs:cargo` 的 issue 在本项目里同时最多 2 条处于 todo/in_progress，其余在 T1 等待（`waiting: cargo slots 2/2`）。计数范围是同一个项目；OX 和 Studio 若同时大量跑 Rust，总数最多 4，必要时把 Studio 设为 1。
-- 每个 worktree 自己的 `target/`（AGENTS.md 规则不变），编译缓存靠 sccache 共享。flake.nix devShell 需加 `sccache`（未写，flake 结构由 Ray 定）。
-- `limits.min_free_gb: 40`（键名与现有 spec 一致）。stuck/idle 放宽到 60/15 分钟（OX）和 45/12（Studio）。
+## 引擎差距（未改代码，需 Ray 定）
+- 引擎没有"专家"角色。`Spec.Normalize` 把 route owner 并入 `roles.owners`，所以 gbot 实际仍按 owner 渲染（`preset render` 输出 `gbot (owner)`，挂 owner 技能和 owner.md），而且未打标签的 issue 也可能派给它。
+- 要真正做成专家，需要：`roles.experts`（route 可引用，但不并入默认 owner 池）、preset 里的 `expert.md` 角色文本、pstack manifest 的 `expert` 角色（上面的技能表），以及 `TestRoleContextBudget` / 有效角色列表加上 expert。
+- 在那之前，lead 应给每个 issue 打 area 标签，避免落到默认池。
 
 ## 引擎支持（已实现，feat/orchestrator）
 | 键 | 行为 | 测试 |
@@ -45,7 +47,6 @@
 | 校验 | route 必须有 labels 和 owners；slot 必须为正；route owner 不能是 reviewer | `TestValidateSettings` |
 
 ## 待 Ray 定
-- CI 恢复后在两个项目里取消注释 6 个 check 名（名称已从真实 check run 核对）。
-- gbot 既是 owner 又拆分：拆分后父单写 `phase=planned`（引擎不再启动它），子单建成 todo 由引擎派（backlog = 未计划，引擎不碰）。
-- 两个项目共用一个 hub 和仓库，worktree 都在 `~/.cursor/worktrees/holt/agent-<key>（旧 worktree 仍在 ~/.cursor/worktrees/pocketjs）`。
+- CI 恢复后可在 `required_checks` 里加回真实 check 名。
+- 两个项目共用一个 hub 和仓库，worktree 都在 `~/.cursor/worktrees/holt/agent-<key>`。
 - 分支命名：`agent/<key>`（worktree `agent-<key>`）只给编排器用；herdr worker 用 `herdr/<task>`，不要用 `agent/<task>`，否则会占住编排分支，issue 被 `[branch_occupied]` 阻塞。

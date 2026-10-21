@@ -13,11 +13,6 @@ export const workspaceKeys = {
   agent: (wsId: string, agentId: string) =>
     ["workspaces", wsId, "agents", "detail", agentId] as const,
   squads: (wsId: string) => ["workspaces", wsId, "squads"] as const,
-  // Per-squad member status. Lives under the workspace key tree so
-  // workspace switches naturally drop the cache, and so a broad
-  // `["workspaces", wsId, "squads"]` invalidation covers it.
-  squadMemberStatus: (wsId: string, squadId: string) =>
-    ["workspaces", wsId, "squads", squadId, "members-status"] as const,
   skills: (wsId: string) => ["workspaces", wsId, "skills"] as const,
   assigneeFrequency: (wsId: string) => ["workspaces", wsId, "assignee-frequency"] as const,
   mcpServers: (wsId: string) => ["workspaces", wsId, "mcp-servers"] as const,
@@ -100,22 +95,10 @@ export function cacheAgentResponse(
 export function squadListOptions(wsId: string) {
   return queryOptions<Squad[]>({
     queryKey: workspaceKeys.squads(wsId),
-    queryFn: () => api.listSquads(),
+    // Squads were removed from the product; existing data is no longer
+    // listed, so every picker sees an empty squad directory.
+    queryFn: async () => [],
     enabled: !!wsId,
-  });
-}
-
-// Per-squad members status snapshot. The freshness signal is the WS task /
-// agent / runtime invalidation wired in use-realtime-sync (which broadly
-// invalidates `["workspaces", wsId, "squads"]`); the staleTime is a
-// tab-focus safety net.
-export function squadMemberStatusOptions(wsId: string, squadId: string) {
-  return queryOptions({
-    queryKey: workspaceKeys.squadMemberStatus(wsId, squadId),
-    queryFn: () => api.getSquadMemberStatus(squadId),
-    enabled: !!wsId && !!squadId,
-    staleTime: 30 * 1000,
-    refetchOnWindowFocus: true,
   });
 }
 

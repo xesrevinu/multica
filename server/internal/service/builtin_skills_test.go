@@ -355,7 +355,6 @@ func TestPlatformSkillDescriptionNamesEveryDomain(t *testing.T) {
 		"references/issues.md":       "issue",
 		"references/mentions.md":     "mention",
 		"references/agents.md":       "agent",
-		"references/squads.md":       "squad",
 		"references/autopilots.md":   "autopilot",
 		"references/projects.md":     "project",
 		"references/runtimes.md":     "runtime",
@@ -417,7 +416,7 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 			file: "SKILL.md",
 			want: []string{
 				// Must-fix from review: "load on demand" is not "load exactly
-				// one". A task that creates a squad, assigns it an issue and
+				// one". A task that creates an agent, assigns it an issue and
 				// writes a mention needs three references, and wording that
 				// implies one would have the agent act on contracts it never
 				// read — the recall loss the merge is not allowed to cause.
@@ -428,7 +427,6 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				"references/issues.md",
 				"references/mentions.md",
 				"references/agents.md",
-				"references/squads.md",
 				"references/autopilots.md",
 				"references/projects.md",
 				"references/runtimes.md",
@@ -584,33 +582,6 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 			},
 		},
 		{
-			file: "references/squads.md",
-			want: []string{
-				"A squad is not an agent",
-				"squad's `leader_id` agent",
-				"squad members are not automatically fanned out",
-				"multica squad member set-role",
-				"mention://squad/<squad-id>",
-				"recording squad activity",
-				// The debugging entry point must stay a bounded two-step read
-				// (MUL-5442): a roots-only scan alone never returns reply
-				// bodies, where mention triggers and failure reasons live.
-				"--roots-only --summary",
-				"--thread <thread-id> --tail 30",
-				"scan the roots first, then open the threads",
-				// MUL-5850: the reads carry --compact, matching the brief and
-				// the router's bounded-reads rule.
-				"--roots-only --summary --compact --output json",
-				"--thread <thread-id> --tail 30 --compact --output json",
-			},
-			notWant: []string{
-				// MUL-5696: no unbounded comment pull. Both shapes contradict
-				// the brief's "two bounded reads, never one bulk pull".
-				"multica issue comment list <issue-id> --output json",
-				"--recent 10",
-			},
-		},
-		{
 			file: "references/autopilots.md",
 			want: []string{
 				"An autopilot is not an agent",
@@ -621,7 +592,6 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				"Do not run `trigger`",
 				"webhook tokens",
 				"{{date}}",
-				"squad's leader agent",
 				// A schedule with no --timezone silently runs in UTC, which is
 				// the one wrong assumption here that recurs daily.
 				"runs in **UTC**",

@@ -9,7 +9,6 @@ export type SidebarNavKey =
   | "projects"
   | "autopilots"
   | "agents"
-  | "squads"
   | "usage"
   | "runtimes"
   | "skills"
@@ -25,7 +24,6 @@ export type SidebarNavLabelKey =
   | "projects"
   | "autopilots"
   | "agents"
-  | "squads"
   | "usage"
   | "runtimes"
   | "skills"
@@ -51,10 +49,9 @@ export const workNav: SidebarNavItem[] = [
 ];
 
 // Agents live on the Runtimes page (see AgentsRuntimesPage). Upstream's
-// AI Team group otherwise keeps squads / skills / runtimes.
+// AI Team group otherwise keeps skills / runtimes.
 export const aiTeamNav: SidebarNavItem[] = [
   { key: "runtimes", labelKey: "runtimes" },
-  { key: "squads", labelKey: "squads" },
   { key: "skills", labelKey: "skills" },
 ];
 
@@ -72,7 +69,6 @@ export const secondaryNav: SidebarNavItem[] = [
   { key: "projects", labelKey: "projects" },
   { key: "autopilots", labelKey: "autopilots" },
   { key: "runtimes", labelKey: "runtimes" },
-  { key: "squads", labelKey: "squads" },
   { key: "skills", labelKey: "skills" },
   { key: "usage", labelKey: "usage" },
   { key: "settings", labelKey: "settings" },

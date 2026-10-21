@@ -31,11 +31,15 @@ Do not edit existing migrations. If dropping tables needs a new migration, skip 
 
 ## (d) Stale refs — not started
 
-Leave `LICENSE` untouched.
+Leave `LICENSE` untouched. Checked 2026-10-21: references to Composio / WeCom / DingTalk / desktop / mobile / plugin SDK remain in ~70 files (channel engine, daemon execenv, handler, generated sqlc, landing i18n, examples). Not small; left for a separate pass after (c).
 
-## (e) Squads — not started
+## (e) Squads — done (herdr/remove-squads)
 
-Do not edit existing migrations. If `server/internal/orchestrator` depends on squads, stop and note it here instead of changing orchestrator logic.
+`server/internal/orchestrator` does not depend on squads.
+
+Removed entry points: `/api/squads*` and `/api/issues/{id}/squad-evaluated` routes and handlers, `multica squad`, squad assignee resolution in the CLI (`--assignee` / `--to` now match members and agents only), squads pages and sidebar / shortcut / search entries, create-squad modal, squad client methods, the `?squad=` join on agent create, the squads docs pages, tutorial sections and CLI rows, and the multica-platform `references/squads.md`.
+
+Kept (no migration): squad tables, sqlc queries, issue `assignee_type = 'squad'`, and the internal squad-leader dispatch in issue/comment/autopilot services. With no way to create or list squads it is unreachable for new data; existing squad-assigned issues still dispatch to their leader. The squad directory query resolves empty, so pickers show no squads and existing squad assignees render as "Unknown Squad".
 
 ## Skipped migrations
 

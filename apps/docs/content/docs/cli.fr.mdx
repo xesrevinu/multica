@@ -167,7 +167,7 @@ Consultez [Daemon et runtimes](/daemon-runtimes) pour son fonctionnement et les 
 | `issue` | Créer, mettre à jour, assigner et rechercher des tâches ; gérer les commentaires, les abonnés, les étiquettes, les propriétés et les exécutions |
 | `project` | Gérer les projets et leurs ressources |
 | `label`, `property` | Gérer les étiquettes et les propriétés personnalisées de l'espace de travail |
-| `agent`, `skill`, `squad` | Gérer les agents, les skills et les squads |
+| `agent`, `skill` | Gérer les agents et les skills |
 | `autopilot` | Gérer les automatisations, les déclencheurs et l'historique des exécutions |
 | `workspace` | Créer, consulter et changer d'espace de travail, et inviter des membres |
 | `repo` | Gérer les dépôts de l'espace de travail et les extraire localement |
@@ -238,7 +238,7 @@ Les tableaux ci-dessous couvrent toutes les commandes de premier niveau actuelle
 | | `get <id>` | Afficher une tâche | `--resolve-properties` (JSON uniquement ; lignes avec les noms de propriété, d'option et de membre à côté des ID enregistrés) |
 | | `create` | Créer une tâche | `--title` (obligatoire), `--description` / `--description-stdin` / `--description-file`, `--status`, `--priority`, `--assignee`, `--parent`, `--stage`, `--project`, `--start-date`, `--due-date`, `--attachment` (répétable) |
 | | `update <id>` | Mettre à jour les champs d'une tâche | Mêmes champs que `create`, plus `--position`, `--no-start`, `--duplicate-of` |
-| | `assign <id>` | Assigner ou désassigner | `--to` (correspondance approximative sur le nom parmi les membres, les agents et les squads), `--to-id`, `--unassign`, `--no-start` |
+| | `assign <id>` | Assigner ou désassigner | `--to` (correspondance approximative sur le nom parmi les membres et les agents), `--to-id`, `--unassign`, `--no-start` |
 | | `status <id> <status>` | Changer le statut | `--no-start`, `--duplicate-of` |
 | | `reorder <id>` | Déplacer au sein d'une colonne | |
 | | `search <query>` | Rechercher des tâches | `--limit`, `--include-closed` |
@@ -279,8 +279,6 @@ Les tableaux ci-dessous couvrent toutes les commandes de premier niveau actuelle
 | | `search <query>` | Rechercher des skills | |
 | | `files list/upsert/delete <skill-id>` | Gérer les fichiers d'un skill | |
 | | `label list/add/remove <skill-id>` | Gérer les étiquettes d'un skill | `add` / `remove` : `<label-id>` accepte un UUID complet ou un préfixe court |
-| `squad` | `list/get/create/update/delete` | Gérer les squads (`delete` archive) | |
-| | `member list/add/set-role/remove` | Gérer les membres d'un squad | |
 | | `activity <issue-id> <outcome>` | Enregistrer une évaluation du chef | |
 | `chat` | `history`, `thread [id]` | Lire la session de messagerie externe qu'un agent traite actuellement | `--limit`, `--before` |
 

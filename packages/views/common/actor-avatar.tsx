@@ -15,7 +15,6 @@ import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { AgentProfileCard } from "../agents/components/agent-profile-card";
 import { AgentLivePeekCard } from "../agents/components/agent-live-peek-card";
 import { MemberProfileCard } from "../members/member-profile-card";
-import { SquadProfileCard } from "../squads/components/squad-profile-card";
 import { availabilityConfig } from "../agents/presence";
 import { useT } from "../i18n";
 import {
@@ -142,17 +141,13 @@ export function ActorAvatar({
   const shouldLinkToProfile =
     profileAvailable &&
     (profileLink ??
-      (actorType === "member" ||
-        actorType === "agent" ||
-        actorType === "squad"));
+      (actorType === "member" || actorType === "agent"));
   const profileHref = shouldLinkToProfile
     ? actorType === "member"
       ? paths.memberDetail(actorId)
       : actorType === "agent"
         ? paths.agentDetail(actorId)
-        : actorType === "squad"
-          ? paths.squadDetail(actorId)
-          : null
+        : null
     : null;
   const content = profileHref ? (
     <ActorAvatarProfileLink href={profileHref}>{dotted}</ActorAvatarProfileLink>
@@ -172,9 +167,6 @@ export function ActorAvatar({
   }
   if (actorType === "member") {
     return <MemberAvatarHoverCard userId={actorId}>{content}</MemberAvatarHoverCard>;
-  }
-  if (actorType === "squad") {
-    return <SquadAvatarHoverCard squadId={actorId}>{content}</SquadAvatarHoverCard>;
   }
   return content;
 }
@@ -306,20 +298,6 @@ function MemberAvatarHoverCard({
 }) {
   return (
     <ActorAvatarHoverCardShell content={<MemberProfileCard userId={userId} />}>
-      {children}
-    </ActorAvatarHoverCardShell>
-  );
-}
-
-function SquadAvatarHoverCard({
-  squadId,
-  children,
-}: {
-  squadId: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <ActorAvatarHoverCardShell content={<SquadProfileCard squadId={squadId} />}>
       {children}
     </ActorAvatarHoverCardShell>
   );

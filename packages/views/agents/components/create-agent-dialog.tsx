@@ -2,17 +2,12 @@
 
 import { useState } from "react";
 import { Globe, Lock, Users } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
 import { ModelDropdown } from "./model-dropdown";
 import { RuntimePicker } from "./runtime-picker";
 import { isRuntimeUsableForUser } from "@multica/core/runtimes";
 import { InstructionsEditor } from "./instructions-editor";
 import { SkillMultiSelect } from "./skill-multi-select";
 import { AvatarUploadControl } from "../../common/avatar-upload-control";
-import { api } from "@multica/core/api";
-import { useWorkspaceId } from "@multica/core/hooks";
-
-import { workspaceKeys } from "@multica/core/workspace/queries";
 import type {
   Agent,
   AgentInvocationTargetInput,
@@ -50,7 +45,6 @@ export function CreateAgentDialog({
   members,
   currentUserId,
   template,
-  squadId,
   onClose,
   onCreate,
 }: {
@@ -66,12 +60,6 @@ export function CreateAgentDialog({
   // Skills are copied separately by the caller after createAgent
   // succeeds — they're not part of CreateAgentRequest.
   template?: Agent | null;
-  // When set, every successful create is followed by
-  // addSquadMember(squadId, agent) so the new agent joins this squad.
-  // If the squad-join call fails the agent still exists and the dialog
-  // surfaces a warning toast — the user can add it manually from the
-  // Members tab.
-  squadId?: string;
   onClose: () => void;
   // Returns the created Agent so the dialog can run a follow-up
   // setAgentSkills with the IDs the user picked in the form. Pre-skill-
@@ -81,8 +69,6 @@ export function CreateAgentDialog({
 }) {
   const { t } = useT("agents");
   const isDuplicate = !!template;
-  const queryClient = useQueryClient();
-  const wsId = useWorkspaceId();
   // Private / public-to access matches AccessPicker on the agent detail page.
   const accessPickerEnabled = true;
 
@@ -172,36 +158,6 @@ export function CreateAgentDialog({
     selectedMemberIds.size === 0 &&
     templateTeamTargets.length === 0;
 
-  // Shared squad-join follow-up. Returns nothing — the caller has
-  // already shown its create-success toast; we only need to surface a
-  // warning when the agent landed but the squad-join failed. Cache
-  // invalidation for the squad's members list rides along so the
-  // Members tab re-renders without a manual refetch.
-  const attachToSquad = async (agentId: string, displayName: string) => {
-    if (!squadId) return;
-    try {
-      await api.addSquadMember(squadId, {
-        member_type: "agent",
-        member_id: agentId,
-      });
-      if (wsId) {
-        queryClient.invalidateQueries({
-          queryKey: [...workspaceKeys.squads(wsId), squadId, "members"],
-        });
-        queryClient.invalidateQueries({
-          queryKey: [...workspaceKeys.squads(wsId), squadId],
-        });
-      }
-    } catch (err) {
-      toast.warning(
-        t(($) => $.create_dialog.squad_join_failed_toast, {
-          name: displayName,
-          error: err instanceof Error ? err.message : "unknown error",
-        }),
-      );
-    }
-  };
-
   const handleSubmit = async () => {
     if (
       !name.trim() ||
@@ -267,15 +223,7 @@ export function CreateAgentDialog({
           data.max_concurrent_tasks = template.max_concurrent_tasks;
         }
       }
-      const createdAgent = await onCreate(data);
-      // Squad context: attach the agent after skills land so the
-      // squad's Members tab shows the agent with its skills already
-      // in place. Atomicity is best-effort by design (see plan in
-      // MUL-2178) — a partial failure surfaces a warning toast and
-      // the user can retry from the Add Member dialog.
-      if (createdAgent && squadId) {
-        await attachToSquad(createdAgent.id, createdAgent.name);
-      }
+      await onCreate(data);
       onClose();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t(($) => $.create_dialog.create_failed_toast));

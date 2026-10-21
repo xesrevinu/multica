@@ -1,7 +1,6 @@
 # Autopilots
 
-An autopilot is not an agent. It is a rule that dispatches work to an agent, or
-to a squad's leader agent.
+An autopilot is not an agent. It is a rule that dispatches work to an agent.
 
 ## Core model
 
@@ -67,10 +66,9 @@ material into comments, logs, docs, or PRs.
 
 1. `multica autopilot get <id> --output json` — status, mode, assignee, triggers.
 2. `multica autopilot runs <id> --output json` — run status and failure reason.
-3. If assigned to a squad, inspect the squad: `multica squad get <squad-id> --output json`; execution goes to the leader.
-4. Inspect the target agent/runtime: `multica agent get <agent-id> --output json` and `multica runtime list --output json`.
-5. For webhooks, inspect delivery status: `queued` means the worker has not completed dispatch; `failed` carries the worker error. A provider retry with the same `X-GitHub-Delivery` / `Idempotency-Key` reuses the original delivery.
-6. For `create_issue`, inspect the created issue if the run records one.
+3. Inspect the target agent/runtime: `multica agent get <agent-id> --output json` and `multica runtime list --output json`.
+4. For webhooks, inspect delivery status: `queued` means the worker has not completed dispatch; `failed` carries the worker error. A provider retry with the same `X-GitHub-Delivery` / `Idempotency-Key` reuses the original delivery.
+5. For `create_issue`, inspect the created issue if the run records one.
 
 ## Access
 

@@ -38,8 +38,6 @@ Ce qu'il peut réellement faire reste limité par la configuration de l'agent, l
 
 Pendant l'exécution, l'agent gère le statut de la tâche en évaluant ce que son travail change : commencer à traiter la demande propre à la tâche la fait passer immédiatement à `in_progress`, une livraison la fait passer à `in_review`, un travail qui se poursuit au-delà du tour la maintient en `in_progress`, et une consultation ou une discussion laisse le statut inchangé — ces actions apparaissent sous l'identité de l'agent dans la chronologie. Le cycle de vie de l'exécution et le statut de la tâche sont distincts : la fin d'une exécution ne change pas à elle seule le statut de la tâche.
 
-Lorsque l'assigné est un [squad](/squads), la même règle s'applique : Multica met le chef en file, et répartir le travail entre les membres n'est pas une livraison — un tour de répartition laisse la tâche parente en `in_progress`, et le chef ne la passe en `in_review` qu'une fois l'objectif global atteint.
-
 ## Assigner sans démarrer
 
 **Ne pas démarrer maintenant** dans la boîte de dialogue de confirmation enregistre l'assigné sans créer d'exécution cette fois-ci. Utilisez-le pour régler d'abord la question du responsable, puis démarrer une fois le contexte ou les dépendances prêts.
@@ -85,4 +83,3 @@ Utilisez `--no-start` lorsque l'assignation doit enregistrer le responsable sans
 
 - [@mentionner des agents dans les commentaires](/mentioning-agents) — traitez une nouvelle question sans changer l'assigné.
 - [Exécutions](/tasks) — règles de mise en file, de nouvelle tentative et d'arrêt.
-- [Squads](/squads) — confiez à un chef la coordination de plusieurs agents.

@@ -1,6 +1,6 @@
 ---
 name: multica-platform
-description: "Use for Multica platform actions the runtime brief does not fully cover: issue and PR contracts, orchestrated (team-run) projects, mentions, agents, squads, autopilots, projects, runtimes, skill import. Not for the product code you are working on."
+description: "Use for Multica platform actions the runtime brief does not fully cover: issue and PR contracts, orchestrated (team-run) projects, mentions, agents, autopilots, projects, runtimes, skill import. Not for the product code you are working on."
 user-invocable: false
 allowed-tools: Bash(multica *), Bash(git *), Bash(gh *)
 ---
@@ -19,13 +19,12 @@ open the reference(s) your task actually needs. Do not read them all.
 | `references/issues.md` | Issues: PR linking, status side effects, sub-issues and stages, sibling runs, wakeups, charts vs files in comments |
 | `references/mentions.md` | `mention://` links: which types start a run, which are inert |
 | `references/agents.md` | Agent definitions: fields, secrets, MCP config, skills |
-| `references/squads.md` | Squads: leader routing, roster |
 | `references/autopilots.md` | Autopilots: triggers, `create_issue` vs `run_only` |
 | `references/projects.md` | Projects, resources (`github_repo`, `local_directory`, worktrees), project workflows |
 | `references/runtimes.md` | Runtimes, daemons, `repo checkout` |
 | `references/skill-import.md` | Importing a skill from a URL or archive |
 
-A task that crosses domains needs each domain it touches: creating a squad,
+A task that crosses domains needs each domain it touches: creating an agent,
 assigning it an issue and writing a mention needs three references.
 
 ## Rules

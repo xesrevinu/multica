@@ -87,8 +87,6 @@
     "./agents/use-agent-presence": "./agents/use-agent-presence.ts",
     "./agents/visibility-label": "./agents/visibility-label.ts",
     "./agents/stores": "./agents/stores/index.ts",
-    "./squads": "./squads/index.ts",
-    "./squads/stores": "./squads/stores/index.ts",
     "./permissions": "./permissions/index.ts",
     "./search/cancelled-rank": "./search/cancelled-rank.ts",
     "./search-index": "./search-index/index.ts",

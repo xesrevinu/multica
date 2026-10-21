@@ -163,7 +163,6 @@ vi.mock("@multica/core/paths", async (importOriginal) => ({
     projects: () => "/acme/projects",
     autopilots: () => "/acme/autopilots",
     agents: () => "/acme/agents",
-    squads: () => "/acme/squads",
     usage: () => "/acme/usage",
     runtimes: () => "/acme/runtimes",
     skills: () => "/acme/skills",
@@ -413,7 +412,7 @@ describe("secondary nav strip", () => {
   it("links every secondary surface from the footer strip", () => {
     const { getByTestId } = render(<AppSidebar />);
     const strip = getByTestId("orch-secondary-nav");
-    for (const href of ["/acme/inbox", "/acme/issues", "/acme/projects", "/acme/autopilots", "/acme/runtimes", "/acme/squads", "/acme/skills", "/acme/usage", "/acme/settings"]) {
+    for (const href of ["/acme/inbox", "/acme/issues", "/acme/projects", "/acme/autopilots", "/acme/runtimes", "/acme/skills", "/acme/usage", "/acme/settings"]) {
       expect(strip.querySelector(`a[href="${href}"]`)).not.toBeNull();
     }
   });

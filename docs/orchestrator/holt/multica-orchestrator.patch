@@ -1,10 +1,10 @@
 diff --git a/.multica/REVIEW.md b/.multica/REVIEW.md
 new file mode 100644
-index 0000000..cb8448a
+index 00000000..37d2eae9
 --- /dev/null
 +++ b/.multica/REVIEW.md
 @@ -0,0 +1,20 @@
-+# REVIEW.md — what review means in PocketJS
++# REVIEW.md — what review means in holt
 +
 +Read by the reviewer on every orchestrated review. Short on purpose.
 +
@@ -25,7 +25,7 @@ index 0000000..cb8448a
 +- Skip: `.build/`, generated bindings, lockfiles (unless a dependency was added), snapshot files the PR regenerated on purpose.
 +- Start the review comment with the count ("1 important, 0 nit, 2 pre-existing") or "nothing to fix".
 diff --git a/.multica/project.yaml b/.multica/project.yaml
-index 3aa3ffb..3e98584 100644
+index 46b27e92..5d794c3f 100644
 --- a/.multica/project.yaml
 +++ b/.multica/project.yaml
 @@ -1,6 +1,10 @@
@@ -39,54 +39,86 @@ index 3aa3ffb..3e98584 100644
    - name: rust-best-practices
      bind: listed
      description: Idiomatic Rust for the host. Does not choose the build command.
-@@ -32,12 +36,21 @@ agents:
+@@ -25,19 +29,28 @@ skills:
+ agents:
+   - name: yielded-lead
+     runtime: mac-studio:yielded
+-    role: Squad leader
++    role: Lead
+     description: Chooses the next person on the roster. Does not implement or accept the result.
+     model: magpie/group/daily-work
+     thinking_level: high
      max_concurrent_tasks: 3
      skills:
        - improve-codebase-architecture
 +      - plan-split
 +      - blocked-report
-+      - figure-it-out
-+      - sharpen
 +      - in-your-own-words
++      - figure-it-out
++      - principle-attack-the-premise
 +      - principle-sequence-verifiable-units
-+      - principle-separate-before-serializing-shared-state
-+      - recall
-+      - reflect
++      - principle-outcome-oriented-execution
++      - sharpen
++      - principle-guard-the-context-window
      instructions: |
 -      Do not edit, commit, push, merge, or mark an issue done. Do not split.
 +      Do not edit, commit, push, merge, or mark an issue done.
  
 -      Pick the next single step from the squad roster. A hard problem, or one that splits into independent parts, goes to gbot. A single clear part goes to that part's owner. A child issue is already one part: mention its owner, not gbot. Research only when the issue asks, or the choice cannot be made from the issue itself. Then implementation. Then review. One @mention. Do not also open a todo child for that same work.
-+      In orchestrated projects (Pocket, Studio Parts) the orchestrator assigns owners, routes review and rework, and merges. You do two things there, following the preset lead role (`multica team preset render`): plan an epic into staged backlog children with area labels (`area:host`, `area:compiler`, `area:framework`, `area:cli`, `area:apps`, `area:studio-app`, `area:control-plane`, `area:hard`), `needs:cargo` when the change builds Rust, and `needs-GUI-Master` when a person must look at a screen; and handle issues that arrive blocked (clarify and `phase=unblocked`, `phase=cancel_proposed`, or escalate). No @mentions to start work; the engine starts it.
++      In orchestrated projects (Pocket, Studio Parts) the orchestrator assigns owners, routes review and rework, and merges. You do two things there, following the preset lead role (`multica team preset render`): plan an epic into staged backlog children with area labels (`area:host`, `area:compiler`, `area:framework`, `area:cli`, `area:apps`, `area:studio-app`, `area:control-plane`, `area:hard`, `area:research`), `needs:cargo` when the change builds Rust, and `needs-GUI-Master` when a person must look at a screen; and handle issues that arrive blocked (clarify and `phase=unblocked`, `phase=cancel_proposed`, or escalate). No @mentions to start work; the engine starts it.
  
 -      A review with no blocking finding is ready for a person: set this issue in_review. That status is only for this issue. Do not wait for another issue. A blocking finding goes back to the implementer. If the implementer says they are blocked, set blocked. You do not accept the work.
 +      Outside orchestrated projects keep the old roster rule: one @mention to the next single step.
  
    - name: yielded-researcher
      runtime: mac-studio:yielded
-@@ -90,6 +103,21 @@ agents:
+@@ -80,8 +93,8 @@ agents:
+   - name: gbot
+     runtime: mac-studio:gbot
+     gbot: Grok Bot
+-    role: Principal
+-    description: Takes the hardest part. Splits the rest into parallel child issues.
++    role: Expert
++    description: External expert for research and the hardest work. Not an owner; the orchestrator routes area:hard, area:cross-cutting and area:research issues to it.
+     max_concurrent_tasks: 2
+     skills:
+       - improve-codebase-architecture
+@@ -90,12 +103,31 @@ agents:
        - webgpu-specs
        - diagnosing-bugs
        - m10-performance
++      - pocket-checks
 +      - open-pr
 +      - handoff-metadata
 +      - rebase-conflict
 +      - blocked-report
-+      - pocket-checks
-+      - tdd
++      # research (lead-like)
++      - in-your-own-words
++      - figure-it-out
++      - principle-attack-the-premise
++      - principle-sequence-verifiable-units
++      - principle-guard-the-context-window
++      # verify and integrate
 +      - principle-prove-it-works
-+      - principle-subtract-before-you-add
-+      - principle-fix-root-causes
-+      - principle-laziness-protocol
 +      - blast-radius
-+      - unslop
-+      - no-comments
-+      - architect
-+      - typescript-best-practices
++      - swarm
      instructions: |
-       You take the hardest part of the issue and do that part yourself, in this checkout. The repository's rules decide how to build. Skills do not override them.
+-      You take the hardest part of the issue and do that part yourself, in this checkout. The repository's rules decide how to build. Skills do not override them.
++      You are the expert, not an owner. The orchestrator hands you research and the hardest work (area:hard, area:cross-cutting, area:research). The repository's rules decide how to build. Skills do not override them.
  
-@@ -112,6 +140,17 @@ agents:
+-      If the rest splits into independent pieces, keep the hardest piece. File each other piece as its own child issue assigned to this issue's squad, with `--status todo`, `--parent`, and a 依赖 line that names this issue. A child is one clear part. Do not assign the part's owner, do not pass `--stage`, and do not @mention anyone on this issue for that piece. That starts the squad leader on the child. The 依赖 line is a trace for Ray, not a branch dependency.
++      Research: answer from primary sources and the code. Post one sourced finding on the issue. Change no files unless the issue asks for a change.
+ 
+-      A change you make is ready only when a check covers the behavior you touched. Do not commit or push unless the issue says so. Do not merge. Post one issue comment with no @mention: what you kept, which children you filed, the branch from `git branch --show-current`, what you checked, and what you did not verify. Do not mark the issue done.
++      Hard work: do it yourself in this issue's worktree, or fan it out. To fan out, open one herdr pane per independent piece and type `grok-pi-worker` into it. Each pane works in its own worktree on branch `herdr/<task>` and never touches another pane's worktree or the primary checkout. Do not steal focus. At most two cargo builds run at once on the machine.
++
++      You own acceptance of every fanned-out piece: read its diff, run the checks that cover it (pocket-checks, verify-gates), and send it back to its pane until it passes. Then integrate all pieces into this issue's single branch (squash, no merge commits, no force), close the panes you opened, and hand back to the orchestrator with one PR or branch for the issue. Do not merge to main and do not mark the issue done.
++
++      Post one issue comment with no @mention: what you did yourself, what each pane did, the branch from `git branch --show-current`, what you checked, and what you did not verify.
+ 
+       End with the exact gbot-task marker from the request. Use status=completed only when your checks passed; otherwise status=failed and name the blocker.
+ 
+@@ -112,6 +144,16 @@ agents:
        - apple-appkit
        - webgpu-specs
        - diagnosing-bugs
@@ -94,17 +126,16 @@ index 3aa3ffb..3e98584 100644
 +      - review-verdict
 +      - blocked-report
 +      - pocket-checks
++      - handoff-metadata
 +      - interrogate
 +      - blast-radius
 +      - principle-prove-it-works
 +      - principle-test-behavior-not-implementation
-+      - principle-fix-root-causes
-+      - swarm
-+      - typescript-best-practices
++      - no-comments
      instructions: |
        Read only. Do not modify files or change git state.
  
-@@ -119,6 +158,8 @@ agents:
+@@ -119,6 +161,8 @@ agents:
  
        It passes when both are true and a check covers the risky behavior. It does not pass when the ask is missing or wrong, unasked behavior was added, an invariant is broken, or you cannot tell. Name the file and the issue line or the rule for each finding. Lead with blocking findings. If nothing blocks, say what you checked.
  
@@ -113,7 +144,7 @@ index 3aa3ffb..3e98584 100644
        Judge the branch named in the implementer's comment. Your own checkout is another branch and does not contain their commits. Post one comment with no @mention. Do not change the issue status. You may `delegate` one bounded read of the diff. Do not open issues, assign anyone, or start another run.
  
  workspaces:
-@@ -138,6 +179,21 @@ workspaces:
+@@ -138,6 +182,19 @@ workspaces:
            - webgpu-specs
            - diagnosing-bugs
            - m10-performance
@@ -124,46 +155,47 @@ index 3aa3ffb..3e98584 100644
 +          - pocket-checks
 +          - tdd
 +          - principle-prove-it-works
-+          - principle-subtract-before-you-add
 +          - principle-fix-root-causes
-+          - principle-laziness-protocol
++          - principle-subtract-before-you-add
++          - principle-test-behavior-not-implementation
 +          - blast-radius
-+          - unslop
-+          - no-comments
++          - principle-boundary-discipline
 +          - typescript-best-practices
-+          - benchmark-checklist
          instructions: |
            Work only in this checkout. You own framework, compiler, CLI, apps, and the Rust host. Do not edit studio/ unless the issue says a runtime contract has to change.
  
-@@ -181,9 +237,37 @@ workspaces:
-             runtime: mac-studio:yielded
-             execution_mode: worktree
-             label: pocketjs
--          - type: github_repo
-+        # In-app orchestrator owns status/assignee for this project (replaces the
-+        # squad's @mention routing). Rendered role text: `multica team preset render`.
+@@ -184,25 +241,43 @@ workspaces:
+           - type: github_repo
+             url: git@github.com:effect-anything/holt.git
+             label: holt
++        # In-app orchestrator owns status/assignee for this project (replaces
++        # @mention routing). Rendered role text: `multica team preset render`.
 +        orchestrator:
 +          preset: impl-review-merge
 +          roles:
 +            lead: yielded-lead
-+            reviewer: yielded-reviewer
-+            owners: [heavy-engineer, gbot]
-+            # roles.routes: first matching area label picks the owner pool
++            reviewer: yielded-reviewer          # never in an owner pool
++            owners: [heavy-engineer]
++            human: Ray
++            # First matching area label picks the pool. gbot is the expert, not an
++            # owner: it only gets research and the hardest work.
 +            routes:
-+              - { labels: [area:hard, area:cross-cutting], owners: [gbot] }
-+              - { labels: [area:host, area:compiler, area:framework, area:cli, area:apps], owners: [heavy-engineer, gbot] }
++              - { labels: [area:hard, area:cross-cutting, area:research], owners: [gbot] }
++              - { labels: [area:host, area:compiler, area:framework, area:cli, area:apps], owners: [heavy-engineer] }
 +          repo:
 +            mode: github
 +            slug: effect-anything/holt
-             url: git@github.com:effect-anything/holt.git
--            label: pocketjs
 +            hub: /Users/kee/Workspace/boom/holt   # wt switch from here; .config/wt.toml hooks run
 +            main: main
 +            branch_prefix: agent/
-+            required_checks: [review-verdict]   # CI paused; target set: docs project.yaml.proposed
++            # GitHub CI stays off (ci.yml is workflow_dispatch only, by decision).
++            # The gate is the engine's review-verdict; owners and the reviewer run
++            # the local pocket checks (pocket-checks, verify-gates) before handoff.
++            required_checks: [review-verdict]
 +            disk_path: /Users/kee/.cursor/worktrees
 +          acceptance:
 +            labels: [needs-acceptance, needs-GUI-Master, needs-Ray-signoff]
++            default_for_labels: [area:apps]     # user-visible app behaviour
 +          limits:
 +            impl: 3
 +            review: 3
@@ -171,11 +203,30 @@ index 3aa3ffb..3e98584 100644
 +            stuck_min: 60        # cold Rust builds are long
 +            idle_min: 15         # one cargo step can be silent for minutes
 +            min_free_gb: 40      # every worktree has its own target/
-+            slots: { cargo: 2 }  # at most 2 issues labelled needs:cargo run at once (10 cores / 32 GB)
++            slots: { cargo: 2 }  # Pocket 2 + Studio 1 = at most 3 cargo-heavy issues on the Mac Studio
  
-     squads:
-       - name: OX Squad
-@@ -215,6 +299,23 @@ workspaces:
+-    squads:
+-      - name: OX Squad
+-        leader: yielded-lead
+-        description: Framework, compiler, Rust host, CLI, and apps. Not studio/.
+-        instructions: |
+-          Scope is framework, compiler, Rust host, CLI, and apps. Not studio/.
+-
+-          A hard problem, or work that splits, goes to gbot. gbot keeps the hardest part. A single clear part goes to heavy-engineer. Research with yielded-researcher only when the issue asks for research first. Review with yielded-reviewer. Do not mention yielded-engineer or code-auditor. Ray merges and marks done.
+-
+-          One @mention on this issue. Do not also open a todo child for the same work. One issue is one worktree. Do not clone the GitHub repo or edit the primary checkout. Do not merge.
+-
+-          When review has no remaining findings, set in_review. Do not set done. A child issue has its own review and its own in_review. Ray merges each of those branches and marks each issue done.
+-        members:
+-          - { type: agent, ref: gbot, role: principal }
+-          - { type: agent, ref: yielded-researcher, role: research }
+-          - { type: agent, ref: heavy-engineer, role: implementation }
+-          - { type: agent, ref: yielded-reviewer, role: reviewer }
+-          - { type: member, ref: Ray, role: final-reviewer }
+ 
+   - workspace: da70b409-e6e8-4ba5-932a-a143d85e9d6f
+     agents:
+@@ -215,6 +290,19 @@ workspaces:
          max_concurrent_tasks: 3
          skills:
            - diagnosing-bugs
@@ -186,20 +237,16 @@ index 3aa3ffb..3e98584 100644
 +          - pocket-checks
 +          - tdd
 +          - principle-prove-it-works
-+          - principle-subtract-before-you-add
 +          - principle-fix-root-causes
-+          - principle-laziness-protocol
++          - principle-subtract-before-you-add
++          - principle-test-behavior-not-implementation
 +          - blast-radius
-+          - unslop
-+          - no-comments
++          - principle-boundary-discipline
 +          - typescript-best-practices
-+          - create-verification-skill
-+          - maintain-verification-skill
-+          - principle-experience-first
          instructions: |
            You own studio/app. Do not edit studio/control-plane or the runtime host. If the screen needs a runtime contract, stop and say so.
  
-@@ -230,6 +331,21 @@ workspaces:
+@@ -230,8 +318,21 @@ workspaces:
          skills:
            - improve-codebase-architecture
            - diagnosing-bugs
@@ -210,57 +257,75 @@ index 3aa3ffb..3e98584 100644
 +          - pocket-checks
 +          - tdd
 +          - principle-prove-it-works
-+          - principle-subtract-before-you-add
 +          - principle-fix-root-causes
-+          - principle-laziness-protocol
++          - principle-subtract-before-you-add
++          - principle-test-behavior-not-implementation
 +          - blast-radius
-+          - unslop
-+          - no-comments
++          - principle-boundary-discipline
 +          - typescript-best-practices
-+          - principle-make-operations-idempotent
          instructions: |
-           You own studio/control-plane and the studio packages it imports. Do not edit studio/app or the PocketJS host. If the change needs a runtime contract, stop and say so.
+-          You own studio/control-plane and the studio packages it imports. Do not edit studio/app or the PocketJS host. If the change needs a runtime contract, stop and say so.
++          You own studio/control-plane and the studio packages it imports. Do not edit studio/app or the holt host. If the change needs a runtime contract, stop and say so.
  
-@@ -248,9 +364,28 @@ workspaces:
-             runtime: mac-studio:yielded
-             execution_mode: worktree
-             label: pocketjs
--          - type: github_repo
+           The change is done only when a test covers the behavior you touched. Do not commit or push unless the issue says so. Do not merge. Post one issue comment with no @mention: what changed, the branch from `git branch --show-current`, what you checked, and what you did not verify. If you cannot proceed, say blocked and what is missing. Do not change the issue status.
+ 
+@@ -251,21 +352,30 @@ workspaces:
+           - type: github_repo
+             url: git@github.com:effect-anything/holt.git
+             label: holt
++        # In-app orchestrator owns status/assignee for this project (replaces
++        # @mention routing). Rendered role text: `multica team preset render`.
 +        orchestrator:
 +          preset: impl-review-merge
 +          roles:
 +            lead: yielded-lead
-+            reviewer: yielded-reviewer
++            reviewer: yielded-reviewer          # never in an owner pool
 +            owners: [frontend-engineer, control-plane-engineer]
++            human: Ray
 +            routes:
++              # gbot is the expert, not an owner: research and the hardest work only.
++              - { labels: [area:hard, area:cross-cutting, area:research], owners: [gbot] }
 +              - { labels: [area:studio-app], owners: [frontend-engineer] }
 +              - { labels: [area:control-plane], owners: [control-plane-engineer] }
 +          repo:
 +            mode: github
 +            slug: effect-anything/holt
-             url: git@github.com:effect-anything/holt.git
--            label: pocketjs
 +            hub: /Users/kee/Workspace/boom/holt
 +            main: main
 +            branch_prefix: agent/
-+            required_checks: [review-verdict]   # CI paused; target set: docs project.yaml.proposed
++            required_checks: [review-verdict]   # GitHub CI off; local pocket checks gate
 +            disk_path: /Users/kee/.cursor/worktrees
 +          acceptance:
 +            labels: [needs-acceptance, needs-GUI-Master, needs-Ray-signoff]
 +            default_for_labels: [area:studio-app]   # every studio/app screen change waits for Ray
-+          limits: { impl: 3, review: 3, infra: 2, stuck_min: 45, idle_min: 12, min_free_gb: 40, slots: { cargo: 2 } }
++          limits: { impl: 3, review: 3, infra: 2, stuck_min: 45, idle_min: 12, min_free_gb: 40, slots: { cargo: 1 } }
  
-     squads:
-       - name: Studio Squad
+-    squads:
+-      - name: Studio Squad
+-        leader: yielded-lead
+-        description: studio/app and studio/control-plane.
+-        instructions: |
+-          A hard problem, or work that crosses studio/app and studio/control-plane, goes to gbot. gbot keeps the hardest part. A single screen goes to frontend-engineer. Control-plane work goes to control-plane-engineer. Research with yielded-researcher only when the issue asks. Review with yielded-reviewer. yielded-engineer is not on this roster. Ray merges and marks done.
+-
+-          One @mention. Do not also open a todo child for the same work. Do not edit the runtime host here. A host contract change is an OX issue named in a 依赖 line; leave this issue in backlog until it lands.
+-
+-          One issue is one worktree. Do not clone the GitHub repo or edit the primary checkout. Do not merge. When review has no remaining findings, set in_review. Do not set done. A child issue has its own review and its own in_review. Ray merges each of those branches and marks each issue done.
+-        members:
+-          - { type: agent, ref: gbot, role: principal }
+-          - { type: agent, ref: yielded-researcher, role: research }
+-          - { type: agent, ref: frontend-engineer, role: ui }
+-          - { type: agent, ref: control-plane-engineer, role: control-plane }
+-          - { type: agent, ref: yielded-reviewer, role: reviewer }
+-          - { type: member, ref: Ray, role: final-reviewer }
 diff --git a/.multica/skills/pocket-checks/SKILL.md b/.multica/skills/pocket-checks/SKILL.md
 new file mode 100644
-index 0000000..d931083
+index 00000000..b3d8cd0a
 --- /dev/null
 +++ b/.multica/skills/pocket-checks/SKILL.md
 @@ -0,0 +1,23 @@
 +---
 +name: pocket-checks
-+description: Pick and run the checks that cover a PocketJS change by area, the same way for the owner and the independent reviewer. Use in orchestrated Pocket and Studio runs.
++description: Pick and run the checks that cover a holt change by area, the same way for the owner and the independent reviewer. Use in orchestrated Pocket and Studio runs.
 +---
 +
 +# Pocket checks
@@ -282,7 +347,7 @@ index 0000000..d931083
 +3. Put each command and the tail of its output in the result comment. A check you could not run is reported as not verified, with the reason.
 +4. Screenshots and logs stay in ignored `.build/validation/`; never commit them.
 diff --git a/.multica/workflow.md b/.multica/workflow.md
-index a51e4b5..24dccab 100644
+index a51e4b56..b87ca0d6 100644
 --- a/.multica/workflow.md
 +++ b/.multica/workflow.md
 @@ -1,49 +1,58 @@
@@ -312,7 +377,7 @@ index a51e4b5..24dccab 100644
 -  extra --> review
 -  review --> ray["Ray 合并，并标 done"]
 +  in["人或 lead 建 backlog issue，带 area:* 标签"] --> t1{"引擎 T1：依赖完成、stage 已开、磁盘够、cargo 槽位空、owner 空闲"}
-+  t1 --> own["按 area 路由给 owner（heavy-engineer / gbot / frontend / control-plane）"]
++  t1 --> own["按 area 路由给 owner（heavy-engineer / frontend / control-plane），area:hard / cross-cutting / research 给专家 gbot"]
 +  own --> wt["daemon 在 hub 上 wt switch agent/<key>（hooks：direnv、bun 依赖、zvec）"]
 +  wt --> code["最小改动；pocket dev / pocket check / bun check / bun run test --project <area>"]
 +  code --> pr["push agent/<KEY>，开一个 ready PR（open-pr）"]
@@ -331,24 +396,24 @@ index a51e4b5..24dccab 100644
  ```
  
 -要拆开时，leader 只建 backlog、不指派的子 issue，带 `--parent`、`--stage` 和 `依赖`。人再决定把哪一条交给 squad。
-+## 区域 → owner → 检查
++## 区域 → owner / 专家 → 检查
  
 -## Studio
 +| area 标签 | owner | 检查（owner 跑，reviewer 重跑） | cargo |
 +|---|---|---|---|
-+| area:host | heavy-engineer（难题给 gbot） | `pocket dev <app> --target macos-app` 冒烟 + `bun run test --project host` | needs:cargo |
++| area:host | heavy-engineer（难题打 area:hard 交给专家 gbot） | `pocket dev <app> --target macos-app` 冒烟 + `bun run test --project host` | needs:cargo |
 +| area:compiler | heavy-engineer | `bun run test --project compiler` + `bun check` | 否 |
 +| area:framework | heavy-engineer | `bun run test --project framework` + `bun check` | 否 |
 +| area:cli | heavy-engineer | `bun run test --project cli` + `bun check` | 视改动 |
 +| area:apps | heavy-engineer | `pocket check <app_path>` | 视 host |
-+| area:hard / area:cross-cutting | gbot（保留最难部分，其余拆成子单回到 backlog） | 涉及区域的全部检查 | 视改动 |
++| area:hard / area:cross-cutting / area:research | gbot（专家，不是 owner：自己做，或开 herdr pane 输入 `grok-pi-worker` 拆给 worker，每个 pane 独立 worktree、分支 `herdr/<task>`；gbot 验收每一块，整合成一个分支 / PR 交回引擎，关掉自己开的 pane） | 涉及区域的全部检查 | 视改动 |
 +| area:studio-app | frontend-engineer | `pocket dev studio` 验证点名的界面 + 截图到 `.build/validation/`；**默认验收门** | 否 |
 +| area:control-plane | control-plane-engineer | 该包的测试 | 否 |
  
 -`studio/app` 和 `studio/control-plane` 分给不同的人。运行时契约改动回到 OX，不在 Studio 这棵树里改 host。
 +## 构建资源
-+- 每个 worktree 有自己的 `target/`。`limits.slots.cargo: 2`（10 核 / 32 GB）：带 `needs:cargo` 的 issue 同时最多两条在跑，其余在 T1 等待（`waiting: cargo slots 2/2`）。
-+- sccache：`.envrc` 里在 flake 提供 sccache 时设置 `RUSTC_WRAPPER=sccache` 和 `SCCACHE_DIR=$HOME/.cache/sccache-pocketjs`、`SCCACHE_CACHE_SIZE=40G`。各 worktree 共享编译缓存，不共享 `target/`（AGENTS.md 规则不变）。
++- 每个 worktree 有自己的 `target/`。cargo 槽位：Pocket `limits.slots.cargo: 2`，Studio `1`（10 核 / 32 GB，合计最多 3 条）。带 `needs:cargo` 的 issue 超出时在 T1 等待（`waiting: cargo slots 2/2`）。
++- sccache：`.envrc` 里在 flake 提供 sccache 时设置 `RUSTC_WRAPPER=sccache` 和 `SCCACHE_DIR=$HOME/.cache/sccache-holt`、`SCCACHE_CACHE_SIZE=40G`。各 worktree 共享编译缓存，不共享 `target/`（AGENTS.md 规则不变）。
 +- 磁盘：`min_free_gb: 40` 低于阈值时 T1 不再开新单。
  
 -```mermaid
