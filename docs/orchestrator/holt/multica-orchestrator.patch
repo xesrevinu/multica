@@ -1,720 +1,83 @@
-diff --git a/.multica/REVIEW.md b/.multica/REVIEW.md
-new file mode 100644
-index 00000000..37d2eae9
---- /dev/null
-+++ b/.multica/REVIEW.md
-@@ -0,0 +1,20 @@
-+# REVIEW.md — what review means in holt
-+
-+Read by the reviewer on every orchestrated review. Short on purpose.
-+
-+## What failure looks like here
-+- **Host**: a window, CAMetalLayer or AppKit object created outside `crates/host-apple`; a DrawList or retained-tree change that renders differently on macos-app vs web-gpu; a frame-time regression without a number (`principle-explain-the-number`).
-+- **Compiler / framework**: Solid, Vue Vapor and Octane no longer compiling to the same retained tree; a test that only asserts the implementation shape.
-+- **Studio**: studio/app or studio/control-plane editing the runtime host instead of filing an OX contract issue; a screen change with no screenshot in `.build/validation/`.
-+- **Docs**: they lie (describe behavior the code does not have). **Config**: it misroutes.
-+
-+## Risk (metadata `risk`, set by the reviewer from the change, not the author)
-+- **high** (forces Ray's acceptance): `crates/host-*` unsafe/FFI, `.github/workflows/**`, release and bundle scripts, installers/updaters, `studio/control-plane` license certificates, update channel or analytics/PII, `flake.nix` / `.envrc` toolchain, anything that sets a pattern other areas will copy.
-+- **medium**: ordinary feature or bug fix in one area.
-+- **low**: docs, tests only, internal tooling, additive change behind a flag.
-+
-+## Findings
-+- Each finding: file:line, a concrete failing case, the minimal fix, and its bug class.
-+- Tags: `important` blocks; `nit` at most 3 and never blocks; `pre-existing` never blocks (note it for the lead).
-+- Skip: `.build/`, generated bindings, lockfiles (unless a dependency was added), snapshot files the PR regenerated on purpose.
-+- Start the review comment with the count ("1 important, 0 nit, 2 pre-existing") or "nothing to fix".
-diff --git a/.multica/avatars/claude-engineer.manifest.json b/.multica/avatars/claude-engineer.manifest.json
-deleted file mode 100644
-index 56ebfa9b..00000000
---- a/.multica/avatars/claude-engineer.manifest.json
-+++ /dev/null
-@@ -1,22 +0,0 @@
--{
--  "provider": "tuzi",
--  "model": "gpt-image-2",
--  "requestId": "holt-avatar-claude-engineer-v1",
--  "output": "/Users/kee/Workspace/github.com/effect-anything/activitywatch/.multica/avatars/claude-engineer.png",
--  "size": "512x512",
--  "promptFile": "/Users/kee/Workspace/github.com/effect-anything/activitywatch/.multica/avatars/prompts/claude-engineer.md",
--  "createdAt": "2026-08-16T08:55:58.104Z",
--  "status": "succeeded",
--  "recovered": false,
--  "sourceImage": {
--    "width": 1254,
--    "height": 1254
--  },
--  "image": {
--    "width": 512,
--    "height": 512
--  },
--  "normalized": true,
--  "resultUrl": "https://apioss30.sydney-ai.com/ximg/8lh.9f.e.r6xr6/21e5fb07-1e35-45ef-8544-c469083fec2e/gi2-e1786870556.png",
--  "revisedPrompt": "Flat vector avatar for an AI architecture engineer. A blueprint-like gear and building block silhouette, teal background, no text, centered, high contrast, simple shapes, recognizable at 48px."
--}
-diff --git a/.multica/avatars/code-auditor.manifest.json b/.multica/avatars/code-auditor.manifest.json
-deleted file mode 100644
-index baad67fa..00000000
---- a/.multica/avatars/code-auditor.manifest.json
-+++ /dev/null
-@@ -1,22 +0,0 @@
--{
--  "provider": "tuzi",
--  "model": "gpt-image-2",
--  "requestId": "holt-avatar-code-auditor-v1",
--  "output": "/Users/kee/Workspace/github.com/effect-anything/activitywatch/.multica/avatars/code-auditor.png",
--  "size": "512x512",
--  "promptFile": "/Users/kee/Workspace/github.com/effect-anything/activitywatch/.multica/avatars/prompts/code-auditor.md",
--  "createdAt": "2026-08-16T08:55:55.015Z",
--  "status": "succeeded",
--  "recovered": false,
--  "sourceImage": {
--    "width": 1254,
--    "height": 1254
--  },
--  "image": {
--    "width": 512,
--    "height": 512
--  },
--  "normalized": true,
--  "resultUrl": "https://apioss30.sydney-ai.com/ximg/8lh.9h.e.r6xr6/28cae181-bee0-44b9-8b3a-dd9074b872bf/gi2-e1786870552.png",
--  "revisedPrompt": "Flat vector avatar for an AI code auditor. A shield with a magnifying lens and lock silhouette, charcoal background, no text, centered, high contrast, simple shapes, recognizable at 48px."
--}
-diff --git a/.multica/avatars/codex-engineer.manifest.json b/.multica/avatars/codex-engineer.manifest.json
-deleted file mode 100644
-index a9af6f8e..00000000
---- a/.multica/avatars/codex-engineer.manifest.json
-+++ /dev/null
-@@ -1,22 +0,0 @@
--{
--  "provider": "tuzi",
--  "model": "gpt-image-2",
--  "requestId": "holt-avatar-codex-engineer-v1",
--  "output": "/Users/kee/Workspace/github.com/effect-anything/activitywatch/.multica/avatars/codex-engineer.png",
--  "size": "512x512",
--  "promptFile": "/Users/kee/Workspace/github.com/effect-anything/activitywatch/.multica/avatars/prompts/codex-engineer.md",
--  "createdAt": "2026-08-16T08:55:59.285Z",
--  "status": "succeeded",
--  "recovered": false,
--  "sourceImage": {
--    "width": 1254,
--    "height": 1254
--  },
--  "image": {
--    "width": 512,
--    "height": 512
--  },
--  "normalized": true,
--  "resultUrl": "https://apioss1.sydney-ai.com/ximg/8lh.pp.5.r6xr6/3117d755-8ea8-4ee3-9e75-3ff66dbaf684/gi2-e1786870556.png",
--  "revisedPrompt": "Flat vector avatar for an AI bugfix and refactor engineer. A wrench and crossed code brackets silhouette, amber background, no text, centered, high contrast, simple shapes, recognizable at 48px."
--}
-diff --git a/.multica/avatars/frontend-engineer.manifest.json b/.multica/avatars/frontend-engineer.manifest.json
-deleted file mode 100644
-index 70de1665..00000000
---- a/.multica/avatars/frontend-engineer.manifest.json
-+++ /dev/null
-@@ -1,22 +0,0 @@
--{
--  "provider": "tuzi",
--  "model": "gpt-image-2",
--  "requestId": "holt-avatar-frontend-engineer-v1",
--  "output": "/Users/kee/Workspace/github.com/effect-anything/activitywatch/.multica/avatars/frontend-engineer.png",
--  "size": "512x512",
--  "promptFile": "/Users/kee/Workspace/github.com/effect-anything/activitywatch/.multica/avatars/prompts/frontend-engineer.md",
--  "createdAt": "2026-08-16T08:55:55.750Z",
--  "status": "succeeded",
--  "recovered": false,
--  "sourceImage": {
--    "width": 1254,
--    "height": 1254
--  },
--  "image": {
--    "width": 512,
--    "height": 512
--  },
--  "normalized": true,
--  "resultUrl": "https://apioss.sydney-ai.com/ximg/8lh.pp.5.r6xr6/8e80bd6f-6aed-4716-b0b1-a756ecfa5986/gi2-e1786870553.png",
--  "revisedPrompt": "Flat vector avatar for an AI frontend engineer. A browser window with layout columns and a paint brush silhouette, sky blue background, no text, centered, high contrast, simple shapes, recognizable at 48px."
--}
-diff --git a/.multica/avatars/prompts/claude-engineer.md b/.multica/avatars/prompts/claude-engineer.md
-deleted file mode 100644
-index 9ab0e913..00000000
---- a/.multica/avatars/prompts/claude-engineer.md
-+++ /dev/null
-@@ -1 +0,0 @@
--Flat vector avatar for an AI architecture engineer. A blueprint-like gear and building block silhouette, teal background, no text, centered, high contrast, simple shapes, recognizable at 48px.
-diff --git a/.multica/avatars/prompts/code-auditor.md b/.multica/avatars/prompts/code-auditor.md
-deleted file mode 100644
-index 80e17fde..00000000
---- a/.multica/avatars/prompts/code-auditor.md
-+++ /dev/null
-@@ -1 +0,0 @@
--Flat vector avatar for an AI code auditor. A shield with a magnifying lens and lock silhouette, charcoal background, no text, centered, high contrast, simple shapes, recognizable at 48px.
-diff --git a/.multica/avatars/prompts/codex-engineer.md b/.multica/avatars/prompts/codex-engineer.md
-deleted file mode 100644
-index 5460f78b..00000000
---- a/.multica/avatars/prompts/codex-engineer.md
-+++ /dev/null
-@@ -1 +0,0 @@
--Flat vector avatar for an AI bugfix and refactor engineer. A wrench and crossed code brackets silhouette, amber background, no text, centered, high contrast, simple shapes, recognizable at 48px.
-diff --git a/.multica/avatars/prompts/frontend-engineer.md b/.multica/avatars/prompts/frontend-engineer.md
-deleted file mode 100644
-index 544d7dde..00000000
---- a/.multica/avatars/prompts/frontend-engineer.md
-+++ /dev/null
-@@ -1 +0,0 @@
--Flat vector avatar for an AI frontend engineer. A browser window with layout columns and a paint brush silhouette, sky blue background, no text, centered, high contrast, simple shapes, recognizable at 48px.
-diff --git a/.multica/avatars/prompts/researcher.md b/.multica/avatars/prompts/researcher.md
-deleted file mode 100644
-index 06499337..00000000
---- a/.multica/avatars/prompts/researcher.md
-+++ /dev/null
-@@ -1 +0,0 @@
--Flat vector avatar for an AI research assistant. An open book with a search spark silhouette, slate background, no text, centered, high contrast, simple shapes, recognizable at 48px.
-diff --git a/.multica/avatars/prompts/reviewer.md b/.multica/avatars/prompts/reviewer.md
-deleted file mode 100644
-index 9b526782..00000000
---- a/.multica/avatars/prompts/reviewer.md
-+++ /dev/null
-@@ -1 +0,0 @@
--Flat vector avatar for an AI code reviewer. A magnifying glass over a checkmark silhouette, violet background, no text, centered, high contrast, simple shapes, recognizable at 48px.
-diff --git a/.multica/avatars/prompts/team-lead.md b/.multica/avatars/prompts/team-lead.md
-deleted file mode 100644
-index 659ef515..00000000
---- a/.multica/avatars/prompts/team-lead.md
-+++ /dev/null
-@@ -1 +0,0 @@
--Flat vector avatar for an AI team leader. A calm commander silhouette holding a small glowing command baton, deep navy background, subtle circuit lines, no text, centered, high contrast, simple shapes, recognizable at 48px.
-diff --git a/.multica/avatars/researcher.manifest.json b/.multica/avatars/researcher.manifest.json
-deleted file mode 100644
-index 05c83171..00000000
---- a/.multica/avatars/researcher.manifest.json
-+++ /dev/null
-@@ -1,22 +0,0 @@
--{
--  "provider": "tuzi",
--  "model": "gpt-image-2",
--  "requestId": "holt-avatar-researcher-v1",
--  "output": "/Users/kee/Workspace/github.com/effect-anything/activitywatch/.multica/avatars/researcher.png",
--  "size": "512x512",
--  "promptFile": "/Users/kee/Workspace/github.com/effect-anything/activitywatch/.multica/avatars/prompts/researcher.md",
--  "createdAt": "2026-08-16T08:55:55.984Z",
--  "status": "succeeded",
--  "recovered": false,
--  "sourceImage": {
--    "width": 1254,
--    "height": 1254
--  },
--  "image": {
--    "width": 512,
--    "height": 512
--  },
--  "normalized": true,
--  "resultUrl": "https://apioss1.sydney-ai.com/ximg/8lh.9h.4.r6xr6/5f8ad7cb-572c-4341-966e-266d81ff70c0/gi2-e1786870553.png",
--  "revisedPrompt": "Flat vector avatar for an AI research assistant. An open book with a search spark silhouette, slate background, no text, centered, high contrast, simple shapes, recognizable at 48px."
--}
-diff --git a/.multica/avatars/reviewer.manifest.json b/.multica/avatars/reviewer.manifest.json
-deleted file mode 100644
-index d5445176..00000000
---- a/.multica/avatars/reviewer.manifest.json
-+++ /dev/null
-@@ -1,22 +0,0 @@
--{
--  "provider": "tuzi",
--  "model": "gpt-image-2",
--  "requestId": "holt-avatar-reviewer-v1",
--  "output": "/Users/kee/Workspace/github.com/effect-anything/activitywatch/.multica/avatars/reviewer.png",
--  "size": "512x512",
--  "promptFile": "/Users/kee/Workspace/github.com/effect-anything/activitywatch/.multica/avatars/prompts/reviewer.md",
--  "createdAt": "2026-08-16T08:56:04.268Z",
--  "status": "succeeded",
--  "recovered": false,
--  "sourceImage": {
--    "width": 1254,
--    "height": 1254
--  },
--  "image": {
--    "width": 512,
--    "height": 512
--  },
--  "normalized": true,
--  "resultUrl": "https://apioss30.sydney-ai.com/ximg/8lh.9h.8.r6xr6/6a867c64-8785-408e-998d-ceaef8ac6c1e/gi2-e1786870561.png",
--  "revisedPrompt": "Flat vector avatar for an AI code reviewer. A magnifying glass over a checkmark silhouette, violet background, no text, centered, high contrast, simple shapes, recognizable at 48px."
--}
-diff --git a/.multica/avatars/team-lead.manifest.json b/.multica/avatars/team-lead.manifest.json
-deleted file mode 100644
-index d2600043..00000000
---- a/.multica/avatars/team-lead.manifest.json
-+++ /dev/null
-@@ -1,22 +0,0 @@
--{
--  "provider": "tuzi",
--  "model": "gpt-image-2",
--  "requestId": "holt-avatar-team-lead-v1",
--  "output": "/Users/kee/Workspace/github.com/effect-anything/activitywatch/.multica/avatars/team-lead.png",
--  "size": "512x512",
--  "promptFile": "/Users/kee/Workspace/github.com/effect-anything/activitywatch/.multica/avatars/prompts/team-lead.md",
--  "createdAt": "2026-08-16T08:55:07.317Z",
--  "status": "succeeded",
--  "recovered": false,
--  "sourceImage": {
--    "width": 1254,
--    "height": 1254
--  },
--  "image": {
--    "width": 512,
--    "height": 512
--  },
--  "normalized": true,
--  "resultUrl": "https://apioss1.sydney-ai.com/ximg/8lh.9g.8.r6xr6/b264a22b-7a39-4d3d-a2f8-f7675abc3e24/gi2-e1786870502.png",
--  "revisedPrompt": "Flat vector avatar for an AI team leader. A calm commander silhouette holding a small glowing command baton, deep navy background, subtle circuit lines, no text, centered, high contrast, simple shapes, recognizable at 48px."
--}
 diff --git a/.multica/project.yaml b/.multica/project.yaml
-index 46b27e92..9d5a3ac6 100644
+index 9d5a3ac6..06865149 100644
 --- a/.multica/project.yaml
 +++ b/.multica/project.yaml
-@@ -1,6 +1,10 @@
- # Multica declaration. One file, two workspaces.
- 
- skills:
-+  - name: pocket-checks
-+    bind: listed
-+    description: Area to check mapping for owner and reviewer runs.
-+    path: ./skills/pocket-checks
-   - name: rust-best-practices
-     bind: listed
-     description: Idiomatic Rust for the host. Does not choose the build command.
-@@ -25,22 +29,33 @@ skills:
- agents:
-   - name: yielded-lead
-     runtime: mac-studio:yielded
--    role: Squad leader
-+    avatar: ./avatars/team-lead.png
-+    role: Lead
-     description: Chooses the next person on the roster. Does not implement or accept the result.
-     model: magpie/group/daily-work
-     thinking_level: high
-     max_concurrent_tasks: 3
-     skills:
-       - improve-codebase-architecture
-+      - plan-split
-+      - blocked-report
-+      - in-your-own-words
-+      - figure-it-out
-+      - principle-attack-the-premise
-+      - principle-sequence-verifiable-units
-+      - principle-outcome-oriented-execution
-+      - sharpen
-+      - principle-guard-the-context-window
-     instructions: |
--      Do not edit, commit, push, merge, or mark an issue done. Do not split.
-+      Do not edit, commit, push, merge, or mark an issue done.
- 
--      Pick the next single step from the squad roster. A hard problem, or one that splits into independent parts, goes to gbot. A single clear part goes to that part's owner. A child issue is already one part: mention its owner, not gbot. Research only when the issue asks, or the choice cannot be made from the issue itself. Then implementation. Then review. One @mention. Do not also open a todo child for that same work.
-+      In orchestrated projects (Pocket, Studio Parts) the orchestrator assigns owners, routes review and rework, and merges. You do two things there, following the preset lead role (`multica team preset render`): plan an epic into staged backlog children with area labels (`area:host`, `area:compiler`, `area:framework`, `area:cli`, `area:apps`, `area:studio-app`, `area:control-plane`, `area:hard`, `area:research`), `needs:cargo` when the change builds Rust, and `needs-GUI-Master` when a person must look at a screen; and handle issues that arrive blocked (clarify and `phase=unblocked`, `phase=cancel_proposed`, or escalate). No @mentions to start work; the engine starts it.
- 
--      A review with no blocking finding is ready for a person: set this issue in_review. That status is only for this issue. Do not wait for another issue. A blocking finding goes back to the implementer. If the implementer says they are blocked, set blocked. You do not accept the work.
-+      Outside orchestrated projects keep the old roster rule: one @mention to the next single step.
- 
-   - name: yielded-researcher
-     runtime: mac-studio:yielded
-+    avatar: ./avatars/researcher.png
-     role: Read-only researcher
-     description: Answers from primary sources and writes one sourced report. Changes no files.
-     model: magpie/group/research
-@@ -59,6 +74,7 @@ agents:
- 
-   - name: yielded-engineer
-     runtime: mac-studio:yielded
-+    avatar: ./avatars/codex-engineer.png
-     role: Implementation
-     description: Makes the smallest change that satisfies one issue.
-     model: magpie/group/daily-work
-@@ -80,8 +96,8 @@ agents:
-   - name: gbot
+@@ -97,7 +97,7 @@ agents:
      runtime: mac-studio:gbot
      gbot: Grok Bot
--    role: Principal
--    description: Takes the hardest part. Splits the rest into parallel child issues.
-+    role: Expert
-+    description: External expert for research and the hardest work. Not an owner; the orchestrator routes area:hard, area:cross-cutting and area:research issues to it.
+     role: Expert
+-    description: External expert for research and the hardest work. Not an owner; the orchestrator routes area:hard, area:cross-cutting and area:research issues to it.
++    description: External expert for research and the hardest work. Not an owner; orchestrator experts deep-work (area:hard, area:cross-cutting) and research (area:research).
      max_concurrent_tasks: 2
      skills:
        - improve-codebase-architecture
-@@ -90,17 +106,40 @@ agents:
-       - webgpu-specs
-       - diagnosing-bugs
-       - m10-performance
--    instructions: |
--      You take the hardest part of the issue and do that part yourself, in this checkout. The repository's rules decide how to build. Skills do not override them.
-+      - pocket-checks
-+      - open-pr
-+      - handoff-metadata
-+      - rebase-conflict
-+      - blocked-report
-+      # research (lead-like)
-+      - in-your-own-words
-+      - figure-it-out
-+      - principle-attack-the-premise
-+      - principle-sequence-verifiable-units
-+      - principle-guard-the-context-window
-+      # verify and integrate
-+      - principle-prove-it-works
-+      - blast-radius
-+      - swarm
-+    # Creation-time persona of the persistent Grok Bot. Sync writes it with
-+    # `gbot bots update --instructions-file`; the per-task message carries only
-+    # the task and its gbot-task marker.
-+    gbot_instructions: |
-+      You are the expert, not an owner. The orchestrator hands you research and the hardest work (area:hard, area:cross-cutting, area:research). The repository's rules decide how to build. Skills do not override them.
- 
--      If the rest splits into independent pieces, keep the hardest piece. File each other piece as its own child issue assigned to this issue's squad, with `--status todo`, `--parent`, and a 依赖 line that names this issue. A child is one clear part. Do not assign the part's owner, do not pass `--stage`, and do not @mention anyone on this issue for that piece. That starts the squad leader on the child. The 依赖 line is a trace for Ray, not a branch dependency.
-+      Research: answer from primary sources and the code. Post one sourced finding on the issue. Change no files unless the issue asks for a change.
- 
--      A change you make is ready only when a check covers the behavior you touched. Do not commit or push unless the issue says so. Do not merge. Post one issue comment with no @mention: what you kept, which children you filed, the branch from `git branch --show-current`, what you checked, and what you did not verify. Do not mark the issue done.
-+      Hard work: do it yourself in this issue's worktree, or fan it out. To fan out, open one herdr pane per independent piece and type `grok-pi-worker` into it. Each pane works in its own worktree on branch `herdr/<task>` and never touches another pane's worktree or the primary checkout. Do not steal focus. At most two cargo builds run at once on the machine.
- 
--      End with the exact gbot-task marker from the request. Use status=completed only when your checks passed; otherwise status=failed and name the blocker.
-+      You own acceptance of every fanned-out piece: read its diff, run the checks that cover it (pocket-checks, verify-gates), and send it back to its pane until it passes. Then integrate all pieces into this issue's single branch (squash, no merge commits, no force), close the panes you opened, and hand back to the orchestrator with one PR or branch for the issue. Do not merge to main and do not mark the issue done.
-+
-+      Post one issue comment with no @mention: what you did yourself, what each pane did, the branch from `git branch --show-current`, what you checked, and what you did not verify.
-+
-+      End every task reply with the exact gbot-task marker the task message gives. Use status=completed only when your checks passed; otherwise status=failed and name the blocker.
- 
-   - name: yielded-reviewer
-     runtime: mac-studio:yielded
-+    avatar: ./avatars/reviewer.png
-     role: Read-only reviewer
-     description: Judges a change on the issue and on the repo's rules. Changes no files.
-     model: magpie/group/explore
-@@ -112,6 +151,16 @@ agents:
-       - apple-appkit
-       - webgpu-specs
-       - diagnosing-bugs
-+      - verify-gates
-+      - review-verdict
-+      - blocked-report
-+      - pocket-checks
-+      - handoff-metadata
-+      - interrogate
-+      - blast-radius
-+      - principle-prove-it-works
-+      - principle-test-behavior-not-implementation
-+      - no-comments
-     instructions: |
-       Read only. Do not modify files or change git state.
- 
-@@ -119,6 +168,8 @@ agents:
- 
-       It passes when both are true and a check covers the risky behavior. It does not pass when the ask is missing or wrong, unasked behavior was added, an invariant is broken, or you cannot tell. Name the file and the issue line or the rule for each finding. Lead with blocking findings. If nothing blocks, say what you checked.
- 
-+      In orchestrated projects (Pocket, Studio Parts) follow the preset reviewer role and skill `review-verdict`: read `.multica/REVIEW.md`; find with several lenses (`interrogate`), keep only findings you reproduced or pinned to file:line; tag each `important` (blocks), `nit` (at most 3, never blocks) or `pre-existing` (note for the lead); start the comment with the count or "nothing to fix"; on re-review look only at the diff since the last `reviewed_sha` and do not repeat findings; set metadata `risk` (low|medium|high) from REVIEW.md's high-risk paths. The verdict goes into metadata, not issue status.
-+
-       Judge the branch named in the implementer's comment. Your own checkout is another branch and does not contain their commits. Post one comment with no @mention. Do not change the issue status. You may `delegate` one bounded read of the diff. Do not open issues, assign anyone, or start another run.
- 
- workspaces:
-@@ -126,6 +177,7 @@ workspaces:
-     agents:
-       - name: heavy-engineer
-         runtime: mac-studio:yielded
-+        avatar: ./avatars/claude-engineer.png
-         role: Implementation
-         description: Owns framework, compiler, CLI, apps, and the Rust host.
-         model: magpie/group/daily-work
-@@ -138,6 +190,19 @@ workspaces:
-           - webgpu-specs
-           - diagnosing-bugs
-           - m10-performance
-+          - open-pr
-+          - handoff-metadata
-+          - rebase-conflict
-+          - blocked-report
-+          - pocket-checks
-+          - tdd
-+          - principle-prove-it-works
-+          - principle-fix-root-causes
-+          - principle-subtract-before-you-add
-+          - principle-test-behavior-not-implementation
-+          - blast-radius
-+          - principle-boundary-discipline
-+          - typescript-best-practices
-         instructions: |
-           Work only in this checkout. You own framework, compiler, CLI, apps, and the Rust host. Do not edit studio/ unless the issue says a runtime contract has to change.
- 
-@@ -147,6 +212,7 @@ workspaces:
- 
-       - name: code-auditor
-         runtime: mac-studio:yielded
-+        avatar: ./avatars/code-auditor.png
-         role: Read-only audit
-         description: Looks for broken invariants, wrong behavior, and security risk. Changes no files.
-         model: magpie/group/daily-work
-@@ -184,30 +250,49 @@ workspaces:
-           - type: github_repo
-             url: git@github.com:effect-anything/holt.git
-             label: holt
-+        # In-app orchestrator owns status/assignee for this project (replaces
-+        # @mention routing). Rendered role text: `multica team preset render`.
-+        orchestrator:
-+          preset: impl-review-merge
-+          roles:
-+            lead: yielded-lead
-+            reviewer: yielded-reviewer          # never in an owner pool
-+            owners: [heavy-engineer]
-+            human: Ray
-+            # First matching area label picks the pool. gbot is the expert, not an
-+            # owner: it only gets research and the hardest work.
-+            routes:
-+              - { labels: [area:hard, area:cross-cutting, area:research], owners: [gbot] }
-+              - { labels: [area:host, area:compiler, area:framework, area:cli, area:apps], owners: [heavy-engineer] }
-+          repo:
-+            mode: github
-+            slug: effect-anything/holt
-+            hub: /Users/kee/Workspace/boom/holt   # wt switch from here; .config/wt.toml hooks run
-+            main: main
-+            branch_prefix: agent/
-+            # GitHub CI stays off (ci.yml is workflow_dispatch only, by decision).
-+            # The gate is the engine's review-verdict; owners and the reviewer run
-+            # the local pocket checks (pocket-checks, verify-gates) before handoff.
-+            required_checks: [review-verdict]
-+            disk_path: /Users/kee/.cursor/worktrees
-+          acceptance:
-+            labels: [needs-acceptance, needs-GUI-Master, needs-Ray-signoff]
-+            default_for_labels: [area:apps]     # user-visible app behaviour
-+          limits:
-+            impl: 3
-+            review: 3
-+            infra: 2
-+            stuck_min: 60        # cold Rust builds are long
-+            idle_min: 15         # one cargo step can be silent for minutes
-+            min_free_gb: 40      # every worktree has its own target/
-+            slots: { cargo: 2 }  # Pocket 2 + Studio 1 = at most 3 cargo-heavy issues on the Mac Studio
- 
--    squads:
--      - name: OX Squad
--        leader: yielded-lead
--        description: Framework, compiler, Rust host, CLI, and apps. Not studio/.
--        instructions: |
--          Scope is framework, compiler, Rust host, CLI, and apps. Not studio/.
--
--          A hard problem, or work that splits, goes to gbot. gbot keeps the hardest part. A single clear part goes to heavy-engineer. Research with yielded-researcher only when the issue asks for research first. Review with yielded-reviewer. Do not mention yielded-engineer or code-auditor. Ray merges and marks done.
--
--          One @mention on this issue. Do not also open a todo child for the same work. One issue is one worktree. Do not clone the GitHub repo or edit the primary checkout. Do not merge.
--
--          When review has no remaining findings, set in_review. Do not set done. A child issue has its own review and its own in_review. Ray merges each of those branches and marks each issue done.
--        members:
--          - { type: agent, ref: gbot, role: principal }
--          - { type: agent, ref: yielded-researcher, role: research }
--          - { type: agent, ref: heavy-engineer, role: implementation }
--          - { type: agent, ref: yielded-reviewer, role: reviewer }
--          - { type: member, ref: Ray, role: final-reviewer }
- 
-   - workspace: da70b409-e6e8-4ba5-932a-a143d85e9d6f
-     agents:
-       - name: frontend-engineer
-         runtime: mac-studio:yielded
-+        avatar: ./avatars/frontend-engineer.png
-         role: Studio UI
-         description: Owns the native panel in studio/app.
-         model: magpie/group/daily-work
-@@ -215,6 +300,19 @@ workspaces:
-         max_concurrent_tasks: 3
-         skills:
-           - diagnosing-bugs
-+          - open-pr
-+          - handoff-metadata
-+          - rebase-conflict
-+          - blocked-report
-+          - pocket-checks
-+          - tdd
-+          - principle-prove-it-works
-+          - principle-fix-root-causes
-+          - principle-subtract-before-you-add
-+          - principle-test-behavior-not-implementation
-+          - blast-radius
-+          - principle-boundary-discipline
-+          - typescript-best-practices
-         instructions: |
-           You own studio/app. Do not edit studio/control-plane or the runtime host. If the screen needs a runtime contract, stop and say so.
- 
-@@ -230,8 +328,21 @@ workspaces:
-         skills:
-           - improve-codebase-architecture
-           - diagnosing-bugs
-+          - open-pr
-+          - handoff-metadata
-+          - rebase-conflict
-+          - blocked-report
-+          - pocket-checks
-+          - tdd
-+          - principle-prove-it-works
-+          - principle-fix-root-causes
-+          - principle-subtract-before-you-add
-+          - principle-test-behavior-not-implementation
-+          - blast-radius
-+          - principle-boundary-discipline
-+          - typescript-best-practices
-         instructions: |
--          You own studio/control-plane and the studio packages it imports. Do not edit studio/app or the PocketJS host. If the change needs a runtime contract, stop and say so.
-+          You own studio/control-plane and the studio packages it imports. Do not edit studio/app or the holt host. If the change needs a runtime contract, stop and say so.
- 
-           The change is done only when a test covers the behavior you touched. Do not commit or push unless the issue says so. Do not merge. Post one issue comment with no @mention: what changed, the branch from `git branch --show-current`, what you checked, and what you did not verify. If you cannot proceed, say blocked and what is missing. Do not change the issue status.
- 
-@@ -251,21 +362,30 @@ workspaces:
-           - type: github_repo
-             url: git@github.com:effect-anything/holt.git
-             label: holt
-+        # In-app orchestrator owns status/assignee for this project (replaces
-+        # @mention routing). Rendered role text: `multica team preset render`.
-+        orchestrator:
-+          preset: impl-review-merge
-+          roles:
-+            lead: yielded-lead
-+            reviewer: yielded-reviewer          # never in an owner pool
-+            owners: [frontend-engineer, control-plane-engineer]
-+            human: Ray
-+            routes:
-+              # gbot is the expert, not an owner: research and the hardest work only.
-+              - { labels: [area:hard, area:cross-cutting, area:research], owners: [gbot] }
-+              - { labels: [area:studio-app], owners: [frontend-engineer] }
-+              - { labels: [area:control-plane], owners: [control-plane-engineer] }
-+          repo:
-+            mode: github
-+            slug: effect-anything/holt
-+            hub: /Users/kee/Workspace/boom/holt
-+            main: main
-+            branch_prefix: agent/
-+            required_checks: [review-verdict]   # GitHub CI off; local pocket checks gate
-+            disk_path: /Users/kee/.cursor/worktrees
-+          acceptance:
-+            labels: [needs-acceptance, needs-GUI-Master, needs-Ray-signoff]
-+            default_for_labels: [area:studio-app]   # every studio/app screen change waits for Ray
-+          limits: { impl: 3, review: 3, infra: 2, stuck_min: 45, idle_min: 12, min_free_gb: 40, slots: { cargo: 1 } }
- 
--    squads:
--      - name: Studio Squad
--        leader: yielded-lead
--        description: studio/app and studio/control-plane.
--        instructions: |
--          A hard problem, or work that crosses studio/app and studio/control-plane, goes to gbot. gbot keeps the hardest part. A single screen goes to frontend-engineer. Control-plane work goes to control-plane-engineer. Research with yielded-researcher only when the issue asks. Review with yielded-reviewer. yielded-engineer is not on this roster. Ray merges and marks done.
--
--          One @mention. Do not also open a todo child for the same work. Do not edit the runtime host here. A host contract change is an OX issue named in a 依赖 line; leave this issue in backlog until it lands.
--
--          One issue is one worktree. Do not clone the GitHub repo or edit the primary checkout. Do not merge. When review has no remaining findings, set in_review. Do not set done. A child issue has its own review and its own in_review. Ray merges each of those branches and marks each issue done.
--        members:
--          - { type: agent, ref: gbot, role: principal }
--          - { type: agent, ref: yielded-researcher, role: research }
--          - { type: agent, ref: frontend-engineer, role: ui }
--          - { type: agent, ref: control-plane-engineer, role: control-plane }
--          - { type: agent, ref: yielded-reviewer, role: reviewer }
--          - { type: member, ref: Ray, role: final-reviewer }
-diff --git a/.multica/skills/pocket-checks/SKILL.md b/.multica/skills/pocket-checks/SKILL.md
-new file mode 100644
-index 00000000..b3d8cd0a
---- /dev/null
-+++ b/.multica/skills/pocket-checks/SKILL.md
-@@ -0,0 +1,23 @@
-+---
-+name: pocket-checks
-+description: Pick and run the checks that cover a holt change by area, the same way for the owner and the independent reviewer. Use in orchestrated Pocket and Studio runs.
-+---
-+
-+# Pocket checks
-+
-+1. Area from the issue label (`area:*`) and the changed paths (`git diff --name-only origin/main...HEAD`).
-+2. Run the checks for every touched area. Never assemble cargo or tsc by hand.
-+
-+| Paths | Check |
-+|---|---|
-+| crates/, host code | `pocket dev <app> --target macos-app` smoke, `bun run test --project host` |
-+| compiler/ | `bun run test --project compiler` |
-+| framework/ | `bun run test --project framework` |
-+| cli/ | `bun run test --project cli` |
-+| apps/<app>/ | `pocket check apps/<app>` |
-+| studio/app/ | `pocket dev studio`, check the named screen, screenshot into `studio/app/.build/validation/<KEY>/` |
-+| studio/control-plane/ | that package's tests |
-+| any TS source | `bun check` |
-+
-+3. Put each command and the tail of its output in the result comment. A check you could not run is reported as not verified, with the reason.
-+4. Screenshots and logs stay in ignored `.build/validation/`; never commit them.
-diff --git a/.multica/workflow.md b/.multica/workflow.md
-deleted file mode 100644
-index a51e4b56..00000000
---- a/.multica/workflow.md
-+++ /dev/null
-@@ -1,49 +0,0 @@
--# Multica 流程
--
--## 框架（OX）
--
--范围是 framework、compiler、Rust host、CLI、apps。不进 `studio/`。实现者是 `grok-engineer`，研究和审查仍是 yielded。
--
--```mermaid
--flowchart TD
--  in["人在 OX 建 backlog issue，不指派"] --> gate{"人把 issue 交给 OX Squad"}
--  gate --> lead["yielded-lead 开工，自己不改代码"]
--  lead --> ask{"issue 要求先研究吗"}
--  ask -->|是| rs["@ yielded-researcher，只读，评论交回"]
--  rs --> impl["@ grok-engineer"]
--  ask -->|否| impl
--  impl --> wt["mac-studio 上的 wt worktree，agent/issue"]
--  wt --> code["pocket dev，只跑相关检查；不手写 cargo，不共享 target"]
--  code --> rv["实现者评论后，leader @ yielded-reviewer"]
--  rv --> read["审查只读"]
--  read --> audit{"人还要审计吗"}
--  audit -->|要| extra["人直接指派 code-auditor，不经过 squad"]
--  audit -->|不要| review["leader 把 issue 设为 in_review"]
--  extra --> review
--  review --> ray["Ray 合并，并标 done"]
--```
--
--要拆开时，leader 只建 backlog、不指派的子 issue，带 `--parent`、`--stage` 和 `依赖`。人再决定把哪一条交给 squad。
--
--## Studio
--
--`studio/app` 和 `studio/control-plane` 分给不同的人。运行时契约改动回到 OX，不在 Studio 这棵树里改 host。
--
--```mermaid
--flowchart TD
--  in["人在 Studio 建 backlog issue，不指派"] --> gate{"人把 issue 交给 Studio Squad"}
--  gate --> lead["yielded-lead 开工"]
--  lead --> where{"落点"}
--  where -->|studio/app| fe["@ frontend-engineer"]
--  where -->|studio/control-plane| cp["@ control-plane-engineer"]
--  where -->|要改 runtime 或 host 契约| ox["停下；人在 OX 另开 issue，Studio 这条写上依赖"]
--  fe --> wt["另一棵 wt worktree"]
--  cp --> wt
--  wt --> verify{"哪一边"}
--  verify -->|app| screen["pocket dev studio，验证点名的界面"]
--  verify -->|control-plane| tests["只跑这块的测试，不改 studio/app"]
--  screen --> rv["leader @ yielded-reviewer"]
--  tests --> rv
--  rv --> review["审查通过后 leader 设 in_review"]
--  review --> ray["Ray 合并，并标 done"]
--```
-diff --git a/AGENTS.md b/AGENTS.md
-index 5a9ae965..200d708a 100644
---- a/AGENTS.md
-+++ b/AGENTS.md
-@@ -105,7 +105,7 @@ The CLI is `multica`. Do not change its default workspace. Pass the full id:
- 
- File follow-up issues as `--status backlog` with no assignee, unless asked to start work. Use `--parent` and `--stage`. Put `依赖: …` at the top of the body. Search for an equal title first.
- 
--OX Squad owns framework, compiler, the Rust host, CLI, and apps. Studio Squad owns `studio/app` and `studio/control-plane`. A host or runtime contract change is an OX issue. The roster is in [`.multica/workflow.md`](.multica/workflow.md). Assigning a squad starts its leader. The leader delegates with one @mention and does not also open a `todo` child for that same work.
-+OX owns framework, compiler, the Rust host, CLI, and apps (project Pocket). Studio owns `studio/app` and `studio/control-plane` (project Studio Parts). A host or runtime contract change is an OX issue. The roster, area routes and owners are the `orchestrator:` sections of [`.multica/project.yaml`](.multica/project.yaml); the orchestrator assigns work by area label. Do not open a `todo` child for work that is already assigned.
- 
- ## Build
- 
-diff --git a/studio/AGENTS.md b/studio/AGENTS.md
-index 1c268af9..23f59624 100644
---- a/studio/AGENTS.md
-+++ b/studio/AGENTS.md
-@@ -3,7 +3,7 @@
- PocketJS SaaS control plane for app updates, license certificates, observability, and analytics.
- Private to this repo. Not published.
- 
--Studio issues live in the Studio workspace. `studio/app` and `studio/control-plane` are different implementers. A runtime or host contract change is an OX issue, not an edit made from a Studio task. The roster and flow are in [`.multica/workflow.md`](../.multica/workflow.md).
-+Studio issues live in the Studio workspace. `studio/app` and `studio/control-plane` are different implementers. A runtime or host contract change is an OX issue, not an edit made from a Studio task. The roster and area routes are the Studio `orchestrator:` section of [`.multica/project.yaml`](../.multica/project.yaml).
- 
- `control-plane/` holds the Cloudflare services — see
- [control-plane/AGENTS.md](./control-plane/AGENTS.md). Workspace packages this tree imports
+@@ -259,11 +259,32 @@ workspaces:
+             reviewer: yielded-reviewer          # never in an owner pool
+             owners: [heavy-engineer]
+             human: Ray
+-            # First matching area label picks the pool. gbot is the expert, not an
+-            # owner: it only gets research and the hardest work.
++            # First matching area label picks the owner pool (after experts).
+             routes:
+-              - { labels: [area:hard, area:cross-cutting, area:research], owners: [gbot] }
+               - { labels: [area:host, area:compiler, area:framework, area:cli, area:apps], owners: [heavy-engineer] }
++          experts:
++            # gbot is an expert, not an owner: matched before routes, never in the
++            # default owner pool, so an unlabelled issue never reaches it.
++            - name: deep-work
++              agents: [gbot]
++              when: { labels: [area:hard, area:cross-cutting] }
++              mode: implement
++              skills: [pocket-checks, diagnosing-bugs]
++              instructions: |
++                Do the hardest part yourself, or fan out: one herdr pane per independent
++                piece, type `grok-pi-worker`, each pane in its own worktree on branch
++                `herdr/<task>`. Accept every piece (pocket-checks, verify-gates),
++                integrate them into this issue's branch (squash, no merge commits, no
++                force), close the panes you opened, then hand back as an owner would.
++              limits: { concurrent: 2 }
++            - name: research
++              agents: [gbot]
++              when: { labels: [area:research] }
++              mode: consult       # role baseline skills only; extras exceed the 45000-byte budget
++              instructions: |
++                Answer from primary sources and the code. One sourced finding: what
++                you checked, what you found, what the owner should do. No files, no
++                branch.
+           repo:
+             mode: github
+             slug: effect-anything/holt
+@@ -372,10 +393,31 @@ workspaces:
+             owners: [frontend-engineer, control-plane-engineer]
+             human: Ray
+             routes:
+-              # gbot is the expert, not an owner: research and the hardest work only.
+-              - { labels: [area:hard, area:cross-cutting, area:research], owners: [gbot] }
+               - { labels: [area:studio-app], owners: [frontend-engineer] }
+               - { labels: [area:control-plane], owners: [control-plane-engineer] }
++          experts:
++            # gbot is an expert, not an owner: matched before routes, never in the
++            # default owner pool, so an unlabelled issue never reaches it.
++            - name: deep-work
++              agents: [gbot]
++              when: { labels: [area:hard, area:cross-cutting] }
++              mode: implement
++              skills: [pocket-checks, diagnosing-bugs]
++              instructions: |
++                Do the hardest part yourself, or fan out: one herdr pane per independent
++                piece, type `grok-pi-worker`, each pane in its own worktree on branch
++                `herdr/<task>`. Accept every piece (pocket-checks, verify-gates),
++                integrate them into this issue's branch (squash, no merge commits, no
++                force), close the panes you opened, then hand back as an owner would.
++              limits: { concurrent: 2 }
++            - name: research
++              agents: [gbot]
++              when: { labels: [area:research] }
++              mode: consult       # role baseline skills only; extras exceed the 45000-byte budget
++              instructions: |
++                Answer from primary sources and the code. One sourced finding: what
++                you checked, what you found, what the owner should do. No files, no
++                branch.
+           repo:
+             mode: github
+             slug: effect-anything/holt

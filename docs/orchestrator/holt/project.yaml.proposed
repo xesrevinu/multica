@@ -97,7 +97,7 @@ agents:
     runtime: mac-studio:gbot
     gbot: Grok Bot
     role: Expert
-    description: External expert for research and the hardest work. Not an owner; the orchestrator routes area:hard, area:cross-cutting and area:research issues to it.
+    description: External expert for research and the hardest work. Not an owner; orchestrator experts deep-work (area:hard, area:cross-cutting) and research (area:research).
     max_concurrent_tasks: 2
     skills:
       - improve-codebase-architecture
@@ -259,11 +259,32 @@ workspaces:
             reviewer: yielded-reviewer          # never in an owner pool
             owners: [heavy-engineer]
             human: Ray
-            # First matching area label picks the pool. gbot is the expert, not an
-            # owner: it only gets research and the hardest work.
+            # First matching area label picks the owner pool (after experts).
             routes:
-              - { labels: [area:hard, area:cross-cutting, area:research], owners: [gbot] }
               - { labels: [area:host, area:compiler, area:framework, area:cli, area:apps], owners: [heavy-engineer] }
+          experts:
+            # gbot is an expert, not an owner: matched before routes, never in the
+            # default owner pool, so an unlabelled issue never reaches it.
+            - name: deep-work
+              agents: [gbot]
+              when: { labels: [area:hard, area:cross-cutting] }
+              mode: implement
+              skills: [pocket-checks, diagnosing-bugs]
+              instructions: |
+                Do the hardest part yourself, or fan out: one herdr pane per independent
+                piece, type `grok-pi-worker`, each pane in its own worktree on branch
+                `herdr/<task>`. Accept every piece (pocket-checks, verify-gates),
+                integrate them into this issue's branch (squash, no merge commits, no
+                force), close the panes you opened, then hand back as an owner would.
+              limits: { concurrent: 2 }
+            - name: research
+              agents: [gbot]
+              when: { labels: [area:research] }
+              mode: consult       # role baseline skills only; extras exceed the 45000-byte budget
+              instructions: |
+                Answer from primary sources and the code. One sourced finding: what
+                you checked, what you found, what the owner should do. No files, no
+                branch.
           repo:
             mode: github
             slug: effect-anything/holt
@@ -372,10 +393,31 @@ workspaces:
             owners: [frontend-engineer, control-plane-engineer]
             human: Ray
             routes:
-              # gbot is the expert, not an owner: research and the hardest work only.
-              - { labels: [area:hard, area:cross-cutting, area:research], owners: [gbot] }
               - { labels: [area:studio-app], owners: [frontend-engineer] }
               - { labels: [area:control-plane], owners: [control-plane-engineer] }
+          experts:
+            # gbot is an expert, not an owner: matched before routes, never in the
+            # default owner pool, so an unlabelled issue never reaches it.
+            - name: deep-work
+              agents: [gbot]
+              when: { labels: [area:hard, area:cross-cutting] }
+              mode: implement
+              skills: [pocket-checks, diagnosing-bugs]
+              instructions: |
+                Do the hardest part yourself, or fan out: one herdr pane per independent
+                piece, type `grok-pi-worker`, each pane in its own worktree on branch
+                `herdr/<task>`. Accept every piece (pocket-checks, verify-gates),
+                integrate them into this issue's branch (squash, no merge commits, no
+                force), close the panes you opened, then hand back as an owner would.
+              limits: { concurrent: 2 }
+            - name: research
+              agents: [gbot]
+              when: { labels: [area:research] }
+              mode: consult       # role baseline skills only; extras exceed the 45000-byte budget
+              instructions: |
+                Answer from primary sources and the code. One sourced finding: what
+                you checked, what you found, what the owner should do. No files, no
+                branch.
           repo:
             mode: github
             slug: effect-anything/holt

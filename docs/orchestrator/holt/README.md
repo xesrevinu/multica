@@ -2,11 +2,11 @@
 
 | 文件 | 内容 |
 |---|---|
-| `multica-orchestrator.patch` | 改 holt 的 `.multica/`：Pocket / Studio Parts 两个项目加 `orchestrator:` 段（保留已绑定的 `github_repo` 资源）；删掉 `squads:`（squads 概念已移除）；lead 只做规划和 blocked 处理；gbot 改为专家，人设改为 `gbot_instructions`（创建时写入 bot，sync 用 `gbot bots update --instructions-file` 管理）；**删除 workflow.md**；删除 `avatars/*.manifest.json` 和 `avatars/prompts/`（已移到 `~/.cursor/artifacts/holt/avatars/`）；agent 加 `avatar:`；AGENTS.md / studio/AGENTS.md 去掉 squad 和 workflow.md 引用；新 skill `pocket-checks`；新 `REVIEW.md` |
+| `multica-orchestrator.patch` | 基于 holt main `245fa28a`（Ray 已把上一版提案合入 main）的增量：gbot 从 `roles.routes` 移到 `orchestrator.experts`（Pocket 和 Studio Parts 各两个专家：`deep-work` implement ← area:hard / area:cross-cutting，`research` consult ← area:research），需要 feat/orchestrator `4a46d48b0` 及以后的引擎 |
 | `project.yaml.proposed` | patch 应用后的完整 `.multica/project.yaml`，便于直接阅读 |
 | `envrc-sccache.patch` | `.envrc`：有 sccache 时设置 `RUSTC_WRAPPER`、共享 `SCCACHE_DIR=$HOME/.cache/sccache-holt`、40G 上限 |
 
-基线：holt main `6c2b188d`（提案分支 `herdr/multica-proposal` @ `35463802`）。两个 patch 都 `git apply --check` 通过（2026-10-21）；两段 `orchestrator:` 用 `multica team preset render -f` 校验通过。
+基线：holt main `245fa28a`。patch 和 envrc patch 都 `git apply --check` 通过（2026-10-21）；两段 `orchestrator:` 用 feat/orchestrator `4a46d48b0` 的 `multica team preset render -f` 校验通过（无预算警告，lead 带生成的 Routing 段）。
 
 ## 决定（Ray，2026-10-21）
 - GitHub CI 保持关闭：`required_checks: [review-verdict]`，靠本地 pocket-checks / verify-gates。
@@ -27,16 +27,15 @@
 ## 映射
 | area 标签 | 池（`roles.routes`） | 检查 | 资源 |
 |---|---|---|---|
-| area:hard, area:cross-cutting, area:research | gbot（专家） | 涉及区域全部 | 视改动 |
+| area:hard, area:cross-cutting | 专家 `deep-work` = gbot（implement，`limits.concurrent: 2`，先于 routes 匹配，不进默认 owner 池） | 涉及区域全部 | 视改动 |
+| area:research | 专家 `research` = gbot（consult：只发一条带来源的结论，然后由 routes/owners 接手实现） | — | — |
 | area:host / compiler / framework / cli / apps | heavy-engineer | `pocket check`、`bun run test --project <area>`、`bun check` | host 带 `needs:cargo` |
 | area:studio-app | frontend-engineer | `pocket dev studio` 验证点名界面 | 默认验收门 |
 | area:control-plane | control-plane-engineer | 包内测试 | — |
 | 无匹配标签 | `roles.owners`（Pocket: heavy-engineer；Studio: frontend, control-plane） | | |
 
-## 引擎差距（未改代码，需 Ray 定）
-- 引擎没有"专家"角色。`Spec.Normalize` 把 route owner 并入 `roles.owners`，所以 gbot 实际仍按 owner 渲染（`preset render` 输出 `gbot (owner)`，挂 owner 技能和 owner.md），而且未打标签的 issue 也可能派给它。
-- 要真正做成专家，需要：`roles.experts`（route 可引用，但不并入默认 owner 池）、preset 里的 `expert.md` 角色文本、pstack manifest 的 `expert` 角色（上面的技能表），以及 `TestRoleContextBudget` / 有效角色列表加上 expert。
-- 在那之前，lead 应给每个 issue 打 area 标签，避免落到默认池。
+## 引擎
+- 专家机制已实现（feat/orchestrator `4a46d48b0`，设计见 `../experts-design.md`）。research 专家只用角色基线技能：再加 principle-explain-the-number 会超出 45000 字节预算。
 
 ## 引擎支持（已实现，feat/orchestrator）
 | 键 | 行为 | 测试 |
