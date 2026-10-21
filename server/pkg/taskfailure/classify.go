@@ -109,6 +109,9 @@ func Classify(rawError string) Reason {
 		"maximum context",
 		"prompt is too long",
 		"context size has been exceeded",
+		// yielded-agent: the retained history no longer fits its durable
+		// record; resuming that session reproduces it (OX-145, 2026-10-21).
+		"exceeds persistence bounds",
 	),
 		containsAny(lower, contextWindowExceededWitnesses...),
 		// SQL had `%token%limit%` — ILIKE wildcard between tokens. We

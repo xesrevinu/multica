@@ -8372,6 +8372,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if resumeReachable {
 		gateCodexResumeToRolloutPresence(&task, &taskCtx, provider, env.CodexHome, taskLog)
 	}
+	if resumeReachable {
+		applyYieldedSessionPolicy(&task, &taskCtx, provider, taskLog)
+	}
 
 	// Inject runtime-specific config (meta skill) so the agent discovers .agent_context/.
 	runtimeBrief, err := execenv.InjectRuntimeConfig(env.WorkDir, provider, taskCtx)
@@ -8761,6 +8764,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		"duration", elapsed.String(),
 		"tools", tools,
 	)
+	recordYieldedSessionSkills(provider, result.SessionID, taskCtx.AgentSkills)
 	taskLog.Debug("agent result detail",
 		"status", result.Status,
 		"output_bytes", len(result.Output),
