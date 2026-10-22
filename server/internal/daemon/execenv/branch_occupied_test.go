@@ -2,6 +2,7 @@ package execenv
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -63,4 +64,41 @@ func TestOccupantFromPorcelain(t *testing.T) {
 			t.Errorf("%s: got %q want %q", branch, got, want)
 		}
 	}
+}
+
+// A reviewer or lead is a different agent from the issue owner: the owner's
+// recorded agent/<key> is not theirs to continue, and they run on their own
+// fingerprinted fork as before instead of failing branch_occupied (OX-108).
+func TestPrepareLocalWorktreeExclusiveBranchOtherAgentForks(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+	params := func(task, agent string) LocalWorktreeParams {
+		return LocalWorktreeParams{
+			LocalPath: repo, EnvRoot: t.TempDir(), AgentName: "J", TaskID: task, ConversationKey: "ATT-62",
+			WorkspaceID: testBranchOwner.WorkspaceID, AgentID: agent, ConversationID: testBranchOwner.ConversationID,
+			ExclusiveBranch: "agent/att-62",
+		}
+	}
+	owner, err := PrepareLocalWorktree(params(turnOneTask, testBranchOwner.AgentID), worktreeTestLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owner.Branch != "agent/att-62" {
+		t.Fatalf("owner branch = %q", owner.Branch)
+	}
+	if err := os.WriteFile(filepath.Join(owner.Path, "work.txt"), []byte("owner\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	finalizeOK(t, owner) // produced work: agent/att-62 stays, recorded to the owner
+	if out := gitRun(t, repo, "branch", "--list", "agent/att-62"); strings.TrimSpace(out) == "" {
+		t.Fatal("owner branch gone after finalize")
+	}
+	reviewer, err := PrepareLocalWorktree(params(turnTwoTask, "reviewer-agent"), worktreeTestLogger())
+	if err != nil {
+		t.Fatalf("reviewer prepare: %v", err)
+	}
+	if !strings.HasPrefix(reviewer.Branch, "agent/att-62-") {
+		t.Fatalf("reviewer branch = %q, want its own fork", reviewer.Branch)
+	}
+	finalizeOK(t, reviewer)
 }
