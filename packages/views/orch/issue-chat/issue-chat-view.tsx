@@ -23,7 +23,8 @@ import { AppLink } from "../../navigation";
 import { checksTone, TONE_DOT } from "../format";
 import { DiffStat, PRChip } from "../parts/chips";
 import { usePhaseLabel } from "../labels";
-import { buildChatItems, mergeReviewItems, type ChatItem } from "./build-items";
+import { buildChatItems, groupChatItems, mergeReviewItems, type ChatItem } from "./build-items";
+import { EventsFeed, FailureGroupCard } from "./timeline-feed";
 import { DetailsDrawer, type DrawerTab } from "./details-drawer";
 import { FlowStateCard } from "./flow-cards";
 import { PRCard } from "./pr-card";
@@ -99,7 +100,8 @@ export function IssueChatView({ issueId }: { issueId: string }) {
   const model = useMemo(() => {
     const m = buildChatItems(runView.timeline, runView.standaloneRuns);
     const pr = prCard?.pr;
-    return pr ? { ...m, items: mergeReviewItems(m.items, pr.reviews, pr.review_comments) } : m;
+    const items = pr ? mergeReviewItems(m.items, pr.reviews, pr.review_comments) : m.items;
+    return { ...m, items: groupChatItems(items) };
   }, [runView, prCard]);
 
   const [drawerOpen, setDrawerOpenRaw] = useState(false);
@@ -177,6 +179,10 @@ export function IssueChatView({ issueId }: { issueId: string }) {
         return <TransitionDivider entry={item.entry} />;
       case "activities":
         return <ActivitiesFold entries={item.entries} />;
+      case "events":
+        return <EventsFeed entries={item.entries} />;
+      case "failures":
+        return <FailureGroupCard runs={item.runs} between={item.between} issueId={issueId} />;
       case "review":
         return <GitHubReviewMessage review={item.review} />;
       case "comment":

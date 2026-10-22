@@ -72,7 +72,7 @@ export function RetryRunButton({
           <button
             type="button"
             onClick={() => setError(null)}
-            aria-label="Dismiss"
+            aria-label={t(($) => $.execution_log.retry_dismiss)}
             className="shrink-0 rounded-xs hover:bg-destructive/20"
           >
             <X className="h-3 w-3" />

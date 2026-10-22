@@ -160,7 +160,7 @@
     "clean": "병합 가능",
     "blocked": "병합 차단됨",
     "unknown": "병합 가능 여부 알 수 없음",
-    "update_branch": "{{base}}을(를) 브랜치에 병합",
+    "update_branch": "Update from {{base}}",
     "rerun": "실패한 검사 다시 실행",
     "merge": "스쿼시 병합",
     "merged": "병합됨",
@@ -185,7 +185,7 @@
       "COMMENTED": "댓글",
       "DISMISSED": "기각"
     },
-    "sync_labels": "레이블 동기화",
+    "sync_labels": "Copy labels to PR",
     "delete_branch": "브랜치 삭제",
     "delete_branch_confirm": "GitHub의 {{branch}} 브랜치를 삭제할까요?",
     "branch_deleted": "브랜치 삭제됨",
@@ -196,7 +196,10 @@
     "base_tip": "{{base}} 최신",
     "loading": "PR 불러오는 중…",
     "error": "풀 리퀘스트를 불러오지 못했습니다",
-    "retry": "다시 시도"
+    "retry": "다시 시도",
+    "sync_labels_tip": "Copy this issue's labels onto the GitHub pull request. It does not change code or the branch.",
+    "update_branch_tip": "Ask GitHub to merge {{base}} into this PR's branch (a merge commit on GitHub). Only works when there are no conflicts; with conflicts it fails and the branch must be fixed locally.",
+    "update_branch_conflict_tip": "GitHub cannot merge {{base}} into this branch: there are conflicts. Resolve them in the issue's worktree."
   },
   "drawer": {
     "title": "세부 정보",
@@ -284,5 +287,42 @@
   },
   "shortcuts": {
     "title": "단축키: D 세부 정보 · F 파일 · Alt+↑/↓ 이전/다음 이슈 · ⌘K 작업"
+  },
+  "flow_tid": {
+    "T0_dispatch": "Dispatched",
+    "T1_start": "Work started",
+    "T2_review": "Sent to review",
+    "T3_rework": "Sent back for changes",
+    "T3b_rereview": "Review restarted",
+    "T3c_carry_verdict": "Approval carried over (same change)",
+    "T4_done": "Merged",
+    "T5_rerun": "Run restarted",
+    "T5_rerun_nobranch": "Run restarted (no branch yet)",
+    "T5_rerun_norun": "Run restarted (no run found)",
+    "T5b_cancel_stuck": "Stuck run cancelled",
+    "T5q_provider_limit": "Provider limit — retrying later",
+    "T6_block": "Blocked",
+    "T7_unblock": "Unblocked",
+    "T7b_unblock_escalate": "Escalated to lead",
+    "T8_cancel": "Cancelled",
+    "T8a_cancel_proposed": "Cancellation proposed",
+    "T8b_member_cancel": "Cancelled by member",
+    "T9_reconcile": "Reconciled",
+    "T10_await_acceptance": "Waiting for your acceptance",
+    "T_epic_progress": "Epic in progress",
+    "T_epic_acceptance": "Epic waiting for acceptance",
+    "T_epic_done": "Epic done",
+    "T_expert_consulted": "Expert consulted"
+  },
+  "feed": {
+    "earlier_one": "{{count}} earlier event",
+    "earlier_other": "{{count}} earlier events"
+  },
+  "failures": {
+    "title_one": "{{count}} run failed",
+    "title_other": "{{count}} runs failed with the same error",
+    "show_runs_one": "Show run",
+    "show_runs_other": "Show {{count}} runs",
+    "failed": "failed"
   }
 }

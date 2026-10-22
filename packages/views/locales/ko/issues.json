@@ -736,7 +736,8 @@
     "more_runs_other": "{{count}}개 더",
     "strip_aria": "실행별 비용 — 실행 타임라인 열기",
     "strip_no_usage": "사용량 기록 없음",
-    "sparkline_now": "지금"
+    "sparkline_now": "지금",
+    "retry_dismiss": "닫기"
   },
   "runs_timeline": {
     "title": "실행 기록",

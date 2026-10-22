@@ -766,7 +766,8 @@
     "more_runs_other": "{{count}} de plus",
     "strip_aria": "Coût par exécution — ouvrir la chronologie",
     "strip_no_usage": "Aucune consommation enregistrée",
-    "sparkline_now": "Maintenant"
+    "sparkline_now": "Maintenant",
+    "retry_dismiss": "Fermer"
   },
   "runs_timeline": {
     "title": "Exécutions",
