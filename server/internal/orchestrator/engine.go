@@ -15,8 +15,10 @@ type Issue struct {
 	AssigneeType           string // agent | member | ""
 	Assignee               string // agent name (for agents) or user id (members)
 	Labels                 []string
-	Meta                   map[string]string
-	UpdatedAt              time.Time
+	// Description is read only by auto-promote (its 依赖:/Depends: line).
+	Description string
+	Meta        map[string]string
+	UpdatedAt   time.Time
 }
 
 // Run is the latest or active agent task of an issue.
@@ -367,6 +369,9 @@ func (sp *Spec) Decide(s *Snapshot, probe Prober) *Decision {
 	if st == StBacklog {
 		if m["phase"] == PhPlanned {
 			return &Decision{Wait: "planned epic: its sub-issues carry the work"}
+		}
+		if sp.AutoPromote.Enabled {
+			return sp.decidePromote(s)
 		}
 		return nil
 	}
@@ -782,7 +787,7 @@ func StartsHere(status string, meta map[string]string) bool {
 // already on todo/in_progress work: T1, and a consult handoff that is about
 // to assign the next owner.
 func (sp *Spec) NeedsAssignBusy(status string, meta map[string]string) bool {
-	if StartsHere(status, meta) {
+	if sp.startCandidate(status, meta) {
 		return true
 	}
 	if (status != StTodo && status != StInProgress) || meta["phase"] != PhReviewRequested {

@@ -334,7 +334,7 @@ func (s *Service) snapshot(ctx context.Context, t *Team, rows []issueRow, row *i
 		if sn.Busy, err = s.st.busyOwners(ctx, t.WorkspaceID); err != nil {
 			return nil, err
 		}
-		if StartsHere(row.Status, row.Meta) {
+		if t.Spec.startCandidate(row.Status, row.Meta) {
 			// T1 decisions in one pass must see the issues started earlier in the
 			// same pass (resource slots), so re-read the siblings here.
 			fresh, ferr := s.st.projectIssues(ctx, t.ProjectID)
@@ -368,7 +368,7 @@ func (s *Service) process(ctx context.Context, t *Team, rows []issueRow, row *is
 	if !s.st.backoffOK(ctx, row.ID, now) {
 		return
 	}
-	if StartsHere(row.Status, row.Meta) {
+	if t.Spec.startCandidate(row.Status, row.Meta) {
 		// owner selection reads workspace-wide busy state: serialize T1 per workspace
 		defer s.lockKey("w:" + t.WorkspaceID)()
 	}

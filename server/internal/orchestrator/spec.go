@@ -58,6 +58,8 @@ type Spec struct {
 	Acceptance  Acceptance   `json:"acceptance" yaml:"acceptance"`
 	Merge       MergeSpec    `json:"merge" yaml:"merge"`
 	Transitions []Transition `json:"transitions,omitempty" yaml:"transitions,omitempty"`
+	// AutoPromote dispatches an eligible backlog issue directly (opt-in).
+	AutoPromote AutoPromote `json:"auto_promote,omitempty" yaml:"auto_promote,omitempty"`
 	// authoredOwners is roles.owners before route owners are merged. Expert
 	// agents are never merged. Not serialized; Defaults fills it.
 	authoredOwners []string
@@ -192,6 +194,7 @@ var builtinStatuses = map[string]bool{StBacklog: true, StTodo: true, StInProgres
 func PresetTransitions() []Transition {
 	all := []string{StBacklog, StTodo, StInProgress, StInReview, StBlocked}
 	return []Transition{
+		{ID: "T0_dispatch", Actor: "engine", From: []string{StBacklog}, To: []string{StInProgress}, Label: "auto_promote: backlog, deps done, stage open, not an epic, owner free → owner"},
 		{ID: "T1_start", Actor: "engine", From: []string{StTodo}, To: []string{StTodo}, Label: "todo (never backlog), deps done, stage open, disk ok, owner free → owner"},
 		{ID: "A1_in_progress", Actor: "agent", From: []string{StTodo}, To: []string{StInProgress}, Label: "owner starts"},
 		{ID: "T2_review", Actor: "engine", From: []string{StTodo, StInProgress}, To: []string{StInReview}, Label: "phase=review_requested, branch pushed, no active run → reviewer"},
@@ -479,4 +482,12 @@ func (s *Spec) Mermaid(current string) string {
 		fmt.Fprintf(&b, "  classDef current fill:#f96,stroke:#333,stroke-width:3px\n  class %s current\n", current)
 	}
 	return b.String()
+}
+
+// AutoPromote: backlog = planned, waiting on its dependencies. When every
+// 依赖: dependency is done, the stage barrier is clear and it is not an epic,
+// the engine starts it straight into in_progress (T0_dispatch). todo stays
+// the manual "start now" lane.
+type AutoPromote struct {
+	Enabled bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 }

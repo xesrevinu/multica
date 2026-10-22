@@ -72,7 +72,7 @@ func metaStrings(raw []byte) map[string]string {
 const issueCols = `i.id::text, w.issue_prefix || '-' || i.number, i.title, i.status, COALESCE(i.parent_issue_id::text,''), COALESCE(i.stage,0),
 	COALESCE(i.assignee_type,''), COALESCE(CASE WHEN i.assignee_type='agent' THEN a.name ELSE i.assignee_id::text END,''),
 	COALESCE((SELECT array_agg(l.name) FROM issue_to_label il JOIN issue_label l ON l.id=il.label_id WHERE il.issue_id=i.id), '{}'),
-	i.metadata, i.updated_at, i.revision, COALESCE(i.project_id::text,''), i.workspace_id::text`
+	i.metadata, COALESCE(i.description,''), i.updated_at, i.revision, COALESCE(i.project_id::text,''), i.workspace_id::text`
 
 const issueFrom = ` FROM issue i JOIN workspace w ON w.id=i.workspace_id LEFT JOIN agent a ON a.id=i.assignee_id AND i.assignee_type='agent' `
 
@@ -88,7 +88,7 @@ func scanIssues(rows pgx.Rows) ([]issueRow, error) {
 	for rows.Next() {
 		var r issueRow
 		var raw []byte
-		if err := rows.Scan(&r.ID, &r.Key, &r.Title, &r.Status, &r.ParentID, &r.Stage, &r.AssigneeType, &r.Assignee, &r.Labels, &raw, &r.UpdatedAt, &r.Revision, &r.ProjectID, &r.Workspace); err != nil {
+		if err := rows.Scan(&r.ID, &r.Key, &r.Title, &r.Status, &r.ParentID, &r.Stage, &r.AssigneeType, &r.Assignee, &r.Labels, &raw, &r.Description, &r.UpdatedAt, &r.Revision, &r.ProjectID, &r.Workspace); err != nil {
 			return nil, err
 		}
 		r.Meta = metaStrings(raw)
