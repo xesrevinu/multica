@@ -86,6 +86,12 @@ func depsWait(s *Snapshot) string {
 // own acceptance when it needs one. epic=false: not an epic.
 func (sp *Spec) decideEpic(s *Snapshot) (*Decision, bool) {
 	i := &s.Issue
+	// An issue that is already its own unit of work (an owner started it) stays
+	// one when an agent files follow-up sub-issues under it (OX-77 → OX-186):
+	// only owner-less parents are epics.
+	if i.Meta["owner"] != "" {
+		return nil, false
+	}
 	total, done, started := 0, 0, false
 	for _, x := range s.Siblings {
 		if x.ParentID != i.ID {

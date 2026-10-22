@@ -151,3 +151,13 @@ func TestQueuedForWorktreeIsVisible(t *testing.T) {
 		t.Fatalf("%+v", d)
 	}
 }
+
+func TestStartedIssueWithFollowUpChildIsNotAnEpic(t *testing.T) {
+	sp := spec(t)
+	s := snap(StInProgress, map[string]string{"phase": PhReviewRequested, "owner": "a", "attempt_impl": "1", "attempt_review": "0"})
+	s.Head = "h1"
+	s.Siblings = []Issue{{ID: "c", Key: "ATT-9", ParentID: "1", Status: StBacklog}}
+	if d := sp.Decide(s, ok(false)); d == nil || d.Tid != "T2_review" {
+		t.Fatalf("want review, got %+v", d)
+	}
+}
