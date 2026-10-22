@@ -199,3 +199,40 @@ func TestExclusiveBranchMergedParkedCheckoutIsReplaced(t *testing.T) {
 	}
 	second.Discard(worktreeTestLogger())
 }
+
+// OX-173: the owner rewrote agent/<key> (amend/squash) so the record names a
+// dropped commit. A clean parked checkout at exactly the pushed tip is
+// re-recorded and reused; the same checkout with an unpushed tip still blocks.
+func TestExclusiveBranchRewrittenPushedTipIsReclaimed(t *testing.T) {
+	repo := newTestRepo(t)
+	installFakeWt(t)
+	enableWorktrunk(t, repo)
+	params := func(task, agent string) LocalWorktreeParams {
+		return LocalWorktreeParams{
+			LocalPath: repo, EnvRoot: t.TempDir(), AgentName: "J", TaskID: task, ConversationKey: "ATT-62",
+			WorkspaceID: testBranchOwner.WorkspaceID, AgentID: agent, ConversationID: testBranchOwner.ConversationID,
+			ExclusiveBranch: "agent/att-62", HolderPID: os.Getpid(),
+		}
+	}
+	first, err := PrepareLocalWorktree(params(turnOneTask, testBranchOwner.AgentID), worktreeTestLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(first.WorkDir, "work.txt"), "owner\n")
+	finalizeOK(t, first)
+	gitRun(t, first.Path, "commit", "-q", "--amend", "-m", "rewritten")
+	_, err = PrepareLocalWorktree(params(turnTwoTask, "reviewer-agent"), worktreeTestLogger())
+	var occ *BranchOccupiedError
+	if !errors.As(err, &occ) {
+		t.Fatalf("unpushed rewritten tip: want BranchOccupiedError, got %v", err)
+	}
+	gitRun(t, repo, "update-ref", "refs/remotes/origin/agent/att-62", "refs/heads/agent/att-62")
+	second, err := PrepareLocalWorktree(params(turnThreeTask, "reviewer-agent"), worktreeTestLogger())
+	if err != nil {
+		t.Fatalf("pushed rewritten tip: %v", err)
+	}
+	if second.Path != first.Path || second.Branch != "agent/att-62" {
+		t.Fatalf("second = %q %q, want parked checkout %q", second.Branch, second.Path, first.Path)
+	}
+	second.Discard(worktreeTestLogger())
+}

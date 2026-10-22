@@ -615,7 +615,15 @@ func reclaimParkedExclusiveWorktree(gitRoot string, plan taskBranchPlan, workspa
 		return plan, "", false, nil
 	}
 	if _, err := runGit(gitRoot, "merge-base", "--is-ancestor", record.checkpoint, "refs/heads/"+plan.name); err != nil {
-		return plan, "", false, nil
+		// The last turn rewrote the branch (rebase/squash) and the record was
+		// refused, so it still names a commit the branch dropped (OX-173).
+		// The clean checkout whose HEAD is exactly the pushed remote tip is
+		// the delivered work: re-record that tip and continue in place.
+		next, ok := rerecordPushedTip(gitRoot, plan.name, hold.Path, record, logger)
+		if !ok {
+			return plan, "", false, nil
+		}
+		record = next
 	}
 	if err := refreshCachedWorktree(hold.Path); err != nil {
 		return plan, "", false, err
@@ -633,4 +641,37 @@ func reclaimParkedExclusiveWorktree(gitRoot string, plan taskBranchPlan, workspa
 			"branch", plan.name, "path", hold.Path, "parked_by_agent", hold.Owner.AgentID)
 	}
 	return plan, hold.Path, true, nil
+}
+
+// rerecordPushedTip rewrites a stale branch record when the parked checkout's
+// HEAD equals the branch tip and refs/remotes/origin/<branch>: nothing local
+// is unpushed, so the pushed tip is the new checkpoint. The caller has already
+// verified the tree is clean.
+func rerecordPushedTip(gitRoot, branch, path string, record branchRecord, logger *slog.Logger) (branchRecord, bool) {
+	head, err := runGitTrimmed(path, "rev-parse", "HEAD")
+	if err != nil || head == "" {
+		return record, false
+	}
+	tip, err := runGitTrimmed(gitRoot, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
+	if err != nil || tip != head {
+		return record, false
+	}
+	remote, err := runGitTrimmed(gitRoot, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch)
+	if err != nil || remote != head {
+		return record, false
+	}
+	userState, err := runGitTrimmed(gitRoot, "rev-parse", "--verify", "--quiet", record.state+"^1")
+	if err != nil || userState == "" {
+		return record, false
+	}
+	state, err := writeBranchRecord(gitRoot, branch, userState, head, record.owner)
+	if err != nil {
+		return record, false
+	}
+	if logger != nil {
+		logger.Info("execenv: re-recorded a rewritten orchestrator branch at its pushed tip",
+			"branch", branch, "stale_checkpoint", record.checkpoint, "tip", head)
+	}
+	record.state, record.checkpoint = state, head
+	return record, true
 }
