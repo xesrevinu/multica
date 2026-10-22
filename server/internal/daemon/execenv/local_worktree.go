@@ -1387,7 +1387,7 @@ func resolveTaskBranchPlan(gitRoot string, params LocalWorktreeParams, headSHA s
 	// the issue identifier, the chat key, or — above — the task id.
 	preferred := "agent/" + sanitizeName(params.ConversationKey)
 	for _, name := range []string{preferred, preferred + "-" + owner.fingerprint()} {
-		plan, ok := planForConversationBranch(gitRoot, name, headSHA, owner, logger)
+		plan, ok := planForConversationBranch(gitRoot, name, headSHA, owner, name == params.ExclusiveBranch, logger)
 		if ok {
 			return plan
 		}
@@ -1401,7 +1401,7 @@ func resolveTaskBranchPlan(gitRoot string, params LocalWorktreeParams, headSHA s
 
 // planForConversationBranch reports how this task would use one candidate
 // branch name, and whether it may use it at all.
-func planForConversationBranch(gitRoot, name, headSHA string, owner branchOwner, logger *slog.Logger) (taskBranchPlan, bool) {
+func planForConversationBranch(gitRoot, name, headSHA string, owner branchOwner, issueScoped bool, logger *slog.Logger) (taskBranchPlan, bool) {
 	plan := taskBranchPlan{
 		name:           name,
 		base:           headSHA,
@@ -1414,7 +1414,7 @@ func planForConversationBranch(gitRoot, name, headSHA string, owner branchOwner,
 		// Free to create.
 		return plan, true
 	}
-	record, owned := branchOwnedBy(gitRoot, name, owner, logger)
+	record, owned := branchOwnedBy(gitRoot, name, owner, issueScoped, logger)
 	if !owned {
 		return taskBranchPlan{}, false
 	}
@@ -1447,13 +1447,28 @@ func planForConversationBranch(gitRoot, name, headSHA string, owner branchOwner,
 //
 // A branch with no record is not ours by definition: every branch this code
 // creates writes one before its task is allowed to run.
-func branchOwnedBy(gitRoot, branch string, owner branchOwner, logger *slog.Logger) (branchRecord, bool) {
+//
+// issueScoped is set for the orchestrator's agent/<key> branch, which belongs
+// to the ISSUE: owner, reviewer and lead runs all deliver onto it one at a
+// time, so the record matches on workspace + conversation (the issue) and not
+// on the agent that happened to finalize last. Comparing the agent too made
+// the next phase's run (e.g. a reviewer retried after a provider quota error,
+// once the previous run's worktree was removed) see "exists without our
+// record" and fail branch_occupied on every retry (OX-174, OX-180).
+func branchOwnedBy(gitRoot, branch string, owner branchOwner, issueScoped bool, logger *slog.Logger) (branchRecord, bool) {
 	ref, err := readUserStateRef(gitRoot, branch)
 	if err != nil || ref == "" {
 		return branchRecord{}, false
 	}
 	record, err := readBranchRecord(gitRoot, ref)
-	if err != nil || record.owner != owner || record.checkpoint == "" {
+	if err != nil || record.checkpoint == "" {
+		return branchRecord{}, false
+	}
+	if issueScoped {
+		if record.owner.WorkspaceID != owner.WorkspaceID || record.owner.ConversationID != owner.ConversationID {
+			return branchRecord{}, false
+		}
+	} else if record.owner != owner {
 		return branchRecord{}, false
 	}
 	if _, err := runGit(gitRoot, "merge-base", "--is-ancestor", record.checkpoint, "refs/heads/"+branch); err != nil {
