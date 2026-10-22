@@ -66,41 +66,40 @@ func TestOccupantFromPorcelain(t *testing.T) {
 	}
 }
 
-// A reviewer or lead is a different agent from the issue owner: the owner's
-// recorded agent/<key> is not theirs to continue, and they run on their own
-// fingerprinted fork as before instead of failing branch_occupied (OX-108).
-func TestPrepareLocalWorktreeExclusiveBranchOtherAgentForks(t *testing.T) {
-	t.Parallel()
+// The orchestrator branch belongs to the issue: a reviewer or lead (another
+// agent) reuses the owner's parked, clean checkout of agent/<key> in place
+// instead of forking a fresh rv-/fingerprint worktree per phase.
+func TestExclusiveBranchOtherAgentReusesIssueCheckout(t *testing.T) {
 	repo := newTestRepo(t)
+	installFakeWt(t)
+	enableWorktrunk(t, repo)
 	params := func(task, agent string) LocalWorktreeParams {
 		return LocalWorktreeParams{
 			LocalPath: repo, EnvRoot: t.TempDir(), AgentName: "J", TaskID: task, ConversationKey: "ATT-62",
 			WorkspaceID: testBranchOwner.WorkspaceID, AgentID: agent, ConversationID: testBranchOwner.ConversationID,
-			ExclusiveBranch: "agent/att-62",
+			ExclusiveBranch: "agent/att-62", HolderPID: os.Getpid(),
 		}
 	}
 	owner, err := PrepareLocalWorktree(params(turnOneTask, testBranchOwner.AgentID), worktreeTestLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if owner.Branch != "agent/att-62" {
-		t.Fatalf("owner branch = %q", owner.Branch)
-	}
-	if err := os.WriteFile(filepath.Join(owner.Path, "work.txt"), []byte("owner\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	finalizeOK(t, owner) // produced work: agent/att-62 stays, recorded to the owner
-	if out := gitRun(t, repo, "branch", "--list", "agent/att-62"); strings.TrimSpace(out) == "" {
-		t.Fatal("owner branch gone after finalize")
-	}
+	writeFile(t, filepath.Join(owner.WorkDir, "work.txt"), "owner\n")
+	finalizeOK(t, owner)
 	reviewer, err := PrepareLocalWorktree(params(turnTwoTask, "reviewer-agent"), worktreeTestLogger())
 	if err != nil {
 		t.Fatalf("reviewer prepare: %v", err)
 	}
-	if !strings.HasPrefix(reviewer.Branch, "agent/att-62-") {
-		t.Fatalf("reviewer branch = %q, want its own fork", reviewer.Branch)
+	if reviewer.Branch != "agent/att-62" || reviewer.Path != owner.Path {
+		t.Fatalf("reviewer = branch %q path %q; want the issue checkout %q", reviewer.Branch, reviewer.Path, owner.Path)
 	}
-	finalizeOK(t, reviewer)
+	if got := readFile(t, filepath.Join(reviewer.WorkDir, "work.txt")); got != "owner\n" {
+		t.Fatalf("owner's work = %q", got)
+	}
+	if out := gitRun(t, repo, "branch", "--list", "agent/att-62-*"); strings.TrimSpace(out) != "" {
+		t.Fatalf("forked a task branch: %s", out)
+	}
+	reviewer.Discard(worktreeTestLogger())
 }
 
 // OX-123: a later task on the orchestrator branch (another conversation of

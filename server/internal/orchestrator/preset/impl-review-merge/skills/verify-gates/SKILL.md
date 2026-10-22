@@ -1,31 +1,32 @@
 ---
 name: verify-gates
-description: Re-run the repository gates yourself on the exact sha under review, in a wt-prepared checkout, before giving a verdict. Use for reviewer runs.
+description: Re-run the repository gates yourself on the exact sha under review, in the issue's own worktree, before giving a verdict. Use for reviewer runs.
 license: MIT
 compatibility: multica
 metadata:
   source: multica orchestrator (pstack independent verifier)
 ---
 
-# Verify gates
-
-1. `git fetch origin` and pick the sha: `SHA=$(git rev-parse origin/agent/<key>)`.
-2. Inspect first, in your own run directory (it is a wt worktree with
-   dependencies, vendor links and the direnv toolchain already prepared):
-   `git diff origin/main...$SHA`, `git show $SHA:<path>`, `git grep <pat> $SHA`.
-   Never `git checkout`/`switch`/`reset` there: its HEAD must stay put.
-3. Any checkout you run checks in MUST come from
-   `wt switch --yes --no-cd --create rv/<key> --base $SHA` (its hooks install
-   deps, link vendor/hermes, `direnv allow`); work in the path `wt` prints.
-   No other way: no `git worktree add`, `git archive`, symlinked or copied
-   node_modules/vendor, or any hand-made tree. If wt or its setup fails,
-   report "not verified: <why>" as an infra finding; do not rebuild it.
+# Verify gates1. `git fetch origin` and pick the sha: `SHA=$(git rev-parse origin/agent/<key>)`.
+2. Your run directory IS the issue's worktree on `agent/<key>` (the same
+   checkout the owner worked in: deps, vendor links, direnv toolchain and
+   build cache already prepared). Pin it before anything else:
+   `test "$(git rev-parse HEAD)" = "$SHA"`. If it differs, do not checkout,
+   reset, pull or rebuild a tree: report "not verified: worktree HEAD
+   <head> != $SHA" as an infra finding and stop.
+3. Run every check right there. No `wt switch`, no `rv/<key>`, no `git worktree
+   add`, `git archive`, copied/symlinked trees. Never commit, checkout, switch,
+   reset, stash or edit tracked files in it.
+.
 4. Run only the checks the repo's checks skill lists for the paths changed
    (e.g. `holt-checks`), with the toolchain from the checkout's `.envrc`
    (`direnv exec . <cmd>` if it is not already in your env). Capture the exact
    command and the tail of its output.
 5. Exercise the changed behavior once through its real surface when it has one
    (CLI call, small script, request). Compilation is not behavior.
-6. `wt remove --yes --force -D rv/<key>`. Leave nothing behind.
+6. Before finishing: `test "$(git rev-parse HEAD)" = "$SHA"` and
+   `git status --porcelain` must be empty (ignored build output is fine).
+   Remove only files you created yourself; if anything tracked changed or
+   HEAD moved, say so as a finding. The next phase reuses this checkout.
 7. Put commands and results in your verdict comment. A gate you could not run
    is a finding ("not verified: <why>"), not a pass.

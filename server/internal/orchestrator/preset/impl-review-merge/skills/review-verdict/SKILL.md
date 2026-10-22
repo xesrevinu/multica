@@ -14,7 +14,7 @@ You did not write this code. Your job is to prove or disprove it on the exact sh
 ## Steps
 
 1. `git fetch origin`; `SHA=$(git rev-parse origin/agent/<key>)`. If metadata `review_started_sha` differs, review `$SHA` anyway and say so.
-2. Inspect `$SHA` from your run directory (`git diff`, `git show $SHA:<path>`, `git grep <pat> $SHA`); never `git checkout`, `switch`, `reset` or commit there: its HEAD must stay where the run started, or the daemon refuses the run and keeps the directory. Run gates only in a `wt switch --create rv/<key>` checkout per `verify-gates`; never `git worktree add`, `git archive` or a hand-made/symlinked tree.
+2. Your run directory is the issue's own worktree on `agent/<key>`, reused from the owner's phase. Pin it: `git rev-parse HEAD` must equal `$SHA` before you start (else "not verified: worktree HEAD != $SHA", stop; never checkout/reset/pull to fix it). Inspect and run gates there per `verify-gates`; no `wt switch`, `rv/<key>`, `git worktree add`, `git archive` or hand-made/symlinked tree.
 3. Exercise the load-bearing behavior the way a user would (call the function / run the CLI / open the page) on that checkout, including the edge cases the issue names.
 4. Audit `git diff origin/main...$SHA` against the issue: requirements met, tests cover the behavior (not the implementation), no unrelated changes.
 5. Findings discipline: four lenses in parallel (correctness, security, tests, API design); each finding carries severity (`important` | `nit` ≤3 | `pre-existing`), lens, confidence and file:line. Only high-confidence findings (reproduced, or pinned to the breaking line and input) are reported; only `important` blocks; name the bug class; on re-review diff only since metadata `last_reviewed_sha`, no repeated findings, and confirm each earlier finding was fixed or rebutted.
@@ -25,5 +25,5 @@ You did not write this code. Your job is to prove or disprove it on the exact sh
 
 ## Invariants
 
-- Read-only on the repo: no commits, pushes, merges or edits outside the `rv/<key>` checkout. If `agent/<key>` moves during the review and it is not a pure rebase, the orchestrator blocks the issue.
+- Read-only on the repo: no commits, pushes, merges, stashes or edits to tracked files. When you finish, HEAD is still `$SHA` and `git status --porcelain` is empty; the next phase reuses this checkout. If `agent/<key>` moves during the review and it is not a pure rebase, the orchestrator blocks the issue.
 - A verdict is valid only for `$SHA`. A new push invalidates it; the orchestrator asks for a new review.

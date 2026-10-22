@@ -1350,7 +1350,7 @@ func (p taskBranchPlan) altName(taskID string) string {
 // task-scoped branch that continues nothing.
 func resolveTaskBranch(gitRoot string, params LocalWorktreeParams, headSHA string, logger *slog.Logger) taskBranchPlan {
 	plan := resolveTaskBranchPlan(gitRoot, params, headSHA, logger)
-	if ex := params.ExclusiveBranch; ex != "" && plan.name != ex && (strings.HasPrefix(plan.name, ex+"-") || plan.name == "agent/"+taskKey(params.TaskID)) && !exclusiveHeldByAnotherAgent(gitRoot, ex, params.AgentID) {
+	if ex := params.ExclusiveBranch; ex != "" && plan.name != ex && (strings.HasPrefix(plan.name, ex+"-") || plan.name == "agent/"+taskKey(params.TaskID)) {
 		// The orchestrator only ever reads its own branch. If that name exists
 		// but carries no ownership record this conversation can prove (for
 		// example it was recreated by hand from origin), the conversation
@@ -1368,27 +1368,13 @@ func resolveTaskBranch(gitRoot string, params LocalWorktreeParams, headSHA strin
 	return plan
 }
 
-// exclusiveHeldByAnotherAgent reports whether the orchestrator branch carries
-// an ownership record written by a different agent: the issue owner's
-// branch seen from a reviewer or lead. Those agents never continue the
-// owner's branch; they get their own fingerprinted fork, as before, and the
-// owner's parked worktree is left alone. Only a branch with no record, or one
-// recorded by this same agent under another conversation, is the hand-made
-// case the exclusive guard exists for.
-func exclusiveHeldByAnotherAgent(gitRoot, branch, agentID string) bool {
-	if agentID == "" {
-		return false
-	}
-	ref, err := readUserStateRef(gitRoot, branch)
-	if err != nil || ref == "" {
-		return false
-	}
-	record, err := readBranchRecord(gitRoot, ref)
-	if err != nil {
-		return false
-	}
-	return record.owner.AgentID != "" && record.owner.AgentID != agentID
-}
+// The orchestrator branch belongs to the ISSUE, not to whichever agent last
+// recorded it: owner, lead and reviewer phases of one issue all run on
+// agent/<key>, one at a time. Planning it as exclusive lets any agent on the
+// issue reclaim the idle, clean, parked checkout in place
+// (reclaimParkedExclusiveWorktree); a checkout a live run still holds, or one
+// with uncommitted changes, fails branch_occupied and the orchestrator retries
+// later instead of forking a fresh rv-/fingerprint worktree per phase.
 
 func resolveTaskBranchPlan(gitRoot string, params LocalWorktreeParams, headSHA string, logger *slog.Logger) taskBranchPlan {
 	taskScoped := taskBranchPlan{name: "agent/" + taskKey(params.TaskID), base: headSHA}
