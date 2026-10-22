@@ -181,3 +181,37 @@ printf '%s\n' '{"type":"error","phase":"startup","message":"session not found"}'
 		t.Fatalf("fresh run must not set ResumeRejected, result = %#v", result)
 	}
 }
+
+// OX-180: a provider quota error made yielded-agent abandon the turn and exit
+// with no "done" event. It was reported as a completed turn, which the
+// orchestrator read as "reviewer ended without verdict". It is now a failed
+// turn carrying the provider error, so it classifies as a provider limit.
+func TestYieldedExitWithoutDoneIsFailedWithProviderError(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "yielded-agent")
+	script := `#!/bin/sh
+cat >/dev/null
+printf '%s\n' '{"type":"text","delta":"checking the"}'
+echo 'request: Model response failed: Free usage limit reached. Subscribe to keep going' >&2
+`
+	writeTestExecutable(t, bin, []byte(script))
+	backend, err := New("yielded", Config{
+		ExecutablePath: bin,
+		Logger:         slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	session, err := backend.Execute(ctx, "review", ExecOptions{Cwd: dir, Timeout: 20 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range session.Messages {
+	}
+	result := <-session.Result
+	if result.Status != "failed" || result.Error != "Model response failed: Free usage limit reached. Subscribe to keep going" {
+		t.Fatalf("result = %#v", result)
+	}
+}
