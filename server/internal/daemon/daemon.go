@@ -7697,7 +7697,13 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	}()
 
 	prepareTimeout := d.effectiveTaskPrepareTimeout()
-	prepareCtx, cancelPrepare := context.WithTimeoutCause(ctx, prepareTimeout, errTaskPrepareTimeout)
+	// The deadline is pausable: time spent queued behind another task's hold
+	// on the same local directory is waiting for capacity, not a stuck
+	// prepare. Counting it made every task queued behind a long wt switch
+	// (start hooks can take minutes) fail "preparation timed out after 5m"
+	// and burn the orchestrator's retry budget (OX-122, OX-173/174/129).
+	prepareCtx, prepareDeadline := newPausableDeadline(ctx, prepareTimeout, errTaskPrepareTimeout)
+	cancelPrepare := prepareDeadline.cancel
 	prepareComplete := false
 	defer func() {
 		cancelPrepare()
@@ -8128,6 +8134,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			release, lockErr := d.localPathLocks.Acquire(waitCtx, localAssignment.RealPath, task.ID, func(holder string) {
 				d.resourceWaitTasks.Add(1)
 				waitCounted = true
+				prepareDeadline.pause()
 				reason := fmt.Sprintf("local_directory %s", localAssignment.AbsPath)
 				if holder != "" {
 					reason = fmt.Sprintf("%s (held by task %s)", reason, shortID(holder))
@@ -8150,6 +8157,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			})
 			if waitCounted {
 				d.resourceWaitTasks.Add(-1)
+				prepareDeadline.resume()
 			}
 			if lockErr != nil {
 				return TaskResult{}, fmt.Errorf("local_directory worktree: wait for a consistent snapshot of %s: %w",

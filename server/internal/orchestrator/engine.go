@@ -654,7 +654,15 @@ func (sp *Spec) providerFailure(s *Snapshot) *Decision {
 	if r == nil || r.Status != "failed" {
 		return nil
 	}
-	switch failureClass(r.Reason) {
+	class := failureClass(r.Reason)
+	// A run that timed out before it ever started was queued for capacity
+	// (a local-directory / worktree lock, an agent slot), not a failed
+	// attempt: retry with the same no-attempt backoff instead of burning
+	// attempt_impl / attempt_infra until the issue blocks (OX-122).
+	if class == "" && r.Reason == "timeout" && r.StartedAt == nil {
+		class = "limit"
+	}
+	switch class {
 	case "auth":
 		return sp.block(s, "provider auth/access failure ("+r.Reason+"): fix the agent's provider credentials or runtime access, then `multica flow unblock "+s.Issue.Key+"`", nil)
 	case "limit":

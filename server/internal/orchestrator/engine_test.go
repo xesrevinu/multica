@@ -315,3 +315,21 @@ func TestCarryVerdict(t *testing.T) {
 		t.Fatal("unknown must re-review", d)
 	}
 }
+
+// A run that timed out while still queued (never started) counts no attempt:
+// it retries with backoff like a provider limit instead of exhausting infra.
+func TestQueuedTimeoutCountsNoAttempt(t *testing.T) {
+	sp := spec(t)
+	s := snap(StInProgress, map[string]string{"phase": PhImplementing, "owner": "a", "attempt_impl": "1", "attempt_infra": "2"})
+	ended := now.Add(-10 * time.Minute)
+	s.LastRun = &Run{ID: "r", Status: "failed", Reason: "timeout", EndedAt: &ended}
+	d := sp.Decide(s, nil)
+	if d.Tid != "T5q_provider_limit" || d.Meta["attempt_infra"] != "" || d.Meta["attempt_impl"] != "" {
+		t.Fatalf("queued timeout: %+v", d)
+	}
+	st := now.Add(-20 * time.Minute)
+	s.LastRun = &Run{ID: "r", Status: "failed", Reason: "timeout", StartedAt: &st, EndedAt: &ended}
+	if d := sp.Decide(s, nil); d.Tid == "T5q_provider_limit" {
+		t.Fatalf("a started run that timed out is a real failure: %+v", d)
+	}
+}
