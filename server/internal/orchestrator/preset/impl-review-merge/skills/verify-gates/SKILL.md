@@ -8,9 +8,8 @@ metadata:
 ---
 
 # Verify gates1. `git fetch origin` and pick the sha: `SHA=$(git rev-parse origin/agent/<key>)`.
-2. Your run directory IS the issue's worktree on `agent/<key>` (the same
-   checkout the owner worked in: deps, vendor links, direnv toolchain and
-   build cache already prepared). Pin it before anything else:
+2. Your run directory IS the issue's worktree on `agent/<key>` (deps,
+   toolchain, build cache prepared). Pin it first:
    `test "$(git rev-parse HEAD)" = "$SHA"`. If it differs, do not checkout,
    reset, pull or rebuild a tree: report "not verified: worktree HEAD
    <head> != $SHA" as an infra finding and stop.
@@ -26,7 +25,6 @@ metadata:
    (CLI call, small script, request). Compilation is not behavior.
 6. Before finishing: `test "$(git rev-parse HEAD)" = "$SHA"` and
    `git status --porcelain` must be empty (ignored build output is fine).
-   Remove only files you created yourself; if anything tracked changed or
-   HEAD moved, say so as a finding. The next phase reuses this checkout.
+   Remove only files you created; report any other change as a finding.
 7. Put commands and results in your verdict comment. A gate you could not run
    is a finding ("not verified: <why>"), not a pass.
