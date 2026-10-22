@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun --bun alchemy dev",
-    "build": "bun --bun alchemy deploy --yes && node ./scripts/write-runtime-package.mjs && bun ./scripts/bundle-server-bun.mjs",
+    "build": "bun --bun alchemy deploy --yes && bun ./scripts/bundle-server-bun.mjs",
     "start": "dist/server/multica-web",
     "typecheck": "tsrs --noEmit",
     "lint": "oxlint .",

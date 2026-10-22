@@ -7,6 +7,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -30,14 +31,43 @@ function rewriteImportMeta(contents, filename) {
   return next;
 }
 
+// One physical React for the whole executable. pnpm keeps older copies for
+// other packages; bundling those next to react-dom splits the dispatcher
+// and SSR hooks crash. Node's external resolution hid that by walking to
+// the app's single copy.
+const appRequire = createRequire(path.join(root, "package.json"));
+const pinnedSpecifiers = /^(react-server-dom-webpack|react-dom|react|scheduler)(\/|$)/;
+
+function pinReact(specifier) {
+  if (!pinnedSpecifiers.test(specifier)) return null;
+  try {
+    return fs.realpathSync(appRequire.resolve(specifier));
+  } catch {
+    return null;
+  }
+}
+
 const bundlePlugin = {
   name: "vinext-bun-executable",
   setup(build) {
+    build.onResolve({ filter: pinnedSpecifiers }, (args) => {
+      const pinned = pinReact(args.path);
+      if (!pinned) return undefined;
+      return { path: pinned };
+    });
     build.onLoad({ filter: /\.[cm]?js$/ }, async (args) => {
       const file = Bun.file(args.path);
       if (!(await file.exists())) return undefined;
       let contents = await file.text();
       const isProdServer = args.path.endsWith(`${path.sep}server${path.sep}prod-server.js`);
+      if (contents.includes("createRequire") && contents.includes("e(import.meta.url)")) {
+        // Rolldown's runtime require() loads react from disk. Serve the
+        // bundled copy instead so SSR and that require share one dispatcher.
+        contents = contents.replaceAll(
+          "e(import.meta.url)",
+          "((id) => globalThis.__MULTICA_CJS__?.[id] ?? e(import.meta.url)(id))",
+        );
+      }
       if (isProdServer) {
         contents = contents.replace(
           "() => import(resolveServerEntryImportUrl(entryPath))",
@@ -62,9 +92,33 @@ const bundlePlugin = {
 };
 
 const entryPath = path.join(serverDir, ".bun-entry.mjs");
+const seedPath = path.join(serverDir, ".bun-react-seed.mjs");
+// Vinext's Rolldown runtime still calls require("react") at request time.
+// Point that require at the bundled module so SSR hooks and the renderer
+// share one dispatcher, with no React install beside the executable.
+fs.writeFileSync(
+  seedPath,
+  `import * as React from "react";
+import * as ReactDOM from "react-dom";
+import * as JSXRuntime from "react/jsx-runtime";
+
+function cjsExports(namespace, marker) {
+  if (namespace[marker] != null) return namespace;
+  if (namespace.default != null && namespace.default[marker] != null) return namespace.default;
+  return namespace.default ?? namespace;
+}
+
+globalThis.__MULTICA_CJS__ = {
+  react: cjsExports(React, "useState"),
+  "react-dom": cjsExports(ReactDOM, "__DOM_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE"),
+  "react/jsx-runtime": cjsExports(JSXRuntime, "jsx"),
+};
+`,
+);
 fs.writeFileSync(
   entryPath,
-  `import path from "node:path";
+  `import ${JSON.stringify(seedPath)};
+import path from "node:path";
 import { startProdServer } from "vinext/server/prod-server";
 import * as serverEntry from ${JSON.stringify(path.join(serverDir, "index.js"))};
 
@@ -98,25 +152,16 @@ server.on("request", (req, res) => {
 `,
 );
 
+const compileTarget = process.env.MULTICA_WEB_COMPILE_TARGET;
 const result = await Bun.build({
   entrypoints: [entryPath],
-  compile: { outfile },
+  compile: compileTarget ? { outfile, target: compileTarget } : { outfile },
   target: "bun",
   format: "esm",
   minify: true,
-  bytecode: true,
+  bytecode: process.env.MULTICA_WEB_BYTECODE === "0" ? false : true,
   sourcemap: "none",
   packages: "bundle",
-  // React's server renderer and the component tree must share one module
-  // instance. Bundling them inlines two copies and SSR hooks crash.
-  external: [
-    "react",
-    "react-dom",
-    "react/jsx-runtime",
-    "react/jsx-dev-runtime",
-    "react/compiler-runtime",
-    "scheduler",
-  ],
   define: {
     "process.env.NODE_ENV": JSON.stringify("production"),
   },
@@ -124,6 +169,7 @@ const result = await Bun.build({
 });
 
 fs.rmSync(entryPath, { force: true });
+fs.rmSync(seedPath, { force: true });
 
 if (!result.success) {
   for (const log of result.logs) console.error(log);

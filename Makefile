@@ -134,7 +134,9 @@ selfhost-build: ## Build backend/web from the current checkout and start the sel
 		echo "==> Generated random JWT_SECRET, POSTGRES_PASSWORD, and MULTICA_VCS_SECRET_KEY"; \
 	fi
 	@echo "==> Building the web app on the host (copied into the image)..."
-	pnpm --filter @multica/web build
+	@target=$$(if [ "$$(uname -s)" = "Darwin" ]; then case "$$(uname -m)" in arm64|aarch64) echo bun-linux-arm64 ;; x86_64) echo bun-linux-x64 ;; esac; fi); \
+	if [ -n "$$target" ]; then echo "==> Web server target $$target"; MULTICA_WEB_COMPILE_TARGET=$$target pnpm --filter @multica/web build; \
+	else pnpm --filter @multica/web build; fi
 	@echo "==> Building images from the current checkout..."
 	$(COMPOSE) -f docker-compose.selfhost.yml -f docker-compose.selfhost.build.yml up -d --build
 	@bash scripts/selfhost-wait.sh build

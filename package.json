@@ -40,6 +40,9 @@
     "overrides": {
       "@types/react": "catalog:",
       "@types/react-dom": "catalog:",
+      "react": "catalog:",
+      "react-dom": "catalog:",
+      "react-server-dom-webpack": "catalog:",
       "scheduler": "0.28.0",
       "@xmldom/xmldom": "^0.8.13",
       "postcss": "8.5.26",

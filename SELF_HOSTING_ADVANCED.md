@@ -412,15 +412,14 @@ DATABASE_URL="your-database-url" ./server/bin/migrate up
 DATABASE_URL="your-database-url" PORT=8080 JWT_SECRET="your-secret" ./server/bin/server
 ```
 
-For the frontend:
+For the frontend, Bun builds a standalone executable. Node is not required to run it:
 
 ```bash
 pnpm install
-pnpm build
+pnpm --filter @multica/web build
 
-# Start the frontend (production mode)
 cd apps/web
-REMOTE_API_URL=http://localhost:8080 pnpm start
+REMOTE_API_URL=http://localhost:8080 ./dist/server/multica-web
 ```
 
 ## Reverse Proxy
