@@ -168,6 +168,10 @@ func (h *Handler) RerunIssue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if msg := h.orchestratedEpicRerunRefusal(r, issue); msg != "" {
+		writeError(w, http.StatusConflict, msg)
+		return
+	}
 
 	// Body is optional. A zero-length body or `{}` keeps the legacy
 	// assignee-driven rerun behaviour the CLI relies on.
@@ -277,4 +281,25 @@ func (h *Handler) RetrySourceContextQuickCreate(w http.ResponseWriter, r *http.R
 	resp := taskToResponse(*task, uuidToString(workspaceID))
 	h.hydrateTaskAttributions(r.Context(), []*TaskAttribution{resp.Attribution})
 	writeJSON(w, http.StatusAccepted, resp)
+}
+
+// orchestratedEpicRerunRefusal explains why an orchestrated epic cannot be
+// rerun: the orchestrator never gives an epic an agent run (its status follows
+// its sub-issues), so a manual rerun would dispatch work the engine then
+// fights. An issue an agent already owns (meta "owner") is not an epic even
+// with follow-up children. "" = rerun allowed.
+func (h *Handler) orchestratedEpicRerunRefusal(r *http.Request, issue db.Issue) string {
+	if h.Orchestrator == nil || !issue.ProjectID.Valid || !h.Orchestrator.Owns(uuidToString(issue.ProjectID)) {
+		return ""
+	}
+	var meta map[string]any
+	_ = json.Unmarshal(issue.Metadata, &meta)
+	if owner, _ := meta["owner"].(string); owner != "" {
+		return ""
+	}
+	children, err := h.Queries.ListChildIssues(r.Context(), issue.ID)
+	if err != nil || len(children) == 0 {
+		return ""
+	}
+	return "this issue is an epic: the orchestrator never runs an agent on it and its status follows its sub-issues; retry the failed sub-issue's run instead"
 }
