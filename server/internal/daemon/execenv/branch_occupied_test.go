@@ -236,3 +236,46 @@ func TestExclusiveBranchRewrittenPushedTipIsReclaimed(t *testing.T) {
 	}
 	second.Discard(worktreeTestLogger())
 }
+
+// OX-174/OX-180: the owner's worktree was removed after it delivered, then the
+// reviewer (another agent on the same issue) prepared from the branch record
+// alone. The record named the owner agent, so the reviewer saw "exists without
+// our record" and failed branch_occupied on every retry. The orchestrator
+// branch belongs to the issue: any agent of that conversation continues it.
+func TestExclusiveBranchOtherAgentContinuesRecordedBranchWithoutCheckout(t *testing.T) {
+	repo := newTestRepo(t)
+	params := func(task, agent string) LocalWorktreeParams {
+		return LocalWorktreeParams{
+			LocalPath: repo, EnvRoot: t.TempDir(), AgentName: "J", TaskID: task, ConversationKey: "ATT-62",
+			WorkspaceID: testBranchOwner.WorkspaceID, AgentID: agent, ConversationID: testBranchOwner.ConversationID,
+			ExclusiveBranch: "agent/att-62",
+		}
+	}
+	owner, err := PrepareLocalWorktree(params(turnOneTask, testBranchOwner.AgentID), worktreeTestLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(owner.WorkDir, "work.txt"), "owner\n")
+	finalizeOK(t, owner)
+	if _, err := os.Stat(owner.Path); !os.IsNotExist(err) {
+		t.Fatalf("owner checkout still present (%v); this test needs the record-only path", err)
+	}
+	reviewer, err := PrepareLocalWorktree(params(turnTwoTask, "reviewer-agent"), worktreeTestLogger())
+	if err != nil {
+		t.Fatalf("reviewer prepare: %v", err)
+	}
+	if reviewer.Branch != "agent/att-62" {
+		t.Fatalf("reviewer branch = %q", reviewer.Branch)
+	}
+	if got := readFile(t, filepath.Join(reviewer.WorkDir, "work.txt")); got != "owner\n" {
+		t.Fatalf("owner's work = %q", got)
+	}
+	finalizeOK(t, reviewer)
+
+	// A different conversation (another issue) still cannot adopt it.
+	other := params(turnThreeTask, testBranchOwner.AgentID)
+	other.ConversationID = "01a00000-0000-7000-8000-000000000999"
+	if _, err := PrepareLocalWorktree(other, worktreeTestLogger()); err == nil {
+		t.Fatal("another conversation adopted the issue branch")
+	}
+}
