@@ -102,3 +102,101 @@ func TestPrepareLocalWorktreeExclusiveBranchOtherAgentForks(t *testing.T) {
 	}
 	finalizeOK(t, reviewer)
 }
+
+// OX-123: a later task on the orchestrator branch (another conversation of
+// the owner, or a later phase) found the earlier phase's parked, clean
+// checkout holding agent/<key> and failed branch_occupied. It now continues
+// in that checkout; a dirty parked checkout still blocks.
+func TestExclusiveBranchReclaimsParkedCleanCheckout(t *testing.T) {
+	repo := newTestRepo(t)
+	installFakeWt(t)
+	enableWorktrunk(t, repo)
+	params := func(task, conv string) LocalWorktreeParams {
+		return LocalWorktreeParams{
+			LocalPath: repo, EnvRoot: t.TempDir(), AgentName: "J", TaskID: task, ConversationKey: "ATT-62",
+			WorkspaceID: testBranchOwner.WorkspaceID, AgentID: testBranchOwner.AgentID, ConversationID: conv,
+			ExclusiveBranch: "agent/att-62", HolderPID: os.Getpid(),
+		}
+	}
+	first, err := PrepareLocalWorktree(params(turnOneTask, testBranchOwner.ConversationID), worktreeTestLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(first.WorkDir, "work.txt"), "owner\n")
+	finalizeOK(t, first)
+	if _, err := os.Stat(first.Path); err != nil {
+		t.Fatalf("expected a parked checkout: %v", err)
+	}
+	second, err := PrepareLocalWorktree(params(turnTwoTask, "another-conversation"), worktreeTestLogger())
+	if err != nil {
+		t.Fatalf("second prepare: %v", err)
+	}
+	if second.Branch != "agent/att-62" || second.Path != first.Path || !second.Continued {
+		t.Fatalf("second = branch %q path %q continued %v; want the parked checkout %q", second.Branch, second.Path, second.Continued, first.Path)
+	}
+	if got := readFile(t, filepath.Join(second.WorkDir, "work.txt")); got != "owner\n" {
+		t.Fatalf("earlier phase's work = %q", got)
+	}
+	if out := gitRun(t, repo, "branch", "--list", "agent/att-62-*"); strings.TrimSpace(out) != "" {
+		t.Fatalf("forked a task branch: %s", out)
+	}
+	second.Discard(worktreeTestLogger())
+}
+
+func TestExclusiveBranchDirtyParkedCheckoutStillBlocks(t *testing.T) {
+	repo := newTestRepo(t)
+	installFakeWt(t)
+	enableWorktrunk(t, repo)
+	params := func(task, conv string) LocalWorktreeParams {
+		return LocalWorktreeParams{
+			LocalPath: repo, EnvRoot: t.TempDir(), AgentName: "J", TaskID: task, ConversationKey: "ATT-62",
+			WorkspaceID: testBranchOwner.WorkspaceID, AgentID: testBranchOwner.AgentID, ConversationID: conv,
+			ExclusiveBranch: "agent/att-62", HolderPID: os.Getpid(),
+		}
+	}
+	first, err := PrepareLocalWorktree(params(turnOneTask, testBranchOwner.ConversationID), worktreeTestLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(first.WorkDir, "work.txt"), "owner\n")
+	finalizeOK(t, first)
+	writeFile(t, filepath.Join(first.Path, "uncommitted.txt"), "keep me\n")
+	_, err = PrepareLocalWorktree(params(turnTwoTask, "another-conversation"), worktreeTestLogger())
+	var occ *BranchOccupiedError
+	if !errors.As(err, &occ) {
+		t.Fatalf("want BranchOccupiedError for a dirty parked checkout, got %v", err)
+	}
+	if got := readFile(t, filepath.Join(first.Path, "uncommitted.txt")); got != "keep me\n" {
+		t.Fatalf("uncommitted work touched: %q", got)
+	}
+}
+
+// The OX-123 shape: the parked checkout's branch sits at HEAD (merged / never
+// moved). It is dropped and the branch recreated, instead of branch_occupied.
+func TestExclusiveBranchMergedParkedCheckoutIsReplaced(t *testing.T) {
+	repo := newTestRepo(t)
+	installFakeWt(t)
+	enableWorktrunk(t, repo)
+	params := func(task, conv string) LocalWorktreeParams {
+		return LocalWorktreeParams{
+			LocalPath: repo, EnvRoot: t.TempDir(), AgentName: "J", TaskID: task, ConversationKey: "ATT-62",
+			WorkspaceID: testBranchOwner.WorkspaceID, AgentID: testBranchOwner.AgentID, ConversationID: conv,
+			ExclusiveBranch: "agent/att-62", HolderPID: os.Getpid(),
+		}
+	}
+	first, err := PrepareLocalWorktree(params(turnOneTask, testBranchOwner.ConversationID), worktreeTestLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(first.WorkDir, "work.txt"), "owner\n")
+	finalizeOK(t, first)
+	gitRun(t, repo, "merge", "--ff-only", "agent/att-62")
+	second, err := PrepareLocalWorktree(params(turnTwoTask, "another-conversation"), worktreeTestLogger())
+	if err != nil {
+		t.Fatalf("second prepare: %v", err)
+	}
+	if second.Branch != "agent/att-62" {
+		t.Fatalf("second branch = %q", second.Branch)
+	}
+	second.Discard(worktreeTestLogger())
+}

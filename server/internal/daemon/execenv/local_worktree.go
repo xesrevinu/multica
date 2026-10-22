@@ -423,6 +423,17 @@ func PrepareLocalWorktree(params LocalWorktreeParams, logger *slog.Logger) (*Loc
 			reused = true
 		}
 	}
+	if !reused && plan.exclusive && worktrunkConfigPresent(gitRoot) {
+		next, path, ok, reclaimErr := reclaimParkedExclusiveWorktree(gitRoot, plan, params.WorkspaceID, logger)
+		if reclaimErr != nil {
+			return nil, reclaimErr
+		}
+		plan = next
+		if ok {
+			worktreePath, actualBranch, createdBranch = path, plan.name, false
+			reused = true
+		}
+	}
 	if !reused {
 		if worktrunkConfigPresent(gitRoot) {
 			worktreePath, actualBranch, createdBranch, err = addWorktrunkWorktree(gitRoot, plan, params.TaskID, logger)

@@ -534,3 +534,88 @@ func listIdleWorktreeRoots() ([]string, error) {
 	})
 	return roots, err
 }
+
+// reclaimParkedExclusiveWorktree hands the orchestrator branch's parked
+// checkout to the task that now needs that branch. The orchestrator routes one
+// task per issue at a time, so an idle hold on agent/<key> is an earlier phase
+// (or an earlier conversation of the same owner) that finished and parked; its
+// branch is the issue's deliverable, and continuing on it in place loses
+// nothing. Before this, a later phase planned agent/<key>, found the parked
+// checkout holding it and failed branch_occupied (OX-123), blocking the issue
+// until someone removed the worktree by hand.
+//
+// It only reclaims a checkout the daemon itself parked for this workspace: an
+// idle (or dead-holder) hold whose path is the worktree git says holds the
+// branch, with a clean tree. A live run, a dirty tree (the only copy of
+// uncommitted work), or a worktree the daemon has no hold for still fails
+// branch_occupied as before.
+func reclaimParkedExclusiveWorktree(gitRoot string, plan taskBranchPlan, workspaceID string, logger *slog.Logger) (taskBranchPlan, string, bool, error) {
+	occupant, err := worktreePathForBranch(gitRoot, plan.name)
+	if err != nil || occupant == "" {
+		return plan, "", false, err
+	}
+	hold, found, err := readWorktreeHold(gitRoot, plan.name)
+	if err != nil || !found {
+		return plan, "", false, err
+	}
+	if hold.Branch != plan.name || !pathsMatch(occupant, hold.Path) || holdInUse(hold) {
+		return plan, "", false, nil
+	}
+	if workspaceID != "" && hold.Owner.WorkspaceID != "" && hold.Owner.WorkspaceID != workspaceID {
+		return plan, "", false, nil
+	}
+	if dirty, dirtyErr := worktreeIsDirty(hold.Path); dirtyErr != nil || dirty {
+		if logger != nil {
+			logger.Info("execenv: parked checkout of the orchestrator branch has uncommitted changes; not reclaiming it",
+				"branch", plan.name, "path", hold.Path)
+		}
+		return plan, "", false, nil
+	}
+	// Merged into HEAD (or never moved off it): nothing on the branch is
+	// unique, so drop the parked checkout and let this task recreate the
+	// branch from HEAD, as claimIdleWorktree does for a merged branch.
+	if _, mergedErr := runGit(gitRoot, "merge-base", "--is-ancestor", "refs/heads/"+plan.name, "HEAD"); mergedErr == nil {
+		if err := removeLocalWorktreeDir(gitRoot, hold.Path, logger); err != nil {
+			return plan, "", false, err
+		}
+		if err := clearWorktreeHold(gitRoot, plan.name); err != nil {
+			return plan, "", false, err
+		}
+		if logger != nil {
+			logger.Info("execenv: removed the parked checkout of a merged orchestrator branch; recreating it from HEAD",
+				"branch", plan.name, "path", hold.Path)
+		}
+		plan.reset = true
+		return plan, "", false, nil
+	}
+	// Unmerged work: continue it in place, replaying from the snapshot the
+	// branch was recorded with. No record we can verify means we cannot
+	// replay safely; leave the occupant alone.
+	ref, err := readUserStateRef(gitRoot, plan.name)
+	if err != nil || ref == "" {
+		return plan, "", false, nil
+	}
+	record, err := readBranchRecord(gitRoot, ref)
+	if err != nil || record.checkpoint == "" {
+		return plan, "", false, nil
+	}
+	if _, err := runGit(gitRoot, "merge-base", "--is-ancestor", record.checkpoint, "refs/heads/"+plan.name); err != nil {
+		return plan, "", false, nil
+	}
+	if err := refreshCachedWorktree(hold.Path); err != nil {
+		return plan, "", false, err
+	}
+	tip, err := runGitTrimmed(hold.Path, "rev-parse", "HEAD")
+	if err != nil {
+		return plan, "", false, fmt.Errorf("execenv: rev-parse parked worktree: %w", err)
+	}
+	plan.base = tip
+	plan.continues = true
+	plan.priorState = record.state
+	plan.priorCheckpoint = record.checkpoint
+	if logger != nil {
+		logger.Info("execenv: reclaiming the parked checkout of the orchestrator branch",
+			"branch", plan.name, "path", hold.Path, "parked_by_agent", hold.Owner.AgentID)
+	}
+	return plan, hold.Path, true, nil
+}
