@@ -2,12 +2,14 @@ package agent
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -106,8 +108,16 @@ func (b *yieldedBackend) Execute(ctx context.Context, prompt string, opts ExecOp
 		cancel()
 		return nil, fmt.Errorf("start yielded-agent: %w", err)
 	}
+	// The last provider error yielded-agent logged on stderr: when the
+	// process ends without a "done" event (the model request failed and the
+	// turn was abandoned), it is the only record of why, and it is what lets
+	// a quota / rate limit classify as a provider limit instead of an
+	// ordinary failure.
+	lastErr := &yieldedStderrErr{}
+	stderrDone := make(chan struct{})
 	go func() {
-		_, _ = io.Copy(newLogWriter(b.cfg.Logger, "[yielded:stderr] "), stderr)
+		defer close(stderrDone)
+		_, _ = io.Copy(io.MultiWriter(newLogWriter(b.cfg.Logger, "[yielded:stderr] "), lastErr), stderr)
 	}()
 
 	if _, err := io.WriteString(stdin, prompt); err != nil {
@@ -134,6 +144,7 @@ func (b *yieldedBackend) Execute(ctx context.Context, prompt string, opts ExecOp
 		status := "completed"
 		var errText string
 		resumeRejected := false
+		sawDone := false
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 		for scanner.Scan() {
@@ -169,6 +180,7 @@ func (b *yieldedBackend) Execute(ctx context.Context, prompt string, opts ExecOp
 			case "tool_result":
 				trySend(msgCh, Message{Type: MessageToolResult, Tool: event.Name, CallID: event.ID, Output: event.Output, Status: event.Status})
 			case "done":
+				sawDone = true
 				output = event.Text
 				sessionID = event.SessionID
 				if event.Stop == "cancelled" {
@@ -197,6 +209,20 @@ func (b *yieldedBackend) Execute(ctx context.Context, prompt string, opts ExecOp
 			status = "aborted"
 			errText = "execution cancelled"
 		}
+		if !sawDone && status == "completed" {
+			// stdout closed without the turn's "done" event: the agent died or
+			// abandoned the turn. Never report that as a completed turn — the
+			// orchestrator would read it as "reviewer ended without verdict".
+			select {
+			case <-stderrDone:
+			case <-time.After(2 * time.Second):
+			}
+			status = "failed"
+			errText = "yielded-agent exited without finishing the turn"
+			if e := lastErr.get(); e != "" {
+				errText = e
+			}
+		}
 		if output == "" {
 			output = text.String()
 		}
@@ -211,4 +237,40 @@ func (b *yieldedBackend) Execute(ctx context.Context, prompt string, opts ExecOp
 	}()
 
 	return &Session{Messages: msgCh, Result: resCh}, nil
+}
+
+// yieldedStderrErr remembers the last "Model response failed" / request error
+// line yielded-agent wrote to stderr.
+type yieldedStderrErr struct {
+	mu   sync.Mutex
+	buf  []byte
+	last string
+}
+
+func (e *yieldedStderrErr) Write(p []byte) (int, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.buf = append(e.buf, p...)
+	for {
+		i := bytes.IndexByte(e.buf, '\n')
+		if i < 0 {
+			if len(e.buf) > 64*1024 {
+				e.buf = e.buf[len(e.buf)-64*1024:]
+			}
+			return len(p), nil
+		}
+		line := strings.TrimSpace(string(e.buf[:i]))
+		e.buf = e.buf[i+1:]
+		if j := strings.Index(line, "Model response failed"); j >= 0 {
+			e.last = line[j:]
+		} else if strings.HasPrefix(line, "request: ") {
+			e.last = strings.TrimPrefix(line, "request: ")
+		}
+	}
+}
+
+func (e *yieldedStderrErr) get() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.last
 }
