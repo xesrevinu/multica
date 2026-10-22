@@ -165,6 +165,13 @@ func (s *IssueService) WillEnqueueRun(ctx context.Context, in IssueTriggerInput,
 		if (source == RunSourceStatus || in.EnteredHandoffStep) && s.hasPendingRun(ctx, issue.ID, issue.AssigneeID) {
 			return IssueRunTrigger{}, false
 		}
+		// Leaving backlog while the agent is already RUNNING this issue (an
+		// orchestrator override that moved a started issue back and forth) must
+		// not queue a second run behind it: that duplicate later starts on the
+		// same branch and work (OX-102/OX-104 on heavy-engineer-4/5).
+		if source == RunSourceStatus && s.hasActiveRun(ctx, issue.ID, issue.AssigneeID) {
+			return IssueRunTrigger{}, false
+		}
 		return IssueRunTrigger{
 			IssueID:      issue.ID,
 			AgentID:      issue.AssigneeID,
@@ -208,6 +215,16 @@ func (s *IssueService) WillEnqueueRun(ctx context.Context, in IssueTriggerInput,
 		}, true
 	}
 	return IssueRunTrigger{}, false
+}
+
+// hasActiveRun reports any non-terminal task (queued, dispatched, running,
+// waiting_local_directory) for the pair. Errors fail closed.
+func (s *IssueService) hasActiveRun(ctx context.Context, issueID, agentID pgtype.UUID) bool {
+	active, err := s.Queries.HasActiveTaskForIssueAndAgent(ctx, db.HasActiveTaskForIssueAndAgentParams{IssueID: issueID, AgentID: agentID})
+	if err != nil {
+		return true
+	}
+	return active
 }
 
 // hasPendingRun reports whether the agent already holds a queued or dispatched
