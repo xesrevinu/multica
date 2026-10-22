@@ -107,15 +107,7 @@ git interpret-trailers --in-place --trailer "$TRAILER" "$COMMIT_MSG_FILE"
 }
 
 func localCoAuthorTrailer() string {
-	name := strings.TrimSpace(os.Getenv("MULTICA_CO_AUTHOR_NAME"))
-	email := strings.TrimSpace(os.Getenv("MULTICA_CO_AUTHOR_EMAIL"))
-	// When agents commit as the bot, the bot co-authoring itself says nothing:
-	// credit the human whose daemon this is instead.
-	if _, botEmail := AgentGitIdentity(); AgentGitHubAppEnabled() && strings.EqualFold(email, botEmail) {
-		if hn, he := humanCoAuthor(); hn != "" && he != "" {
-			name, email = hn, he
-		}
-	}
+	name, email := AgentCoAuthor()
 	if name == "" {
 		name = "multica-agent"
 	}

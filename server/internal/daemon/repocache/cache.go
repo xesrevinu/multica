@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"log/slog"
 	"net/url"
 	"os"
@@ -2017,8 +2018,7 @@ const (
 // default for a self-hosted bot. Unsafe values are ignored so they cannot
 // break out of the double-quoted shell assignment.
 func coAuthorTrailer() string {
-	name := strings.TrimSpace(os.Getenv("MULTICA_CO_AUTHOR_NAME"))
-	email := strings.TrimSpace(os.Getenv("MULTICA_CO_AUTHOR_EMAIL"))
+	name, email := execenv.AgentCoAuthor()
 	if name == "" {
 		name = defaultCoAuthorName
 	}

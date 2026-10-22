@@ -80,6 +80,26 @@ func dedupeWorktreeValues(workDir, key string, values ...string) error {
 	return nil
 }
 
+// AgentCoAuthor is the Co-authored-by identity for agent commits, before
+// defaults. With the GitHub App identity on, the bot is the commit author, so
+// the trailer credits the human whose daemon this is — unless
+// MULTICA_CO_AUTHOR_* names someone other than the bot. Without an explicit
+// override this used to fall through to the product default
+// (multica-agent <github@multica.ai>), which is wrong for a bot-authored commit.
+func AgentCoAuthor() (name, email string) {
+	name = strings.TrimSpace(os.Getenv("MULTICA_CO_AUTHOR_NAME"))
+	email = strings.TrimSpace(os.Getenv("MULTICA_CO_AUTHOR_EMAIL"))
+	if !AgentGitHubAppEnabled() {
+		return name, email
+	}
+	if _, botEmail := AgentGitIdentity(); email == "" || strings.EqualFold(email, botEmail) {
+		if hn, he := humanCoAuthor(); hn != "" && he != "" {
+			return hn, he
+		}
+	}
+	return name, email
+}
+
 // humanCoAuthor is the user's own git identity (global config, read only),
 // used as Co-authored-by when the bot is the commit author.
 func humanCoAuthor() (string, string) {
