@@ -104,6 +104,14 @@ func TestPrecheckConflictAndMergeConflict(t *testing.T) {
 	s := snap(StInProgress, map[string]string{"phase": PhReviewRequested, "owner": "a", "attempt_impl": "1"})
 	s.Head = "h"
 	d := sp.Decide(s, fail("conflict"))
+	// A conflict goes to the reviewer's resolve-conflict run (T11), not the owner.
+	want(t, d, "T11_resolve_conflict", StInReview, sp.Roles.Reviewer)
+	if d.Meta["attempt_conflict"] != "1" || d.Meta["phase"] != PhResolvingConflict {
+		t.Fatal(d.Meta)
+	}
+	off := spec(t)
+	off.Limits.Conflict = -1
+	d = off.Decide(s, fail("conflict"))
 	want(t, d, "T3_rework", StTodo, "a")
 	if !strings.Contains(d.Meta["blocked_reason"], "precheck conflict") {
 		t.Fatal(d.Meta)
@@ -331,5 +339,16 @@ func TestQueuedTimeoutCountsNoAttempt(t *testing.T) {
 	s.LastRun = &Run{ID: "r", Status: "failed", Reason: "timeout", StartedAt: &st, EndedAt: &ended}
 	if d := sp.Decide(s, nil); d.Tid == "T5q_provider_limit" {
 		t.Fatalf("a started run that timed out is a real failure: %+v", d)
+	}
+}
+
+func TestMemberResolveConflictRequest(t *testing.T) {
+	sp := spec(t)
+	s := snap(StTodo, map[string]string{"phase": PhChangesRequested, "owner": "a", "conflict_requested": "true", "blocked_reason": "precheck conflict: x"})
+	s.Head = "h"
+	d := sp.Decide(s, nil)
+	want(t, d, "T11_resolve_conflict", StInReview, sp.Roles.Reviewer)
+	if d.Meta["conflict_requested"] != "" || d.Meta["conflict_from_phase"] != PhChangesRequested {
+		t.Fatal(d.Meta)
 	}
 }

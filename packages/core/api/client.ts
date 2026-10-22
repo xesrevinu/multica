@@ -1394,7 +1394,7 @@ export class ApiClient {
     return this.fetch<unknown>(`/api/orchestrator/issues/${encodeURIComponent(key)}/pr${q}`);
   }
 
-  async orchFlowAction(key: string, action: "accept" | "reject" | "unblock" | "cancel" | "pause" | "resume" | "replay", body?: { reason?: string }): Promise<unknown> {
+  async orchFlowAction(key: string, action: "accept" | "reject" | "unblock" | "cancel" | "pause" | "resume" | "replay" | "resolve-conflict", body?: { reason?: string }): Promise<unknown> {
     return this.fetch<unknown>(`/api/orchestrator/flow/${encodeURIComponent(key)}/${action}`, { method: "POST", body: JSON.stringify(body ?? {}) });
   }
 

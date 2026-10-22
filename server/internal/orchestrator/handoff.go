@@ -72,11 +72,14 @@ const (
 	HKDeadLetter        = "dead_letter"
 	HKAgentBlocked      = "agent_blocked"
 	HKUnblock           = "unblock"
+	// HKResolveConflict: the reviewer is asked to merge main into the issue
+	// branch with the resolve-conflict skill (T11).
+	HKResolveConflict = "resolve_conflict"
 )
 
 // handoffTids are the transitions that send an issue back or re-run it
 // because something went wrong.
-var handoffTids = map[string]bool{"T3_rework": true, "T5_rerun": true, "T5q_provider_limit": true, "T6_block": true, "T7_unblock": true, "T3b_rereview": true}
+var handoffTids = map[string]bool{"T3_rework": true, "T5_rerun": true, "T5q_provider_limit": true, "T6_block": true, "T7_unblock": true, "T3b_rereview": true, "T11_resolve_conflict": true, "T11b_conflict_handback": true}
 
 // BuildHandoff derives the handoff for d from the snapshot. Pure. nil when d
 // is not a send-back / failure re-run (e.g. a first start, a normal review).
@@ -93,7 +96,7 @@ func (sp *Spec) BuildHandoff(s *Snapshot, d *Decision) *Handoff {
 		}
 	}
 	h.Attempts = map[string]int{}
-	for _, k := range []string{"attempt_impl", "attempt_review", "attempt_infra", "attempt_quota", "unblock_count"} {
+	for _, k := range []string{"attempt_impl", "attempt_review", "attempt_infra", "attempt_quota", "attempt_conflict", "unblock_count"} {
 		v := m[k]
 		if nv, ok := d.Meta[k]; ok {
 			v = nv
@@ -130,6 +133,12 @@ func (sp *Spec) BuildHandoff(s *Snapshot, d *Decision) *Handoff {
 		default:
 			h.Kind, h.Attempt = HKNoHandover, h.Attempts["impl"]
 		}
+	case "T11_resolve_conflict":
+		h.Role, h.Kind, h.Attempt = "reviewer", HKResolveConflict, h.Attempts["conflict"]
+		h.Summary = "Merge " + sp.mainName() + " into this issue's branch with the resolve-conflict skill (merge --no-ff origin/" + sp.mainName() +
+			", never rebase or force-push; run the gates; fast-forward push; then set conflict_result=resolved, or abort and set conflict_result=cannot_resolve with conflict_notes). Trigger: " + d.Why
+	case "T11b_conflict_handback":
+		h.Role, h.Kind, h.Attempt = "owner", HKConflict, h.Attempts["impl"]
 	case "T5q_provider_limit":
 		h.Kind, h.Attempt = HKProviderLimit, h.Attempts["quota"]
 		h.Role = roleOf(sp, s.Issue.Assignee)

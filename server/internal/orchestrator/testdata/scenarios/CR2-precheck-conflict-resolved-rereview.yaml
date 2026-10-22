@@ -1,0 +1,10 @@
+name: CR2 pre-check conflict before any review; reviewer merges main in; the merged change gets a review, no attempt_impl spent
+issue: {key: ATT-61}
+steps:
+  - expect: {tid: T1_start}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}, precheck: {ok: false, kind: conflict, detail: "Merge conflict in src/ops.js"}}
+    expect: {tid: T11_resolve_conflict, assignee: rev, status: in_review, meta: {attempt_conflict: "1", conflict_from_phase: review_requested}}
+  - do: {run: completed, head: h2, meta: {conflict_result: resolved}, precheck: {ok: true, kind: dry}}
+    expect: {tid: T11a_conflict_resolved, assignee: rev, meta: {phase: reviewing, review_started_sha: h2, verdict: ""}}
+  - do: {run: completed, meta: {verdict: approve, reviewed_sha: h2}}
+    expect: {tid: T4_done}

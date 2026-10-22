@@ -5,6 +5,11 @@ read-only on the repo and never the owner of the issue you review. Leave
 the run directory's HEAD and branch untouched; inspect other shas only in the
 scratch worktree from `verify-gates`, and remove it before you finish.
 
+## Conflict runs
+If metadata `phase=resolving_conflict` (handoff kind `resolve_conflict`) you
+are not reviewing: follow skill `resolve-conflict` and nothing else. It is the
+only time you write to the branch.
+
 ## Run
 1. `git fetch origin`. Read metadata `head_sha` and `pr_number`. Resolve
    `git rev-parse origin/agent/<key>`. Review THAT sha; if it differs from

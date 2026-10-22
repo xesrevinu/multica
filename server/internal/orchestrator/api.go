@@ -34,6 +34,7 @@ func (s *Service) Routes() http.Handler {
 	r.Post("/flow/{key}/accept", s.hMeta("", PhAwaitAcceptance, map[string]string{"acceptance": "ok"}))
 	r.Post("/flow/{key}/reject", s.hMeta("", PhAwaitAcceptance, map[string]string{"acceptance": "reject"}))
 	r.Post("/flow/{key}/replay", s.hReplay)
+	r.Post("/flow/{key}/resolve-conflict", s.hResolveConflict)
 	r.Get("/issues", s.hIssues)
 	r.Get("/issues/{key}/timeline", s.hIssueTimeline)
 	r.Get("/issues/{key}/pr", s.hPR)
@@ -451,4 +452,27 @@ func (s *Service) hReplay(w http.ResponseWriter, r *http.Request) {
 	s.process(r.Context(), t, rows, row, "replay")
 	after, _ := s.st.issue(r.Context(), row.ID)
 	writeJSON(w, 200, map[string]any{"key": row.Key, "status": after.Status, "metadata": after.Meta, "recent": s.transitions(r, row.ID, 3), "by": util.UUIDToString(util.MustParseUUID(s.svcUserID))})
+}
+
+// hResolveConflict: the PR card's "Resolve conflicts" on an orchestrated
+// issue. Asks the engine to run T11 now (reviewer + resolve-conflict skill);
+// a member's request starts a fresh episode (attempts and hand-back reset).
+func (s *Service) hResolveConflict(w http.ResponseWriter, r *http.Request) {
+	row, t, ok := s.issueFor(w, r)
+	if !ok {
+		return
+	}
+	if t.Spec.Roles.Reviewer == "" || t.Spec.Limits.conflictLimit() < 0 {
+		writeErr(w, 409, "conflict_resolution_off", "conflict resolution is off for this team (limits.conflict < 0 or no reviewer)")
+		return
+	}
+	if settled(row.Status) || row.Status == StBlocked || row.Status == StBacklog {
+		writeErr(w, 409, "wrong_state", fmt.Sprintf("%s is %s", row.Key, row.Status))
+		return
+	}
+	if row.Meta["phase"] == PhResolvingConflict {
+		writeErr(w, 409, "wrong_state", row.Key+" is already resolving conflicts")
+		return
+	}
+	s.writeFlowMeta(w, r, row, map[string]string{"conflict_requested": "true", "attempt_conflict": "0", "conflict_handback": ""})
 }

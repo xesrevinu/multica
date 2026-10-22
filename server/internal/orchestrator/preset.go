@@ -23,8 +23,8 @@ type PresetRole struct {
 // presetSkills: which preset skills each role gets attached.
 var presetSkills = map[string][]string{
 	"owner":    {"open-pr", "handoff-metadata", "rebase-conflict", "blocked-report"},
-	"expert":   {"open-pr", "handoff-metadata", "rebase-conflict", "blocked-report"},     // implement mode uses the owner's handoff skills
-	"reviewer": {"verify-gates", "review-verdict", "handoff-metadata", "blocked-report"}, // review-verdict step 8 writes metadata via handoff-metadata
+	"expert":   {"open-pr", "handoff-metadata", "rebase-conflict", "blocked-report"},                         // implement mode uses the owner's handoff skills
+	"reviewer": {"verify-gates", "review-verdict", "resolve-conflict", "handoff-metadata", "blocked-report"}, // review-verdict step 8 writes metadata via handoff-metadata; resolve-conflict for phase=resolving_conflict
 	"lead":     {"plan-split", "blocked-report"},
 }
 

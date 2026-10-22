@@ -19,6 +19,7 @@ import {
 import {
   orchPRCardOptions,
   orchPRListOptions,
+  useOrchFlowAction,
   useOrchPROp,
   type OrchPRCard,
   type OrchPROp,
@@ -101,6 +102,7 @@ function PRCardBody({ wsId, issueKey, data, number }: { wsId: string; issueKey: 
   const { t } = useT("orch");
   const timeAgo = useTimeAgo();
   const op = useOrchPROp(wsId, issueKey);
+  const flow = useOrchFlowAction(wsId, issueKey);
   const [showChecks, setShowChecks] = useState(false);
   const [showConflicts, setShowConflicts] = useState(true);
   const pr = data.pr;
@@ -268,7 +270,25 @@ function PRCardBody({ wsId, issueKey, data, number }: { wsId: string; issueKey: 
               {t(($) => $.pr.rerun)}
             </Button>
           )}
-          {open && data.can.update_branch && (behind > 0 || conflict) && (
+          {open && data.orchestrated && conflict && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={flow.isPending}
+              onClick={() =>
+                flow
+                  .mutateAsync({ action: "resolve-conflict" })
+                  .then(() => toast.success(t(($) => $.pr.resolve_conflicts_started)))
+                  .catch((err: unknown) => toast.error(t(($) => $.actions.failed, { error: err instanceof Error ? err.message : String(err) })))
+              }
+              data-testid="orch-pr-resolve-conflicts"
+              title={t(($) => $.pr.resolve_conflicts_tip, { base })}
+            >
+              {flow.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <GitMerge className="size-3.5" />}
+              {t(($) => $.pr.resolve_conflicts)}
+            </Button>
+          )}
+          {open && !data.orchestrated && data.can.update_branch && (behind > 0 || conflict) && (
             <Button
               size="sm"
               variant="outline"

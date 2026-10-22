@@ -1,4 +1,8 @@
 name: PR-S3 approved PR becomes CONFLICTING after a sibling merged; owner merges main
+spec:
+  roles: {lead: lead, reviewer: rev, owners: [a, b]}
+  repo: {mode: github, slug: x/y, required_checks: [test]}
+  limits: {conflict: -1}   # legacy: conflict resolution off, conflicts go back to the owner
 recorded: ATT-53
 issue: {key: ATT-53}
 steps:
