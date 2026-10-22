@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"reflect"
@@ -20,7 +21,7 @@ import (
 // smaller one that hashes and validates like a correct one.
 var errInjectedSkillRead = errors.New("injected skill read failure")
 
-// sliceRows is a pgx.Rows over canned column values, so the skill loaders can
+// sliceRows is a *sql.Rows over canned column values, so the skill loaders can
 // be exercised without a database. Values must match the destination field
 // types exactly; Scan assigns them positionally.
 type sliceRows struct {
@@ -30,7 +31,7 @@ type sliceRows struct {
 
 func (r *sliceRows) Close()                                       {}
 func (r *sliceRows) Err() error                                   { return nil }
-func (r *sliceRows) CommandTag() pgconn.CommandTag                { return pgconn.NewCommandTag("") }
+func (r *sliceRows) CommandTag() sql.Result                       { return stubResult{} }
 func (r *sliceRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
 func (r *sliceRows) Values() ([]any, error)                       { return nil, nil }
 func (r *sliceRows) RawValues() [][]byte                          { return nil }
@@ -77,46 +78,48 @@ type skillReadDBTX struct {
 	perSkillFileCall int
 }
 
-func (d *skillReadDBTX) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
-	return pgconn.NewCommandTag(""), nil
+func (d *skillReadDBTX) ExecContext(context.Context, string, ...any) (sql.Result, error) {
+	return stubResult{}, nil
 }
 
-func (d *skillReadDBTX) QueryRow(context.Context, string, ...any) pgx.Row { return noRow{} }
+func (d *skillReadDBTX) QueryRowContext(context.Context, string, ...any) *sql.Row {
+	return errQueryRow()
+}
 
-func (d *skillReadDBTX) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
+func (d *skillReadDBTX) QueryContext(_ context.Context, query string, _ ...any) (*sql.Rows, error) {
 	// Checked longest-name-first: the batch query's text also contains the
 	// per-skill query's name as a prefix.
 	switch {
-	case strings.Contains(sql, "ListSkillFilesBySkillIDs"):
+	case strings.Contains(query, "ListSkillFilesBySkillIDs"):
 		if d.failQuery == "ListSkillFilesBySkillIDs" {
 			return nil, errInjectedSkillRead
 		}
-		return &sliceRows{rows: d.files}, nil
-	case strings.Contains(sql, "ListSkillFiles"):
+		return nil, fmt.Errorf("sqlite rows unsupported in test double")
+	case strings.Contains(query, "ListSkillFiles"):
 		d.perSkillFileCall++
-		return &sliceRows{}, nil
-	case strings.Contains(sql, "ListAgentSkills"):
+		return nil, fmt.Errorf("sqlite rows unsupported in test double")
+	case strings.Contains(query, "ListAgentSkills"):
 		if d.failQuery == "ListAgentSkills" {
 			return nil, errInjectedSkillRead
 		}
-		return &sliceRows{rows: d.skills}, nil
+		return nil, fmt.Errorf("sqlite rows unsupported in test double")
 	}
-	return nil, fmt.Errorf("unexpected query: %s", sql)
+	return nil, fmt.Errorf("unexpected query: %s", query)
 }
 
 // skillRow / skillFileRow build result rows in the column order the generated
 // ListAgentSkills / ListSkillFilesBySkillIDs scanners read.
-func skillRow(id pgtype.UUID, name, description, content string) []any {
+func skillRow(id string, name, description, content string) []any {
 	return []any{
 		id, testUUID(0xF0), name, description, content,
-		[]byte(nil), pgtype.UUID{}, pgtype.Timestamptz{}, pgtype.Timestamptz{}, pgtype.UUID{},
+		[]byte(nil), "", sql.NullString{}, sql.NullString{}, "",
 	}
 }
 
-func skillFileRow(skillID pgtype.UUID, path, content string) []any {
+func skillFileRow(skillID string, path, content string) []any {
 	return []any{
 		testUUID(0xF1), skillID, path, content,
-		pgtype.Timestamptz{}, pgtype.Timestamptz{},
+		sql.NullString{}, sql.NullString{},
 	}
 }
 
@@ -240,4 +243,8 @@ func TestLoadAgentSkillBundles_FailsClosedOnReadFailure(t *testing.T) {
 	if bundles != nil || refs != nil {
 		t.Fatalf("returned %d bundles / %d refs alongside an error, want none", len(bundles), len(refs))
 	}
+}
+
+func (*skillReadDBTX) PrepareContext(context.Context, string) (*sql.Stmt, error) {
+	return nil, fmt.Errorf("prepare not supported")
 }

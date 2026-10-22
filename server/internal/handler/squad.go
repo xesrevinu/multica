@@ -2,12 +2,12 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -82,7 +82,7 @@ func squadMemberToResponse(m db.SquadMember) SquadMemberResponse {
 	}
 }
 
-func addSquadMemberPreview(summary *squadMemberSummary, memberType string, memberID pgtype.UUID, role string) {
+func addSquadMemberPreview(summary *squadMemberSummary, memberType string, memberID string, role string) {
 	summary.count++
 	if len(summary.preview) >= 3 {
 		return
@@ -157,7 +157,7 @@ func (h *Handler) loadSquadInWorkspace(w http.ResponseWriter, r *http.Request) (
 	return squad, workspaceID, true
 }
 
-func (h *Handler) loadSquadMemberSummary(ctx context.Context, squadID pgtype.UUID) (*squadMemberSummary, error) {
+func (h *Handler) loadSquadMemberSummary(ctx context.Context, squadID string) (*squadMemberSummary, error) {
 	rows, err := h.Queries.ListSquadMemberPreviewRowsBySquad(ctx, squadID)
 	if err != nil {
 		return nil, err
@@ -213,8 +213,8 @@ type SquadMemberStatusListResponse struct {
 // policy. Agent projections use these values directly; squad presence maps an
 // online runtime to its user-facing "idle" bucket after workload precedence.
 func deriveRuntimeAvailability(
-	runtimeStatus pgtype.Text,
-	lastSeen pgtype.Timestamptz,
+	runtimeStatus sql.NullString,
+	lastSeen string,
 	now time.Time,
 ) string {
 	if !runtimeStatus.Valid {
@@ -223,10 +223,10 @@ func deriveRuntimeAvailability(
 	if runtimeStatus.String == "online" {
 		return "online"
 	}
-	if !lastSeen.Valid {
+	if !(lastSeen != "") {
 		return "offline"
 	}
-	if now.Sub(lastSeen.Time) < 5*time.Minute {
+	if now.Sub(parseDBTime(lastSeen)) < 5*time.Minute {
 		return "unstable"
 	}
 	return "offline"
@@ -252,8 +252,8 @@ func deriveRuntimeAvailability(
 // out in the SQL.
 func deriveSquadMemberStatus(
 	archived bool,
-	runtimeStatus pgtype.Text,
-	lastSeen pgtype.Timestamptz,
+	runtimeStatus sql.NullString,
+	lastSeen string,
 	hasWorkingTask bool,
 	now time.Time,
 ) string {
@@ -279,18 +279,18 @@ func deriveSquadMemberStatus(
 // leader-authored non-leader task allowed to wake the assigned leader is a
 // same-squad worker task; generic agent tasks such as direct mentions and
 // thread-parent replies are not worker-role proof and must not self-trigger.
-func (h *Handler) shouldSuppressSquadLeaderSelfTrigger(ctx context.Context, issueID, leaderID, squadID pgtype.UUID) bool {
+func (h *Handler) shouldSuppressSquadLeaderSelfTrigger(ctx context.Context, issueID, leaderID, squadID string) bool {
 	latest, err := h.Queries.GetLatestTaskRoleForIssueAndAgent(ctx, db.GetLatestTaskRoleForIssueAndAgentParams{
-		IssueID: issueID,
+		IssueID: nullString(issueID),
 		AgentID: leaderID,
 	})
 	if err != nil {
 		return false
 	}
-	if latest.IsLeaderTask {
+	if latest.IsLeaderTask != 0 {
 		return true
 	}
-	return !latest.SquadID.Valid || uuidToString(latest.SquadID) != uuidToString(squadID)
+	return !latest.SquadID.Valid || uuidToString(latest.SquadID.String) != uuidToString(squadID)
 }
 
 // commentMentionsAnyone returns true when the comment body contains at least
@@ -321,9 +321,9 @@ func commentMentionsAnyone(content string) bool {
 // paths go through computeCommentAgentTriggers so preview and create share the
 // same trigger set.
 // It returns true only when a leader task was actually enqueued.
-func (h *Handler) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, authorType, authorID, handoffNote string) bool {
+func (h *Handler) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, triggerCommentID string, authorType, authorID, handoffNote string) bool {
 	squad, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
-		ID:          issue.AssigneeID,
+		ID:          issue.AssigneeID.String,
 		WorkspaceID: issue.WorkspaceID,
 	})
 	if err != nil {
@@ -344,14 +344,14 @@ func (h *Handler) enqueueSquadLeaderTask(ctx context.Context, issue db.Issue, tr
 	if authorType == "member" {
 		leaderOriginator = authorID
 	} else {
-		leaderOriginator = uuidToString(h.TaskService.OriginatorForIssueTask(ctx, issue, pgtype.UUID{}))
+		leaderOriginator = uuidToString(h.TaskService.OriginatorForIssueTask(ctx, issue, ""))
 	}
 	if !h.canEnqueueSquadLeader(ctx, squad.LeaderID, authorType, authorID, leaderOriginator, uuidToString(issue.WorkspaceID)) {
 		return false
 	}
 
 	hasPending, err := h.Queries.HasPendingTaskForIssueAndAgent(ctx, db.HasPendingTaskForIssueAndAgentParams{
-		IssueID: issue.ID,
+		IssueID: nullString(issue.ID),
 		AgentID: squad.LeaderID,
 		// Key dedup on the reviewed head (TEN-356).
 		HeadSha: h.TaskService.ResolveIssueReviewSHAParam(ctx, issue.ID),

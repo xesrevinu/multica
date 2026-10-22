@@ -2,10 +2,8 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"testing"
-
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -70,11 +68,11 @@ func TestEnqueueChatTaskSealsMessageStrandedByPredecessorReply(t *testing.T) {
 		t.Fatalf("EnqueueChatTask (turn 2): %v", err)
 	}
 
-	var owner pgtype.UUID
-	if err := pool.QueryRow(ctx, `SELECT task_id FROM chat_message WHERE id = $1`, stranded).Scan(&owner); err != nil {
+	var owner string
+	if err := pool.QueryRowContext(ctx, `SELECT task_id FROM chat_message WHERE id = $1`, stranded).Scan(&owner); err != nil {
 		t.Fatalf("load waiting message: %v", err)
 	}
-	if !owner.Valid || owner.Bytes != next.ID.Bytes {
+	if (owner == "") || owner != next.ID {
 		t.Fatalf("waiting user message task_id = %q, want the new turn %q — a predecessor reply that landed after the message must not seal it out",
 			util.UUIDToString(owner), util.UUIDToString(next.ID))
 	}
@@ -117,7 +115,7 @@ func TestEnqueueChatTaskSealsMessageWhenReplyCommitsDuringEnqueue(t *testing.T) 
 		Bus:     events.New(),
 		TxStarter: &raceInjectTxStarter{pool: pool, inject: func() {
 			// Turn 1's reply row, committed by a concurrent completion.
-			if _, err := pool.Exec(ctx, `
+			if _, err := pool.ExecContext(ctx, `
 				INSERT INTO chat_message (chat_session_id, role, content, task_id)
 				VALUES ($1, 'assistant', '通了。', $2)`, chatSessionID, first.ID); err != nil {
 				t.Errorf("inject predecessor reply: %v", err)
@@ -134,11 +132,11 @@ func TestEnqueueChatTaskSealsMessageWhenReplyCommitsDuringEnqueue(t *testing.T) 
 		t.Fatal("race injection did not run")
 	}
 
-	var owner pgtype.UUID
-	if err := pool.QueryRow(ctx, `SELECT task_id FROM chat_message WHERE id = $1`, stranded).Scan(&owner); err != nil {
+	var owner string
+	if err := pool.QueryRowContext(ctx, `SELECT task_id FROM chat_message WHERE id = $1`, stranded).Scan(&owner); err != nil {
 		t.Fatalf("load waiting message: %v", err)
 	}
-	if !owner.Valid || owner.Bytes != next.ID.Bytes {
+	if (owner == "") || owner != next.ID {
 		t.Fatalf("waiting user message task_id = %q, want the new turn %q",
 			util.UUIDToString(owner), util.UUIDToString(next.ID))
 	}
@@ -162,7 +160,7 @@ func TestEnqueueChatTaskLeavesAlreadyPassedMessagesUnowned(t *testing.T) {
 
 	// A pre-ownership pair: user row and reply, neither carrying a task.
 	legacy := appendChannelUserMessage(t, ctx, pool, chatSessionID, "老消息")
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO chat_message (chat_session_id, role, content)
 		VALUES ($1, 'assistant', '老回复')`, chatSessionID); err != nil {
 		t.Fatalf("seed pre-ownership reply: %v", err)
@@ -171,17 +169,17 @@ func TestEnqueueChatTaskLeavesAlreadyPassedMessagesUnowned(t *testing.T) {
 	// The orphan the pre-fix seal stranded, then a later turn (created after it)
 	// that ran on its own input and replied.
 	orphan := appendChannelUserMessage(t, ctx, pool, chatSessionID, "被漏掉的")
-	var laterTurn pgtype.UUID
-	if err := pool.QueryRow(ctx, `
+	var laterTurn string
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO agent_task_queue (agent_id, runtime_id, chat_session_id, status, priority, completed_at)
 		SELECT id, runtime_id, $2, 'completed', 2, now() FROM agent WHERE id = $1
 		RETURNING id`, agentID, chatSessionID).Scan(&laterTurn); err != nil {
 		t.Fatalf("seed later turn: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `UPDATE agent_task_queue SET chat_input_task_id = id WHERE id = $1`, laterTurn); err != nil {
+	if _, err := pool.ExecContext(ctx, `UPDATE agent_task_queue SET chat_input_task_id = id WHERE id = $1`, laterTurn); err != nil {
 		t.Fatalf("stamp later turn input owner: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO chat_message (chat_session_id, role, content, task_id)
 		VALUES ($1, 'user', '后一条', $2), ($1, 'assistant', '后一条的回复', $2)`,
 		chatSessionID, laterTurn); err != nil {
@@ -200,20 +198,20 @@ func TestEnqueueChatTaskLeavesAlreadyPassedMessagesUnowned(t *testing.T) {
 		{"a pre-ownership message whose reply carries no task", legacy},
 		{"an orphan a later turn has already replied past", orphan},
 	} {
-		var owner pgtype.UUID
-		if err := pool.QueryRow(ctx, `SELECT task_id FROM chat_message WHERE id = $1`, tc.id).Scan(&owner); err != nil {
+		var owner string
+		if err := pool.QueryRowContext(ctx, `SELECT task_id FROM chat_message WHERE id = $1`, tc.id).Scan(&owner); err != nil {
 			t.Fatalf("load %s: %v", tc.label, err)
 		}
-		if owner.Valid {
+		if owner != "" {
 			t.Fatalf("%s was swept into task %s; it must stay out of the new batch",
 				tc.label, util.UUIDToString(owner))
 		}
 	}
-	var freshOwner pgtype.UUID
-	if err := pool.QueryRow(ctx, `SELECT task_id FROM chat_message WHERE id = $1`, fresh).Scan(&freshOwner); err != nil {
+	var freshOwner string
+	if err := pool.QueryRowContext(ctx, `SELECT task_id FROM chat_message WHERE id = $1`, fresh).Scan(&freshOwner); err != nil {
 		t.Fatalf("load fresh message: %v", err)
 	}
-	if !freshOwner.Valid || freshOwner.Bytes != task.ID.Bytes {
+	if (freshOwner == "") || freshOwner != task.ID {
 		t.Fatalf("fresh message task_id = %q, want %q", util.UUIDToString(freshOwner), util.UUIDToString(task.ID))
 	}
 	if got := sealedInputCount(t, ctx, pool, task.ID); got != 1 {
@@ -221,16 +219,16 @@ func TestEnqueueChatTaskLeavesAlreadyPassedMessagesUnowned(t *testing.T) {
 	}
 }
 
-func seedChannelChatSession(t *testing.T, ctx context.Context, pool *pgxpool.Pool, workspaceID, agentID, userID string) string {
+func seedChannelChatSession(t *testing.T, ctx context.Context, pool *sql.DB, workspaceID, agentID, userID string) string {
 	t.Helper()
 	var id string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO chat_session (workspace_id, agent_id, creator_id)
 		VALUES ($1, $2, $3) RETURNING id`, workspaceID, agentID, userID).Scan(&id); err != nil {
 		t.Fatalf("seed chat session: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM chat_session WHERE id = $1`, id)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM chat_session WHERE id = $1`, id)
 	})
 	seedChannelTaskBinding(t, pool, id)
 	return id
@@ -240,10 +238,10 @@ func seedChannelChatSession(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 // ChatSession.AppendUserMessage does: durable, unowned, and stamped with the
 // immutable channel_ingested provenance. The debounced flush is what later
 // seals it to a task.
-func appendChannelUserMessage(t *testing.T, ctx context.Context, pool *pgxpool.Pool, chatSessionID, body string) string {
+func appendChannelUserMessage(t *testing.T, ctx context.Context, pool *sql.DB, chatSessionID, body string) string {
 	t.Helper()
 	var id string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO chat_message (chat_session_id, role, content, channel_ingested)
 		VALUES ($1, 'user', $2, TRUE) RETURNING id`, chatSessionID, body).Scan(&id); err != nil {
 		t.Fatalf("append channel user message %q: %v", body, err)
@@ -251,19 +249,19 @@ func appendChannelUserMessage(t *testing.T, ctx context.Context, pool *pgxpool.P
 	return id
 }
 
-func markChannelTaskRunning(t *testing.T, ctx context.Context, pool *pgxpool.Pool, taskID pgtype.UUID) {
+func markChannelTaskRunning(t *testing.T, ctx context.Context, pool *sql.DB, taskID string) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		UPDATE agent_task_queue SET status = 'running', dispatched_at = now(), started_at = now()
 		WHERE id = $1`, taskID); err != nil {
 		t.Fatalf("mark task running: %v", err)
 	}
 }
 
-func sealedInputCount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, taskID pgtype.UUID) int {
+func sealedInputCount(t *testing.T, ctx context.Context, pool *sql.DB, taskID string) int {
 	t.Helper()
 	var n int
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		SELECT count(*) FROM chat_message WHERE task_id = $1 AND role = 'user'`, taskID).Scan(&n); err != nil {
 		t.Fatalf("count sealed input: %v", err)
 	}

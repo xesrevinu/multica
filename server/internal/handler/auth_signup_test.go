@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -144,7 +145,7 @@ func TestFindOrCreateUserGating(t *testing.T) {
 	t.Run("new_user_blocked", func(t *testing.T) {
 		cfg := Config{AllowSignup: false}
 		h := newTestHandler(cfg)
-		h.Queries = db.New(&mockDB{getUserErr: pgx.ErrNoRows})
+		h.Queries = db.New(&mockDB{getUserErr: sql.ErrNoRows})
 
 		_, isNew, err := h.findOrCreateUser(context.Background(), "new@blocked.com")
 		if err == nil {
@@ -176,7 +177,7 @@ func TestFindOrCreateUserGating(t *testing.T) {
 	t.Run("whitelisted_user_allowed", func(t *testing.T) {
 		cfg := Config{AllowSignup: false, AllowedEmails: []string{"whitelisted@test.com"}}
 		h := newTestHandler(cfg)
-		h.Queries = db.New(&mockDB{getUserErr: pgx.ErrNoRows})
+		h.Queries = db.New(&mockDB{getUserErr: sql.ErrNoRows})
 
 		// This will pass checkSignupAllowed and move to CreateUser.
 		// Our mockDB Exec returns success, but Queries.CreateUser might expect QueryRow for RETURNING id.

@@ -7,26 +7,25 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const bumpCommentRevision = `-- name: BumpCommentRevision :one
 UPDATE comment
 SET revision = revision + 1,
     updated_at = now()
-WHERE id = $1
-  AND workspace_id = $2
+WHERE id = ?1
+  AND workspace_id = ?2
 RETURNING id, issue_id, author_type, author_id, content, type, created_at, updated_at, parent_id, workspace_id, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id, via_plugin_id, revision, recovery_settled_at, deleted_at, suppressed_agent_ids
 `
 
 type BumpCommentRevisionParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 func (q *Queries) BumpCommentRevision(ctx context.Context, arg BumpCommentRevisionParams) (Comment, error) {
-	row := q.db.QueryRow(ctx, bumpCommentRevision, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, bumpCommentRevision, arg.ID, arg.WorkspaceID)
 	var i Comment
 	err := row.Scan(
 		&i.ID,
@@ -58,7 +57,7 @@ WITH RECURSIVE root_of AS (
     -- Walk up from the target to its thread root.
     SELECT c.id, c.parent_id
     FROM comment c
-    WHERE c.id = $1 AND c.issue_id = $2 AND c.workspace_id = $3
+    WHERE c.id = ?1 AND c.issue_id = ?2 AND c.workspace_id = ?3
     UNION ALL
     SELECT p.id, p.parent_id
     FROM comment p
@@ -77,7 +76,7 @@ descendants AS (
     SELECT c.id
     FROM comment c
     JOIN descendants d ON c.parent_id = d.id
-    WHERE c.issue_id = $2 AND c.workspace_id = $3
+    WHERE c.issue_id = ?2 AND c.workspace_id = ?3
 )
 UPDATE comment SET
     resolved_at = NULL,
@@ -86,29 +85,29 @@ UPDATE comment SET
     revision = revision + 1,
     updated_at = now()
 WHERE comment.id IN (SELECT id FROM descendants)
-  AND comment.id <> $1
+  AND comment.id <> ?1
   AND comment.resolved_at IS NOT NULL
 RETURNING id, issue_id, author_type, author_id, content, type, created_at, updated_at, parent_id, workspace_id, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id, via_plugin_id, revision, recovery_settled_at, deleted_at, suppressed_agent_ids
 `
 
 type ClearOtherThreadResolutionsParams struct {
-	TargetID    pgtype.UUID `json:"target_id"`
-	IssueID     pgtype.UUID `json:"issue_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	TargetID    string `json:"target_id"`
+	IssueID     string `json:"issue_id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // Single-resolution invariant: a thread has at most one resolved comment.
 // Resolving @target_id makes it the sole resolution, so this clears resolved_at
 // on every OTHER currently-resolved comment in the same thread (the root of
 // @target_id plus every descendant). The handler runs this in the SAME tx as
-// ResolveComment so the replace is atomic — a crash can never leave two
+// ResolveComment so the replace is atomic - a crash can never leave two
 // resolutions or zero. Scope is the thread only (id IN descendants AND
 // id <> @target_id), never the whole issue. Returns each cleared row so the
 // handler can emit a comment:unresolved event per row; granular realtime
 // consumers replace a single comment in place and would otherwise keep
 // displaying the stale resolution.
 func (q *Queries) ClearOtherThreadResolutions(ctx context.Context, arg ClearOtherThreadResolutionsParams) ([]Comment, error) {
-	rows, err := q.db.Query(ctx, clearOtherThreadResolutions, arg.TargetID, arg.IssueID, arg.WorkspaceID)
+	rows, err := q.db.QueryContext(ctx, clearOtherThreadResolutions, arg.TargetID, arg.IssueID, arg.WorkspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -142,6 +141,9 @@ func (q *Queries) ClearOtherThreadResolutions(ctx context.Context, arg ClearOthe
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -151,17 +153,17 @@ func (q *Queries) ClearOtherThreadResolutions(ctx context.Context, arg ClearOthe
 const commentHasReplies = `-- name: CommentHasReplies :one
 SELECT EXISTS (
     SELECT 1 FROM comment
-    WHERE parent_id = $1 AND workspace_id = $2
+    WHERE parent_id = ?1 AND workspace_id = ?2
 ) AS has_replies
 `
 
 type CommentHasRepliesParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          sql.NullString `json:"id"`
+	WorkspaceID string         `json:"workspace_id"`
 }
 
 func (q *Queries) CommentHasReplies(ctx context.Context, arg CommentHasRepliesParams) (bool, error) {
-	row := q.db.QueryRow(ctx, commentHasReplies, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, commentHasReplies, arg.ID, arg.WorkspaceID)
 	var has_replies bool
 	err := row.Scan(&has_replies)
 	return has_replies, err
@@ -169,16 +171,16 @@ func (q *Queries) CommentHasReplies(ctx context.Context, arg CommentHasRepliesPa
 
 const countComments = `-- name: CountComments :one
 SELECT count(*) FROM comment
-WHERE issue_id = $1 AND workspace_id = $2
+WHERE issue_id = ?1 AND workspace_id = ?2
 `
 
 type CountCommentsParams struct {
-	IssueID     pgtype.UUID `json:"issue_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	IssueID     string `json:"issue_id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 func (q *Queries) CountComments(ctx context.Context, arg CountCommentsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countComments, arg.IssueID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, countComments, arg.IssueID, arg.WorkspaceID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -186,32 +188,32 @@ func (q *Queries) CountComments(ctx context.Context, arg CountCommentsParams) (i
 
 const countNewCommentsSince = `-- name: CountNewCommentsSince :one
 SELECT count(*) FROM comment
-WHERE issue_id = $1
-  AND workspace_id = $2
-  AND created_at > $3
-  AND id <> $4
+WHERE issue_id = ?1
+  AND workspace_id = ?2
+  AND created_at > ?3
+  AND id <> ?4
   AND deleted_at IS NULL
-  AND NOT (author_type = 'agent' AND author_id = $5)
+  AND NOT (author_type = 'agent' AND author_id = ?5)
 `
 
 type CountNewCommentsSinceParams struct {
-	IssueID     pgtype.UUID        `json:"issue_id"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	Since       pgtype.Timestamptz `json:"since"`
-	AnchorID    pgtype.UUID        `json:"anchor_id"`
-	AuthorID    pgtype.UUID        `json:"author_id"`
+	IssueID     string `json:"issue_id"`
+	WorkspaceID string `json:"workspace_id"`
+	Since       string `json:"since"`
+	AnchorID    string `json:"anchor_id"`
+	AuthorID    string `json:"author_id"`
 }
 
 // Counts comments on an issue created strictly after @since, ACROSS THE WHOLE
 // ISSUE (every thread, not just the triggering one). Excludes the triggering
-// comment itself (@anchor_id — its body is already injected into the prompt)
+// comment itself (@anchor_id - its body is already injected into the prompt)
 // and any authored by the given agent (@author_id), so a chatty agent does not
 // inflate its own new-comment count. The agent is steered to read the
 // triggering thread first (see BuildNewCommentsHint), but the count is
 // issue-wide so it knows the full catch-up volume. Feeds the daemon claim
 // response without shipping comment bodies.
 func (q *Queries) CountNewCommentsSince(ctx context.Context, arg CountNewCommentsSinceParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countNewCommentsSince,
+	row := q.db.QueryRowContext(ctx, countNewCommentsSince,
 		arg.IssueID,
 		arg.WorkspaceID,
 		arg.Since,
@@ -224,71 +226,75 @@ func (q *Queries) CountNewCommentsSince(ctx context.Context, arg CountNewComment
 }
 
 const createComment = `-- name: CreateComment :one
-WITH touched_issue AS (
-    UPDATE issue SET
-        updated_at = now(),
-        revision = revision + 1,
-        last_activity_at = GREATEST(COALESCE(last_activity_at, updated_at), now())
-    WHERE issue.id = $1 AND issue.workspace_id = $2
-    RETURNING issue.id, issue.workspace_id, issue.revision
-), inserted_comment AS (
-    INSERT INTO comment (issue_id, workspace_id, author_type, author_id, content, type, parent_id, source_task_id, quick_action_id, via_plugin_id, suppressed_agent_ids, id)
-    SELECT ti.id, ti.workspace_id, $3, $4, $5, $6, $7, $8, $9, $10, $11::uuid[], COALESCE($12::uuid, gen_random_uuid())
-    FROM touched_issue ti
-    RETURNING id, issue_id, author_type, author_id, content, type, created_at, updated_at, parent_id, workspace_id, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id, via_plugin_id, revision, recovery_settled_at, deleted_at, suppressed_agent_ids
+INSERT INTO comment (
+    issue_id, workspace_id, author_type, author_id, content, type, parent_id,
+    source_task_id, quick_action_id, via_plugin_id, suppressed_agent_ids, id
 )
-SELECT inserted_comment.id, inserted_comment.issue_id, inserted_comment.author_type, inserted_comment.author_id, inserted_comment.content, inserted_comment.type, inserted_comment.created_at, inserted_comment.updated_at, inserted_comment.parent_id, inserted_comment.workspace_id, inserted_comment.resolved_at, inserted_comment.resolved_by_type, inserted_comment.resolved_by_id, inserted_comment.source_task_id, inserted_comment.quick_action_id, inserted_comment.via_plugin_id, inserted_comment.revision, inserted_comment.recovery_settled_at, inserted_comment.deleted_at, inserted_comment.suppressed_agent_ids, touched_issue.revision AS issue_revision
-FROM inserted_comment
-JOIN touched_issue ON touched_issue.id = inserted_comment.issue_id
+SELECT issue.id AS issue_id,
+       issue.workspace_id AS workspace_id,
+       ?1 AS author_type,
+       ?2 AS author_id,
+       ?3 AS content,
+       ?4 AS type,
+       ?5 AS parent_id,
+       ?6 AS source_task_id,
+       ?7 AS quick_action_id,
+       ?8 AS via_plugin_id,
+       ?9 AS suppressed_agent_ids,
+       COALESCE(?10, gen_random_uuid()) AS id
+FROM issue
+WHERE issue.id = ?11 AND issue.workspace_id = ?12
+RETURNING id, issue_id, author_type, author_id, content, type, created_at, updated_at, parent_id, workspace_id, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id, via_plugin_id, revision, recovery_settled_at, deleted_at, suppressed_agent_ids,
+    (SELECT issue.revision FROM issue WHERE issue.id = comment.issue_id AND issue.workspace_id = comment.workspace_id) AS issue_revision
 `
 
 type CreateCommentParams struct {
-	IssueID            pgtype.UUID   `json:"issue_id"`
-	WorkspaceID        pgtype.UUID   `json:"workspace_id"`
-	AuthorType         string        `json:"author_type"`
-	AuthorID           pgtype.UUID   `json:"author_id"`
-	Content            string        `json:"content"`
-	Type               string        `json:"type"`
-	ParentID           pgtype.UUID   `json:"parent_id"`
-	SourceTaskID       pgtype.UUID   `json:"source_task_id"`
-	QuickActionID      pgtype.UUID   `json:"quick_action_id"`
-	ViaPluginID        pgtype.UUID   `json:"via_plugin_id"`
-	SuppressedAgentIds []pgtype.UUID `json:"suppressed_agent_ids"`
-	ID                 pgtype.UUID   `json:"id"`
+	AuthorType         string         `json:"author_type"`
+	AuthorID           string         `json:"author_id"`
+	Content            string         `json:"content"`
+	Type               string         `json:"type"`
+	ParentID           sql.NullString `json:"parent_id"`
+	SourceTaskID       sql.NullString `json:"source_task_id"`
+	QuickActionID      sql.NullString `json:"quick_action_id"`
+	ViaPluginID        sql.NullString `json:"via_plugin_id"`
+	SuppressedAgentIds sql.NullString `json:"suppressed_agent_ids"`
+	ID                 sql.NullString `json:"id"`
+	IssueID            string         `json:"issue_id"`
+	WorkspaceID        string         `json:"workspace_id"`
 }
 
 type CreateCommentRow struct {
-	ID                 pgtype.UUID        `json:"id"`
-	IssueID            pgtype.UUID        `json:"issue_id"`
-	AuthorType         string             `json:"author_type"`
-	AuthorID           pgtype.UUID        `json:"author_id"`
-	Content            string             `json:"content"`
-	Type               string             `json:"type"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-	ParentID           pgtype.UUID        `json:"parent_id"`
-	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
-	ResolvedAt         pgtype.Timestamptz `json:"resolved_at"`
-	ResolvedByType     pgtype.Text        `json:"resolved_by_type"`
-	ResolvedByID       pgtype.UUID        `json:"resolved_by_id"`
-	SourceTaskID       pgtype.UUID        `json:"source_task_id"`
-	QuickActionID      pgtype.UUID        `json:"quick_action_id"`
-	ViaPluginID        pgtype.UUID        `json:"via_plugin_id"`
-	Revision           int64              `json:"revision"`
-	RecoverySettledAt  pgtype.Timestamptz `json:"recovery_settled_at"`
-	DeletedAt          pgtype.Timestamptz `json:"deleted_at"`
-	SuppressedAgentIds []pgtype.UUID      `json:"suppressed_agent_ids"`
-	IssueRevision      int64              `json:"issue_revision"`
+	Revision           int64          `json:"revision"`
+	ID                 string         `json:"id"`
+	IssueID            string         `json:"issue_id"`
+	AuthorType         string         `json:"author_type"`
+	AuthorID           string         `json:"author_id"`
+	Content            string         `json:"content"`
+	Type               string         `json:"type"`
+	CreatedAt          string         `json:"created_at"`
+	UpdatedAt          string         `json:"updated_at"`
+	ParentID           sql.NullString `json:"parent_id"`
+	WorkspaceID        string         `json:"workspace_id"`
+	ResolvedAt         sql.NullString `json:"resolved_at"`
+	ResolvedByType     sql.NullString `json:"resolved_by_type"`
+	ResolvedByID       sql.NullString `json:"resolved_by_id"`
+	SourceTaskID       sql.NullString `json:"source_task_id"`
+	QuickActionID      sql.NullString `json:"quick_action_id"`
+	ViaPluginID        sql.NullString `json:"via_plugin_id"`
+	Revision_2         int64          `json:"revision_2"`
+	RecoverySettledAt  sql.NullString `json:"recovery_settled_at"`
+	DeletedAt          sql.NullString `json:"deleted_at"`
+	SuppressedAgentIds sql.NullString `json:"suppressed_agent_ids"`
 }
 
 // A new comment counts as activity on its issue, so the same statement bumps
 // the parent issue's updated_at and last_activity_at. The touch is a leading data-modifying CTE and
 // the INSERT selects the issue/workspace back out of it, which makes the two
 // inseparable and gives two query-level guarantees:
-//   - atomicity — the insert and the timestamp bump commit or roll back
+//   - atomicity - the insert and the timestamp bump commit or roll back
 //     together, so an issue is never left with a stale updated_at after a
 //     comment persists; and
-//   - tenant integrity — the comment can only be created against an issue that
+//   - tenant integrity - the comment can only be created against an issue that
 //     actually exists in the given workspace. A mismatched (issue, workspace)
 //     pair matches 0 rows in the CTE, the dependent INSERT then selects nothing,
 //     and the :one query returns pgx.ErrNoRows. A wrong workspace can therefore
@@ -297,10 +303,9 @@ type CreateCommentRow struct {
 // Centralizing this here means every comment entrypoint inherits both
 // guarantees regardless of what a caller passes. The "Updated date" sort and
 // the daemon GC TTL both read updated_at, so this consistency is load-bearing.
+// Call in order: CreateComment_Step2, CreateComment.
 func (q *Queries) CreateComment(ctx context.Context, arg CreateCommentParams) (CreateCommentRow, error) {
-	row := q.db.QueryRow(ctx, createComment,
-		arg.IssueID,
-		arg.WorkspaceID,
+	row := q.db.QueryRowContext(ctx, createComment,
 		arg.AuthorType,
 		arg.AuthorID,
 		arg.Content,
@@ -311,9 +316,12 @@ func (q *Queries) CreateComment(ctx context.Context, arg CreateCommentParams) (C
 		arg.ViaPluginID,
 		arg.SuppressedAgentIds,
 		arg.ID,
+		arg.IssueID,
+		arg.WorkspaceID,
 	)
 	var i CreateCommentRow
 	err := row.Scan(
+		&i.Revision,
 		&i.ID,
 		&i.IssueID,
 		&i.AuthorType,
@@ -330,37 +338,55 @@ func (q *Queries) CreateComment(ctx context.Context, arg CreateCommentParams) (C
 		&i.SourceTaskID,
 		&i.QuickActionID,
 		&i.ViaPluginID,
-		&i.Revision,
+		&i.Revision_2,
 		&i.RecoverySettledAt,
 		&i.DeletedAt,
 		&i.SuppressedAgentIds,
-		&i.IssueRevision,
 	)
 	return i, err
 }
 
+const createComment_Step2 = `-- name: CreateComment_Step2 :exec
+UPDATE issue SET
+    updated_at = now(),
+    revision = revision + 1,
+    last_activity_at = GREATEST(COALESCE(last_activity_at, updated_at), now())
+WHERE issue.id = ?1 AND issue.workspace_id = ?2
+`
+
+type CreateComment_Step2Params struct {
+	IssueID     string `json:"issue_id"`
+	WorkspaceID string `json:"workspace_id"`
+}
+
+// Call in order before CreateComment.
+func (q *Queries) CreateComment_Step2(ctx context.Context, arg CreateComment_Step2Params) error {
+	_, err := q.db.ExecContext(ctx, createComment_Step2, arg.IssueID, arg.WorkspaceID)
+	return err
+}
+
 const deleteLeafComment = `-- name: DeleteLeafComment :one
 DELETE FROM comment
-WHERE comment.id = $1 AND comment.workspace_id = $2
+WHERE comment.id = ?1 AND comment.workspace_id = ?2
   AND NOT EXISTS (SELECT 1 FROM comment child WHERE child.parent_id = comment.id)
 RETURNING comment.id, comment.parent_id
 `
 
 type DeleteLeafCommentParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 type DeleteLeafCommentRow struct {
-	ID       pgtype.UUID `json:"id"`
-	ParentID pgtype.UUID `json:"parent_id"`
+	ID       string         `json:"id"`
+	ParentID sql.NullString `json:"parent_id"`
 }
 
 // Removes a comment that has no replies. The NOT EXISTS guard keeps this
 // statement from ever reaching the legacy parent_id cascade: a comment with a
 // reply is tombstoned instead, never deleted with its replies.
 func (q *Queries) DeleteLeafComment(ctx context.Context, arg DeleteLeafCommentParams) (DeleteLeafCommentRow, error) {
-	row := q.db.QueryRow(ctx, deleteLeafComment, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, deleteLeafComment, arg.ID, arg.WorkspaceID)
 	var i DeleteLeafCommentRow
 	err := row.Scan(&i.ID, &i.ParentID)
 	return i, err
@@ -368,27 +394,27 @@ func (q *Queries) DeleteLeafComment(ctx context.Context, arg DeleteLeafCommentPa
 
 const deleteReplylessCommentTombstone = `-- name: DeleteReplylessCommentTombstone :one
 DELETE FROM comment
-WHERE comment.id = $1 AND comment.workspace_id = $2
+WHERE comment.id = ?1 AND comment.workspace_id = ?2
   AND comment.deleted_at IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM comment child WHERE child.parent_id = comment.id)
 RETURNING comment.id, comment.parent_id
 `
 
 type DeleteReplylessCommentTombstoneParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 type DeleteReplylessCommentTombstoneRow struct {
-	ID       pgtype.UUID `json:"id"`
-	ParentID pgtype.UUID `json:"parent_id"`
+	ID       string         `json:"id"`
+	ParentID sql.NullString `json:"parent_id"`
 }
 
 // Removes a tombstone whose last reply is gone. The delete transaction calls
 // this for each ancestor in turn, so a chain of placeholders never outlives
 // the replies it kept attached.
 func (q *Queries) DeleteReplylessCommentTombstone(ctx context.Context, arg DeleteReplylessCommentTombstoneParams) (DeleteReplylessCommentTombstoneRow, error) {
-	row := q.db.QueryRow(ctx, deleteReplylessCommentTombstone, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, deleteReplylessCommentTombstone, arg.ID, arg.WorkspaceID)
 	var i DeleteReplylessCommentTombstoneRow
 	err := row.Scan(&i.ID, &i.ParentID)
 	return i, err
@@ -396,11 +422,11 @@ func (q *Queries) DeleteReplylessCommentTombstone(ctx context.Context, arg Delet
 
 const getComment = `-- name: GetComment :one
 SELECT id, issue_id, author_type, author_id, content, type, created_at, updated_at, parent_id, workspace_id, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id, via_plugin_id, revision, recovery_settled_at, deleted_at, suppressed_agent_ids FROM comment
-WHERE id = $1
+WHERE id = ?1
 `
 
-func (q *Queries) GetComment(ctx context.Context, id pgtype.UUID) (Comment, error) {
-	row := q.db.QueryRow(ctx, getComment, id)
+func (q *Queries) GetComment(ctx context.Context, id string) (Comment, error) {
+	row := q.db.QueryRowContext(ctx, getComment, id)
 	var i Comment
 	err := row.Scan(
 		&i.ID,
@@ -429,16 +455,16 @@ func (q *Queries) GetComment(ctx context.Context, id pgtype.UUID) (Comment, erro
 
 const getCommentInWorkspace = `-- name: GetCommentInWorkspace :one
 SELECT id, issue_id, author_type, author_id, content, type, created_at, updated_at, parent_id, workspace_id, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id, via_plugin_id, revision, recovery_settled_at, deleted_at, suppressed_agent_ids FROM comment
-WHERE id = $1 AND workspace_id = $2
+WHERE id = ?1 AND workspace_id = ?2
 `
 
 type GetCommentInWorkspaceParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 func (q *Queries) GetCommentInWorkspace(ctx context.Context, arg GetCommentInWorkspaceParams) (Comment, error) {
-	row := q.db.QueryRow(ctx, getCommentInWorkspace, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, getCommentInWorkspace, arg.ID, arg.WorkspaceID)
 	var i Comment
 	err := row.Scan(
 		&i.ID,
@@ -467,19 +493,19 @@ func (q *Queries) GetCommentInWorkspace(ctx context.Context, arg GetCommentInWor
 
 const getDelegatedFailureRecoveryComment = `-- name: GetDelegatedFailureRecoveryComment :one
 SELECT id, issue_id, author_type, author_id, content, type, created_at, updated_at, parent_id, workspace_id, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id, via_plugin_id, revision, recovery_settled_at, deleted_at, suppressed_agent_ids FROM comment
-WHERE issue_id = $1
-  AND workspace_id = $2
+WHERE issue_id = ?1
+  AND workspace_id = ?2
   AND author_type = 'system'
   AND type = 'progress_update'
-  AND source_task_id = $3
+  AND source_task_id = ?3
 ORDER BY created_at ASC, id ASC
 LIMIT 1
 `
 
 type GetDelegatedFailureRecoveryCommentParams struct {
-	IssueID      pgtype.UUID `json:"issue_id"`
-	WorkspaceID  pgtype.UUID `json:"workspace_id"`
-	SourceTaskID pgtype.UUID `json:"source_task_id"`
+	IssueID      string         `json:"issue_id"`
+	WorkspaceID  string         `json:"workspace_id"`
+	SourceTaskID sql.NullString `json:"source_task_id"`
 }
 
 // The failed task row is locked by the caller before this lookup/insert pair,
@@ -487,7 +513,7 @@ type GetDelegatedFailureRecoveryCommentParams struct {
 // hot-table index or schema migration. Platform recovery signals are the only
 // system-authored progress updates that carry source_task_id.
 func (q *Queries) GetDelegatedFailureRecoveryComment(ctx context.Context, arg GetDelegatedFailureRecoveryCommentParams) (Comment, error) {
-	row := q.db.QueryRow(ctx, getDelegatedFailureRecoveryComment, arg.IssueID, arg.WorkspaceID, arg.SourceTaskID)
+	row := q.db.QueryRowContext(ctx, getDelegatedFailureRecoveryComment, arg.IssueID, arg.WorkspaceID, arg.SourceTaskID)
 	var i Comment
 	err := row.Scan(
 		&i.ID,
@@ -516,19 +542,19 @@ func (q *Queries) GetDelegatedFailureRecoveryComment(ctx context.Context, arg Ge
 
 const getDelegatedFailureRecoveryExhaustionComment = `-- name: GetDelegatedFailureRecoveryExhaustionComment :one
 SELECT id, issue_id, author_type, author_id, content, type, created_at, updated_at, parent_id, workspace_id, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id, via_plugin_id, revision, recovery_settled_at, deleted_at, suppressed_agent_ids FROM comment
-WHERE issue_id = $1
-  AND workspace_id = $2
+WHERE issue_id = ?1
+  AND workspace_id = ?2
   AND author_type = 'system'
   AND type = 'system'
-  AND source_task_id = $3
+  AND source_task_id = ?3
 ORDER BY created_at ASC, id ASC
 LIMIT 1
 `
 
 type GetDelegatedFailureRecoveryExhaustionCommentParams struct {
-	IssueID      pgtype.UUID `json:"issue_id"`
-	WorkspaceID  pgtype.UUID `json:"workspace_id"`
-	SourceTaskID pgtype.UUID `json:"source_task_id"`
+	IssueID      string         `json:"issue_id"`
+	WorkspaceID  string         `json:"workspace_id"`
+	SourceTaskID sql.NullString `json:"source_task_id"`
 }
 
 // The failed task and newest recovery-attempt row are locked by the caller
@@ -536,7 +562,7 @@ type GetDelegatedFailureRecoveryExhaustionCommentParams struct {
 // comment preserves the original recovery signal while making the automatic
 // stop visible in the issue timeline.
 func (q *Queries) GetDelegatedFailureRecoveryExhaustionComment(ctx context.Context, arg GetDelegatedFailureRecoveryExhaustionCommentParams) (Comment, error) {
-	row := q.db.QueryRow(ctx, getDelegatedFailureRecoveryExhaustionComment, arg.IssueID, arg.WorkspaceID, arg.SourceTaskID)
+	row := q.db.QueryRowContext(ctx, getDelegatedFailureRecoveryExhaustionComment, arg.IssueID, arg.WorkspaceID, arg.SourceTaskID)
 	var i Comment
 	err := row.Scan(
 		&i.ID,
@@ -565,30 +591,30 @@ func (q *Queries) GetDelegatedFailureRecoveryExhaustionComment(ctx context.Conte
 
 const getLatestMemberCommentForIssueSince = `-- name: GetLatestMemberCommentForIssueSince :one
 SELECT id, issue_id, author_type, author_id, content, type, created_at, updated_at, parent_id, workspace_id, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id, via_plugin_id, revision, recovery_settled_at, deleted_at, suppressed_agent_ids FROM comment
-WHERE issue_id = $1
+WHERE issue_id = ?1
   AND author_type = 'member'
-  AND created_at > $2
+  AND created_at > ?2
   AND deleted_at IS NULL
 ORDER BY created_at DESC
 LIMIT 1
 `
 
 type GetLatestMemberCommentForIssueSinceParams struct {
-	IssueID pgtype.UUID        `json:"issue_id"`
-	Since   pgtype.Timestamptz `json:"since"`
+	IssueID string `json:"issue_id"`
+	Since   string `json:"since"`
 }
 
 // MUL-4195 completion reconciliation: the newest MEMBER-authored comment on an
 // issue created strictly after @since (a run's started_at). Used when a task
 // completes to detect deliberate user input that landed while the agent was
-// busy — or that was merged into the running task after its context was
-// already built — so a single follow-up run can be scheduled for it. Restricted
+// busy - or that was merged into the running task after its context was
+// already built - so a single follow-up run can be scheduled for it. Restricted
 // to author_type = 'member' on purpose: only human input earns the guaranteed
 // follow-up, which preserves the existing anti-loop guarantees (agent replies,
 // acknowledgements, and self-triggers never qualify). Returns pgx.ErrNoRows
 // when nothing newer exists, i.e. the run already covered the latest input.
 func (q *Queries) GetLatestMemberCommentForIssueSince(ctx context.Context, arg GetLatestMemberCommentForIssueSinceParams) (Comment, error) {
-	row := q.db.QueryRow(ctx, getLatestMemberCommentForIssueSince, arg.IssueID, arg.Since)
+	row := q.db.QueryRowContext(ctx, getLatestMemberCommentForIssueSince, arg.IssueID, arg.Since)
 	var i Comment
 	err := row.Scan(
 		&i.ID,
@@ -619,7 +645,7 @@ const getThreadRoot = `-- name: GetThreadRoot :one
 WITH RECURSIVE root_of AS (
     SELECT c.id, c.parent_id
     FROM comment c
-    WHERE c.id = $1 AND c.workspace_id = $2
+    WHERE c.id = ?1 AND c.workspace_id = ?2
     UNION ALL
     SELECT p.id, p.parent_id
     FROM comment p
@@ -630,8 +656,8 @@ WHERE c.id = (SELECT id FROM root_of WHERE parent_id IS NULL LIMIT 1)
 `
 
 type GetThreadRootParams struct {
-	CommentID   pgtype.UUID `json:"comment_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	CommentID   string `json:"comment_id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // Returns the thread-root comment for @comment_id by walking parent_id up to
@@ -640,7 +666,7 @@ type GetThreadRootParams struct {
 // the exact direct parent of a reply. Cycle-safe under the PK constraint (a
 // comment cannot be its own ancestor).
 func (q *Queries) GetThreadRoot(ctx context.Context, arg GetThreadRootParams) (Comment, error) {
-	row := q.db.QueryRow(ctx, getThreadRoot, arg.CommentID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, getThreadRoot, arg.CommentID, arg.WorkspaceID)
 	var i Comment
 	err := row.Scan(
 		&i.ID,
@@ -670,22 +696,22 @@ func (q *Queries) GetThreadRoot(ctx context.Context, arg GetThreadRootParams) (C
 const hasAgentCommentedSince = `-- name: HasAgentCommentedSince :one
 SELECT EXISTS (
     SELECT 1 FROM comment
-    WHERE issue_id = $1
+    WHERE issue_id = ?1
       AND author_type = 'agent'
-      AND author_id = $2
-      AND created_at >= $3
+      AND author_id = ?2
+      AND created_at >= ?3
       AND deleted_at IS NULL
 ) AS commented
 `
 
 type HasAgentCommentedSinceParams struct {
-	IssueID  pgtype.UUID        `json:"issue_id"`
-	AuthorID pgtype.UUID        `json:"author_id"`
-	Since    pgtype.Timestamptz `json:"since"`
+	IssueID  string `json:"issue_id"`
+	AuthorID string `json:"author_id"`
+	Since    string `json:"since"`
 }
 
 func (q *Queries) HasAgentCommentedSince(ctx context.Context, arg HasAgentCommentedSinceParams) (bool, error) {
-	row := q.db.QueryRow(ctx, hasAgentCommentedSince, arg.IssueID, arg.AuthorID, arg.Since)
+	row := q.db.QueryRowContext(ctx, hasAgentCommentedSince, arg.IssueID, arg.AuthorID, arg.Since)
 	var commented bool
 	err := row.Scan(&commented)
 	return commented, err
@@ -693,19 +719,19 @@ func (q *Queries) HasAgentCommentedSince(ctx context.Context, arg HasAgentCommen
 
 const hasAgentRepliedInThread = `-- name: HasAgentRepliedInThread :one
 SELECT count(*) > 0 AS has_replied FROM comment
-WHERE parent_id = $1 AND author_type = 'agent' AND author_id = $2
+WHERE parent_id = ?1 AND author_type = 'agent' AND author_id = ?2
 `
 
 type HasAgentRepliedInThreadParams struct {
-	ParentID pgtype.UUID `json:"parent_id"`
-	AgentID  pgtype.UUID `json:"agent_id"`
+	ParentID sql.NullString `json:"parent_id"`
+	AgentID  string         `json:"agent_id"`
 }
 
 // Returns true if the given agent has posted a reply in the thread rooted at
 // the specified parent comment. Used to detect agent participation in a
 // member-started thread so that follow-up member replies still trigger the agent.
 func (q *Queries) HasAgentRepliedInThread(ctx context.Context, arg HasAgentRepliedInThreadParams) (bool, error) {
-	row := q.db.QueryRow(ctx, hasAgentRepliedInThread, arg.ParentID, arg.AgentID)
+	row := q.db.QueryRowContext(ctx, hasAgentRepliedInThread, arg.ParentID, arg.AgentID)
 	var has_replied bool
 	err := row.Scan(&has_replied)
 	return has_replied, err
@@ -713,21 +739,21 @@ func (q *Queries) HasAgentRepliedInThread(ctx context.Context, arg HasAgentRepli
 
 const listChildCommentsForParents = `-- name: ListChildCommentsForParents :many
 SELECT id, issue_id, author_type, author_id, content, type, created_at, updated_at, parent_id, workspace_id, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id, via_plugin_id, revision, recovery_settled_at, deleted_at, suppressed_agent_ids FROM comment
-WHERE parent_id = ANY($1::uuid[])
-  AND issue_id = $2
-  AND workspace_id = $3
-  AND (created_at, id) <= ($4::timestamptz, $5::uuid)
+WHERE parent_id IN (SELECT value FROM json_each(?1))
+  AND issue_id = ?2
+  AND workspace_id = ?3
+  AND (created_at, id) <= (?4, ?5)
 ORDER BY parent_id ASC, created_at ASC, id ASC
-LIMIT $6
+LIMIT ?6
 `
 
 type ListChildCommentsForParentsParams struct {
-	ParentIds   []pgtype.UUID      `json:"parent_ids"`
-	IssueID     pgtype.UUID        `json:"issue_id"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	ThroughAt   pgtype.Timestamptz `json:"through_at"`
-	ThroughID   pgtype.UUID        `json:"through_id"`
-	RowLimit    int32              `json:"row_limit"`
+	ParentIds   interface{} `json:"parent_ids"`
+	IssueID     string      `json:"issue_id"`
+	WorkspaceID string      `json:"workspace_id"`
+	ThroughAt   string      `json:"through_at"`
+	ThroughID   string      `json:"through_id"`
+	RowLimit    int64       `json:"row_limit"`
 }
 
 // Fetch one descendant level for a bounded set of parent comments. Each parent
@@ -740,7 +766,7 @@ type ListChildCommentsForParentsParams struct {
 // the original window, so replies created concurrently are left to realtime
 // delivery instead of making the multi-query snapshot internally inconsistent.
 func (q *Queries) ListChildCommentsForParents(ctx context.Context, arg ListChildCommentsForParentsParams) ([]Comment, error) {
-	rows, err := q.db.Query(ctx, listChildCommentsForParents,
+	rows, err := q.db.QueryContext(ctx, listChildCommentsForParents,
 		arg.ParentIds,
 		arg.IssueID,
 		arg.WorkspaceID,
@@ -781,6 +807,9 @@ func (q *Queries) ListChildCommentsForParents(ctx context.Context, arg ListChild
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -789,22 +818,22 @@ func (q *Queries) ListChildCommentsForParents(ctx context.Context, arg ListChild
 
 const listCommentAncestorPath = `-- name: ListCommentAncestorPath :many
 WITH RECURSIVE ancestor_path AS (
-  SELECT c.id, c.issue_id, c.author_type, c.author_id, c.content, c.type, c.created_at, c.updated_at, c.parent_id, c.workspace_id, c.resolved_at, c.resolved_by_type, c.resolved_by_id, c.source_task_id, c.quick_action_id, c.via_plugin_id, c.revision, c.recovery_settled_at, c.deleted_at, c.suppressed_agent_ids, ARRAY[c.id]::uuid[] AS visited_ids, 1::integer AS depth, false AS cycle
+  SELECT c.id, c.issue_id, c.author_type, c.author_id, c.content, c.type, c.created_at, c.updated_at, c.parent_id, c.workspace_id, c.resolved_at, c.resolved_by_type, c.resolved_by_id, c.source_task_id, c.quick_action_id, c.via_plugin_id, c.revision, c.recovery_settled_at, c.deleted_at, c.suppressed_agent_ids, json_array(c.id) AS visited_ids, 1 AS depth, false AS cycle
   FROM comment c
-  WHERE c.id = $1
-    AND c.workspace_id = $2
-    AND c.issue_id = $3
+  WHERE c.id = ?1
+    AND c.workspace_id = ?2
+    AND c.issue_id = ?3
 
   UNION ALL
 
   SELECT parent.id, parent.issue_id, parent.author_type, parent.author_id, parent.content, parent.type, parent.created_at, parent.updated_at, parent.parent_id, parent.workspace_id, parent.resolved_at, parent.resolved_by_type, parent.resolved_by_id, parent.source_task_id, parent.quick_action_id, parent.via_plugin_id, parent.revision, parent.recovery_settled_at, parent.deleted_at, parent.suppressed_agent_ids,
-         path.visited_ids || parent.id,
+         json_insert(path.visited_ids, '$[#]', parent.id),
          path.depth + 1,
-         parent.id = ANY(path.visited_ids)
+         EXISTS (SELECT 1 FROM json_each(path.visited_ids) v WHERE v.value = parent.id)
   FROM ancestor_path path
   JOIN comment parent ON parent.id = path.parent_id
-  WHERE parent.workspace_id = $2
-    AND parent.issue_id = $3
+  WHERE parent.workspace_id = ?2
+    AND parent.issue_id = ?3
     AND path.depth <= 256
     AND NOT path.cycle
 )
@@ -817,36 +846,36 @@ ORDER BY depth DESC
 `
 
 type ListCommentAncestorPathParams struct {
-	CommentID   pgtype.UUID `json:"comment_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	IssueID     pgtype.UUID `json:"issue_id"`
+	CommentID   string `json:"comment_id"`
+	WorkspaceID string `json:"workspace_id"`
+	IssueID     string `json:"issue_id"`
 }
 
 type ListCommentAncestorPathRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	IssueID        pgtype.UUID        `json:"issue_id"`
-	AuthorType     string             `json:"author_type"`
-	AuthorID       pgtype.UUID        `json:"author_id"`
-	Content        string             `json:"content"`
-	Type           string             `json:"type"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
-	ParentID       pgtype.UUID        `json:"parent_id"`
-	ResolvedAt     pgtype.Timestamptz `json:"resolved_at"`
-	ResolvedByType pgtype.Text        `json:"resolved_by_type"`
-	ResolvedByID   pgtype.UUID        `json:"resolved_by_id"`
-	SourceTaskID   pgtype.UUID        `json:"source_task_id"`
-	Revision       int64              `json:"revision"`
-	QuickActionID  pgtype.UUID        `json:"quick_action_id"`
-	ViaPluginID    pgtype.UUID        `json:"via_plugin_id"`
-	DeletedAt      pgtype.Timestamptz `json:"deleted_at"`
-	Depth          int32              `json:"depth"`
-	Cycle          bool               `json:"cycle"`
+	ID             string         `json:"id"`
+	IssueID        string         `json:"issue_id"`
+	AuthorType     string         `json:"author_type"`
+	AuthorID       string         `json:"author_id"`
+	Content        string         `json:"content"`
+	Type           string         `json:"type"`
+	CreatedAt      string         `json:"created_at"`
+	UpdatedAt      string         `json:"updated_at"`
+	WorkspaceID    string         `json:"workspace_id"`
+	ParentID       sql.NullString `json:"parent_id"`
+	ResolvedAt     sql.NullString `json:"resolved_at"`
+	ResolvedByType sql.NullString `json:"resolved_by_type"`
+	ResolvedByID   sql.NullString `json:"resolved_by_id"`
+	SourceTaskID   sql.NullString `json:"source_task_id"`
+	Revision       int64          `json:"revision"`
+	QuickActionID  sql.NullString `json:"quick_action_id"`
+	ViaPluginID    sql.NullString `json:"via_plugin_id"`
+	DeletedAt      sql.NullString `json:"deleted_at"`
+	Depth          int64          `json:"depth"`
+	Cycle          int64          `json:"cycle"`
 }
 
 func (q *Queries) ListCommentAncestorPath(ctx context.Context, arg ListCommentAncestorPathParams) ([]ListCommentAncestorPathRow, error) {
-	rows, err := q.db.Query(ctx, listCommentAncestorPath, arg.CommentID, arg.WorkspaceID, arg.IssueID)
+	rows, err := q.db.QueryContext(ctx, listCommentAncestorPath, arg.CommentID, arg.WorkspaceID, arg.IssueID)
 	if err != nil {
 		return nil, err
 	}
@@ -880,6 +909,9 @@ func (q *Queries) ListCommentAncestorPath(ctx context.Context, arg ListCommentAn
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -890,13 +922,13 @@ const listCommentThreadHistory = `-- name: ListCommentThreadHistory :many
 WITH RECURSIVE thread_history AS (
   SELECT root.id, root.issue_id, root.author_type, root.author_id, root.content, root.type, root.created_at, root.updated_at, root.parent_id, root.workspace_id, root.resolved_at, root.resolved_by_type, root.resolved_by_id, root.source_task_id, root.quick_action_id, root.via_plugin_id, root.revision, root.recovery_settled_at, root.deleted_at, root.suppressed_agent_ids
   FROM comment root
-  WHERE root.id = $2
-    AND root.workspace_id = $3
-    AND root.issue_id = $4
+  WHERE root.id = ?2
+    AND root.workspace_id = ?3
+    AND root.issue_id = ?4
     AND root.parent_id IS NULL
     AND (root.created_at, root.id) <= (
-      $5::timestamptz,
-      $6::uuid
+      ?5,
+      ?6
     )
 
   UNION ALL
@@ -904,56 +936,56 @@ WITH RECURSIVE thread_history AS (
   SELECT child.id, child.issue_id, child.author_type, child.author_id, child.content, child.type, child.created_at, child.updated_at, child.parent_id, child.workspace_id, child.resolved_at, child.resolved_by_type, child.resolved_by_id, child.source_task_id, child.quick_action_id, child.via_plugin_id, child.revision, child.recovery_settled_at, child.deleted_at, child.suppressed_agent_ids
   FROM comment child
   JOIN thread_history parent ON child.parent_id = parent.id
-  WHERE child.workspace_id = $3
-    AND child.issue_id = $4
+  WHERE child.workspace_id = ?3
+    AND child.issue_id = ?4
     AND (child.created_at, child.id) <= (
-      $5::timestamptz,
-      $6::uuid
+      ?5,
+      ?6
     )
 )
 SELECT id, issue_id, author_type, author_id, content, type, created_at, updated_at, parent_id, workspace_id, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id, via_plugin_id, revision, recovery_settled_at, deleted_at, suppressed_agent_ids
 FROM thread_history
 ORDER BY created_at, id
-LIMIT $1
+LIMIT ?1
 `
 
 type ListCommentThreadHistoryParams struct {
-	RowLimit        int32              `json:"row_limit"`
-	RootID          pgtype.UUID        `json:"root_id"`
-	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
-	IssueID         pgtype.UUID        `json:"issue_id"`
-	AnchorCreatedAt pgtype.Timestamptz `json:"anchor_created_at"`
-	AnchorID        pgtype.UUID        `json:"anchor_id"`
+	RowLimit        int64  `json:"row_limit"`
+	RootID          string `json:"root_id"`
+	WorkspaceID     string `json:"workspace_id"`
+	IssueID         string `json:"issue_id"`
+	AnchorCreatedAt string `json:"anchor_created_at"`
+	AnchorID        string `json:"anchor_id"`
 }
 
 type ListCommentThreadHistoryRow struct {
-	ID                 pgtype.UUID        `json:"id"`
-	IssueID            pgtype.UUID        `json:"issue_id"`
-	AuthorType         string             `json:"author_type"`
-	AuthorID           pgtype.UUID        `json:"author_id"`
-	Content            string             `json:"content"`
-	Type               string             `json:"type"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-	ParentID           pgtype.UUID        `json:"parent_id"`
-	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
-	ResolvedAt         pgtype.Timestamptz `json:"resolved_at"`
-	ResolvedByType     pgtype.Text        `json:"resolved_by_type"`
-	ResolvedByID       pgtype.UUID        `json:"resolved_by_id"`
-	SourceTaskID       pgtype.UUID        `json:"source_task_id"`
-	QuickActionID      pgtype.UUID        `json:"quick_action_id"`
-	ViaPluginID        pgtype.UUID        `json:"via_plugin_id"`
-	Revision           int64              `json:"revision"`
-	RecoverySettledAt  pgtype.Timestamptz `json:"recovery_settled_at"`
-	DeletedAt          pgtype.Timestamptz `json:"deleted_at"`
-	SuppressedAgentIds []pgtype.UUID      `json:"suppressed_agent_ids"`
+	ID                 string         `json:"id"`
+	IssueID            string         `json:"issue_id"`
+	AuthorType         string         `json:"author_type"`
+	AuthorID           string         `json:"author_id"`
+	Content            string         `json:"content"`
+	Type               string         `json:"type"`
+	CreatedAt          string         `json:"created_at"`
+	UpdatedAt          string         `json:"updated_at"`
+	ParentID           sql.NullString `json:"parent_id"`
+	WorkspaceID        string         `json:"workspace_id"`
+	ResolvedAt         sql.NullString `json:"resolved_at"`
+	ResolvedByType     sql.NullString `json:"resolved_by_type"`
+	ResolvedByID       sql.NullString `json:"resolved_by_id"`
+	SourceTaskID       sql.NullString `json:"source_task_id"`
+	QuickActionID      sql.NullString `json:"quick_action_id"`
+	ViaPluginID        sql.NullString `json:"via_plugin_id"`
+	Revision           int64          `json:"revision"`
+	RecoverySettledAt  sql.NullString `json:"recovery_settled_at"`
+	DeletedAt          sql.NullString `json:"deleted_at"`
+	SuppressedAgentIds sql.NullString `json:"suppressed_agent_ids"`
 }
 
 // Capture the anchor comment's complete chronological thread through that
 // comment. Later replies are outside the immutable context boundary.
 // UUID is the stable tiebreaker used by the issue timeline when timestamps tie.
 func (q *Queries) ListCommentThreadHistory(ctx context.Context, arg ListCommentThreadHistoryParams) ([]ListCommentThreadHistoryRow, error) {
-	rows, err := q.db.Query(ctx, listCommentThreadHistory,
+	rows, err := q.db.QueryContext(ctx, listCommentThreadHistory,
 		arg.RowLimit,
 		arg.RootID,
 		arg.WorkspaceID,
@@ -994,6 +1026,9 @@ func (q *Queries) ListCommentThreadHistory(ctx context.Context, arg ListCommentT
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -1002,29 +1037,29 @@ func (q *Queries) ListCommentThreadHistory(ctx context.Context, arg ListCommentT
 
 const listCommentsByIDsForIssue = `-- name: ListCommentsByIDsForIssue :many
 SELECT id, issue_id, author_type, author_id, content, type, created_at, updated_at, parent_id, workspace_id, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id, via_plugin_id, revision, recovery_settled_at, deleted_at, suppressed_agent_ids FROM comment
-WHERE id = ANY($1::uuid[])
-  AND issue_id = $2
-  AND workspace_id = $3
+WHERE id IN (SELECT value FROM json_each(?1))
+  AND issue_id = ?2
+  AND workspace_id = ?3
 ORDER BY created_at ASC, id ASC
 `
 
 type ListCommentsByIDsForIssueParams struct {
-	Ids         []pgtype.UUID `json:"ids"`
-	IssueID     pgtype.UUID   `json:"issue_id"`
-	WorkspaceID pgtype.UUID   `json:"workspace_id"`
+	Ids         interface{} `json:"ids"`
+	IssueID     string      `json:"issue_id"`
+	WorkspaceID string      `json:"workspace_id"`
 }
 
 // The subset of @ids that exists within this issue and workspace.
 //
 // Used to walk parent chains one level at a time (see completeCommentThreads).
 // Deliberately NOT a recursive CTE: an earlier revision walked parent_id upward
-// in SQL, which had no depth bound — a deep chain could pull tens of thousands of
-// ancestors back and defeat the whole point of the row cap — and its recursive
+// in SQL, which had no depth bound - a deep chain could pull tens of thousands of
+// ancestors back and defeat the whole point of the row cap - and its recursive
 // branch matched on parent_id alone, so a stray cross-workspace parent reference
 // would have dragged another tenant's comments into the response. Both tenant
 // columns are required here on every level, and the caller owns the budget.
 func (q *Queries) ListCommentsByIDsForIssue(ctx context.Context, arg ListCommentsByIDsForIssueParams) ([]Comment, error) {
-	rows, err := q.db.Query(ctx, listCommentsByIDsForIssue, arg.Ids, arg.IssueID, arg.WorkspaceID)
+	rows, err := q.db.QueryContext(ctx, listCommentsByIDsForIssue, arg.Ids, arg.IssueID, arg.WorkspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -1057,6 +1092,9 @@ func (q *Queries) ListCommentsByIDsForIssue(ctx context.Context, arg ListComment
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -1067,20 +1105,20 @@ func (q *Queries) ListCommentsByIDsForIssue(ctx context.Context, arg ListComment
 const listCommentsForIssue = `-- name: ListCommentsForIssue :many
 SELECT id, issue_id, author_type, author_id, content, type, created_at, updated_at, parent_id, workspace_id, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id, via_plugin_id, revision, recovery_settled_at, deleted_at, suppressed_agent_ids FROM (
     SELECT id, issue_id, author_type, author_id, content, type, created_at, updated_at, parent_id, workspace_id, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id, via_plugin_id, revision, recovery_settled_at, deleted_at, suppressed_agent_ids FROM comment
-    WHERE issue_id = $1 AND workspace_id = $2
+    WHERE issue_id = ?1 AND workspace_id = ?2
     ORDER BY created_at DESC, id DESC
-    LIMIT $3
+    LIMIT ?3
 ) AS recent
 ORDER BY created_at ASC, id ASC
 `
 
 type ListCommentsForIssueParams struct {
-	IssueID     pgtype.UUID `json:"issue_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Limit       int32       `json:"limit"`
+	IssueID     string `json:"issue_id"`
+	WorkspaceID string `json:"workspace_id"`
+	Limit       int64  `json:"limit"`
 }
 
-// The NEWEST $3 comments for an issue, returned in chronological order.
+// The NEWEST arg3 comments for an issue, returned in chronological order.
 //
 // Same shape and same reason as ListActivitiesForIssue: the inner query takes
 // the window with the keyset ordering so the cap discards the OLDEST rows, and
@@ -1091,14 +1129,14 @@ type ListCommentsForIssueParams struct {
 // A newest-N window is a suffix of the timeline, and unlike a prefix it is NOT
 // closed under "parent of": a reply is always newer than its parent, so an old
 // thread root can fall outside the window while a fresh reply to it stays
-// inside. Callers that render threads must close the parent chains afterwards —
+// inside. Callers that render threads must close the parent chains afterwards -
 // see completeCommentThreads (MUL-5492).
 //
-// The cap is still purely defensive here — issue p99 is ~30 comments and the max
-// ever observed in prod is ~1.1k — but "defensive" is not a reason to drop the
+// The cap is still purely defensive here - issue p99 is ~30 comments and the max
+// ever observed in prod is ~1.1k - but "defensive" is not a reason to drop the
 // newest rows when it does fire (MUL-5492).
 func (q *Queries) ListCommentsForIssue(ctx context.Context, arg ListCommentsForIssueParams) ([]Comment, error) {
-	rows, err := q.db.Query(ctx, listCommentsForIssue, arg.IssueID, arg.WorkspaceID, arg.Limit)
+	rows, err := q.db.QueryContext(ctx, listCommentsForIssue, arg.IssueID, arg.WorkspaceID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1132,6 +1170,9 @@ func (q *Queries) ListCommentsForIssue(ctx context.Context, arg ListCommentsForI
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -1140,22 +1181,22 @@ func (q *Queries) ListCommentsForIssue(ctx context.Context, arg ListCommentsForI
 
 const listCommentsSinceForIssue = `-- name: ListCommentsSinceForIssue :many
 SELECT id, issue_id, author_type, author_id, content, type, created_at, updated_at, parent_id, workspace_id, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id, via_plugin_id, revision, recovery_settled_at, deleted_at, suppressed_agent_ids FROM comment
-WHERE issue_id = $1 AND workspace_id = $2 AND created_at > $3
+WHERE issue_id = ?1 AND workspace_id = ?2 AND created_at > ?3
 ORDER BY created_at ASC, id ASC
-LIMIT $4
+LIMIT ?4
 `
 
 type ListCommentsSinceForIssueParams struct {
-	IssueID     pgtype.UUID        `json:"issue_id"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	Limit       int32              `json:"limit"`
+	IssueID     string `json:"issue_id"`
+	WorkspaceID string `json:"workspace_id"`
+	CreatedAt   string `json:"created_at"`
+	Limit       int64  `json:"limit"`
 }
 
-// Comments created strictly after $3 in chronological order, capped at $4.
+// Comments created strictly after arg3 in chronological order, capped at arg4.
 // Powers the CLI's `--since` agent-polling flow.
 func (q *Queries) ListCommentsSinceForIssue(ctx context.Context, arg ListCommentsSinceForIssueParams) ([]Comment, error) {
-	rows, err := q.db.Query(ctx, listCommentsSinceForIssue,
+	rows, err := q.db.QueryContext(ctx, listCommentsSinceForIssue,
 		arg.IssueID,
 		arg.WorkspaceID,
 		arg.CreatedAt,
@@ -1194,6 +1235,9 @@ func (q *Queries) ListCommentsSinceForIssue(ctx context.Context, arg ListComment
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -1205,31 +1249,51 @@ WITH RECURSIVE membership(id, root_id, comment_created_at) AS (
     -- Each root maps to itself.
     SELECT c.id, c.id AS root_id, c.created_at
     FROM comment c
-    WHERE c.issue_id = $1
-      AND c.workspace_id = $2
+    WHERE c.issue_id = ?1
+      AND c.workspace_id = ?2
       AND c.parent_id IS NULL
     UNION ALL
     -- Each descendant inherits its parent's root_id.
     SELECT c.id, m.root_id, c.created_at
     FROM comment c
     JOIN membership m ON c.parent_id = m.id
-    WHERE c.issue_id = $1
-      AND c.workspace_id = $2
+    WHERE c.issue_id = ?1
+      AND c.workspace_id = ?2
 ),
 thread_stats AS (
-    SELECT root_id, MAX(comment_created_at)::timestamptz AS last_activity_at
+    SELECT root_id, MAX(comment_created_at) AS last_activity_at
     FROM membership
     GROUP BY root_id
 ),
 picked AS (
     SELECT ts.root_id, ts.last_activity_at
     FROM thread_stats ts
-    WHERE (
-        $3::boolean = FALSE
-        OR (ts.last_activity_at, ts.root_id) < ($4::timestamptz, $5::uuid)
-    )
+    WHERE ?3 = FALSE
+       OR EXISTS (
+            SELECT 1 FROM comment AS cursor_root
+            WHERE cursor_root.id = ts.root_id
+              AND NOT EXISTS (
+                  SELECT 1 FROM comment AS late
+                  WHERE late.id IN (
+                      SELECT membership.id FROM membership
+                      WHERE membership.root_id = cursor_root.id
+                  )
+                    AND late.created_at > ?4
+              )
+              AND (
+                  NOT EXISTS (
+                      SELECT 1 FROM comment AS eq
+                      WHERE eq.id IN (
+                          SELECT membership.id FROM membership
+                          WHERE membership.root_id = cursor_root.id
+                      )
+                        AND eq.created_at = ?4
+                  )
+                  OR cursor_root.id < ?5
+              )
+       )
     ORDER BY ts.last_activity_at DESC, ts.root_id DESC
-    LIMIT $6
+    LIMIT ?6
 )
 SELECT c.id, c.issue_id, c.author_type, c.author_id, c.content, c.type,
        c.created_at, c.updated_at, c.parent_id, c.workspace_id,
@@ -1244,34 +1308,34 @@ ORDER BY p.last_activity_at ASC, p.root_id ASC, c.created_at ASC, c.id ASC
 `
 
 type ListRecentThreadCommentsForIssueParams struct {
-	IssueID     pgtype.UUID        `json:"issue_id"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	HasCursor   bool               `json:"has_cursor"`
-	BeforeAt    pgtype.Timestamptz `json:"before_at"`
-	BeforeID    pgtype.UUID        `json:"before_id"`
-	ThreadLimit int32              `json:"thread_limit"`
+	IssueID     string      `json:"issue_id"`
+	WorkspaceID string      `json:"workspace_id"`
+	HasCursor   interface{} `json:"has_cursor"`
+	BeforeAt    string      `json:"before_at"`
+	BeforeID    string      `json:"before_id"`
+	ThreadLimit int64       `json:"thread_limit"`
 }
 
 type ListRecentThreadCommentsForIssueRow struct {
-	ID                   pgtype.UUID        `json:"id"`
-	IssueID              pgtype.UUID        `json:"issue_id"`
-	AuthorType           string             `json:"author_type"`
-	AuthorID             pgtype.UUID        `json:"author_id"`
-	Content              string             `json:"content"`
-	Type                 string             `json:"type"`
-	CreatedAt            pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
-	ParentID             pgtype.UUID        `json:"parent_id"`
-	WorkspaceID          pgtype.UUID        `json:"workspace_id"`
-	ResolvedAt           pgtype.Timestamptz `json:"resolved_at"`
-	ResolvedByType       pgtype.Text        `json:"resolved_by_type"`
-	ResolvedByID         pgtype.UUID        `json:"resolved_by_id"`
-	SourceTaskID         pgtype.UUID        `json:"source_task_id"`
-	QuickActionID        pgtype.UUID        `json:"quick_action_id"`
-	Revision             int64              `json:"revision"`
-	DeletedAt            pgtype.Timestamptz `json:"deleted_at"`
-	ThreadRootID         pgtype.UUID        `json:"thread_root_id"`
-	ThreadLastActivityAt pgtype.Timestamptz `json:"thread_last_activity_at"`
+	ID                   string         `json:"id"`
+	IssueID              string         `json:"issue_id"`
+	AuthorType           string         `json:"author_type"`
+	AuthorID             string         `json:"author_id"`
+	Content              string         `json:"content"`
+	Type                 string         `json:"type"`
+	CreatedAt            string         `json:"created_at"`
+	UpdatedAt            string         `json:"updated_at"`
+	ParentID             sql.NullString `json:"parent_id"`
+	WorkspaceID          string         `json:"workspace_id"`
+	ResolvedAt           sql.NullString `json:"resolved_at"`
+	ResolvedByType       sql.NullString `json:"resolved_by_type"`
+	ResolvedByID         sql.NullString `json:"resolved_by_id"`
+	SourceTaskID         sql.NullString `json:"source_task_id"`
+	QuickActionID        sql.NullString `json:"quick_action_id"`
+	Revision             int64          `json:"revision"`
+	DeletedAt            sql.NullString `json:"deleted_at"`
+	ThreadRootID         string         `json:"thread_root_id"`
+	ThreadLastActivityAt interface{}    `json:"thread_last_activity_at"`
 }
 
 // Returns the N most recently active threads (root + every descendant) rather
@@ -1280,7 +1344,7 @@ type ListRecentThreadCommentsForIssueRow struct {
 // root_id DESC) and the top N are expanded.
 //
 // Why thread-grouped instead of row-recent: with row-recent the newest 20
-// comments can come from 8 different threads — the agent sees 8 unrelated
+// comments can come from 8 different threads - the agent sees 8 unrelated
 // tails. With thread-grouped the agent sees N complete conversational arcs,
 // which matches how a human reads an issue (#2340).
 //
@@ -1294,7 +1358,7 @@ type ListRecentThreadCommentsForIssueRow struct {
 //
 // Cursor scrolls back through threads. When @has_cursor=TRUE only threads
 // with (last_activity_at, root_id) < (@before_at, @before_id) are eligible.
-// The cursor is a THREAD cursor — both values identify a thread (its last
+// The cursor is a THREAD cursor - both values identify a thread (its last
 // activity timestamp and its root comment id), not a single row.
 //
 // The recursive `membership` CTE labels each comment with its thread root by
@@ -1303,7 +1367,7 @@ type ListRecentThreadCommentsForIssueRow struct {
 // (the agent path in TaskService.createAgentComment collapses to root today,
 // but the user-facing CreateComment handler does not enforce it).
 func (q *Queries) ListRecentThreadCommentsForIssue(ctx context.Context, arg ListRecentThreadCommentsForIssueParams) ([]ListRecentThreadCommentsForIssueRow, error) {
-	rows, err := q.db.Query(ctx, listRecentThreadCommentsForIssue,
+	rows, err := q.db.QueryContext(ctx, listRecentThreadCommentsForIssue,
 		arg.IssueID,
 		arg.WorkspaceID,
 		arg.HasCursor,
@@ -1343,6 +1407,9 @@ func (q *Queries) ListRecentThreadCommentsForIssue(ctx context.Context, arg List
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -1351,9 +1418,9 @@ func (q *Queries) ListRecentThreadCommentsForIssue(ctx context.Context, arg List
 
 const listReconcilableCommentsForIssueSince = `-- name: ListReconcilableCommentsForIssueSince :many
 SELECT c.id, c.issue_id, c.author_type, c.author_id, c.content, c.type, c.created_at, c.updated_at, c.parent_id, c.workspace_id, c.resolved_at, c.resolved_by_type, c.resolved_by_id, c.source_task_id, c.quick_action_id, c.via_plugin_id, c.revision, c.recovery_settled_at, c.deleted_at, c.suppressed_agent_ids FROM comment c
-WHERE c.issue_id = $1
-  AND (c.id = ANY($2::uuid[])
-       OR comment_thread_root_id(c.id) = $3::uuid)
+WHERE c.issue_id = ?1
+  AND (c.id IN (SELECT value FROM json_each(?2))
+       OR comment_thread_root_id(c.id) = ?3)
   -- A deleted comment is no longer input, even when replies keep its row.
   AND c.deleted_at IS NULL
   -- A comment that steered this agent's running turn belongs to that turn,
@@ -1364,31 +1431,31 @@ WHERE c.issue_id = $1
       SELECT 1 FROM task_supplement s
       JOIN agent_task_queue bound ON bound.id = s.task_id
       WHERE s.comment_id = c.id AND s.workspace_id = c.workspace_id
-        AND bound.agent_id = $4
+        AND bound.agent_id = ?4
   )
   -- Nor does a comment whose author chose not to start this agent for it.
-  AND NOT COALESCE($4::uuid = ANY(c.suppressed_agent_ids), false)
+  AND NOT COALESCE(@agent_id IN (SELECT value FROM json_each(c.suppressed_agent_ids)), false)
   AND (
       (
           c.author_type IN ('member', 'agent')
-          AND (c.created_at > $5 OR c.id = ANY($2::uuid[]))
+          AND (c.created_at > ?5 OR c.id IN (SELECT value FROM json_each(?2)))
       )
       OR (
           c.author_type = 'system'
           AND c.type = 'progress_update'
           AND c.source_task_id IS NOT NULL
-          AND c.id = ANY($2::uuid[])
+          AND c.id IN (SELECT value FROM json_each(?2))
       )
   )
 ORDER BY c.created_at ASC, c.id ASC
 `
 
 type ListReconcilableCommentsForIssueSinceParams struct {
-	IssueID           pgtype.UUID        `json:"issue_id"`
-	PlannedCommentIds []pgtype.UUID      `json:"planned_comment_ids"`
-	CommentThreadID   pgtype.UUID        `json:"comment_thread_id"`
-	AgentID           pgtype.UUID        `json:"agent_id"`
-	Since             pgtype.Timestamptz `json:"since"`
+	IssueID           string         `json:"issue_id"`
+	PlannedCommentIds interface{}    `json:"planned_comment_ids"`
+	CommentThreadID   sql.NullString `json:"comment_thread_id"`
+	AgentID           string         `json:"agent_id"`
+	Since             string         `json:"since"`
 }
 
 // MUL-4195 / MUL-4304 completion reconciliation: every MEMBER- or AGENT-authored
@@ -1405,7 +1472,7 @@ type ListReconcilableCommentsForIssueSinceParams struct {
 // replays the remainder through the normal trigger pipeline oldest first.
 //
 // Author-type scope (MUL-4304): originally restricted to author_type = 'member'.
-// That left a gap — an explicit agent→agent @mention (agent A comments
+// That left a gap - an explicit agent->agent @mention (agent A comments
 // `@agent B`) that landed while B already had a DISPATCHED task was dropped by
 // the create-time enqueue path (merge only folds into a QUEUED task, so a
 // dispatched target hits the merge-miss + active-task continue) and then never
@@ -1418,7 +1485,7 @@ type ListReconcilableCommentsForIssueSinceParams struct {
 // remain excluded. Replays are scoped to the completing agent, never a fan-out.
 // Ordered ASC so later comments coalesce onto the follow-up created by the first.
 func (q *Queries) ListReconcilableCommentsForIssueSince(ctx context.Context, arg ListReconcilableCommentsForIssueSinceParams) ([]Comment, error) {
-	rows, err := q.db.Query(ctx, listReconcilableCommentsForIssueSince,
+	rows, err := q.db.QueryContext(ctx, listReconcilableCommentsForIssueSince,
 		arg.IssueID,
 		arg.PlannedCommentIds,
 		arg.CommentThreadID,
@@ -1458,6 +1525,9 @@ func (q *Queries) ListReconcilableCommentsForIssueSince(ctx context.Context, arg
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -1468,11 +1538,11 @@ const listRootCommentsForIssue = `-- name: ListRootCommentsForIssue :many
 WITH RECURSIVE selected_roots AS (
     SELECT c.id, c.created_at
     FROM comment c
-    WHERE c.issue_id = $1
-      AND c.workspace_id = $2
+    WHERE c.issue_id = ?1
+      AND c.workspace_id = ?2
       AND c.parent_id IS NULL
     ORDER BY c.created_at DESC, c.id DESC
-    LIMIT $3
+    LIMIT ?3
 ),
 membership(id, root_id, comment_created_at) AS (
     SELECT sr.id, sr.id AS root_id, sr.created_at
@@ -1481,13 +1551,13 @@ membership(id, root_id, comment_created_at) AS (
     SELECT c.id, m.root_id, c.created_at
     FROM comment c
     JOIN membership m ON c.parent_id = m.id
-    WHERE c.issue_id = $1
-      AND c.workspace_id = $2
+    WHERE c.issue_id = ?1
+      AND c.workspace_id = ?2
 ),
 thread_stats AS (
     SELECT root_id,
-           (COUNT(*) - 1)::int AS reply_count,
-           MAX(comment_created_at)::timestamptz AS last_activity_at
+           (COUNT(*) - 1) AS reply_count,
+           MAX(comment_created_at) AS last_activity_at
     FROM membership
     GROUP BY root_id
 )
@@ -1504,31 +1574,31 @@ ORDER BY c.created_at ASC, c.id ASC
 `
 
 type ListRootCommentsForIssueParams struct {
-	IssueID     pgtype.UUID `json:"issue_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	RowLimit    int32       `json:"row_limit"`
+	IssueID     string `json:"issue_id"`
+	WorkspaceID string `json:"workspace_id"`
+	RowLimit    int64  `json:"row_limit"`
 }
 
 type ListRootCommentsForIssueRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	IssueID        pgtype.UUID        `json:"issue_id"`
-	AuthorType     string             `json:"author_type"`
-	AuthorID       pgtype.UUID        `json:"author_id"`
-	Content        string             `json:"content"`
-	Type           string             `json:"type"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-	ParentID       pgtype.UUID        `json:"parent_id"`
-	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
-	ResolvedAt     pgtype.Timestamptz `json:"resolved_at"`
-	ResolvedByType pgtype.Text        `json:"resolved_by_type"`
-	ResolvedByID   pgtype.UUID        `json:"resolved_by_id"`
-	SourceTaskID   pgtype.UUID        `json:"source_task_id"`
-	QuickActionID  pgtype.UUID        `json:"quick_action_id"`
-	Revision       int64              `json:"revision"`
-	DeletedAt      pgtype.Timestamptz `json:"deleted_at"`
-	ReplyCount     int32              `json:"reply_count"`
-	LastActivityAt pgtype.Timestamptz `json:"last_activity_at"`
+	ID             string         `json:"id"`
+	IssueID        string         `json:"issue_id"`
+	AuthorType     string         `json:"author_type"`
+	AuthorID       string         `json:"author_id"`
+	Content        string         `json:"content"`
+	Type           string         `json:"type"`
+	CreatedAt      string         `json:"created_at"`
+	UpdatedAt      string         `json:"updated_at"`
+	ParentID       sql.NullString `json:"parent_id"`
+	WorkspaceID    string         `json:"workspace_id"`
+	ResolvedAt     sql.NullString `json:"resolved_at"`
+	ResolvedByType sql.NullString `json:"resolved_by_type"`
+	ResolvedByID   sql.NullString `json:"resolved_by_id"`
+	SourceTaskID   sql.NullString `json:"source_task_id"`
+	QuickActionID  sql.NullString `json:"quick_action_id"`
+	Revision       int64          `json:"revision"`
+	DeletedAt      sql.NullString `json:"deleted_at"`
+	ReplyCount     interface{}    `json:"reply_count"`
+	LastActivityAt interface{}    `json:"last_activity_at"`
 }
 
 // Top-level comments only, in issue chronological order, each annotated with
@@ -1544,7 +1614,7 @@ type ListRootCommentsForIssueRow struct {
 // selected threads rather than every thread in the issue, and labels every
 // descendant with its root so the stats stay correct at any reply depth.
 func (q *Queries) ListRootCommentsForIssue(ctx context.Context, arg ListRootCommentsForIssueParams) ([]ListRootCommentsForIssueRow, error) {
-	rows, err := q.db.Query(ctx, listRootCommentsForIssue, arg.IssueID, arg.WorkspaceID, arg.RowLimit)
+	rows, err := q.db.QueryContext(ctx, listRootCommentsForIssue, arg.IssueID, arg.WorkspaceID, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -1577,6 +1647,9 @@ func (q *Queries) ListRootCommentsForIssue(ctx context.Context, arg ListRootComm
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -1587,12 +1660,12 @@ const listRootCommentsSinceForIssue = `-- name: ListRootCommentsSinceForIssue :m
 WITH RECURSIVE selected_roots AS (
     SELECT c.id, c.created_at
     FROM comment c
-    WHERE c.issue_id = $1
-      AND c.workspace_id = $2
+    WHERE c.issue_id = ?1
+      AND c.workspace_id = ?2
       AND c.parent_id IS NULL
-      AND c.created_at > $3
+      AND c.created_at > ?3
     ORDER BY c.created_at ASC, c.id ASC
-    LIMIT $4
+    LIMIT ?4
 ),
 membership(id, root_id, comment_created_at) AS (
     SELECT sr.id, sr.id AS root_id, sr.created_at
@@ -1601,13 +1674,13 @@ membership(id, root_id, comment_created_at) AS (
     SELECT c.id, m.root_id, c.created_at
     FROM comment c
     JOIN membership m ON c.parent_id = m.id
-    WHERE c.issue_id = $1
-      AND c.workspace_id = $2
+    WHERE c.issue_id = ?1
+      AND c.workspace_id = ?2
 ),
 thread_stats AS (
     SELECT root_id,
-           (COUNT(*) - 1)::int AS reply_count,
-           MAX(comment_created_at)::timestamptz AS last_activity_at
+           (COUNT(*) - 1) AS reply_count,
+           MAX(comment_created_at) AS last_activity_at
     FROM membership
     GROUP BY root_id
 )
@@ -1624,32 +1697,32 @@ ORDER BY c.created_at ASC, c.id ASC
 `
 
 type ListRootCommentsSinceForIssueParams struct {
-	IssueID     pgtype.UUID        `json:"issue_id"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	Since       pgtype.Timestamptz `json:"since"`
-	RowLimit    int32              `json:"row_limit"`
+	IssueID     string `json:"issue_id"`
+	WorkspaceID string `json:"workspace_id"`
+	Since       string `json:"since"`
+	RowLimit    int64  `json:"row_limit"`
 }
 
 type ListRootCommentsSinceForIssueRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	IssueID        pgtype.UUID        `json:"issue_id"`
-	AuthorType     string             `json:"author_type"`
-	AuthorID       pgtype.UUID        `json:"author_id"`
-	Content        string             `json:"content"`
-	Type           string             `json:"type"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-	ParentID       pgtype.UUID        `json:"parent_id"`
-	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
-	ResolvedAt     pgtype.Timestamptz `json:"resolved_at"`
-	ResolvedByType pgtype.Text        `json:"resolved_by_type"`
-	ResolvedByID   pgtype.UUID        `json:"resolved_by_id"`
-	SourceTaskID   pgtype.UUID        `json:"source_task_id"`
-	QuickActionID  pgtype.UUID        `json:"quick_action_id"`
-	Revision       int64              `json:"revision"`
-	DeletedAt      pgtype.Timestamptz `json:"deleted_at"`
-	ReplyCount     int32              `json:"reply_count"`
-	LastActivityAt pgtype.Timestamptz `json:"last_activity_at"`
+	ID             string         `json:"id"`
+	IssueID        string         `json:"issue_id"`
+	AuthorType     string         `json:"author_type"`
+	AuthorID       string         `json:"author_id"`
+	Content        string         `json:"content"`
+	Type           string         `json:"type"`
+	CreatedAt      string         `json:"created_at"`
+	UpdatedAt      string         `json:"updated_at"`
+	ParentID       sql.NullString `json:"parent_id"`
+	WorkspaceID    string         `json:"workspace_id"`
+	ResolvedAt     sql.NullString `json:"resolved_at"`
+	ResolvedByType sql.NullString `json:"resolved_by_type"`
+	ResolvedByID   sql.NullString `json:"resolved_by_id"`
+	SourceTaskID   sql.NullString `json:"source_task_id"`
+	QuickActionID  sql.NullString `json:"quick_action_id"`
+	Revision       int64          `json:"revision"`
+	DeletedAt      sql.NullString `json:"deleted_at"`
+	ReplyCount     interface{}    `json:"reply_count"`
+	LastActivityAt interface{}    `json:"last_activity_at"`
 }
 
 // Top-level comments created strictly after @since, each annotated with the
@@ -1660,7 +1733,7 @@ type ListRootCommentsSinceForIssueRow struct {
 // selected_roots applies the @since + @row_limit cut up front so the recursive
 // membership walk only touches the subtrees of the roots we actually return.
 func (q *Queries) ListRootCommentsSinceForIssue(ctx context.Context, arg ListRootCommentsSinceForIssueParams) ([]ListRootCommentsSinceForIssueRow, error) {
-	rows, err := q.db.Query(ctx, listRootCommentsSinceForIssue,
+	rows, err := q.db.QueryContext(ctx, listRootCommentsSinceForIssue,
 		arg.IssueID,
 		arg.WorkspaceID,
 		arg.Since,
@@ -1698,6 +1771,9 @@ func (q *Queries) ListRootCommentsSinceForIssue(ctx context.Context, arg ListRoo
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -1708,12 +1784,12 @@ const listThreadCommentsForIssuePaged = `-- name: ListThreadCommentsForIssuePage
 WITH RECURSIVE root_of AS (
     SELECT c.id, c.parent_id
     FROM comment c
-    WHERE c.id = $1 AND c.issue_id = $2 AND c.workspace_id = $3
+    WHERE c.id = ?1 AND c.issue_id = ?2 AND c.workspace_id = ?3
     UNION ALL
     SELECT p.id, p.parent_id
     FROM comment p
     JOIN root_of r ON p.id = r.parent_id
-    WHERE p.issue_id = $2 AND p.workspace_id = $3
+    WHERE p.issue_id = ?2 AND p.workspace_id = ?3
 ),
 thread_root AS (
     SELECT id FROM root_of WHERE parent_id IS NULL LIMIT 1
@@ -1732,7 +1808,7 @@ descendants AS (
            c.source_task_id, c.quick_action_id, c.revision, c.deleted_at
     FROM comment c
     JOIN descendants d ON c.parent_id = d.id
-    WHERE c.issue_id = $2 AND c.workspace_id = $3
+    WHERE c.issue_id = ?2 AND c.workspace_id = ?3
 ),
 reply_page AS (
     SELECT d.id, d.issue_id, d.author_type, d.author_id, d.content, d.type,
@@ -1742,11 +1818,18 @@ reply_page AS (
     FROM descendants d
     WHERE d.id NOT IN (SELECT id FROM thread_root)
       AND (
-          $4::boolean = FALSE
-          OR (d.created_at, d.id) < ($5::timestamptz, $6::uuid)
+          ?4 = FALSE
+          OR EXISTS (
+              SELECT 1 FROM comment AS cursor_row
+              WHERE cursor_row.id = d.id
+                AND (
+                    cursor_row.created_at < ?5
+                    OR (cursor_row.created_at = ?5 AND cursor_row.id < ?6)
+                )
+          )
       )
     ORDER BY d.created_at DESC, d.id DESC
-    LIMIT $7
+    LIMIT ?7
 )
 SELECT id, issue_id, author_type, author_id, content, type,
        created_at, updated_at, parent_id, workspace_id,
@@ -1770,39 +1853,39 @@ ORDER BY created_at ASC, id ASC
 `
 
 type ListThreadCommentsForIssuePagedParams struct {
-	AnchorID    pgtype.UUID        `json:"anchor_id"`
-	IssueID     pgtype.UUID        `json:"issue_id"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	HasCursor   bool               `json:"has_cursor"`
-	BeforeAt    pgtype.Timestamptz `json:"before_at"`
-	BeforeID    pgtype.UUID        `json:"before_id"`
-	ReplyLimit  int32              `json:"reply_limit"`
+	AnchorID    string      `json:"anchor_id"`
+	IssueID     string      `json:"issue_id"`
+	WorkspaceID string      `json:"workspace_id"`
+	HasCursor   interface{} `json:"has_cursor"`
+	BeforeAt    string      `json:"before_at"`
+	BeforeID    string      `json:"before_id"`
+	ReplyLimit  int64       `json:"reply_limit"`
 }
 
 type ListThreadCommentsForIssuePagedRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	IssueID        pgtype.UUID        `json:"issue_id"`
-	AuthorType     string             `json:"author_type"`
-	AuthorID       pgtype.UUID        `json:"author_id"`
-	Content        string             `json:"content"`
-	Type           string             `json:"type"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-	ParentID       pgtype.UUID        `json:"parent_id"`
-	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
-	ResolvedAt     pgtype.Timestamptz `json:"resolved_at"`
-	ResolvedByType pgtype.Text        `json:"resolved_by_type"`
-	ResolvedByID   pgtype.UUID        `json:"resolved_by_id"`
-	SourceTaskID   pgtype.UUID        `json:"source_task_id"`
-	QuickActionID  pgtype.UUID        `json:"quick_action_id"`
-	Revision       int64              `json:"revision"`
-	DeletedAt      pgtype.Timestamptz `json:"deleted_at"`
+	ID             string         `json:"id"`
+	IssueID        string         `json:"issue_id"`
+	AuthorType     string         `json:"author_type"`
+	AuthorID       string         `json:"author_id"`
+	Content        string         `json:"content"`
+	Type           string         `json:"type"`
+	CreatedAt      string         `json:"created_at"`
+	UpdatedAt      string         `json:"updated_at"`
+	ParentID       sql.NullString `json:"parent_id"`
+	WorkspaceID    string         `json:"workspace_id"`
+	ResolvedAt     sql.NullString `json:"resolved_at"`
+	ResolvedByType sql.NullString `json:"resolved_by_type"`
+	ResolvedByID   sql.NullString `json:"resolved_by_id"`
+	SourceTaskID   sql.NullString `json:"source_task_id"`
+	QuickActionID  sql.NullString `json:"quick_action_id"`
+	Revision       int64          `json:"revision"`
+	DeletedAt      sql.NullString `json:"deleted_at"`
 }
 
 // Resolves @anchor_id to its thread root, recursively expands every descendant,
 // and returns the root + only the @reply_limit most recent replies (per the
 // (created_at, id) composite key). When @has_cursor=TRUE only replies with
-// (created_at, id) < (@before_at, @before_id) are eligible — that is the
+// (created_at, id) < (@before_at, @before_id) are eligible - that is the
 // cursor for scrolling *within* a thread.
 //
 // Root is unconditional: it is included regardless of @reply_limit (even 0)
@@ -1812,10 +1895,10 @@ type ListThreadCommentsForIssuePagedRow struct {
 //
 // Reply selection happens DESC (newest replies first) so the cursor walks
 // toward older replies; the outer SELECT then re-sorts the combined output
-// ASC so the body stays chronological (oldest → newest), matching every
+// ASC so the body stays chronological (oldest -> newest), matching every
 // other comment list path.
 func (q *Queries) ListThreadCommentsForIssuePaged(ctx context.Context, arg ListThreadCommentsForIssuePagedParams) ([]ListThreadCommentsForIssuePagedRow, error) {
-	rows, err := q.db.Query(ctx, listThreadCommentsForIssuePaged,
+	rows, err := q.db.QueryContext(ctx, listThreadCommentsForIssuePaged,
 		arg.AnchorID,
 		arg.IssueID,
 		arg.WorkspaceID,
@@ -1854,6 +1937,9 @@ func (q *Queries) ListThreadCommentsForIssuePaged(ctx context.Context, arg ListT
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -1862,48 +1948,50 @@ func (q *Queries) ListThreadCommentsForIssuePaged(ctx context.Context, arg ListT
 
 const lockCommentAncestorPath = `-- name: LockCommentAncestorPath :many
 WITH RECURSIVE ancestor_ids AS (
-  SELECT c.id, c.parent_id, 1::integer AS depth, ARRAY[c.id]::uuid[] AS visited_ids
+  SELECT c.id, c.parent_id, 1 AS depth, json_array(c.id) AS visited_ids
   FROM comment c
-  WHERE c.id = $1
-    AND c.workspace_id = $2
-    AND c.issue_id = $3
+  WHERE c.id = ?1
+    AND c.workspace_id = ?2
+    AND c.issue_id = ?3
 
   UNION ALL
 
-  SELECT parent.id, parent.parent_id, path.depth + 1, path.visited_ids || parent.id
+  SELECT parent.id, parent.parent_id, path.depth + 1, json_insert(path.visited_ids, '$[#]', parent.id)
   FROM ancestor_ids path
   JOIN comment parent ON parent.id = path.parent_id
-  WHERE parent.workspace_id = $2
-    AND parent.issue_id = $3
+  WHERE parent.workspace_id = ?2
+    AND parent.issue_id = ?3
     AND path.depth <= 256
-    AND NOT parent.id = ANY(path.visited_ids)
+    AND NOT parent.id IN (SELECT value FROM json_each(path.visited_ids))
 )
 SELECT c.id
 FROM comment c
 JOIN ancestor_ids path ON path.id = c.id
 ORDER BY c.id
-FOR UPDATE OF c
 `
 
 type LockCommentAncestorPathParams struct {
-	CommentID   pgtype.UUID `json:"comment_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	IssueID     pgtype.UUID `json:"issue_id"`
+	CommentID   string `json:"comment_id"`
+	WorkspaceID string `json:"workspace_id"`
+	IssueID     string `json:"issue_id"`
 }
 
-func (q *Queries) LockCommentAncestorPath(ctx context.Context, arg LockCommentAncestorPathParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, lockCommentAncestorPath, arg.CommentID, arg.WorkspaceID, arg.IssueID)
+func (q *Queries) LockCommentAncestorPath(ctx context.Context, arg LockCommentAncestorPathParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, lockCommentAncestorPath, arg.CommentID, arg.WorkspaceID, arg.IssueID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []string{}
 	for rows.Next() {
-		var id pgtype.UUID
+		var id string
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -1912,31 +2000,29 @@ func (q *Queries) LockCommentAncestorPath(ctx context.Context, arg LockCommentAn
 }
 
 const lockCommentForDelete = `-- name: LockCommentForDelete :one
-WITH locked_issue AS MATERIALIZED (
+WITH locked_issue AS (
     SELECT issue.id
     FROM issue
     JOIN comment ON comment.issue_id = issue.id
                 AND comment.workspace_id = issue.workspace_id
-    WHERE comment.id = $1 AND comment.workspace_id = $2
-    FOR UPDATE OF issue
-), issue_fence AS MATERIALIZED (
+    WHERE comment.id = ?1 AND comment.workspace_id = ?2
+), issue_fence AS (
     -- The consumed locked_count below is the ordering fence: the issue lock is
-    -- acquired before the comment lock. MATERIALIZED only prevents
+    -- acquired before the comment lock. only prevents
     -- folding/re-evaluation and is not, by itself, a lock-order guarantee.
     SELECT count(*) AS locked_count FROM locked_issue
 )
 SELECT comment.id, comment.issue_id, comment.author_type, comment.author_id, comment.content, comment.type, comment.created_at, comment.updated_at, comment.parent_id, comment.workspace_id, comment.resolved_at, comment.resolved_by_type, comment.resolved_by_id, comment.source_task_id, comment.quick_action_id, comment.via_plugin_id, comment.revision, comment.recovery_settled_at, comment.deleted_at, comment.suppressed_agent_ids
 FROM comment
 CROSS JOIN issue_fence
-WHERE comment.id = $1 AND comment.workspace_id = $2
+WHERE comment.id = ?1 AND comment.workspace_id = ?2
   AND comment.deleted_at IS NULL
   AND issue_fence.locked_count >= 0
-FOR UPDATE OF comment
 `
 
 type LockCommentForDeleteParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // First statement of the comment delete transaction (#8296). Defense-in-depth:
@@ -1952,7 +2038,7 @@ type LockCommentForDeleteParams struct {
 //
 // A tombstone is excluded: deleting an already-deleted comment finds nothing.
 func (q *Queries) LockCommentForDelete(ctx context.Context, arg LockCommentForDeleteParams) (Comment, error) {
-	row := q.db.QueryRow(ctx, lockCommentForDelete, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, lockCommentForDelete, arg.ID, arg.WorkspaceID)
 	var i Comment
 	err := row.Scan(
 		&i.ID,
@@ -1980,38 +2066,36 @@ func (q *Queries) LockCommentForDelete(ctx context.Context, arg LockCommentForDe
 }
 
 const lockLiveComment = `-- name: LockLiveComment :one
-WITH locked_issue AS MATERIALIZED (
+WITH locked_issue AS (
     SELECT issue.id
     FROM issue
     JOIN comment ON comment.issue_id = issue.id
                 AND comment.workspace_id = issue.workspace_id
-    WHERE comment.id = $1 AND comment.workspace_id = $2
-    FOR NO KEY UPDATE OF issue
-), issue_fence AS MATERIALIZED (
+    WHERE comment.id = ?1 AND comment.workspace_id = ?2
+), issue_fence AS (
     SELECT count(*) AS locked_count FROM locked_issue
 )
 SELECT comment.id, comment.issue_id, comment.author_type, comment.author_id, comment.content, comment.type, comment.created_at, comment.updated_at, comment.parent_id, comment.workspace_id, comment.resolved_at, comment.resolved_by_type, comment.resolved_by_id, comment.source_task_id, comment.quick_action_id, comment.via_plugin_id, comment.revision, comment.recovery_settled_at, comment.deleted_at, comment.suppressed_agent_ids
 FROM comment
 CROSS JOIN issue_fence
-WHERE comment.id = $1 AND comment.workspace_id = $2
+WHERE comment.id = ?1 AND comment.workspace_id = ?2
   AND comment.deleted_at IS NULL
   AND issue_fence.locked_count >= 0
-FOR NO KEY UPDATE OF comment
 `
 
 type LockLiveCommentParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
-// Locks a live comment ahead of a write to one of its children — reactions and
-// attachments — in the order every comment mutation shares: issue, then
+// Locks a live comment ahead of a write to one of its children - reactions and
+// attachments - in the order every comment mutation shares: issue, then
 // comment, then child. A comment deleted before or while this waits reads as
 // absent (the row lock re-checks deleted_at), so no child can land on its
-// tombstone. FOR NO KEY UPDATE conflicts with the delete transaction's FOR
-// UPDATE but not with a reply's FOR KEY SHARE, so it never blocks replies.
+// tombstone. conflicts with the delete transaction's FOR
+// UPDATE but not with a reply's, so it never blocks replies.
 func (q *Queries) LockLiveComment(ctx context.Context, arg LockLiveCommentParams) (Comment, error) {
-	row := q.db.QueryRow(ctx, lockLiveComment, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, lockLiveComment, arg.ID, arg.WorkspaceID)
 	var i Comment
 	err := row.Scan(
 		&i.ID,
@@ -2041,26 +2125,26 @@ func (q *Queries) LockLiveComment(ctx context.Context, arg LockLiveCommentParams
 const resolveComment = `-- name: ResolveComment :one
 UPDATE comment SET
     resolved_at = COALESCE(resolved_at, now()),
-    resolved_by_type = COALESCE(resolved_by_type, $2),
-    resolved_by_id = COALESCE(resolved_by_id, $3),
+    resolved_by_type = COALESCE(resolved_by_type, ?2),
+    resolved_by_id = COALESCE(resolved_by_id, ?3),
     revision = revision + CASE WHEN resolved_at IS NULL THEN 1 ELSE 0 END,
     updated_at = CASE WHEN resolved_at IS NULL THEN now() ELSE updated_at END
-WHERE id = $1
+WHERE id = ?1
   AND deleted_at IS NULL
 RETURNING id, issue_id, author_type, author_id, content, type, created_at, updated_at, parent_id, workspace_id, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id, via_plugin_id, revision, recovery_settled_at, deleted_at, suppressed_agent_ids
 `
 
 type ResolveCommentParams struct {
-	ID             pgtype.UUID `json:"id"`
-	ResolvedByType pgtype.Text `json:"resolved_by_type"`
-	ResolvedByID   pgtype.UUID `json:"resolved_by_id"`
+	ID             string         `json:"id"`
+	ResolvedByType sql.NullString `json:"resolved_by_type"`
+	ResolvedByID   sql.NullString `json:"resolved_by_id"`
 }
 
 // Idempotent: re-resolving keeps the original resolved_at + resolver. Always
-// returns the row so the handler can surface the canonical state — unless the
+// returns the row so the handler can surface the canonical state - unless the
 // comment has been deleted, whose tombstone cannot be a resolution.
 func (q *Queries) ResolveComment(ctx context.Context, arg ResolveCommentParams) (Comment, error) {
-	row := q.db.QueryRow(ctx, resolveComment, arg.ID, arg.ResolvedByType, arg.ResolvedByID)
+	row := q.db.QueryRowContext(ctx, resolveComment, arg.ID, arg.ResolvedByType, arg.ResolvedByID)
 	var i Comment
 	err := row.Scan(
 		&i.ID,
@@ -2096,14 +2180,14 @@ UPDATE comment SET
     resolved_by_id = NULL,
     revision = revision + 1,
     updated_at = now()
-WHERE id = $1 AND workspace_id = $2
+WHERE id = ?1 AND workspace_id = ?2
   AND deleted_at IS NULL
 RETURNING id, issue_id, author_type, author_id, content, type, created_at, updated_at, parent_id, workspace_id, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id, via_plugin_id, revision, recovery_settled_at, deleted_at, suppressed_agent_ids
 `
 
 type TombstoneCommentParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // Deletes a comment that still has replies by clearing it in place. The row,
@@ -2112,7 +2196,7 @@ type TombstoneCommentParams struct {
 // thread's conclusion. The caller removes attachments and reactions in the
 // same transaction.
 func (q *Queries) TombstoneComment(ctx context.Context, arg TombstoneCommentParams) (Comment, error) {
-	row := q.db.QueryRow(ctx, tombstoneComment, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, tombstoneComment, arg.ID, arg.WorkspaceID)
 	var i Comment
 	err := row.Scan(
 		&i.ID,
@@ -2143,20 +2227,20 @@ const touchIssueForCommentDelete = `-- name: TouchIssueForCommentDelete :one
 UPDATE issue
 SET revision = revision + 1,
     last_activity_at = GREATEST(COALESCE(last_activity_at, updated_at), now())
-WHERE id = $1 AND workspace_id = $2
+WHERE id = ?1 AND workspace_id = ?2
 RETURNING revision
 `
 
 type TouchIssueForCommentDeleteParams struct {
-	IssueID     pgtype.UUID `json:"issue_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	IssueID     string `json:"issue_id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // A delete counts as activity on its issue, like CreateComment and
 // UpdateComment. Runs inside the delete transaction after the comment rows
 // changed, so a delete that lost its race never touches the issue.
 func (q *Queries) TouchIssueForCommentDelete(ctx context.Context, arg TouchIssueForCommentDeleteParams) (int64, error) {
-	row := q.db.QueryRow(ctx, touchIssueForCommentDelete, arg.IssueID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, touchIssueForCommentDelete, arg.IssueID, arg.WorkspaceID)
 	var revision int64
 	err := row.Scan(&revision)
 	return revision, err
@@ -2169,13 +2253,13 @@ UPDATE comment SET
     resolved_by_id = NULL,
     revision = revision + CASE WHEN resolved_at IS NOT NULL THEN 1 ELSE 0 END,
     updated_at = CASE WHEN resolved_at IS NOT NULL THEN now() ELSE updated_at END
-WHERE id = $1
+WHERE id = ?1
 RETURNING id, issue_id, author_type, author_id, content, type, created_at, updated_at, parent_id, workspace_id, resolved_at, resolved_by_type, resolved_by_id, source_task_id, quick_action_id, via_plugin_id, revision, recovery_settled_at, deleted_at, suppressed_agent_ids
 `
 
 // Idempotent: a no-op clear (already unresolved) just returns the row.
-func (q *Queries) UnresolveComment(ctx context.Context, id pgtype.UUID) (Comment, error) {
-	row := q.db.QueryRow(ctx, unresolveComment, id)
+func (q *Queries) UnresolveComment(ctx context.Context, id string) (Comment, error) {
+	row := q.db.QueryRowContext(ctx, unresolveComment, id)
 	var i Comment
 	err := row.Scan(
 		&i.ID,
@@ -2203,119 +2287,83 @@ func (q *Queries) UnresolveComment(ctx context.Context, id pgtype.UUID) (Comment
 }
 
 const updateComment = `-- name: UpdateComment :one
-WITH locked_issue AS MATERIALIZED (
-    -- Keep the global issue -> child lock order used by issue teardown. The
-    -- aggregate below still yields one row when the parent was concurrently
-    -- deleted, preserving best-effort edits of an orphaned comment.
-    SELECT issue.id
-    FROM issue
-    JOIN comment ON comment.issue_id = issue.id
-                AND comment.workspace_id = issue.workspace_id
-    WHERE comment.id = $1
-    FOR UPDATE OF issue
-), issue_fence AS MATERIALIZED (
-    -- The aggregate always emits one row. Consuming locked_count in target's
-    -- tautological predicate creates a real data dependency: locked_issue must
-    -- acquire the owner lock before target can lock the comment. MATERIALIZED
-    -- prevents folding/re-evaluation; it does not itself establish lock order.
-    SELECT count(*) AS locked_count FROM locked_issue
-), target AS MATERIALIZED (
-    SELECT comment.id, comment.issue_id, comment.author_type, comment.author_id, comment.content, comment.type, comment.created_at, comment.updated_at, comment.parent_id, comment.workspace_id, comment.resolved_at, comment.resolved_by_type, comment.resolved_by_id, comment.source_task_id, comment.quick_action_id, comment.via_plugin_id, comment.revision, comment.recovery_settled_at, comment.deleted_at, comment.suppressed_agent_ids,
-           ROW(comment.content, comment.source_task_id) IS DISTINCT FROM
-               ROW($2, $3::uuid) AS did_change
+WITH target AS (
+    SELECT comment.id AS id,
+           NOT (comment.content IS ?2 AND comment.source_task_id IS ?3) AS did_change
     FROM comment
-    CROSS JOIN issue_fence
-    WHERE comment.id = $1
-      AND issue_fence.locked_count >= 0
-      -- A deleted comment's tombstone is not editable.
+    WHERE comment.id = ?1
       AND comment.deleted_at IS NULL
-      AND ($4::bigint IS NULL OR revision = $4::bigint)
+      AND (?5 IS NULL OR comment.revision = ?5)
       AND (
-        $5::text IS NULL
-        OR content IS NOT DISTINCT FROM $5::text
-        OR content IS NOT DISTINCT FROM $2
+        ?6 IS NULL
+        OR comment.content IS ?6
+        OR comment.content IS ?2
       )
-    FOR UPDATE OF comment
-), updated_comment AS (
-    UPDATE comment SET
-        content = $2,
-        source_task_id = $3::uuid,
-        -- New text re-decides which agents it must not start, under the same
-        -- revision check as the text itself.
-        suppressed_agent_ids = CASE WHEN target.content IS DISTINCT FROM $2
-                                    THEN $6::uuid[]
-                                    ELSE comment.suppressed_agent_ids END,
-        revision = comment.revision + CASE WHEN target.did_change THEN 1 ELSE 0 END,
-        updated_at = CASE WHEN target.did_change THEN now() ELSE comment.updated_at END
-    FROM target
-    WHERE comment.id = target.id
-    RETURNING comment.id, comment.issue_id, comment.author_type, comment.author_id,
-              comment.content, comment.type, comment.created_at, comment.updated_at,
-              comment.parent_id, comment.workspace_id, comment.resolved_at,
-              comment.resolved_by_type, comment.resolved_by_id, comment.source_task_id,
-              comment.quick_action_id, comment.via_plugin_id, comment.revision,
-              comment.deleted_at, target.did_change
-), touched_issue AS (
-    UPDATE issue
-    SET revision = issue.revision + 1,
-        last_activity_at = GREATEST(COALESCE(issue.last_activity_at, issue.updated_at), now())
-    FROM updated_comment
-    WHERE updated_comment.did_change
-      AND issue.id = updated_comment.issue_id
-      AND issue.workspace_id = updated_comment.workspace_id
-    RETURNING issue.id, issue.revision
 )
-SELECT updated_comment.id, updated_comment.issue_id, updated_comment.author_type,
-       updated_comment.author_id, updated_comment.content, updated_comment.type,
-       updated_comment.created_at, updated_comment.updated_at, updated_comment.parent_id,
-       updated_comment.workspace_id, updated_comment.resolved_at,
-       updated_comment.resolved_by_type, updated_comment.resolved_by_id,
-       updated_comment.source_task_id, updated_comment.quick_action_id,
-       updated_comment.via_plugin_id, updated_comment.revision,
-       updated_comment.deleted_at,
-       COALESCE((SELECT revision FROM touched_issue), 0)::bigint AS issue_revision
-FROM updated_comment
+UPDATE comment SET
+    content = ?2,
+    source_task_id = ?3,
+    suppressed_agent_ids = CASE WHEN comment.content IS NOT ?2
+                            THEN ?4
+                            ELSE comment.suppressed_agent_ids END,
+    revision = comment.revision + CASE WHEN EXISTS (
+        SELECT 1 FROM target WHERE target.id = comment.id AND target.did_change
+    ) THEN 1 ELSE 0 END,
+    updated_at = CASE WHEN EXISTS (
+        SELECT 1 FROM target WHERE target.id = comment.id AND target.did_change
+    ) THEN now() ELSE comment.updated_at END
+WHERE comment.id IN (SELECT target.id FROM target)
+RETURNING comment.id, comment.issue_id, comment.author_type, comment.author_id,
+          comment.content, comment.type, comment.created_at, comment.updated_at,
+          comment.parent_id, comment.workspace_id, comment.resolved_at,
+          comment.resolved_by_type, comment.resolved_by_id, comment.source_task_id,
+          comment.quick_action_id, comment.via_plugin_id, comment.revision,
+          comment.deleted_at,
+          CASE WHEN EXISTS (SELECT 1 FROM target WHERE target.id = comment.id AND target.did_change)
+               THEN COALESCE((SELECT issue.revision FROM issue WHERE issue.id = comment.issue_id AND issue.workspace_id = comment.workspace_id), 0)
+               ELSE 0 END AS issue_revision
 `
 
 type UpdateCommentParams struct {
-	ID                 pgtype.UUID   `json:"id"`
-	Content            string        `json:"content"`
-	SourceTaskID       pgtype.UUID   `json:"source_task_id"`
-	ExpectedRevision   pgtype.Int8   `json:"expected_revision"`
-	ContentBase        pgtype.Text   `json:"content_base"`
-	SuppressedAgentIds []pgtype.UUID `json:"suppressed_agent_ids"`
+	ID                 string         `json:"id"`
+	Content            string         `json:"content"`
+	SourceTaskID       sql.NullString `json:"source_task_id"`
+	SuppressedAgentIds sql.NullString `json:"suppressed_agent_ids"`
+	ExpectedRevision   interface{}    `json:"expected_revision"`
+	ContentBase        interface{}    `json:"content_base"`
 }
 
 type UpdateCommentRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	IssueID        pgtype.UUID        `json:"issue_id"`
-	AuthorType     string             `json:"author_type"`
-	AuthorID       pgtype.UUID        `json:"author_id"`
-	Content        string             `json:"content"`
-	Type           string             `json:"type"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-	ParentID       pgtype.UUID        `json:"parent_id"`
-	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
-	ResolvedAt     pgtype.Timestamptz `json:"resolved_at"`
-	ResolvedByType pgtype.Text        `json:"resolved_by_type"`
-	ResolvedByID   pgtype.UUID        `json:"resolved_by_id"`
-	SourceTaskID   pgtype.UUID        `json:"source_task_id"`
-	QuickActionID  pgtype.UUID        `json:"quick_action_id"`
-	ViaPluginID    pgtype.UUID        `json:"via_plugin_id"`
-	Revision       int64              `json:"revision"`
-	DeletedAt      pgtype.Timestamptz `json:"deleted_at"`
-	IssueRevision  int64              `json:"issue_revision"`
+	ID             string         `json:"id"`
+	IssueID        string         `json:"issue_id"`
+	AuthorType     string         `json:"author_type"`
+	AuthorID       string         `json:"author_id"`
+	Content        string         `json:"content"`
+	Type           string         `json:"type"`
+	CreatedAt      string         `json:"created_at"`
+	UpdatedAt      string         `json:"updated_at"`
+	ParentID       sql.NullString `json:"parent_id"`
+	WorkspaceID    string         `json:"workspace_id"`
+	ResolvedAt     sql.NullString `json:"resolved_at"`
+	ResolvedByType sql.NullString `json:"resolved_by_type"`
+	ResolvedByID   sql.NullString `json:"resolved_by_id"`
+	SourceTaskID   sql.NullString `json:"source_task_id"`
+	QuickActionID  sql.NullString `json:"quick_action_id"`
+	ViaPluginID    sql.NullString `json:"via_plugin_id"`
+	Revision       int64          `json:"revision"`
+	DeletedAt      sql.NullString `json:"deleted_at"`
+	Column19       int64          `json:"column_19"`
 }
 
+// Call in order: UpdateComment_Step2, UpdateComment.
 func (q *Queries) UpdateComment(ctx context.Context, arg UpdateCommentParams) (UpdateCommentRow, error) {
-	row := q.db.QueryRow(ctx, updateComment,
+	row := q.db.QueryRowContext(ctx, updateComment,
 		arg.ID,
 		arg.Content,
 		arg.SourceTaskID,
+		arg.SuppressedAgentIds,
 		arg.ExpectedRevision,
 		arg.ContentBase,
-		arg.SuppressedAgentIds,
 	)
 	var i UpdateCommentRow
 	err := row.Scan(
@@ -2337,7 +2385,52 @@ func (q *Queries) UpdateComment(ctx context.Context, arg UpdateCommentParams) (U
 		&i.ViaPluginID,
 		&i.Revision,
 		&i.DeletedAt,
-		&i.IssueRevision,
+		&i.Column19,
 	)
 	return i, err
+}
+
+const updateComment_Step2 = `-- name: UpdateComment_Step2 :exec
+WITH target AS (
+    SELECT comment.issue_id AS issue_id,
+           comment.workspace_id AS workspace_id
+    FROM comment
+    WHERE comment.id = ?1
+      AND comment.deleted_at IS NULL
+      AND (?3 IS NULL OR comment.revision = ?3)
+      AND (
+        ?4 IS NULL
+        OR comment.content IS ?4
+        OR comment.content IS ?2
+      )
+      AND NOT (comment.content IS ?2 AND comment.source_task_id IS ?5)
+)
+UPDATE issue
+SET revision = issue.revision + 1,
+    last_activity_at = GREATEST(COALESCE(issue.last_activity_at, issue.updated_at), now())
+WHERE EXISTS (
+    SELECT 1 FROM target
+    WHERE target.issue_id = issue.id
+      AND target.workspace_id = issue.workspace_id
+)
+`
+
+type UpdateComment_Step2Params struct {
+	ID               string         `json:"id"`
+	Content          string         `json:"content"`
+	ExpectedRevision interface{}    `json:"expected_revision"`
+	ContentBase      interface{}    `json:"content_base"`
+	SourceTaskID     sql.NullString `json:"source_task_id"`
+}
+
+// Call in order before UpdateComment.
+func (q *Queries) UpdateComment_Step2(ctx context.Context, arg UpdateComment_Step2Params) error {
+	_, err := q.db.ExecContext(ctx, updateComment_Step2,
+		arg.ID,
+		arg.Content,
+		arg.ExpectedRevision,
+		arg.ContentBase,
+		arg.SourceTaskID,
+	)
+	return err
 }

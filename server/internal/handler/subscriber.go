@@ -2,13 +2,12 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -227,19 +226,16 @@ var errTargetNoLongerMember = errors.New("target user is no longer a workspace m
 // (workspace, user) serialization boundary the delegated auto-subscribe rule
 // uses, and returns every issue it actually retired.
 func (h *Handler) unsubscribeSubtreeSerialized(
-	ctx context.Context, workspaceID string, rootID pgtype.UUID, userType, userID string,
-) ([]pgtype.UUID, error) {
-	tx, err := h.TxStarter.Begin(ctx)
+	ctx context.Context, workspaceID string, rootID string, userType, userID string,
+) ([]string, error) {
+	tx, err := h.TxStarter.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
-	if err := qtx.LockSubscriberWrites(ctx, db.LockSubscriberWritesParams{
-		WorkspaceID: parseUUID(workspaceID),
-		UserID:      parseUUID(userID),
-	}); err != nil {
+	if err := qtx.LockSubscriberWrites(ctx); err != nil {
 		return nil, err
 	}
 
@@ -259,7 +255,7 @@ func (h *Handler) unsubscribeSubtreeSerialized(
 			UserID:      parseUUID(userID),
 			WorkspaceID: parseUUID(workspaceID),
 		}); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+			if errors.Is(err, sql.ErrNoRows) {
 				return nil, errTargetNoLongerMember
 			}
 			return nil, err
@@ -267,14 +263,14 @@ func (h *Handler) unsubscribeSubtreeSerialized(
 	}
 
 	ids, err := qtx.UnsubscribeFromIssueSubtree(ctx, db.UnsubscribeFromIssueSubtreeParams{
-		ID:       rootID,
+		IssueID:  rootID,
 		UserType: userType,
 		UserID:   parseUUID(userID),
 	})
 	if err != nil {
 		return nil, err
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return ids, nil

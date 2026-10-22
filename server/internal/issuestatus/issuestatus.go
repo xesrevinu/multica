@@ -12,14 +12,14 @@ package issuestatus
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -91,7 +91,7 @@ var keyPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_]{0,31}$`)
 type Querier interface {
 	GetIssueStatusEntryByKey(ctx context.Context, arg db.GetIssueStatusEntryByKeyParams) (db.IssueStatus, error)
 	ListIssueStatusEntries(ctx context.Context, arg db.ListIssueStatusEntriesParams) ([]db.IssueStatus, error)
-	SeedIssueStatusEntries(ctx context.Context, workspaceID pgtype.UUID) error
+	SeedIssueStatusEntries(ctx context.Context, workspaceID string) error
 	ListIssueStatusKeysByCategories(ctx context.Context, arg db.ListIssueStatusKeysByCategoriesParams) ([]string, error)
 }
 
@@ -367,7 +367,7 @@ func truncateForSuffix(base string, suffixLen int) string {
 // concurrently — the unique (workspace_id, key) index turns a losing racer into
 // a no-op, which matters during a rolling deploy where an old pod may create a
 // workspace while a new pod seeds it.
-func Ensure(ctx context.Context, q Querier, workspaceID pgtype.UUID) error {
+func Ensure(ctx context.Context, q Querier, workspaceID string) error {
 	return q.SeedIssueStatusEntries(ctx, workspaceID)
 }
 
@@ -382,7 +382,7 @@ func Ensure(ctx context.Context, q Querier, workspaceID pgtype.UUID) error {
 // direction: an unrecognized status matches none of the canonical comparisons,
 // so the issue is left alone rather than being swept, auto-triggered, or having
 // its autopilot run finalized on a guess.
-func Effective(ctx context.Context, q Querier, workspaceID pgtype.UUID, status string) string {
+func Effective(ctx context.Context, q Querier, workspaceID string, status string) string {
 	if IsBuiltIn(status) {
 		return status
 	}
@@ -406,7 +406,7 @@ func Effective(ctx context.Context, q Querier, workspaceID pgtype.UUID, status s
 // The name is empty for a built-in on purpose — clients localize those from the
 // key, so echoing the seeded English one would be the single string a
 // non-English workspace has to ignore. (MUL-6749)
-func EffectiveAndName(ctx context.Context, q Querier, workspaceID pgtype.UUID, status string) (string, string) {
+func EffectiveAndName(ctx context.Context, q Querier, workspaceID string, status string) (string, string) {
 	if IsBuiltIn(status) {
 		return status, ""
 	}
@@ -423,7 +423,7 @@ func EffectiveAndName(ctx context.Context, q Querier, workspaceID pgtype.UUID, s
 // Category resolves a status to its four-value lifecycle category.
 // Unknown keys return empty so callers never guess at lifecycle
 // behavior when a catalog read fails.
-func Category(ctx context.Context, q Querier, workspaceID pgtype.UUID, status string) string {
+func Category(ctx context.Context, q Querier, workspaceID string, status string) string {
 	category, _ := CategoryAndName(ctx, q, workspaceID, status)
 	return category
 }
@@ -431,7 +431,7 @@ func Category(ctx context.Context, q Querier, workspaceID pgtype.UUID, status st
 // CategoryWithError resolves lifecycle for side-effect decisions. Unlike
 // Category, it preserves catalog failures so a caller can defer work and retry.
 // Built-ins still resolve without reading the catalog.
-func CategoryWithError(ctx context.Context, q Querier, workspaceID pgtype.UUID, status string) (string, error) {
+func CategoryWithError(ctx context.Context, q Querier, workspaceID string, status string) (string, error) {
 	category, _, err := categoryAndName(ctx, q, workspaceID, status)
 	return category, err
 }
@@ -439,12 +439,12 @@ func CategoryWithError(ctx context.Context, q Querier, workspaceID pgtype.UUID, 
 // CategoryAndName is the payload-oriented counterpart to EffectiveAndName.
 // It shares one catalog read while returning the public category rather than
 // the internal behavior projection.
-func CategoryAndName(ctx context.Context, q Querier, workspaceID pgtype.UUID, status string) (string, string) {
+func CategoryAndName(ctx context.Context, q Querier, workspaceID string, status string) (string, string) {
 	category, name, _ := categoryAndName(ctx, q, workspaceID, status)
 	return category, name
 }
 
-func categoryAndName(ctx context.Context, q Querier, workspaceID pgtype.UUID, status string) (string, string, error) {
+func categoryAndName(ctx context.Context, q Querier, workspaceID string, status string) (string, string, error) {
 	if category, ok := CategoryForBehavior(status); ok {
 		return category, "", nil
 	}
@@ -470,7 +470,7 @@ func categoryAndName(ctx context.Context, q Querier, workspaceID pgtype.UUID, st
 // feature, or mid-rollout before migration 339 runs — could not create or
 // update an issue at all. Failing open here is limited precisely to the set
 // that was valid before this feature existed; anything else still needs a row.
-func Resolve(ctx context.Context, q Querier, workspaceID pgtype.UUID, status string) (db.IssueStatus, error) {
+func Resolve(ctx context.Context, q Querier, workspaceID string, status string) (db.IssueStatus, error) {
 	key := strings.ToLower(strings.TrimSpace(status))
 	if key == "" {
 		return db.IssueStatus{}, ErrUnknownStatus
@@ -480,7 +480,7 @@ func Resolve(ctx context.Context, q Querier, workspaceID pgtype.UUID, status str
 		Key:         key,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			if IsBuiltIn(key) {
 				return builtInEntry(workspaceID, key), nil
 			}
@@ -500,20 +500,20 @@ func Resolve(ctx context.Context, q Querier, workspaceID pgtype.UUID, status str
 // whose seed has not landed. It carries the fields that define behavior — key
 // and category, which are equal by construction — and is deliberately not
 // persisted: Ensure owns seeding.
-func builtInEntry(workspaceID pgtype.UUID, key string) db.IssueStatus {
+func builtInEntry(workspaceID string, key string) db.IssueStatus {
 	category, _ := CategoryForBehavior(key)
 	return db.IssueStatus{
 		WorkspaceID: workspaceID,
 		Key:         key,
 		Category:    category,
-		IsSystem:    true,
+		IsSystem:    1,
 	}
 }
 
 // ActiveKeys returns the workspace's usable status keys in display order, for
 // error messages and CLI validation. An unseeded workspace still reports the 7
 // built-ins, so an error message can never omit a key that Resolve accepts.
-func ActiveKeys(ctx context.Context, q Querier, workspaceID pgtype.UUID) ([]string, error) {
+func ActiveKeys(ctx context.Context, q Querier, workspaceID string) ([]string, error) {
 	entries, err := q.ListIssueStatusEntries(ctx, db.ListIssueStatusEntriesParams{
 		WorkspaceID:     workspaceID,
 		IncludeArchived: false,
@@ -545,7 +545,7 @@ func ActiveKeys(ctx context.Context, q Querier, workspaceID pgtype.UUID) ([]stri
 // Built-ins stay bare. Their key IS their category, their seeded name is
 // English, and every client localizes them from the key anyway, so printing
 // `todo (Todo)` would add noise rather than information.
-func ActiveKeyLabels(ctx context.Context, q Querier, workspaceID pgtype.UUID) ([]string, error) {
+func ActiveKeyLabels(ctx context.Context, q Querier, workspaceID string) ([]string, error) {
 	entries, err := q.ListIssueStatusEntries(ctx, db.ListIssueStatusEntriesParams{
 		WorkspaceID:     workspaceID,
 		IncludeArchived: false,
@@ -583,7 +583,7 @@ func ActiveKeyLabels(ctx context.Context, q Querier, workspaceID pgtype.UUID) ([
 // catalog for its lifetime, so a long-lived Resolver would serve stale
 // categories after an admin edits the catalog.
 type Resolver struct {
-	workspaceID pgtype.UUID
+	workspaceID string
 	categories  map[string]string
 	names       map[string]string
 	archived    map[string]bool
@@ -592,7 +592,7 @@ type Resolver struct {
 }
 
 // NewResolver returns a Resolver for one workspace. It performs no I/O.
-func NewResolver(workspaceID pgtype.UUID) *Resolver {
+func NewResolver(workspaceID string) *Resolver {
 	return &Resolver{workspaceID: workspaceID}
 }
 
@@ -718,7 +718,7 @@ func (r *Resolver) Name(ctx context.Context, q Querier, status string) string {
 //
 // An unseeded workspace yields no rows; the concrete built-in behavior keys are
 // added explicitly so filtering remains complete.
-func ExpandCategories(ctx context.Context, q Querier, workspaceID pgtype.UUID, categories []string) ([]string, error) {
+func ExpandCategories(ctx context.Context, q Querier, workspaceID string, categories []string) ([]string, error) {
 	behaviors := make([]string, 0, len(categories)*2)
 	for _, c := range categories {
 		if IsCategory(c) {
@@ -743,9 +743,13 @@ func ExpandCategories(ctx context.Context, q Querier, workspaceID pgtype.UUID, c
 			valid = append(valid, behavior)
 		}
 	}
+	categoriesJSON, err := json.Marshal(valid)
+	if err != nil {
+		return nil, err
+	}
 	keys, err := q.ListIssueStatusKeysByCategories(ctx, db.ListIssueStatusKeysByCategoriesParams{
 		WorkspaceID: workspaceID,
-		Categories:  valid,
+		Categories:  string(categoriesJSON),
 	})
 	if err != nil {
 		return nil, err
@@ -783,7 +787,7 @@ func ExpandCategories(ctx context.Context, q Querier, workspaceID pgtype.UUID, c
 //
 // Archived statuses are included, for the same reason ExpandCategories includes
 // them: issues left on one must still group into their category.
-func CustomKeyCategories(ctx context.Context, q Querier, workspaceID pgtype.UUID) (map[string]string, error) {
+func CustomKeyCategories(ctx context.Context, q Querier, workspaceID string) (map[string]string, error) {
 	entries, err := q.ListIssueStatusEntries(ctx, db.ListIssueStatusEntriesParams{
 		WorkspaceID:     workspaceID,
 		IncludeArchived: true,

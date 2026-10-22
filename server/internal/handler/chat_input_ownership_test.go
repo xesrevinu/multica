@@ -147,7 +147,7 @@ func TestDirectChat_ClaimKeepsQueuedTurnsPairedWithReplies(t *testing.T) {
 	t2 := sendDirectChat(t, ctx, agentID, sessionID, "user B")
 	t3 := sendDirectChat(t, ctx, agentID, sessionID, "user C")
 
-	inputABeforeClaim, err := testHandler.Queries.ListChatInputMessages(ctx, parseUUID(t1))
+	inputABeforeClaim, err := testHandler.Queries.ListChatInputMessages(ctx, nullString(parseUUID(t1)))
 	if err != nil || len(inputABeforeClaim) != 1 {
 		t.Fatalf("load A input before claim: messages=%+v err=%v", inputABeforeClaim, err)
 	}
@@ -158,12 +158,12 @@ func TestDirectChat_ClaimKeepsQueuedTurnsPairedWithReplies(t *testing.T) {
 	assertChatTranscriptContents(t, transcript, []string{"user A"})
 
 	claimTaskForRuntimeGuard(t, runtimeID, daemonID)
-	inputAAfterClaim, err := testHandler.Queries.ListChatInputMessages(ctx, parseUUID(t1))
+	inputAAfterClaim, err := testHandler.Queries.ListChatInputMessages(ctx, nullString(parseUUID(t1)))
 	if err != nil || len(inputAAfterClaim) != 1 {
 		t.Fatalf("load A input after claim: messages=%+v err=%v", inputAAfterClaim, err)
 	}
-	if !inputAAfterClaim[0].CreatedAt.Time.Equal(inputABeforeClaim[0].CreatedAt.Time) {
-		t.Fatalf("claim moved already-visible A from %s to %s", inputABeforeClaim[0].CreatedAt.Time, inputAAfterClaim[0].CreatedAt.Time)
+	if !parseDBTime(inputAAfterClaim[0].CreatedAt).Equal(parseDBTime(inputABeforeClaim[0].CreatedAt)) {
+		t.Fatalf("claim moved already-visible A from %s to %s", parseDBTime(inputABeforeClaim[0].CreatedAt), parseDBTime(inputAAfterClaim[0].CreatedAt))
 	}
 	markTaskRunning(t, ctx, t1)
 	if _, err := testHandler.TaskService.CompleteTask(ctx, parseUUID(t1), completeResult(t, "assistant A"), "", "", "", false, "", ""); err != nil {
@@ -179,7 +179,7 @@ func TestDirectChat_ClaimKeepsQueuedTurnsPairedWithReplies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load queued turn B: %v", err)
 	}
-	inputBBeforeClaim, err := testHandler.Queries.ListChatInputMessages(ctx, parseUUID(t2))
+	inputBBeforeClaim, err := testHandler.Queries.ListChatInputMessages(ctx, nullString(parseUUID(t2)))
 	if err != nil || len(inputBBeforeClaim) != 1 {
 		t.Fatalf("load B input before claim: messages=%+v err=%v", inputBBeforeClaim, err)
 	}
@@ -188,15 +188,15 @@ func TestDirectChat_ClaimKeepsQueuedTurnsPairedWithReplies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load claimed turn B: %v", err)
 	}
-	if !claimedAfter.CreatedAt.Time.Equal(queuedBeforeClaim.CreatedAt.Time) {
-		t.Fatalf("claim changed task queue created_at from %s to %s", queuedBeforeClaim.CreatedAt.Time, claimedAfter.CreatedAt.Time)
+	if !parseDBTime(claimedAfter.CreatedAt).Equal(parseDBTime(queuedBeforeClaim.CreatedAt)) {
+		t.Fatalf("claim changed task queue created_at from %s to %s", parseDBTime(queuedBeforeClaim.CreatedAt), parseDBTime(claimedAfter.CreatedAt))
 	}
-	inputBAfterClaim, err := testHandler.Queries.ListChatInputMessages(ctx, parseUUID(t2))
+	inputBAfterClaim, err := testHandler.Queries.ListChatInputMessages(ctx, nullString(parseUUID(t2)))
 	if err != nil || len(inputBAfterClaim) != 1 {
 		t.Fatalf("load B input after claim: messages=%+v err=%v", inputBAfterClaim, err)
 	}
-	if !inputBAfterClaim[0].CreatedAt.Time.Equal(inputBBeforeClaim[0].CreatedAt.Time) {
-		t.Fatalf("claim moved already-visible B from %s to %s", inputBBeforeClaim[0].CreatedAt.Time, inputBAfterClaim[0].CreatedAt.Time)
+	if !parseDBTime(inputBAfterClaim[0].CreatedAt).Equal(parseDBTime(inputBBeforeClaim[0].CreatedAt)) {
+		t.Fatalf("claim moved already-visible B from %s to %s", parseDBTime(inputBBeforeClaim[0].CreatedAt), parseDBTime(inputBAfterClaim[0].CreatedAt))
 	}
 
 	transcript, err = testHandler.Queries.ListChatMessages(ctx, parseUUID(sessionID))
@@ -207,7 +207,7 @@ func TestDirectChat_ClaimKeepsQueuedTurnsPairedWithReplies(t *testing.T) {
 
 	// Lost claim responses are re-delivered from dispatched without creating a
 	// new transcript turn. Refreshing dispatched_at must not move user B again.
-	inputBeforeReclaim, err := testHandler.Queries.ListChatInputMessages(ctx, parseUUID(t2))
+	inputBeforeReclaim, err := testHandler.Queries.ListChatInputMessages(ctx, nullString(parseUUID(t2)))
 	if err != nil || len(inputBeforeReclaim) != 1 {
 		t.Fatalf("load B input before reclaim: messages=%+v err=%v", inputBeforeReclaim, err)
 	}
@@ -220,7 +220,7 @@ func TestDirectChat_ClaimKeepsQueuedTurnsPairedWithReplies(t *testing.T) {
 		t.Fatalf("age B dispatch for reclaim: %v", err)
 	}
 	reclaimed, err := testHandler.Queries.ReclaimStaleDispatchedTaskForRuntime(ctx, db.ReclaimStaleDispatchedTaskForRuntimeParams{
-		RuntimeID:         parseUUID(runtimeID),
+		RuntimeID:         nullString(parseUUID(runtimeID)),
 		ClaimRecoverySecs: 0,
 		PrepareLeaseSecs:  60,
 		RuntimeStaleSecs:  service.RuntimeClaimFreshnessSeconds,
@@ -231,12 +231,12 @@ func TestDirectChat_ClaimKeepsQueuedTurnsPairedWithReplies(t *testing.T) {
 	if uuidToString(reclaimed.ID) != t2 {
 		t.Fatalf("reclaimed task = %s, want %s", uuidToString(reclaimed.ID), t2)
 	}
-	inputAfterReclaim, err := testHandler.Queries.ListChatInputMessages(ctx, parseUUID(t2))
+	inputAfterReclaim, err := testHandler.Queries.ListChatInputMessages(ctx, nullString(parseUUID(t2)))
 	if err != nil || len(inputAfterReclaim) != 1 {
 		t.Fatalf("load B input after reclaim: messages=%+v err=%v", inputAfterReclaim, err)
 	}
-	if !inputAfterReclaim[0].CreatedAt.Time.Equal(inputBeforeReclaim[0].CreatedAt.Time) {
-		t.Fatalf("stale reclaim moved B from %s to %s", inputBeforeReclaim[0].CreatedAt.Time, inputAfterReclaim[0].CreatedAt.Time)
+	if !parseDBTime(inputAfterReclaim[0].CreatedAt).Equal(parseDBTime(inputBeforeReclaim[0].CreatedAt)) {
+		t.Fatalf("stale reclaim moved B from %s to %s", parseDBTime(inputBeforeReclaim[0].CreatedAt), parseDBTime(inputAfterReclaim[0].CreatedAt))
 	}
 
 	markTaskRunning(t, ctx, t2)
@@ -315,7 +315,7 @@ func TestDirectChat_RetryClaimDoesNotMoveOriginalInput(t *testing.T) {
 	ctx := context.Background()
 	agentID, sessionID, _, _ := setupDirectChatSession(t, ctx, "retry transcript order")
 	rootID := sendDirectChat(t, ctx, agentID, sessionID, "retry me")
-	inputBefore, err := testHandler.Queries.ListChatInputMessages(ctx, parseUUID(rootID))
+	inputBefore, err := testHandler.Queries.ListChatInputMessages(ctx, nullString(parseUUID(rootID)))
 	if err != nil || len(inputBefore) != 1 {
 		t.Fatalf("load root input: messages=%+v err=%v", inputBefore, err)
 	}
@@ -330,8 +330,8 @@ func TestDirectChat_RetryClaimDoesNotMoveOriginalInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create retry task: %v", err)
 	}
-	if !retry.ChatInputTaskID.Valid || uuidToString(retry.ChatInputTaskID) != rootID {
-		t.Fatalf("retry input owner = %s, want root %s", uuidToString(retry.ChatInputTaskID), rootID)
+	if !retry.ChatInputTaskID.Valid || uuidToString(retry.ChatInputTaskID.String) != rootID {
+		t.Fatalf("retry input owner = %s, want root %s", uuidToString(retry.ChatInputTaskID.String), rootID)
 	}
 	claimed, err := testHandler.TaskService.ClaimTask(ctx, parseUUID(agentID))
 	if err != nil || claimed == nil {
@@ -340,12 +340,12 @@ func TestDirectChat_RetryClaimDoesNotMoveOriginalInput(t *testing.T) {
 	if uuidToString(claimed.ID) != uuidToString(retry.ID) {
 		t.Fatalf("claimed task = %s, want retry %s", uuidToString(claimed.ID), uuidToString(retry.ID))
 	}
-	inputAfter, err := testHandler.Queries.ListChatInputMessages(ctx, parseUUID(rootID))
+	inputAfter, err := testHandler.Queries.ListChatInputMessages(ctx, nullString(parseUUID(rootID)))
 	if err != nil || len(inputAfter) != 1 {
 		t.Fatalf("reload root input: messages=%+v err=%v", inputAfter, err)
 	}
-	if !inputAfter[0].CreatedAt.Time.Equal(inputBefore[0].CreatedAt.Time) {
-		t.Fatalf("retry claim moved root input from %s to %s", inputBefore[0].CreatedAt.Time, inputAfter[0].CreatedAt.Time)
+	if !parseDBTime(inputAfter[0].CreatedAt).Equal(parseDBTime(inputBefore[0].CreatedAt)) {
+		t.Fatalf("retry claim moved root input from %s to %s", parseDBTime(inputBefore[0].CreatedAt), parseDBTime(inputAfter[0].CreatedAt))
 	}
 }
 
@@ -368,14 +368,14 @@ func TestDirectChat_RunningTaskDoesNotAbsorbNewMessage(t *testing.T) {
 	}
 
 	// T1's owned batch is still exactly {first}; the mid-run message belongs to T2.
-	owned1, err := testHandler.Queries.ListChatInputMessages(ctx, parseUUID(t1))
+	owned1, err := testHandler.Queries.ListChatInputMessages(ctx, nullString(parseUUID(t1)))
 	if err != nil {
 		t.Fatalf("list T1 owned input: %v", err)
 	}
 	if len(owned1) != 1 || owned1[0].Content != "first" {
 		t.Fatalf("T1 must own only its own message; got %+v", msgContents(owned1))
 	}
-	owned2, err := testHandler.Queries.ListChatInputMessages(ctx, parseUUID(t2))
+	owned2, err := testHandler.Queries.ListChatInputMessages(ctx, nullString(parseUUID(t2)))
 	if err != nil {
 		t.Fatalf("list T2 owned input: %v", err)
 	}
@@ -516,7 +516,7 @@ func TestFailTask_ChatRetryInheritsInputOwnerAndPriority(t *testing.T) {
 	}
 
 	// The child reads the same input batch: the root's user message.
-	owned, err := testHandler.Queries.ListChatInputMessages(ctx, parseUUID(childOwner))
+	owned, err := testHandler.Queries.ListChatInputMessages(ctx, nullString(parseUUID(childOwner)))
 	if err != nil {
 		t.Fatalf("list child owned input: %v", err)
 	}
@@ -839,7 +839,7 @@ func TestCompleteTask_ChatQuickActions(t *testing.T) {
 	// pre-upgrade provider session to the retired, lower-quality suggestions and
 	// suppress the pass that replaces them.
 	var actions []protocol.ChatQuickAction
-	if err := json.Unmarshal(rows[0].QuickActions, &actions); err != nil {
+	if err := json.Unmarshal([]byte(rows[0].QuickActions), &actions); err != nil {
 		t.Fatalf("decode quick actions: %v", err)
 	}
 	if len(actions) != 0 {
@@ -864,7 +864,7 @@ func TestCompleteTask_ChatQuickActions(t *testing.T) {
 		t.Fatal("actions-only no_response row must carry a non-empty fallback body for old clients")
 	}
 	var droppedActions []protocol.ChatQuickAction
-	if err := json.Unmarshal(rows[1].QuickActions, &droppedActions); err != nil {
+	if err := json.Unmarshal([]byte(rows[1].QuickActions), &droppedActions); err != nil {
 		t.Fatalf("decode quick actions: %v", err)
 	}
 	if len(droppedActions) != 0 {
@@ -907,7 +907,7 @@ func TestCompleteTask_ChatQuickActionsSupplement(t *testing.T) {
 	}
 	rows = assistantRows(t, ctx, sessionID)
 	var actions []protocol.ChatQuickAction
-	if err := json.Unmarshal(rows[0].QuickActions, &actions); err != nil {
+	if err := json.Unmarshal([]byte(rows[0].QuickActions), &actions); err != nil {
 		t.Fatalf("decode quick actions: %v", err)
 	}
 	if len(actions) != 1 || actions[0].Label != "From pass" || !actions[0].Primary {
@@ -921,7 +921,7 @@ func TestCompleteTask_ChatQuickActionsSupplement(t *testing.T) {
 	}
 	rows = assistantRows(t, ctx, sessionID)
 	actions = nil
-	if err := json.Unmarshal(rows[0].QuickActions, &actions); err != nil {
+	if err := json.Unmarshal([]byte(rows[0].QuickActions), &actions); err != nil {
 		t.Fatalf("decode quick actions after empty supplement: %v", err)
 	}
 	if len(actions) != 1 || actions[0].Label != "From pass" {
@@ -998,7 +998,7 @@ func TestChatQuickActions_ContextAnchorsOnTargetTurn(t *testing.T) {
 		t.Fatalf("expected one assistant row, got %d", len(rows))
 	}
 	var actions []protocol.ChatQuickAction
-	if err := json.Unmarshal(rows[0].QuickActions, &actions); err != nil {
+	if err := json.Unmarshal([]byte(rows[0].QuickActions), &actions); err != nil {
 		t.Fatalf("decode quick actions: %v", err)
 	}
 	if len(actions) != 1 || actions[0].Label != "Next" {

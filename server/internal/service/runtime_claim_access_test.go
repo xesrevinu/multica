@@ -2,14 +2,12 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -17,9 +15,9 @@ import (
 )
 
 type runtimeClaimAccessFixture struct {
-	pool      *pgxpool.Pool
-	agentID   pgtype.UUID
-	runtimeID pgtype.UUID
+	pool      *sql.DB
+	agentID   string
+	runtimeID string
 	taskID    string
 }
 
@@ -113,17 +111,17 @@ func TestRuntimeAccessGatesQueuedTaskClaims(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			fixture := newRuntimeClaimAccessFixture(t, tt.visibility, tt.sameOwner, tt.matchingBinding, "queued")
 			if tt.ownerlessAgent {
-				if _, err := fixture.pool.Exec(ctx, `UPDATE agent SET owner_id = NULL WHERE id = $1`, fixture.agentID); err != nil {
+				if _, err := fixture.pool.ExecContext(ctx, `UPDATE agent SET owner_id = NULL WHERE id = $1`, fixture.agentID); err != nil {
 					t.Fatalf("clear agent owner: %v", err)
 				}
 			}
 			q := db.New(fixture.pool)
 
-			candidates, err := q.ListQueuedClaimCandidatesByRuntime(ctx, fixture.runtimeID)
+			candidates, err := q.ListQueuedClaimCandidatesByRuntime(ctx, nullString(fixture.runtimeID))
 			if err != nil {
 				t.Fatalf("list singular candidates: %v", err)
 			}
-			batchCandidates, err := q.ListQueuedClaimCandidatesByRuntimes(ctx, []pgtype.UUID{fixture.runtimeID})
+			batchCandidates, err := q.ListQueuedClaimCandidatesByRuntimes(ctx, []string{fixture.runtimeID})
 			if err != nil {
 				t.Fatalf("list batch candidates: %v", err)
 			}
@@ -140,16 +138,16 @@ func TestRuntimeAccessGatesQueuedTaskClaims(t *testing.T) {
 
 			claimed, err := q.ClaimAgentTask(ctx, db.ClaimAgentTaskParams{
 				AgentID:          fixture.agentID,
-				RuntimeID:        fixture.runtimeID,
-				PrepareLeaseSecs: 60,
-				RuntimeStaleSecs: RuntimeClaimFreshnessSeconds,
+				RuntimeID:        nullString(fixture.runtimeID),
+				PrepareLeaseSecs: nullString(fmt.Sprint(60)),
+				RuntimeStaleSecs: nullString(fmt.Sprint(RuntimeClaimFreshnessSeconds)),
 			})
 			if !tt.wantClaim {
-				if !errors.Is(err, pgx.ErrNoRows) {
+				if !errors.Is(err, sql.ErrNoRows) {
 					t.Fatalf("claim error = %v, want no rows", err)
 				}
 				var status string
-				if err := fixture.pool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, fixture.taskID).Scan(&status); err != nil {
+				if err := fixture.pool.QueryRowContext(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, fixture.taskID).Scan(&status); err != nil {
 					t.Fatalf("read task status: %v", err)
 				}
 				if status != "queued" {
@@ -189,20 +187,20 @@ func TestRuntimeAccessGatesStaleDispatchReclaim(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			fixture := newRuntimeClaimAccessFixture(t, tt.visibility, tt.sameOwner, tt.matchingBinding, "dispatched")
 			if tt.ownerlessAgent {
-				if _, err := fixture.pool.Exec(ctx, `UPDATE agent SET owner_id = NULL WHERE id = $1`, fixture.agentID); err != nil {
+				if _, err := fixture.pool.ExecContext(ctx, `UPDATE agent SET owner_id = NULL WHERE id = $1`, fixture.agentID); err != nil {
 					t.Fatalf("clear agent owner: %v", err)
 				}
 			}
 			q := db.New(fixture.pool)
 			params := db.ReclaimStaleDispatchedTaskForRuntimeParams{
-				RuntimeID:         fixture.runtimeID,
-				PrepareLeaseSecs:  60,
-				ClaimRecoverySecs: 30,
-				RuntimeStaleSecs:  RuntimeClaimFreshnessSeconds,
+				RuntimeID:         nullString(fixture.runtimeID),
+				PrepareLeaseSecs:  nullString(fmt.Sprint(60)),
+				ClaimRecoverySecs: nullString(fmt.Sprint(30)),
+				RuntimeStaleSecs:  nullString(fmt.Sprint(RuntimeClaimFreshnessSeconds)),
 			}
 			reclaimed, err := q.ReclaimStaleDispatchedTaskForRuntime(ctx, params)
 			if !tt.wantReclaim {
-				if !errors.Is(err, pgx.ErrNoRows) {
+				if !errors.Is(err, sql.ErrNoRows) {
 					t.Fatalf("singular reclaim error = %v, want no rows", err)
 				}
 			} else {
@@ -215,7 +213,7 @@ func TestRuntimeAccessGatesStaleDispatchReclaim(t *testing.T) {
 			}
 
 			// Restore the stale generation so the batch path evaluates the same gate.
-			if _, err := fixture.pool.Exec(ctx, `
+			if _, err := fixture.pool.ExecContext(ctx, `
 				UPDATE agent_task_queue
 				SET dispatched_at = now() - interval '10 minutes',
 				    prepare_lease_expires_at = now() - interval '1 minute'
@@ -224,10 +222,10 @@ func TestRuntimeAccessGatesStaleDispatchReclaim(t *testing.T) {
 				t.Fatalf("reset stale dispatch: %v", err)
 			}
 			batch, err := q.ReclaimStaleDispatchedTasksForRuntimes(ctx, db.ReclaimStaleDispatchedTasksForRuntimesParams{
-				RuntimeIds:        []pgtype.UUID{fixture.runtimeID},
-				PrepareLeaseSecs:  60,
-				ClaimRecoverySecs: 30,
-				RuntimeStaleSecs:  RuntimeClaimFreshnessSeconds,
+				RuntimeIds:        []string{fixture.runtimeID},
+				PrepareLeaseSecs:  nullString(fmt.Sprint(60)),
+				ClaimRecoverySecs: nullString(fmt.Sprint(30)),
+				RuntimeStaleSecs:  nullString(fmt.Sprint(RuntimeClaimFreshnessSeconds)),
 				MaxTasks:          10,
 			})
 			if err != nil {
@@ -258,7 +256,7 @@ func TestClaimTaskRejectsMismatchedAgentRuntime(t *testing.T) {
 	}
 
 	var status string
-	if err := fixture.pool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, fixture.taskID).Scan(&status); err != nil {
+	if err := fixture.pool.QueryRowContext(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, fixture.taskID).Scan(&status); err != nil {
 		t.Fatalf("read task status: %v", err)
 	}
 	if status != "queued" {
@@ -269,7 +267,7 @@ func TestClaimTaskRejectsMismatchedAgentRuntime(t *testing.T) {
 func TestClaimTaskForRuntimeKeepsOwnerlessPrivateAgentClaimable(t *testing.T) {
 	ctx := context.Background()
 	fixture := newRuntimeClaimAccessFixture(t, "private", true, true, "queued")
-	if _, err := fixture.pool.Exec(ctx, `UPDATE agent SET owner_id = NULL WHERE id = $1`, fixture.agentID); err != nil {
+	if _, err := fixture.pool.ExecContext(ctx, `UPDATE agent SET owner_id = NULL WHERE id = $1`, fixture.agentID); err != nil {
 		t.Fatalf("clear agent owner: %v", err)
 	}
 	svc := NewTaskService(db.New(fixture.pool), fixture.pool, nil, events.New())
@@ -286,12 +284,12 @@ func TestClaimTaskForRuntimeKeepsOwnerlessPrivateAgentClaimable(t *testing.T) {
 func TestClaimTasksForRuntimesKeepsOwnerlessPrivateAgentClaimable(t *testing.T) {
 	ctx := context.Background()
 	fixture := newRuntimeClaimAccessFixture(t, "private", true, true, "queued")
-	if _, err := fixture.pool.Exec(ctx, `UPDATE agent SET owner_id = NULL WHERE id = $1`, fixture.agentID); err != nil {
+	if _, err := fixture.pool.ExecContext(ctx, `UPDATE agent SET owner_id = NULL WHERE id = $1`, fixture.agentID); err != nil {
 		t.Fatalf("clear agent owner: %v", err)
 	}
 	svc := NewTaskService(db.New(fixture.pool), fixture.pool, nil, events.New())
 
-	claimed, err := svc.ClaimTasksForRuntimes(ctx, []pgtype.UUID{fixture.runtimeID}, 1)
+	claimed, err := svc.ClaimTasksForRuntimes(ctx, []string{fixture.runtimeID}, 1)
 	if err != nil {
 		t.Fatalf("claim tasks: %v", err)
 	}

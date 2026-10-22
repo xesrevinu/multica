@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/pkg/plugincontract"
 )
 
@@ -86,7 +85,7 @@ func PluginToolName(pluginKey, hookKey string) string {
 // Disabled installations are skipped, which is what makes disabling a plugin
 // take effect on the next task rather than only in the UI. An uninstalled one
 // has no row at all.
-func (s *PluginService) AgentHookTools(ctx context.Context, workspaceID pgtype.UUID) ([]PluginHookTool, error) {
+func (s *PluginService) AgentHookTools(ctx context.Context, workspaceID string) ([]PluginHookTool, error) {
 	installations, err := s.Queries.ListWorkspacePluginInstallations(ctx, workspaceID)
 	if err != nil {
 		return nil, &PluginError{Kind: PluginErrorUnavailable, Message: "list plugin installations", Err: err}
@@ -94,7 +93,7 @@ func (s *PluginService) AgentHookTools(ctx context.Context, workspaceID pgtype.U
 
 	tools := make([]PluginHookTool, 0)
 	for _, installation := range installations {
-		if !installation.Enabled {
+		if installation.Enabled == 0 {
 			continue
 		}
 		manifest, err := ParseInstallationManifest(installation)
@@ -128,8 +127,8 @@ func (s *PluginService) AgentHookTools(ctx context.Context, workspaceID pgtype.U
 // agent's, exactly as they would be if the agent had written them directly.
 // author_type already has a value for that, which is why this trigger needs no
 // new one.
-func (s *PluginService) InvokeAgentHook(ctx context.Context, installationID, hookKey string, agentID pgtype.UUID, input json.RawMessage) (HookResult, error) {
-	caller, err := s.AuthorizePluginAction(ctx, installationID, pgtype.UUID{}, "")
+func (s *PluginService) InvokeAgentHook(ctx context.Context, installationID, hookKey string, agentID string, input json.RawMessage) (HookResult, error) {
+	caller, err := s.AuthorizePluginAction(ctx, installationID, "", "")
 	if err != nil {
 		return HookResult{}, err
 	}

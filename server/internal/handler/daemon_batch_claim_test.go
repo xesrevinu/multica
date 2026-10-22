@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -140,7 +139,7 @@ func TestNextDeferredTaskFireAtForRuntimes_OmitsIneligibleOverdueTasks(t *testin
 			}
 
 			next, err := testHandler.Queries.NextDeferredTaskFireAtForRuntimes(t.Context(), db.NextDeferredTaskFireAtForRuntimesParams{
-				RuntimeIds:       []pgtype.UUID{parseUUID(runtimeID)},
+				RuntimeIds:       []string{parseUUID(runtimeID)},
 				RuntimeStaleSecs: service.RuntimeClaimFreshnessSeconds,
 			})
 			if err != nil {

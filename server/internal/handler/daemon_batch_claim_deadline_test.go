@@ -13,7 +13,6 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/service"
@@ -24,7 +23,7 @@ import (
 
 type slowBatchClaimDB struct {
 	db.DBTX
-	failingAgent  pgtype.UUID
+	failingAgent  string
 	expired       bool
 	recoveryDelay time.Duration
 }
@@ -66,10 +65,10 @@ func TestClaimTasksByRuntime_PartialSuccessFitsClientDeadlines(t *testing.T) {
 				dbfx.Exec(t, `UPDATE agent_task_queue SET priority = 100 WHERE id = $1`, taskA)
 
 				h := *testHandler
-				h.Queries = db.New(&slowBatchClaimDB{DBTX: testPool, failingAgent: parseUUID(agentB)})
+				h.Queries = db.New(&slowBatchClaimDB{DBTX: testSQLite, failingAgent: parseUUID(agentB)})
 				hub := daemonws.NewHub()
-				recoveryDB := &slowBatchClaimDB{DBTX: testPool, expired: true, recoveryDelay: recoveryDelay}
-				h.TaskService = service.NewTaskService(db.New(recoveryDB), testPool, testHandler.TaskService.Hub, testHandler.TaskService.Bus, hub)
+				recoveryDB := &slowBatchClaimDB{DBTX: testSQLite, expired: true, recoveryDelay: recoveryDelay}
+				h.TaskService = service.NewTaskService(db.New(recoveryDB), testSQLite, testHandler.TaskService.Hub, testHandler.TaskService.Bus, hub)
 				completed := make(chan struct{})
 				hub.SetRPCHandler(func(ctx context.Context, identity daemonws.ClientIdentity, method string, body json.RawMessage) (int, json.RawMessage, error) {
 					status, response, err := h.DaemonRPCHandler(ctx, identity, method, body)
@@ -240,8 +239,8 @@ func TestClaimTasksByRuntime_ChatRecoversAfterRepeatedInputFailures(t *testing.T
 		"chat_session_id": chatID, "task_id": taskID, "role": "user", "content": input,
 	})
 	h := *testHandler
-	h.Queries = db.New(&retryChatInputDB{DBTX: testPool, failures: 3})
-	h.TaskService = service.NewTaskService(testHandler.Queries, testPool, testHandler.TaskService.Hub, testHandler.TaskService.Bus)
+	h.Queries = db.New(&retryChatInputDB{DBTX: testSQLite, failures: 3})
+	h.TaskService = service.NewTaskService(testHandler.Queries, testSQLite, testHandler.TaskService.Hub, testHandler.TaskService.Bus)
 	claim := func() []AgentTaskResponse {
 		t.Helper()
 		var response struct {

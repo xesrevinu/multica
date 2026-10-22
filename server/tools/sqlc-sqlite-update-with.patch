@@ -1,0 +1,78 @@
+--- /Users/kee/go/pkg/mod/github.com/sqlc-dev/sqlc@v1.31.1/internal/engine/sqlite/convert.go	2026-10-22 22:49:26.398299290 +0800
++++ /tmp/sqlc-patch/internal/engine/sqlite/convert.go	2026-10-22 23:25:44.060227365 +0800
+@@ -224,7 +224,7 @@
+ 
+ 		delete := &ast.DeleteStmt{
+ 			Relations:  relations,
+-			WithClause: nil,
++			WithClause: sqliteWithClause(c, n),
+ 		}
+ 
+ 		if n.WHERE_() != nil && n.Expr() != nil {
+@@ -1134,6 +1134,38 @@
+ 	AllExpr() []parser.IExprContext
+ }
+ 
++
++func sqliteWithClause(c *cc, n interface{}) *ast.WithClause {
++	type withSrc interface {
++		With_clause() parser.IWith_clauseContext
++	}
++	src, ok := n.(withSrc)
++	if !ok || src.With_clause() == nil {
++		return nil
++	}
++	ct := src.With_clause()
++	var ctes ast.List
++	recursive := ct.RECURSIVE_() != nil
++	names := ct.AllCte_table_name()
++	selects := ct.AllSelect_stmt()
++	for i, name := range names {
++		if i >= len(selects) {
++			break
++		}
++		tableName := identifier(name.GetText())
++		ctes.Items = append(ctes.Items, &ast.CommonTableExpr{
++			Ctename:      &tableName,
++			Ctequery:     c.convert(selects[i]),
++			Location:     name.GetStart().GetStart(),
++			Cterecursive: recursive,
++		})
++	}
++	if len(ctes.Items) == 0 {
++		return nil
++	}
++	return &ast.WithClause{Ctes: &ctes}
++}
++
+ func (c *cc) convertUpdate_stmtContext(n Update_stmt) ast.Node {
+ 	if n == nil {
+ 		return nil
+@@ -1141,8 +1173,18 @@
+ 
+ 	relations := &ast.List{}
+ 	tableName := identifier(n.Qualified_table_name().GetText())
++	var alias *ast.Alias
++	if qn, ok := n.Qualified_table_name().(*parser.Qualified_table_nameContext); ok {
++		tableName = identifier(qn.Table_name().GetText())
++		if qn.Alias() != nil {
++			aliasName := identifier(qn.Alias().GetText())
++			aliasName = strings.TrimPrefix(strings.TrimPrefix(aliasName, "as "), "AS ")
++			alias = &ast.Alias{Aliasname: &aliasName}
++		}
++	}
+ 	rel := ast.RangeVar{
+ 		Relname:  &tableName,
++		Alias:    alias,
+ 		Location: n.GetStart().GetStart(),
+ 	}
+ 	relations.Items = append(relations.Items, &rel)
+@@ -1167,7 +1209,7 @@
+ 		TargetList:  list,
+ 		WhereClause: where,
+ 		FromClause:  &ast.List{},
+-		WithClause:  nil, // TODO: support with clause
++		WithClause:  sqliteWithClause(c, n),
+ 	}
+ 	if n, ok := n.(interface {
+ 		Returning_clause() parser.IReturning_clauseContext

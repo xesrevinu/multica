@@ -2,20 +2,20 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 
 	"encoding/json"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"log/slog"
+	"net/http"
+
 	"github.com/multica-ai/multica/server/internal/logger"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
 	"github.com/multica-ai/multica/server/pkg/protocol"
-	"log/slog"
-	"net/http"
 )
 
 // Mika's product-defined identity. These are server constants on purpose: the
@@ -122,10 +122,10 @@ func (h *Handler) resolveMikaAgent(w http.ResponseWriter, r *http.Request, works
 	// or a re-run of onboarding cannot produce a duplicate.
 	if existing, err := h.Queries.GetAgentBySystemKey(r.Context(), db.GetAgentBySystemKeyParams{
 		WorkspaceID: wsUUID,
-		SystemKey:   pgtype.Text{String: service.MikaSystemKey, Valid: true},
+		SystemKey:   sql.NullString{String: service.MikaSystemKey, Valid: true},
 	}); err == nil {
 		return existing, false, true
-	} else if !errors.Is(err, pgx.ErrNoRows) {
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusInternalServerError, "failed to look up the workspace agent")
 		return db.Agent{}, false, false
 	}
@@ -144,12 +144,12 @@ func (h *Handler) resolveMikaAgent(w http.ResponseWriter, r *http.Request, works
 		return db.Agent{}, false, false
 	}
 
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start agent create transaction")
 		return db.Agent{}, false, false
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	// Serialize provisioning per workspace. The check above is only a fast
@@ -158,7 +158,7 @@ func (h *Handler) resolveMikaAgent(w http.ResponseWriter, r *http.Request, works
 	// stop them either — it covers (workspace_id, owner_id, runtime_id,
 	// system_key), so different owners or different runtimes are distinct
 	// tuples, and the workspace would end up with two live Mikas.
-	if _, err := tx.Exec(r.Context(),
+	if _, err := tx.ExecContext(r.Context(),
 		"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
 		"mika:"+workspaceID,
 	); err != nil {
@@ -169,10 +169,10 @@ func (h *Handler) resolveMikaAgent(w http.ResponseWriter, r *http.Request, works
 	// may have committed by now.
 	if existing, err := qtx.GetAgentBySystemKey(r.Context(), db.GetAgentBySystemKeyParams{
 		WorkspaceID: wsUUID,
-		SystemKey:   pgtype.Text{String: service.MikaSystemKey, Valid: true},
+		SystemKey:   sql.NullString{String: service.MikaSystemKey, Valid: true},
 	}); err == nil {
 		return existing, false, true
-	} else if !errors.Is(err, pgx.ErrNoRows) {
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusInternalServerError, "failed to look up the workspace agent")
 		return db.Agent{}, false, false
 	}
@@ -181,15 +181,15 @@ func (h *Handler) resolveMikaAgent(w http.ResponseWriter, r *http.Request, works
 		WorkspaceID:        wsUUID,
 		Name:               service.MikaDefaultName,
 		Description:        description,
-		AvatarUrl:          pgtype.Text{String: mikaAgentAvatarURL, Valid: true},
+		AvatarUrl:          sql.NullString{String: mikaAgentAvatarURL, Valid: true},
 		RuntimeMode:        runtime.RuntimeMode,
-		RuntimeID:          runtime.ID,
-		Model:              pgtype.Text{String: strings.TrimSpace(req.Model), Valid: strings.TrimSpace(req.Model) != ""},
+		RuntimeID:          nullString(runtime.ID),
+		Model:              sql.NullString{String: strings.TrimSpace(req.Model), Valid: strings.TrimSpace(req.Model) != ""},
 		Visibility:         mikaAgentVisibility,
 		PermissionMode:     mikaAgentPermissionMode,
 		MaxConcurrentTasks: mikaAgentMaxConcurrency,
-		OwnerID:            parseUUID(userID),
-		SystemKey:          pgtype.Text{String: service.MikaSystemKey, Valid: true},
+		OwnerID:            nullString(parseUUID(userID)),
+		SystemKey:          sql.NullString{String: service.MikaSystemKey, Valid: true},
 	})
 	if err != nil {
 		slog.Warn("create mika agent failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
@@ -203,7 +203,7 @@ func (h *Handler) resolveMikaAgent(w http.ResponseWriter, r *http.Request, works
 		writeError(w, http.StatusInternalServerError, "failed to save agent access")
 		return db.Agent{}, false, false
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit agent create")
 		return db.Agent{}, false, false
 	}
@@ -226,7 +226,7 @@ func (h *Handler) writeMikaAgentResponse(w http.ResponseWriter, r *http.Request,
 	// already committed and other clients' agent lists are stale until they
 	// hear about it.
 	if created {
-		actorType, actorID := h.resolveActor(r, uuidToString(agent.OwnerID), workspaceID)
+		actorType, actorID := h.resolveActor(r, uuidToString(agent.OwnerID.String), workspaceID)
 		h.publish(protocol.EventAgentCreated, workspaceID, actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
 	}
 
@@ -264,14 +264,14 @@ func (h *Handler) getOrCreateMikaSession(ctx context.Context, agent db.Agent, wo
 	wsUUID := parseUUID(workspaceID)
 	creatorUUID := parseUUID(userID)
 
-	tx, err := h.TxStarter.Begin(ctx)
+	tx, err := h.TxStarter.BeginTx(ctx, nil)
 	if err != nil {
 		return db.ChatSession{}, err
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
-	if _, err := tx.Exec(ctx,
+	if _, err := tx.ExecContext(ctx,
 		"SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
 		"mika-session:"+workspaceID+":"+userID,
 	); err != nil {
@@ -289,11 +289,11 @@ func (h *Handler) getOrCreateMikaSession(ctx context.Context, agent db.Agent, wo
 		AgentID:     agent.ID,
 	})
 	if err == nil {
-		if err := tx.Commit(ctx); err != nil {
+		if err := tx.Commit(); err != nil {
 			return db.ChatSession{}, err
 		}
 		return existing, nil
-	} else if !errors.Is(err, pgx.ErrNoRows) {
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		return db.ChatSession{}, err
 	}
 
@@ -311,7 +311,7 @@ func (h *Handler) getOrCreateMikaSession(ctx context.Context, agent db.Agent, wo
 	if err != nil {
 		return db.ChatSession{}, err
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return db.ChatSession{}, err
 	}
 	return created, nil

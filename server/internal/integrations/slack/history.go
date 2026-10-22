@@ -2,6 +2,7 @@ package slack
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,8 +11,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/slack-go/slack"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
@@ -38,7 +37,7 @@ const (
 type historyQueries interface {
 	GetChannelChatSessionBindingBySession(ctx context.Context, arg db.GetChannelChatSessionBindingBySessionParams) (db.ChannelChatSessionBinding, error)
 	GetChannelInstallation(ctx context.Context, arg db.GetChannelInstallationParams) (db.ChannelInstallation, error)
-	ListChannelOutboundMessageIDsForContext(ctx context.Context, arg db.ListChannelOutboundMessageIDsForContextParams) ([]string, error)
+	ListChannelOutboundMessageIDsForContext(ctx context.Context, arg db.ListChannelOutboundMessageIDsForContextParams) ([]interface{}, error)
 	ListChannelOutboundMessagesByIDs(ctx context.Context, arg db.ListChannelOutboundMessagesByIDsParams) ([]db.ChannelOutboundMessage, error)
 }
 
@@ -82,8 +81,8 @@ func NewHistory(q historyQueries, decrypt Decrypter, logger *slog.Logger) *Histo
 // the session's pinned channel and its own thread root.
 type slackTarget struct {
 	client          historyClient
-	installationID  pgtype.UUID
-	bindingID       pgtype.UUID
+	installationID  string
+	bindingID       string
 	channelID       string
 	threadRoot      string // the session's own thread (empty for a DM)
 	botUserID       string
@@ -96,13 +95,13 @@ type slackTarget struct {
 // server-derived here and never accepted from the caller — that is the security
 // boundary for `multica chat thread <id>` (the agent supplies only a
 // within-channel thread locator).
-func (h *History) resolve(ctx context.Context, chatSessionID pgtype.UUID) (slackTarget, error) {
+func (h *History) resolve(ctx context.Context, chatSessionID string) (slackTarget, error) {
 	binding, err := h.q.GetChannelChatSessionBindingBySession(ctx, db.GetChannelChatSessionBindingBySessionParams{
 		ChatSessionID: chatSessionID,
 		ChannelType:   string(TypeSlack),
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return slackTarget{}, ErrNoSlackSession
 		}
 		return slackTarget{}, fmt.Errorf("lookup slack chat binding: %w", err)
@@ -131,7 +130,7 @@ func (h *History) resolve(ctx context.Context, chatSessionID pgtype.UUID) (slack
 		botUserID:       creds.BotUserID,
 		historyStart:    binding.HistoryStartMessageID.String,
 		historyEnd:      binding.HistoryEndMessageID.String,
-		boundaryPending: binding.HistoryBoundaryPending,
+		boundaryPending: binding.HistoryBoundaryPending != 0,
 	}, nil
 }
 
@@ -139,7 +138,7 @@ func (h *History) resolve(ctx context.Context, chatSessionID pgtype.UUID) (slack
 // each thread tagged with its id + reply count. It does NOT expand thread
 // contents — it is the table of contents the agent reads to find a thread, then
 // drills into with `multica chat thread <id>`. Backs `multica chat history`.
-func (h *History) ChannelOverview(ctx context.Context, chatSessionID pgtype.UUID, opts channel.HistoryOptions) (channel.HistoryPage, error) {
+func (h *History) ChannelOverview(ctx context.Context, chatSessionID string, opts channel.HistoryOptions) (channel.HistoryPage, error) {
 	t, err := h.resolve(ctx, chatSessionID)
 	if err != nil {
 		return channel.HistoryPage{}, err
@@ -181,7 +180,7 @@ func (h *History) ChannelOverview(ctx context.Context, chatSessionID pgtype.UUID
 // thread the session is in (the agent's own thread); a non-empty id reads that
 // specific thread — but always within the session's pinned channel. A DM (no
 // threads) reads its linear conversation. Backs `multica chat thread [id]`.
-func (h *History) Thread(ctx context.Context, chatSessionID pgtype.UUID, threadID string, opts channel.HistoryOptions) (channel.HistoryPage, error) {
+func (h *History) Thread(ctx context.Context, chatSessionID string, threadID string, opts channel.HistoryOptions) (channel.HistoryPage, error) {
 	t, err := h.resolve(ctx, chatSessionID)
 	if err != nil {
 		return channel.HistoryPage{}, err
@@ -311,8 +310,12 @@ func (h *History) filterRouteGeneration(ctx context.Context, target slackTarget,
 	if len(window) == 0 {
 		return window, nil
 	}
+	encodedIDs, err := json.Marshal(ids)
+	if err != nil {
+		return nil, fmt.Errorf("encode slack outbound message ids: %w", err)
+	}
 	rows, err := h.q.ListChannelOutboundMessagesByIDs(ctx, db.ListChannelOutboundMessagesByIDsParams{
-		InstallationID: target.installationID, ChannelMessageIds: ids,
+		InstallationID: target.installationID, ChannelMessageIds: string(encodedIDs),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("load slack outbound route ledger: %w", err)
@@ -349,7 +352,7 @@ func (h *History) filterRouteGeneration(ctx context.Context, target slackTarget,
 	return result, nil
 }
 
-func (h *History) allowedBotMessages(ctx context.Context, chatSessionID pgtype.UUID, target slackTarget, opts channel.HistoryOptions, raw []slack.Message) (map[string]struct{}, error) {
+func (h *History) allowedBotMessages(ctx context.Context, chatSessionID string, target slackTarget, opts channel.HistoryOptions, raw []slack.Message) (map[string]struct{}, error) {
 	if opts.ContextRevision <= 1 {
 		return nil, nil
 	}
@@ -362,20 +365,28 @@ func (h *History) allowedBotMessages(ctx context.Context, chatSessionID pgtype.U
 	if len(candidates) == 0 {
 		return map[string]struct{}{}, nil
 	}
+	encodedCandidates, err := json.Marshal(candidates)
+	if err != nil {
+		return nil, fmt.Errorf("encode slack reply candidates: %w", err)
+	}
 	ids, err := h.q.ListChannelOutboundMessageIDsForContext(ctx, db.ListChannelOutboundMessageIDsForContextParams{
 		ChatSessionID:          chatSessionID,
-		ChannelType:            pgtype.Text{String: string(TypeSlack), Valid: true},
-		InstallationID:         target.installationID,
-		ChannelChatID:          pgtype.Text{String: target.channelID, Valid: true},
-		ChannelContextRevision: pgtype.Int8{Int64: opts.ContextRevision, Valid: true},
-		CandidateMessageIds:    candidates,
+		ChannelType:            nullText(string(TypeSlack)),
+		InstallationID:         nullText(target.installationID),
+		ChannelChatID:          nullText(target.channelID),
+		ChannelContextRevision: sql.NullInt64{Int64: opts.ContextRevision, Valid: true},
+		CandidateMessageIds:    string(encodedCandidates),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("load slack reply provenance: %w", err)
 	}
 	allowed := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
-		allowed[id] = struct{}{}
+		s, ok := id.(string)
+		if !ok || s == "" {
+			continue
+		}
+		allowed[s] = struct{}{}
 	}
 	return allowed, nil
 }
@@ -433,7 +444,7 @@ func historyTarget(b db.ChannelChatSessionBinding) (channelID, threadRoot string
 	channelID = b.ChannelChatID
 	if len(b.Config) > 0 {
 		var cfg slackBindingConfig
-		if err := json.Unmarshal(b.Config, &cfg); err == nil && cfg.ChannelID != "" {
+		if err := json.Unmarshal([]byte(b.Config), &cfg); err == nil && cfg.ChannelID != "" {
 			channelID = cfg.ChannelID
 		}
 	}

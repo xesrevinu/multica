@@ -163,7 +163,7 @@ func TestClaimTaskChatInputLoadFailureSkipsResumeQueries(t *testing.T) {
 	claimMetrics := obsmetrics.NewBusinessMetrics()
 	h := *testHandler
 	h.Metrics = claimMetrics
-	h.Queries = db.New(&failChatInputQueryDB{delegate: testPool})
+	h.Queries = db.New(&failChatInputQueryDB{delegate: testSQLite})
 
 	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/claim", nil,
 		testWorkspaceID, daemonID)

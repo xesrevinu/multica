@@ -126,7 +126,7 @@ func TestMigration467BackfillsTriggerCreatorFromAutopilot(t *testing.T) {
 		legacyWebhookID, filledType, filledID)
 	w = postWebhook(t, token, map[string]any{"ref": "refs/heads/main"}, map[string]string{"X-GitHub-Event": "push"})
 	delivery := processQueuedWebhookDelivery(t, requireAcceptedWebhookResponse(t, w))
-	run, err := testHandler.Queries.GetAutopilotRun(ctx, delivery.AutopilotRunID)
+	run, err := testHandler.Queries.GetAutopilotRun(ctx, delivery.AutopilotRunID.String)
 	if err != nil {
 		t.Fatalf("load run: %v", err)
 	}

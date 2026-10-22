@@ -7,31 +7,37 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const listConversationRootOwners = `-- name: ListConversationRootOwners :many
-SELECT DISTINCT ON (agent_id) agent_id, squad_id
-FROM agent_task_queue
-WHERE issue_id = $1 AND trigger_comment_id = $2 AND agent_id IS NOT NULL
-ORDER BY agent_id, (squad_id IS NOT NULL) DESC, created_at DESC, id DESC
+SELECT agent_id, squad_id
+FROM (
+    SELECT agent_id, squad_id,
+           row_number() OVER (
+               PARTITION BY agent_id
+               ORDER BY (squad_id IS NOT NULL) DESC, created_at DESC, id DESC
+           ) AS rn
+    FROM agent_task_queue
+    WHERE issue_id = ?1 AND trigger_comment_id = ?2 AND agent_id IS NOT NULL
+)
+WHERE rn = 1
 `
 
 type ListConversationRootOwnersParams struct {
-	IssueID          pgtype.UUID `json:"issue_id"`
-	TriggerCommentID pgtype.UUID `json:"trigger_comment_id"`
+	IssueID          sql.NullString `json:"issue_id"`
+	TriggerCommentID sql.NullString `json:"trigger_comment_id"`
 }
 
 type ListConversationRootOwnersRow struct {
-	AgentID pgtype.UUID `json:"agent_id"`
-	SquadID pgtype.UUID `json:"squad_id"`
+	AgentID string         `json:"agent_id"`
+	SquadID sql.NullString `json:"squad_id"`
 }
 
 // Preserve the newest non-null squad per agent, including terminal tasks.
 // Routing does not need execution context, results, or other issue threads.
 func (q *Queries) ListConversationRootOwners(ctx context.Context, arg ListConversationRootOwnersParams) ([]ListConversationRootOwnersRow, error) {
-	rows, err := q.db.Query(ctx, listConversationRootOwners, arg.IssueID, arg.TriggerCommentID)
+	rows, err := q.db.QueryContext(ctx, listConversationRootOwners, arg.IssueID, arg.TriggerCommentID)
 	if err != nil {
 		return nil, err
 	}
@@ -43,6 +49,9 @@ func (q *Queries) ListConversationRootOwners(ctx context.Context, arg ListConver
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

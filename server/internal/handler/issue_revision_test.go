@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -12,7 +13,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -26,7 +26,7 @@ type failIssueAttachmentLinkTxStarter struct {
 	inner txStarter
 }
 
-func (s failIssueAttachmentLinkTxStarter) Begin(ctx context.Context) (pgx.Tx, error) {
+func (s failIssueAttachmentLinkTxStarter) BeginTx(ctx context.Context, _ *sql.TxOptions) (*sql.Tx, error) {
 	tx, err := s.inner.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -35,7 +35,7 @@ func (s failIssueAttachmentLinkTxStarter) Begin(ctx context.Context) (pgx.Tx, er
 }
 
 type failIssueAttachmentLinkTx struct {
-	pgx.Tx
+	*sql.Tx
 }
 
 func (tx *failIssueAttachmentLinkTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
@@ -57,7 +57,7 @@ type pauseIssueAttachmentLinkTxStarter struct {
 	release <-chan struct{}
 }
 
-func (s pauseIssueAttachmentLinkTxStarter) Begin(ctx context.Context) (pgx.Tx, error) {
+func (s pauseIssueAttachmentLinkTxStarter) BeginTx(ctx context.Context, _ *sql.TxOptions) (*sql.Tx, error) {
 	tx, err := s.inner.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -70,7 +70,8 @@ func (s pauseIssueAttachmentLinkTxStarter) Begin(ctx context.Context) (pgx.Tx, e
 }
 
 type pauseIssueAttachmentLinkTx struct {
-	pgx.Tx
+	*sql.Tx
+
 	reached chan<- struct{}
 	release <-chan struct{}
 }
@@ -810,7 +811,7 @@ func TestAuxiliaryVisibleMutationsAdvanceOwnerRevisionExactlyOnce(t *testing.T) 
 		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID)
 	})
 
-	labelParams := db.AttachLabelToIssueParams{IssueID: issueUUID, LabelID: pgtype.UUID{Bytes: labelID, Valid: true}, WorkspaceID: workspaceUUID}
+	labelParams := db.AttachLabelToIssueParams{IssueID: issueUUID, LabelID: labelID.String(), WorkspaceID: workspaceUUID}
 	attached, err := testHandler.Queries.AttachLabelToIssue(ctx, labelParams)
 	if err != nil || !attached.Changed || attached.IssueRevision != 2 {
 		t.Fatalf("attach label = (%+v, %v), want changed revision 2", attached, err)
@@ -885,21 +886,21 @@ func TestAuxiliaryVisibleMutationsAdvanceOwnerRevisionExactlyOnce(t *testing.T) 
 
 	attachmentID := uuid.New()
 	createdAttachment, err := testHandler.Queries.CreateAttachment(ctx, db.CreateAttachmentParams{
-		ID: pgtype.UUID{Bytes: attachmentID, Valid: true}, WorkspaceID: workspaceUUID,
-		IssueID: issueUUID, CommentID: commentUUID, UploaderType: "member", UploaderID: userUUID,
+		ID: attachmentID.String(), WorkspaceID: workspaceUUID,
+		IssueID: nullString(issueUUID), CommentID: nullString(commentUUID), UploaderType: "member", UploaderID: userUUID,
 		Filename: "aux.txt", Url: "/aux.txt", ContentType: "text/plain", SizeBytes: 1,
 	})
 	if err != nil || createdAttachment.IssueRevision != 6 || createdAttachment.CommentRevision != 4 {
 		t.Fatalf("create attachment = (%+v, %v), want issue/comment revisions 6/4", createdAttachment, err)
 	}
 	deletedAttachment, err := testHandler.Queries.DeleteAttachment(ctx, db.DeleteAttachmentParams{
-		ID: pgtype.UUID{Bytes: attachmentID, Valid: true}, WorkspaceID: workspaceUUID,
+		ID: attachmentID.String(), WorkspaceID: workspaceUUID,
 	})
 	if err != nil || !deletedAttachment.Changed || deletedAttachment.IssueRevision != 7 || deletedAttachment.CommentRevision != 5 {
 		t.Fatalf("delete attachment = (%+v, %v), want issue/comment revisions 7/5", deletedAttachment, err)
 	}
 
-	unboundAttachmentID := pgtype.UUID{Bytes: uuid.New(), Valid: true}
+	unboundAttachmentID := uuid.NewString()
 	if _, err := testHandler.Queries.CreateAttachment(ctx, db.CreateAttachmentParams{
 		ID: unboundAttachmentID, WorkspaceID: workspaceUUID,
 		UploaderType: "member", UploaderID: userUUID,
@@ -908,28 +909,28 @@ func TestAuxiliaryVisibleMutationsAdvanceOwnerRevisionExactlyOnce(t *testing.T) 
 		t.Fatalf("create unbound attachment: %v", err)
 	}
 	linkedAttachment, err := testHandler.Queries.LinkAttachmentsToIssue(ctx, db.LinkAttachmentsToIssueParams{
-		IssueID: issueUUID, WorkspaceID: workspaceUUID, AttachmentIds: []pgtype.UUID{unboundAttachmentID}, BumpRevision: true,
+		IssueID: nullString(issueUUID), WorkspaceID: workspaceUUID, AttachmentIds: []string{unboundAttachmentID}, BumpRevision: true,
 	})
 	if err != nil || linkedAttachment.LinkedCount != 1 || linkedAttachment.IssueRevision != 8 {
 		t.Fatalf("link attachment = (%+v, %v), want one link and issue revision 8", linkedAttachment, err)
 	}
 	linkedAttachment, err = testHandler.Queries.LinkAttachmentsToIssue(ctx, db.LinkAttachmentsToIssueParams{
-		IssueID: issueUUID, WorkspaceID: workspaceUUID, AttachmentIds: []pgtype.UUID{unboundAttachmentID}, BumpRevision: true,
+		IssueID: nullString(issueUUID), WorkspaceID: workspaceUUID, AttachmentIds: []string{unboundAttachmentID}, BumpRevision: true,
 	})
 	if err != nil || linkedAttachment.LinkedCount != 0 || linkedAttachment.IssueRevision != 0 {
 		t.Fatalf("duplicate attachment link = (%+v, %v), want no-op", linkedAttachment, err)
 	}
 
 	metadataParams := db.SetIssueMetadataKeyParams{
-		Key: "revision-test", Value: []byte(`"value"`), ID: issueUUID, WorkspaceID: workspaceUUID,
+		Key: nullString("revision-test"), Value: []byte(`"value"`), ID: issueUUID, WorkspaceID: workspaceUUID,
 	}
 	metadataIssue, err := testHandler.Queries.SetIssueMetadataKey(ctx, metadataParams)
 	if err != nil || metadataIssue.Revision != 9 {
 		t.Fatalf("set metadata = (%+v, %v), want revision 9", metadataIssue, err)
 	}
 	_, err = testHandler.Queries.SetIssueMetadataKey(ctx, metadataParams)
-	if !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("duplicate metadata set error = %v, want pgx.ErrNoRows", err)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("duplicate metadata set error = %v, want sql.ErrNoRows", err)
 	}
 	currentMetadataIssue, err := testHandler.Queries.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{
 		ID: issueUUID, WorkspaceID: workspaceUUID,
@@ -945,7 +946,7 @@ func TestAuxiliaryVisibleMutationsAdvanceOwnerRevisionExactlyOnce(t *testing.T) 
 	}
 
 	propertyParams := db.SetIssuePropertyValueParams{
-		Key: "revision-test", Value: []byte(`42`), ID: issueUUID, WorkspaceID: workspaceUUID,
+		Key: nullString("revision-test"), Value: []byte(`42`), ID: issueUUID, WorkspaceID: workspaceUUID,
 	}
 	propertyIssue, err := testHandler.Queries.SetIssuePropertyValue(ctx, propertyParams)
 	if err != nil || propertyIssue.Revision != 11 {
@@ -963,13 +964,13 @@ func TestAuxiliaryVisibleMutationsAdvanceOwnerRevisionExactlyOnce(t *testing.T) 
 	}
 
 	resolved, err := testHandler.Queries.ResolveComment(ctx, db.ResolveCommentParams{
-		ID: commentUUID, ResolvedByType: pgtype.Text{String: "member", Valid: true}, ResolvedByID: userUUID,
+		ID: commentUUID, ResolvedByType: sql.NullString{String: "member", Valid: true}, ResolvedByID: nullString(userUUID),
 	})
 	if err != nil || resolved.Revision != 6 {
 		t.Fatalf("resolve comment = (%+v, %v), want revision 6", resolved, err)
 	}
 	resolved, err = testHandler.Queries.ResolveComment(ctx, db.ResolveCommentParams{
-		ID: commentUUID, ResolvedByType: pgtype.Text{String: "member", Valid: true}, ResolvedByID: userUUID,
+		ID: commentUUID, ResolvedByType: sql.NullString{String: "member", Valid: true}, ResolvedByID: nullString(userUUID),
 	})
 	if err != nil || resolved.Revision != 6 {
 		t.Fatalf("duplicate resolve = (%+v, %v), want unchanged revision 6", resolved, err)

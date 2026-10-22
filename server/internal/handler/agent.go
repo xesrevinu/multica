@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,7 +19,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/attribution"
 	"github.com/multica-ai/multica/server/internal/logger"
@@ -118,14 +118,14 @@ type AgentResponse struct {
 	ThinkingLevel string `json:"thinking_level"`
 	// ServiceTier is the runtime-native Codex execution tier persisted for
 	// this agent (empty = inherit local Codex configuration).
-	ServiceTier string `json:"service_tier"`
-	OwnerID                          *string                `json:"owner_id"`
-	Skills                           []AgentSkillSummary    `json:"skills"`
-	DisabledRuntimeSkills            []DisabledRuntimeSkill `json:"disabled_runtime_skills"`
-	CreatedAt                        string                 `json:"created_at"`
-	UpdatedAt                        string                 `json:"updated_at"`
-	ArchivedAt                       *string                `json:"archived_at"`
-	ArchivedBy                       *string                `json:"archived_by"`
+	ServiceTier           string                 `json:"service_tier"`
+	OwnerID               *string                `json:"owner_id"`
+	Skills                []AgentSkillSummary    `json:"skills"`
+	DisabledRuntimeSkills []DisabledRuntimeSkill `json:"disabled_runtime_skills"`
+	CreatedAt             string                 `json:"created_at"`
+	UpdatedAt             string                 `json:"updated_at"`
+	ArchivedAt            *string                `json:"archived_at"`
+	ArchivedBy            *string                `json:"archived_by"`
 }
 
 // runtimeConfigGatewayTokenMask is the placeholder the API substitutes for
@@ -139,8 +139,8 @@ const runtimeConfigGatewayTokenMask = "***"
 
 func (h *Handler) agentToResponse(a db.Agent) AgentResponse {
 	var rc any
-	if a.RuntimeConfig != nil {
-		json.Unmarshal(a.RuntimeConfig, &rc)
+	if a.RuntimeConfig != "" {
+		json.Unmarshal([]byte(a.RuntimeConfig), &rc)
 	}
 	if rc == nil {
 		rc = map[string]any{}
@@ -153,17 +153,17 @@ func (h *Handler) agentToResponse(a db.Agent) AgentResponse {
 	// the caller must hit GET /api/agents/{id}/env (agent owner or
 	// workspace owner/admin, audited).
 	envKeyCount := 0
-	if a.CustomEnv != nil {
+	if a.CustomEnv != "" {
 		var customEnv map[string]string
-		if err := json.Unmarshal(a.CustomEnv, &customEnv); err != nil {
+		if err := json.Unmarshal([]byte(a.CustomEnv), &customEnv); err != nil {
 			slog.Warn("failed to unmarshal agent custom_env", "agent_id", uuidToString(a.ID), "error", err)
 		}
 		envKeyCount = len(customEnv)
 	}
 
 	var customArgs []string
-	if a.CustomArgs != nil {
-		if err := json.Unmarshal(a.CustomArgs, &customArgs); err != nil {
+	if a.CustomArgs != "" {
+		if err := json.Unmarshal([]byte(a.CustomArgs), &customArgs); err != nil {
 			slog.Warn("failed to unmarshal agent custom_args", "agent_id", uuidToString(a.ID), "error", err)
 		}
 	}
@@ -172,51 +172,51 @@ func (h *Handler) agentToResponse(a db.Agent) AgentResponse {
 	}
 
 	var mcpConfig json.RawMessage
-	if a.McpConfig != nil {
-		mcpConfig = json.RawMessage(a.McpConfig)
+	if a.McpConfig.Valid {
+		mcpConfig = json.RawMessage(a.McpConfig.String)
 	}
 
 	conversationStarters := []AgentConversationStarter{}
 	if len(a.ConversationStarters) > 0 {
-		if err := json.Unmarshal(a.ConversationStarters, &conversationStarters); err != nil {
+		if err := json.Unmarshal([]byte(a.ConversationStarters), &conversationStarters); err != nil {
 			slog.Warn("failed to unmarshal agent conversation_starters", "agent_id", uuidToString(a.ID), "error", err)
 			conversationStarters = []AgentConversationStarter{}
 		}
 	}
 
 	return AgentResponse{
-		ID:                       uuidToString(a.ID),
-		WorkspaceID:              uuidToString(a.WorkspaceID),
-		RuntimeID:                uuidToString(a.RuntimeID),
-		RuntimeBound:             a.RuntimeID.Valid,
-		Name:                     a.Name,
-		Description:              a.Description,
-		Instructions:             a.Instructions,
-		ConversationStarters:     conversationStarters,
-		SystemKey:                a.SystemKey.String,
-		SystemInstructions:       systemInstructionsFor(a),
-		AvatarURL:                h.resolveAvatarURLPtr(textToPtr(a.AvatarUrl)),
-		RuntimeMode:              a.RuntimeMode,
-		RuntimeConfig:            rc,
-		CustomArgs:               customArgs,
-		McpConfig:                mcpConfig,
-		HasCustomEnv:             envKeyCount > 0,
-		CustomEnvKeyCount:        envKeyCount,
-		Visibility:               a.Visibility,
-		PermissionMode:           a.PermissionMode,
-		InvocationTargets:        []AgentInvocationTargetDTO{},
-		Status:                   a.Status,
-		MaxConcurrentTasks:       a.MaxConcurrentTasks,
-		Model:                    a.Model.String,
-		ThinkingLevel:            a.ThinkingLevel.String,
-		ServiceTier:              a.ServiceTier.String,
-		OwnerID:                  uuidToPtr(a.OwnerID),
-		Skills:                   []AgentSkillSummary{},
-		DisabledRuntimeSkills:    decodeDisabledRuntimeSkills(a.DisabledRuntimeSkills),
-		CreatedAt:                timestampToString(a.CreatedAt),
-		UpdatedAt:                timestampToString(a.UpdatedAt),
-		ArchivedAt:               timestampToPtr(a.ArchivedAt),
-		ArchivedBy:               uuidToPtr(a.ArchivedBy),
+		ID:                    uuidToString(a.ID),
+		WorkspaceID:           uuidToString(a.WorkspaceID),
+		RuntimeID:             uuidToString(a.RuntimeID.String),
+		RuntimeBound:          a.RuntimeID.Valid,
+		Name:                  a.Name,
+		Description:           a.Description,
+		Instructions:          a.Instructions,
+		ConversationStarters:  conversationStarters,
+		SystemKey:             a.SystemKey.String,
+		SystemInstructions:    systemInstructionsFor(a),
+		AvatarURL:             h.resolveAvatarURLPtr(textToPtr(a.AvatarUrl)),
+		RuntimeMode:           a.RuntimeMode,
+		RuntimeConfig:         rc,
+		CustomArgs:            customArgs,
+		McpConfig:             mcpConfig,
+		HasCustomEnv:          envKeyCount > 0,
+		CustomEnvKeyCount:     envKeyCount,
+		Visibility:            a.Visibility,
+		PermissionMode:        a.PermissionMode,
+		InvocationTargets:     []AgentInvocationTargetDTO{},
+		Status:                a.Status,
+		MaxConcurrentTasks:    int32(a.MaxConcurrentTasks),
+		Model:                 a.Model.String,
+		ThinkingLevel:         a.ThinkingLevel.String,
+		ServiceTier:           a.ServiceTier.String,
+		OwnerID:               uuidToPtr(a.OwnerID),
+		Skills:                []AgentSkillSummary{},
+		DisabledRuntimeSkills: decodeDisabledRuntimeSkills([]byte(a.DisabledRuntimeSkills)),
+		CreatedAt:             timestampToString(a.CreatedAt),
+		UpdatedAt:             timestampToString(a.UpdatedAt),
+		ArchivedAt:            timestampToPtr(a.ArchivedAt),
+		ArchivedBy:            uuidToPtr(a.ArchivedBy),
 	}
 }
 
@@ -609,19 +609,19 @@ func taskAttributionBase(t db.AgentTaskQueue) *TaskAttribution {
 	attr := &TaskAttribution{
 		Source:              src.String(), // empty (pre-migration) → "unattributed"
 		Precise:             src.Precise(),
-		RuleVersionID:       uuidToString(t.RuleVersionID),
-		DelegatedFromTaskID: uuidToString(t.DelegatedFromTaskID),
-		RetryOfTaskID:       uuidToString(t.RetryOfTaskID),
-		RerunOfTaskID:       uuidToString(t.RerunOfTaskID),
+		RuleVersionID:       uuidToString(t.RuleVersionID.String),
+		DelegatedFromTaskID: uuidToString(t.DelegatedFromTaskID.String),
+		RetryOfTaskID:       uuidToString(t.RetryOfTaskID.String),
+		RerunOfTaskID:       uuidToString(t.RerunOfTaskID.String),
 	}
 	if t.AccountableUserID.Valid {
-		attr.Initiator = &AttributionUser{ID: uuidToString(t.AccountableUserID)}
+		attr.Initiator = &AttributionUser{ID: uuidToString(t.AccountableUserID.String)}
 	}
 	if t.OriginatorUserID.Valid {
-		attr.Originator = &AttributionUser{ID: uuidToString(t.OriginatorUserID)}
+		attr.Originator = &AttributionUser{ID: uuidToString(t.OriginatorUserID.String)}
 	}
 	if t.TriggerEvidenceKind.Valid && t.TriggerEvidenceKind.String != "" {
-		attr.Evidence = &TaskEvidence{Kind: t.TriggerEvidenceKind.String, RefID: uuidToString(t.TriggerEvidenceRefID)}
+		attr.Evidence = &TaskEvidence{Kind: t.TriggerEvidenceKind.String, RefID: uuidToString(t.TriggerEvidenceRefID.String)}
 	}
 	return attr
 }
@@ -632,7 +632,7 @@ func taskAttributionBase(t db.AgentTaskQueue) *TaskAttribution {
 // raw user ids already present are left as-is — names are display sugar, not gating.
 func (h *Handler) hydrateTaskAttributions(ctx context.Context, attrs []*TaskAttribution) {
 	seen := make(map[string]struct{})
-	var ids []pgtype.UUID
+	var ids []string
 	add := func(ref *AttributionUser) {
 		if ref == nil || ref.ID == "" {
 			return
@@ -793,10 +793,10 @@ func taskToResponse(t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
 	var cancellation struct {
 		TaskID string `json:"comment_change_cancelled_task_id"`
 	}
-	_ = json.Unmarshal(t.Context, &cancellation)
+	_ = json.Unmarshal([]byte(t.Context.String), &cancellation)
 	var result any
-	if t.Result != nil {
-		json.Unmarshal(t.Result, &result)
+	if t.Result.Valid {
+		json.Unmarshal([]byte(t.Result.String), &result)
 	}
 	failureReason := ""
 	if t.FailureReason.Valid {
@@ -818,7 +818,7 @@ func taskToResponse(t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
 		ID         string `json:"wakeup_id"`
 		SystemRule string `json:"wakeup_system"`
 	}
-	_ = json.Unmarshal(t.Context, &wakeupContext)
+	_ = json.Unmarshal([]byte(t.Context.String), &wakeupContext)
 	handoffNote := ""
 	if t.HandoffNote.Valid {
 		handoffNote = t.HandoffNote.String
@@ -830,11 +830,11 @@ func taskToResponse(t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
 
 		ID:                     uuidToString(t.ID),
 		AgentID:                uuidToString(t.AgentID),
-		RuntimeID:              uuidToString(t.RuntimeID),
-		IssueID:                uuidToString(t.IssueID),
+		RuntimeID:              uuidToString(t.RuntimeID.String),
+		IssueID:                uuidToString(t.IssueID.String),
 		WorkspaceID:            workspaceID,
 		Status:                 t.Status,
-		Priority:               t.Priority,
+		Priority:               int32(t.Priority),
 		DispatchedAt:           timestampToPtr(t.DispatchedAt),
 		StartedAt:              timestampToPtr(t.StartedAt),
 		CompletedAt:            timestampToPtr(t.CompletedAt),
@@ -842,27 +842,27 @@ func taskToResponse(t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
 		Error:                  textToPtr(t.Error),
 		FailureReason:          failureReason,
 		BranchName:             branchName,
-		Attempt:                t.Attempt,
-		MaxAttempts:            t.MaxAttempts,
+		Attempt:                int32(t.Attempt),
+		MaxAttempts:            int32(t.MaxAttempts),
 		ParentTaskID:           uuidToPtr(t.ParentTaskID),
-		IsLeaderTask:           t.IsLeaderTask,
+		IsLeaderTask:           int64ToBool(t.IsLeaderTask),
 		CreatedAt:              timestampToString(t.CreatedAt),
 		TriggerCommentID:       uuidToPtr(t.TriggerCommentID),
 		CoalescedCommentIDs:    uuidsToStrings(t.CoalescedCommentIds),
-		DeliveredCommentIDs:    uuidStringsOrEmpty(t.DeliveredCommentIds),
+		DeliveredCommentIDs:    uuidStringsOrEmpty(parseIDList(t.DeliveredCommentIds)),
 		TriggerSummary:         textToPtr(t.TriggerSummary),
 		HandoffNote:            handoffNote,
 		WakeupID:               wakeupContext.ID,
 		WakeupSystemRule:       wakeupContext.SystemRule,
-		WakeupJoined:           service.JoinedWakeupNotes(t.Context),
+		WakeupJoined:           service.JoinedWakeupNotes([]byte(t.Context.String)),
 		WorkDir:                workDir,
 		RelativeWorkDir:        relativeWorkDir(workDir, workspaceID, uuidToString(t.ID)),
 		DurableWorkDir:         durableWorkDir,
 		RelativeDurableWorkDir: relativeWorkDir(durableWorkDir, "", ""),
 		// Surface the stable task source. A successful quick-create gains an
 		// issue link for navigation but retains its quick_create kind.
-		ChatSessionID:  uuidToString(t.ChatSessionID),
-		AutopilotRunID: uuidToString(t.AutopilotRunID),
+		ChatSessionID:  uuidToString(t.ChatSessionID.String),
+		AutopilotRunID: uuidToString(t.AutopilotRunID.String),
 		Kind:           computeTaskKind(t),
 		// Attribution labels + evidence + lineage + raw user ids (pure). Names are
 		// hydrated separately on user-facing surfaces (MUL-4302 §9).
@@ -876,7 +876,7 @@ func taskCancellationActorToResponse(t db.AgentTaskQueue) *TaskCancellationActor
 	}
 	actor := &TaskCancellationActor{
 		Type: t.CancelledByType.String,
-		ID:   uuidToString(t.CancelledByID),
+		ID:   uuidToString(t.CancelledByID.String),
 	}
 	if t.CancelledByName.Valid {
 		actor.Name = t.CancelledByName.String
@@ -1026,24 +1026,24 @@ func basename(p string) string {
 // because completion links the newly created issue back onto the task. The
 // remaining issue tasks split into comment-triggered and direct runs.
 func computeTaskKind(t db.AgentTaskQueue) string {
-	if uuidToString(t.ChatSessionID) != "" {
+	if uuidToString(t.ChatSessionID.String) != "" {
 		return "chat"
 	}
-	if uuidToString(t.AutopilotRunID) != "" {
+	if uuidToString(t.AutopilotRunID.String) != "" {
 		return "autopilot"
 	}
 	var contextKind struct {
 		Type string `json:"type"`
 	}
-	if json.Unmarshal(t.Context, &contextKind) == nil && contextKind.Type == service.QuickCreateContextType {
+	if json.Unmarshal([]byte(t.Context.String), &contextKind) == nil && contextKind.Type == service.QuickCreateContextType {
 		return "quick_create"
 	}
 	// Preserve the historical classification for issue-less rows from before
 	// quick-create stored a typed context.
-	if uuidToString(t.IssueID) == "" {
+	if uuidToString(t.IssueID.String) == "" {
 		return "quick_create"
 	}
-	if uuidToString(t.TriggerCommentID) != "" {
+	if uuidToString(t.TriggerCommentID.String) != "" {
 		return "comment"
 	}
 	return "direct"
@@ -1061,12 +1061,12 @@ func (h *Handler) loadAgentRuntimeAvailability(ctx context.Context, agents []db.
 		return map[string]string{}, nil
 	}
 
-	runtimeIDs := make([]pgtype.UUID, 0, len(agents))
+	runtimeIDs := make([]string, 0, len(agents))
 	for _, agent := range agents {
 		// Archived presence always resolves to "archived", so its runtime state
 		// is neither user-visible nor a reason for clients to keep polling.
 		if !agent.ArchivedAt.Valid && agent.RuntimeID.Valid {
-			runtimeIDs = append(runtimeIDs, agent.RuntimeID)
+			runtimeIDs = append(runtimeIDs, agent.RuntimeID.String)
 		}
 	}
 	result := make(map[string]string, len(runtimeIDs))
@@ -1092,7 +1092,7 @@ func (h *Handler) loadAgentRuntimeAvailability(ctx context.Context, agents []db.
 		// owner/public rows to regular members. Keep the coarse bridge for the
 		// rows that the viewer's runtime list cannot carry.
 		if runtime.Visibility == "public" ||
-			(runtime.OwnerID.Valid && uuidToString(runtime.OwnerID) == viewerID) {
+			(runtime.OwnerID.Valid && uuidToString(runtime.OwnerID.String) == viewerID) {
 			continue
 		}
 		result[uuidToString(runtime.ID)] = deriveAgentRuntimeAvailability(runtime, now)
@@ -1101,8 +1101,8 @@ func (h *Handler) loadAgentRuntimeAvailability(ctx context.Context, agents []db.
 }
 
 func deriveAgentRuntimeAvailability(runtime db.AgentRuntime, now time.Time) string {
-	status := pgtype.Text{String: runtime.Status, Valid: runtime.Status != ""}
-	return deriveRuntimeAvailability(status, runtime.LastSeenAt, now)
+	status := sql.NullString{String: runtime.Status, Valid: runtime.Status != ""}
+	return deriveRuntimeAvailability(status, runtime.LastSeenAt.String, now)
 }
 
 func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
@@ -1143,7 +1143,7 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 			ID:          uuidToString(row.ID),
 			Name:        row.Name,
 			Description: row.Description,
-			Enabled:     row.Enabled,
+			Enabled:     int64ToBool(row.Enabled),
 		})
 	}
 
@@ -1158,7 +1158,7 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
-	alwaysRedact := workspaceAlwaysRedactSecrets(ws.Settings)
+	alwaysRedact := workspaceAlwaysRedactSecrets([]byte(ws.Settings))
 
 	// Resolve the request actor once. Agents bypass the view gate to preserve
 	// A2A collaboration; members see a private agent only when they own it or
@@ -1254,7 +1254,7 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
-	alwaysRedact := workspaceAlwaysRedactSecrets(ws.Settings)
+	alwaysRedact := workspaceAlwaysRedactSecrets([]byte(ws.Settings))
 	// Agent actors NEVER see mcp_config (see ListAgents for the rationale).
 	if actorType == "agent" || alwaysRedact {
 		redactMcpConfig(&resp)
@@ -1514,34 +1514,34 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start agent create transaction")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	created, err := qtx.CreateAgent(r.Context(), db.CreateAgentParams{
-		WorkspaceID:              wsUUID,
-		Name:                     req.Name,
-		Description:              req.Description,
-		Instructions:             req.Instructions,
-		AvatarUrl:                avatarURL,
-		RuntimeMode:              runtime.RuntimeMode,
-		RuntimeConfig:            rc,
-		RuntimeID:                runtime.ID,
-		Visibility:               perm.legacyVisibility(),
-		PermissionMode:           perm.mode,
-		MaxConcurrentTasks:       req.MaxConcurrentTasks,
-		OwnerID:                  parseUUID(ownerID),
-		CustomEnv:                ce,
-		CustomArgs:               ca,
-		McpConfig:                mc,
-		Model:                    pgtype.Text{String: req.Model, Valid: req.Model != ""},
-		ThinkingLevel:            pgtype.Text{String: req.ThinkingLevel, Valid: req.ThinkingLevel != ""},
-		ServiceTier:              pgtype.Text{String: req.ServiceTier, Valid: req.ServiceTier != ""},
-		ConversationStarters:     sp,
+		WorkspaceID:          wsUUID,
+		Name:                 req.Name,
+		Description:          req.Description,
+		Instructions:         req.Instructions,
+		AvatarUrl:            avatarURL,
+		RuntimeMode:          runtime.RuntimeMode,
+		RuntimeConfig:        string(rc),
+		RuntimeID:            nullString(runtime.ID),
+		Visibility:           perm.legacyVisibility(),
+		PermissionMode:       perm.mode,
+		MaxConcurrentTasks:   int64(req.MaxConcurrentTasks),
+		OwnerID:              nullString(parseUUID(ownerID)),
+		CustomEnv:            string(ce),
+		CustomArgs:           string(ca),
+		McpConfig:            nullString(string(mc)),
+		Model:                sql.NullString{String: req.Model, Valid: req.Model != ""},
+		ThinkingLevel:        sql.NullString{String: req.ThinkingLevel, Valid: req.ThinkingLevel != ""},
+		ServiceTier:          sql.NullString{String: req.ServiceTier, Valid: req.ServiceTier != ""},
+		ConversationStarters: sp,
 	})
 	if err != nil {
 		// Unique constraint on (workspace_id, name) — return a clear conflict error
@@ -1568,7 +1568,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit agent create")
 		return
 	}
@@ -1680,7 +1680,7 @@ func canViewAgentSecrets(agent db.Agent, userID string, memberRole string) bool 
 	if roleAllowed(memberRole, "owner", "admin") {
 		return true
 	}
-	return uuidToString(agent.OwnerID) == userID
+	return uuidToString(agent.OwnerID.String) == userID
 }
 
 // broadcastAgentResponse strips secret-bearing fields from an
@@ -1692,7 +1692,6 @@ func canViewAgentSecrets(agent db.Agent, userID string, memberRole string) bool 
 // redaction in ListAgents / GetAgent. The caller still receives the
 // canonical form in the HTTP response; only the broadcast copy is
 // redacted.
-//
 func broadcastAgentResponse(resp AgentResponse) AgentResponse {
 	out := resp
 	redactMcpConfig(&out)
@@ -1739,7 +1738,7 @@ func (h *Handler) canManageAgent(w http.ResponseWriter, r *http.Request, agent d
 		return false
 	}
 	isAdmin := roleAllowed(member.Role, "owner", "admin")
-	isAgentOwner := uuidToString(agent.OwnerID) == requestUserID(r)
+	isAgentOwner := uuidToString(agent.OwnerID.String) == requestUserID(r)
 	if !isAdmin && !isAgentOwner {
 		writeError(w, http.StatusForbidden, "only the agent owner can manage this agent")
 		return false
@@ -1781,17 +1780,17 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		ID: existing.ID,
 	}
 	if req.Name != nil {
-		params.Name = pgtype.Text{String: *req.Name, Valid: true}
+		params.Name = sql.NullString{String: *req.Name, Valid: true}
 	}
 	if req.Description != nil {
 		if utf8.RuneCountInString(*req.Description) > maxAgentDescriptionLength {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("description must be %d characters or fewer", maxAgentDescriptionLength))
 			return
 		}
-		params.Description = pgtype.Text{String: *req.Description, Valid: true}
+		params.Description = sql.NullString{String: *req.Description, Valid: true}
 	}
 	if req.Instructions != nil {
-		params.Instructions = pgtype.Text{String: *req.Instructions, Valid: true}
+		params.Instructions = sql.NullString{String: *req.Instructions, Valid: true}
 	}
 	if req.ConversationStarters != nil {
 		conversationStarters, err := normaliseAgentConversationStarters(*req.ConversationStarters)
@@ -1800,32 +1799,32 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		encoded, _ := json.Marshal(conversationStarters)
-		params.ConversationStarters = encoded
+		params.ConversationStarters = nullString(string(encoded))
 	}
 	if req.AvatarURL != nil {
 		avatarURL, ok := h.acceptAvatarURL(w, r, *req.AvatarURL, existing.AvatarUrl.String)
 		if !ok {
 			return
 		}
-		params.AvatarUrl = pgtype.Text{String: avatarURL, Valid: true}
+		params.AvatarUrl = sql.NullString{String: avatarURL, Valid: true}
 	}
 	if req.RuntimeConfig != nil {
 		// Restore the persisted gateway token when the request submitted the
 		// public mask sentinel. Without this, a UI that GETs the agent and
 		// PATCHes the same payload back round-trips "***" into the database
 		// and silently destroys the real secret (issue #3260).
-		preserveMaskedGatewayToken(req.RuntimeConfig, existing.RuntimeConfig)
+		preserveMaskedGatewayToken(req.RuntimeConfig, []byte(existing.RuntimeConfig))
 		rc, _ := json.Marshal(req.RuntimeConfig)
-		params.RuntimeConfig = rc
+		params.RuntimeConfig = nullString(string(rc))
 	}
 	if req.CustomArgs != nil {
 		ca, _ := json.Marshal(*req.CustomArgs)
-		params.CustomArgs = ca
+		params.CustomArgs = nullString(string(ca))
 	}
 	rawMcpConfig, hasMcpConfig := rawFields["mcp_config"]
 	shouldClearMcpConfig := hasMcpConfig && bytes.Equal(bytes.TrimSpace(rawMcpConfig), []byte("null"))
 	if hasMcpConfig && !shouldClearMcpConfig {
-		params.McpConfig = append([]byte(nil), rawMcpConfig...)
+		params.McpConfig = nullString(string(append([]byte(nil), rawMcpConfig...)))
 	}
 
 	// Resolve the runtime that will be in force after this update so the
@@ -1858,9 +1857,9 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, "this runtime is private; only its owner can move agents onto it")
 			return
 		}
-		params.RuntimeID = runtime.ID
-		params.RuntimeMode = pgtype.Text{String: runtime.RuntimeMode, Valid: true}
-		targetRuntimeID = runtime.ID
+		params.RuntimeID = nullString(runtime.ID)
+		params.RuntimeMode = sql.NullString{String: runtime.RuntimeMode, Valid: true}
+		targetRuntimeID = nullString(runtime.ID)
 		targetProvider = runtime.Provider
 	}
 	// Invocation permission (MUL-3963). OWNER-ONLY write: access is the one
@@ -1878,7 +1877,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	replacePermissionTargets := false
 	var resolvedPerm resolvedPermission
 	if permissionTouched {
-		isAgentOwner := uuidToString(existing.OwnerID) == requestUserID(r)
+		isAgentOwner := uuidToString(existing.OwnerID.String) == requestUserID(r)
 		if !isAgentOwner {
 			changed, permErr := h.permissionInputChangesAgent(r.Context(), existing, req, hasPermissionMode, hasTargets)
 			if permErr != nil {
@@ -1903,29 +1902,29 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			}
 			resolvedPerm = perm
 			replacePermissionTargets = true
-			params.PermissionMode = pgtype.Text{String: perm.mode, Valid: true}
-			params.Visibility = pgtype.Text{String: perm.legacyVisibility(), Valid: true}
+			params.PermissionMode = sql.NullString{String: perm.mode, Valid: true}
+			params.Visibility = sql.NullString{String: perm.legacyVisibility(), Valid: true}
 		}
 	}
 	if req.Status != nil {
-		params.Status = pgtype.Text{String: *req.Status, Valid: true}
+		params.Status = sql.NullString{String: *req.Status, Valid: true}
 	}
 	if req.MaxConcurrentTasks != nil {
 		if err := validateAgentMaxConcurrentTasks(*req.MaxConcurrentTasks); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		params.MaxConcurrentTasks = pgtype.Int4{Int32: *req.MaxConcurrentTasks, Valid: true}
+		params.MaxConcurrentTasks = sql.NullInt64{Int64: int64(*req.MaxConcurrentTasks), Valid: true}
 	}
 	if req.Model != nil {
-		params.Model = pgtype.Text{String: *req.Model, Valid: true}
+		params.Model = sql.NullString{String: *req.Model, Valid: true}
 	} else if req.RuntimeID != nil && existing.Model.Valid && agent.ModelKnownIncompatibleWithProvider(targetProvider, existing.Model.String) {
 		// Model is runtime-native. When moving an agent across known provider
 		// families and the caller did not choose a replacement model, clear the
 		// old value so the new runtime falls back to its own default instead of
 		// receiving an obvious foreign model ID (e.g. Claude Code -> Codex).
 		// Unknown/custom model strings are preserved by the helper.
-		params.Model = pgtype.Text{String: "", Valid: true}
+		params.Model = sql.NullString{String: "", Valid: true}
 	}
 
 	// thinking_level handling (MUL-2339). Tri-state semantics:
@@ -1949,7 +1948,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			provider := targetProvider
 			if provider == "" {
 				var ok bool
-				provider, ok = h.resolveAgentProvider(r, existing.WorkspaceID, targetRuntimeID)
+				provider, ok = h.resolveAgentProvider(r, existing.WorkspaceID, targetRuntimeID.String)
 				if !ok {
 					writeError(w, http.StatusInternalServerError, "failed to resolve runtime for thinking_level validation")
 					return
@@ -1959,7 +1958,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusBadRequest, thinkingLevelRejection(provider, value))
 				return
 			}
-			switch h.acpThinkingDecision(r.Context(), provider, targetRuntimeID) {
+			switch h.acpThinkingDecision(r.Context(), provider, targetRuntimeID.String) {
 			case acpEffortAbsent:
 				writeError(w, http.StatusBadRequest, thinkingCapabilityRejection(provider))
 				return
@@ -1967,7 +1966,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusBadRequest, thinkingCapabilityUnknownRejection(provider))
 				return
 			}
-			params.ThinkingLevel = pgtype.Text{String: value, Valid: true}
+			params.ThinkingLevel = sql.NullString{String: value, Valid: true}
 		}
 	} else if req.RuntimeID != nil && existing.ThinkingLevel.Valid && existing.ThinkingLevel.String != "" {
 		// Runtime is changing but the caller didn't touch thinking_level.
@@ -1980,7 +1979,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		provider := targetProvider
 		if provider == "" {
 			var ok bool
-			provider, ok = h.resolveAgentProvider(r, existing.WorkspaceID, targetRuntimeID)
+			provider, ok = h.resolveAgentProvider(r, existing.WorkspaceID, targetRuntimeID.String)
 			if !ok {
 				writeError(w, http.StatusInternalServerError, "failed to resolve runtime for thinking_level validation")
 				return
@@ -1990,7 +1989,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, existingThinkingLevelRejection(provider, existing.ThinkingLevel.String))
 			return
 		}
-		switch h.acpThinkingDecision(r.Context(), provider, targetRuntimeID) {
+		switch h.acpThinkingDecision(r.Context(), provider, targetRuntimeID.String) {
 		case acpEffortAbsent:
 			writeError(w, http.StatusBadRequest, existingThinkingCapabilityRejection(provider, existing.ThinkingLevel.String))
 			return
@@ -2010,7 +2009,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		provider := targetProvider
 		if provider == "" {
 			var ok bool
-			provider, ok = h.resolveAgentProvider(r, existing.WorkspaceID, targetRuntimeID)
+			provider, ok = h.resolveAgentProvider(r, existing.WorkspaceID, targetRuntimeID.String)
 			if !ok {
 				writeError(w, http.StatusInternalServerError, "failed to resolve runtime for thinking_level validation")
 				return
@@ -2031,7 +2030,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			provider := targetProvider
 			if provider == "" {
 				var ok bool
-				provider, ok = h.resolveAgentProvider(r, existing.WorkspaceID, targetRuntimeID)
+				provider, ok = h.resolveAgentProvider(r, existing.WorkspaceID, targetRuntimeID.String)
 				if !ok {
 					writeError(w, http.StatusInternalServerError, "failed to resolve runtime for service_tier validation")
 					return
@@ -2041,13 +2040,13 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusBadRequest, fmt.Sprintf("service_tier %q is not a recognised value for runtime %q", value, provider))
 				return
 			}
-			params.ServiceTier = pgtype.Text{String: value, Valid: true}
+			params.ServiceTier = sql.NullString{String: value, Valid: true}
 		}
 	} else if req.RuntimeID != nil && existing.ServiceTier.Valid && existing.ServiceTier.String != "" {
 		provider := targetProvider
 		if provider == "" {
 			var ok bool
-			provider, ok = h.resolveAgentProvider(r, existing.WorkspaceID, targetRuntimeID)
+			provider, ok = h.resolveAgentProvider(r, existing.WorkspaceID, targetRuntimeID.String)
 			if !ok {
 				writeError(w, http.StatusInternalServerError, "failed to resolve runtime for service_tier validation")
 				return
@@ -2150,7 +2149,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 // table for the given agent. agentToResponse zeros the field; mutation
 // handlers that don't refresh it would otherwise serve a misleading
 // empty array on every successful response (#3459).
-func (h *Handler) attachAgentSkills(ctx context.Context, resp *AgentResponse, agentID pgtype.UUID) error {
+func (h *Handler) attachAgentSkills(ctx context.Context, resp *AgentResponse, agentID string) error {
 	skills, err := h.Queries.ListAgentSkillSummaries(ctx, agentID)
 	if err != nil {
 		return err
@@ -2164,7 +2163,7 @@ func (h *Handler) attachAgentSkills(ctx context.Context, resp *AgentResponse, ag
 			ID:          uuidToString(s.ID),
 			Name:        s.Name,
 			Description: s.Description,
-			Enabled:     s.Enabled,
+			Enabled:     int64ToBool(s.Enabled),
 		}
 	}
 	resp.Skills = out
@@ -2175,7 +2174,7 @@ func (h *Handler) attachAgentSkills(ctx context.Context, resp *AgentResponse, ag
 // will own this agent after the in-flight update applies. Used by the
 // thinking_level validator so a runtime/model swap and a level swap
 // validated in the same request both consult the same provider.
-func (h *Handler) resolveAgentProvider(r *http.Request, workspaceID pgtype.UUID, runtimeID pgtype.UUID) (string, bool) {
+func (h *Handler) resolveAgentProvider(r *http.Request, workspaceID string, runtimeID string) (string, bool) {
 	rt, err := h.Queries.GetAgentRuntimeForWorkspace(r.Context(), db.GetAgentRuntimeForWorkspaceParams{
 		ID:          runtimeID,
 		WorkspaceID: workspaceID,
@@ -2321,7 +2320,7 @@ var ambiguousACPEffortProviders = map[string]bool{
 // turns an undiscovered catalog into a refusal, because for those the name
 // genuinely does not answer the question and guessing "yes" is what let a Hermes
 // Agent user persist a level the daemon would later drop.
-func (h *Handler) acpThinkingDecision(ctx context.Context, provider string, runtimeID pgtype.UUID) acpEffortEvidence {
+func (h *Handler) acpThinkingDecision(ctx context.Context, provider string, runtimeID string) acpEffortEvidence {
 	if !agent.UsesACPCatalogThinking(provider) {
 		return acpEffortPresent
 	}
@@ -2381,7 +2380,7 @@ func (h *Handler) ArchiveAgent(w http.ResponseWriter, r *http.Request) {
 	userID := requestUserID(r)
 	archived, err := h.Queries.ArchiveAgent(r.Context(), db.ArchiveAgentParams{
 		ID:         agent.ID,
-		ArchivedBy: parseUUID(userID),
+		ArchivedBy: nullString(parseUUID(userID)),
 	})
 	if err != nil {
 		slog.Warn("archive agent failed", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
@@ -2529,18 +2528,18 @@ func (h *Handler) ListAgentTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	// An infinite upper bound gives both first and subsequent pages an indexed
 	// tuple comparison, without an optional-cursor OR in the query plan.
-	beforeCreatedAt := pgtype.Timestamptz{InfinityModifier: pgtype.Infinity, Valid: true}
+	beforeCreatedAt := ""
 	beforeID := agent.ID
 	if raw := r.URL.Query().Get("before"); raw != "" {
 		beforeCreatedAt, beforeID = parseTranscriptCursor(raw)
-		if !beforeCreatedAt.Valid || !beforeID.Valid {
+		if !(beforeCreatedAt != "") || !(beforeID != "") {
 			writeError(w, http.StatusBadRequest, "invalid before cursor")
 			return
 		}
 	}
 	tasks, err := h.Queries.ListAgentTasks(r.Context(), db.ListAgentTasksParams{
 		AgentID: agent.ID, BeforeCreatedAt: beforeCreatedAt, BeforeID: beforeID,
-		PageLimit: int32(limit + 1),
+		PageLimit: int64(int32(limit + 1)),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list agent tasks")
@@ -2551,12 +2550,12 @@ func (h *Handler) ListAgentTasks(w http.ResponseWriter, r *http.Request) {
 	if len(tasks) > limit {
 		tasks = tasks[:limit]
 		last := tasks[len(tasks)-1]
-		nextCursor = transcriptCursor(last.CreatedAt.Time, last.ID)
+		nextCursor = transcriptCursor(parseDBTime(last.CreatedAt), last.ID)
 	}
 	resp := make([]AgentTaskResponse, len(tasks))
-	var taskIDs []pgtype.UUID
+	var taskIDs []string
 	if includeUsage {
-		taskIDs = make([]pgtype.UUID, len(tasks))
+		taskIDs = make([]string, len(tasks))
 	}
 	for i, t := range tasks {
 		resp[i] = taskToResponse(t, workspaceID)
@@ -2637,7 +2636,7 @@ func (h *Handler) ListWorkspaceWorkingAgents(w http.ResponseWriter, r *http.Requ
 
 	scope := strings.TrimSpace(r.URL.Query().Get("scope"))
 	mineRelation := strings.TrimSpace(r.URL.Query().Get("relation"))
-	var memberID pgtype.UUID
+	var memberID string
 	switch scope {
 	case "":
 		if mineRelation != "" {
@@ -2678,7 +2677,7 @@ func (h *Handler) ListWorkspaceWorkingAgents(w http.ResponseWriter, r *http.Requ
 	// count client-side. Left zero when absent, which the query treats as
 	// NULL and therefore as "no narrowing" — an older client that never
 	// sends it keeps the exact workspace-wide behaviour.
-	var parentIssueID pgtype.UUID
+	var parentIssueID string
 	if raw := strings.TrimSpace(r.URL.Query().Get("parent")); raw != "" {
 		if workType != "issue" {
 			writeError(w, http.StatusBadRequest, "parent requires type=issue")
@@ -2701,7 +2700,7 @@ func (h *Handler) ListWorkspaceWorkingAgents(w http.ResponseWriter, r *http.Requ
 			WorkspaceID:   parseUUID(workspaceID),
 			WorkType:      workType,
 			MineRelation:  mineRelation,
-			MemberID:      memberID,
+			MemberID:      nullString(memberID),
 			ParentIssueID: parentIssueID,
 		},
 	)
@@ -2727,8 +2726,8 @@ func (h *Handler) ListWorkspaceWorkingAgents(w http.ResponseWriter, r *http.Requ
 			ID:               agentID,
 			Name:             row.Name,
 			AvatarURL:        h.resolveAvatarURLPtr(textToPtr(row.AvatarUrl)),
-			RunningTaskCount: row.RunningTaskCount,
-			IssueIDs:         uuidStringsOrEmpty(row.IssueIds),
+			RunningTaskCount: int32(row.RunningTaskCount),
+			IssueIDs:         sqliteIfaceStringsOrEmpty(row.IssueIds),
 		})
 	}
 
@@ -2766,7 +2765,7 @@ func (h *Handler) GetWorkspaceAgentRunCounts(w http.ResponseWriter, r *http.Requ
 		}
 		resp = append(resp, AgentRunCount{
 			AgentID:  agentID,
-			RunCount: row.RunCount,
+			RunCount: int32(row.RunCount),
 		})
 	}
 
@@ -2805,15 +2804,16 @@ func (h *Handler) GetWorkspaceAgentActivity30d(w http.ResponseWriter, r *http.Re
 		if _, ok := allowed[agentID]; !ok {
 			continue
 		}
+		bucket, _ := sqliteIfaceString(row.Bucket)
 		resp = append(resp, AgentActivityBucket{
 			AgentID:        agentID,
-			BucketAt:       timestampToString(row.Bucket),
-			TaskCount:      row.TaskCount,
-			FailedCount:    row.FailedCount,
-			CompletedCount: row.CompletedCount,
-			CancelledCount: row.CancelledCount,
-			DurationMs:     row.DurationMs,
-			DurationCount:  row.DurationCount,
+			BucketAt:       timestampToString(bucket),
+			TaskCount:      int32(row.TaskCount),
+			FailedCount:    int32(row.FailedCount.Float64),
+			CompletedCount: int32(row.CompletedCount.Float64),
+			CancelledCount: int32(row.CancelledCount.Float64),
+			DurationMs:     sqliteIfaceFloat64(row.DurationMs),
+			DurationCount:  int32(row.DurationCount.Float64),
 		})
 	}
 
@@ -2862,4 +2862,131 @@ func (h *Handler) ListWorkspaceAgentTaskSnapshot(w http.ResponseWriter, r *http.
 	h.hydrateTaskAttributions(r.Context(), attributionsOf(resp))
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func sqliteBoolArg(b bool) string {
+	if b {
+		return "1"
+	}
+	return "0"
+}
+
+func sqliteBoolNull(b bool) sql.NullString {
+	return sql.NullString{String: sqliteBoolArg(b), Valid: true}
+}
+
+func sqliteIfaceString(v any) (string, bool) {
+	switch t := v.(type) {
+	case nil:
+		return "", false
+	case string:
+		return t, true
+	case []byte:
+		return string(t), true
+	case sql.NullString:
+		if !t.Valid {
+			return "", false
+		}
+		return t.String, true
+	default:
+		return "", false
+	}
+}
+
+func sqliteIfaceInt64(v any) int64 {
+	switch t := v.(type) {
+	case int64:
+		return t
+	case int32:
+		return int64(t)
+	case int:
+		return int64(t)
+	case float64:
+		return int64(t)
+	case float32:
+		return int64(t)
+	case json.Number:
+		n, _ := t.Int64()
+		return n
+	case string:
+		n, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64)
+		if err != nil {
+			f, ferr := strconv.ParseFloat(strings.TrimSpace(t), 64)
+			if ferr != nil {
+				return 0
+			}
+			return int64(f)
+		}
+		return n
+	case []byte:
+		return sqliteIfaceInt64(string(t))
+	case sql.NullInt64:
+		if t.Valid {
+			return t.Int64
+		}
+	case sql.NullFloat64:
+		if t.Valid {
+			return int64(t.Float64)
+		}
+	default:
+		return 0
+	}
+	return 0
+}
+
+func sqliteIfaceFloat64(v any) float64 {
+	switch t := v.(type) {
+	case float64:
+		return t
+	case float32:
+		return float64(t)
+	case int64:
+		return float64(t)
+	case int:
+		return float64(t)
+	case json.Number:
+		n, _ := t.Float64()
+		return n
+	case string:
+		n, _ := strconv.ParseFloat(strings.TrimSpace(t), 64)
+		return n
+	case []byte:
+		return sqliteIfaceFloat64(string(t))
+	case sql.NullFloat64:
+		if t.Valid {
+			return t.Float64
+		}
+	case sql.NullInt64:
+		if t.Valid {
+			return float64(t.Int64)
+		}
+	default:
+		return 0
+	}
+	return 0
+}
+
+func sqliteIfaceStrings(v any) []string {
+	switch t := v.(type) {
+	case []byte:
+		return uuidsToStrings(string(t))
+	default:
+		return uuidsToStrings(v)
+	}
+}
+
+func sqliteIfaceStringsOrEmpty(v any) []string {
+	out := sqliteIfaceStrings(v)
+	if out == nil {
+		return []string{}
+	}
+	return out
+}
+
+func sqliteIfaceNullString(v any) sql.NullString {
+	s, ok := sqliteIfaceString(v)
+	if !ok {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: s, Valid: true}
 }

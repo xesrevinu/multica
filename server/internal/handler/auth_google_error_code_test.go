@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -11,7 +12,6 @@ import (
 	"testing"
 	"testing/iotest"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/testutil"
@@ -189,7 +189,7 @@ func TestGoogleLoginActionableErrorCodes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := newTestHandler(tt.cfg)
-			h.Queries = db.New(&mockDB{getUserErr: pgx.ErrNoRows})
+			h.Queries = db.New(&mockDB{getUserErr: sql.ErrNoRows})
 
 			h.googleOAuthHTTPClient = &http.Client{Transport: googleRoundTripper(func(req *http.Request) (*http.Response, error) {
 				switch req.URL.Host {

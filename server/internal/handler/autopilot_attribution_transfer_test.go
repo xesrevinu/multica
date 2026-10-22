@@ -58,7 +58,7 @@ func triggerPublisherMember(t *testing.T, triggerID string) string {
 		t.Fatalf("load trigger: %v", err)
 	}
 	if row.PublishedByType.Valid && row.PublishedByType.String == "member" && row.PublishedByID.Valid {
-		return uuidToString(row.PublishedByID)
+		return uuidToString(row.PublishedByID.String)
 	}
 	return ""
 }

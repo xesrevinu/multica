@@ -174,7 +174,7 @@ func TestSignupInvitationLookupFailure(t *testing.T) {
 			signupInvitation(t, email)
 			h := *testHandler
 			h.cfg = Config{AllowSignup: false}
-			h.Queries = db.New(failingSignupInvitationDB{testPool})
+			h.Queries = db.New(failingSignupInvitationDB{testSQLite})
 			handler := h.SendCode
 			body := map[string]string{"email": email}
 			switch path {

@@ -23,7 +23,7 @@ func TestIntegrationReviewRejectHandoff(t *testing.T) {
 		h := f.gh.heads[key]
 		f.gh.mu.Unlock()
 		var issueID string
-		_ = f.svc.opt.Pool.QueryRow(f.ctx, `SELECT id::text FROM issue WHERE workspace_id=$1 AND number=$2`, f.ws, strings.TrimPrefix(key, f.prefix+"-")).Scan(&issueID)
+		_ = f.svc.opt.Pool.QueryRowContext(f.ctx, `SELECT id::text FROM issue WHERE workspace_id=$1 AND number=$2`, f.ws, strings.TrimPrefix(key, f.prefix+"-")).Scan(&issueID)
 		rid, _ := f.svc.st.agentID(f.ctx, f.ws, "rev")
 		f.exec(`INSERT INTO comment (issue_id, workspace_id, author_type, author_id, content) VALUES ($1, $2, 'agent', $3, $4)`, issueID, f.ws, rid, "1 important: [important] src/sq.js:3 negative input returns NaN")
 		m["verdict"], m["reviewed_sha"] = "changes", h
@@ -32,14 +32,14 @@ func TestIntegrationReviewRejectHandoff(t *testing.T) {
 	f.drive(12)
 	wantSeq(t, f.tids(id), "T1_start T2_review T3_rework T2_review T4_done")
 	var kind, to, head string
-	if err := f.svc.opt.Pool.QueryRow(f.ctx, `SELECT decision->'handoff'->>'kind', decision->'handoff'->>'to', decision->'handoff'->>'prev_head' FROM orchestrator_transition WHERE issue_id=$1 AND tid='T3_rework'`, id).Scan(&kind, &to, &head); err != nil {
+	if err := f.svc.opt.Pool.QueryRowContext(f.ctx, `SELECT decision->'handoff'->>'kind', decision->'handoff'->>'to', decision->'handoff'->>'prev_head' FROM orchestrator_transition WHERE issue_id=$1 AND tid='T3_rework'`, id).Scan(&kind, &to, &head); err != nil {
 		t.Fatal(err)
 	}
 	if kind != HKReviewChanges || to != "a" || head == "" {
 		t.Fatalf("persisted handoff kind=%q to=%q head=%q", kind, to, head)
 	}
 	var n int
-	_ = f.svc.opt.Pool.QueryRow(f.ctx, `SELECT count(*) FROM orchestrator_transition WHERE issue_id=$1 AND tid='T3_rework' AND decision->'handoff'->'review_comments'->0->>'body' LIKE '%NaN%'`, id).Scan(&n)
+	_ = f.svc.opt.Pool.QueryRowContext(f.ctx, `SELECT count(*) FROM orchestrator_transition WHERE issue_id=$1 AND tid='T3_rework' AND decision->'handoff'->'review_comments'->0->>'body' LIKE '%NaN%'`, id).Scan(&n)
 	if n != 1 {
 		t.Fatal("reviewer finding not captured in the handoff")
 	}

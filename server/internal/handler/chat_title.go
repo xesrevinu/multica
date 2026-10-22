@@ -2,13 +2,12 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -24,11 +23,11 @@ const chatTitleGenTimeout = 20 * time.Second
 // ChannelChatStarted publishes list invalidation metadata without changing any
 // client's current navigation. The explicit empty Chat is already committed.
 func (h *Handler) ChannelChatStarted(event engine.ChannelChatStartedEvent) {
-	ws, user, session := uuidToString(event.WorkspaceID), uuidToString(event.CreatorID), uuidToString(event.SessionID)
+	ws, user, session := event.WorkspaceID, event.CreatorID, event.SessionID
 	h.publishChat(protocol.EventChatSessionCreated, ws, "member", user, session, protocol.ChatSessionCreatedPayload{
-		WorkspaceID: ws, ChatSessionID: session, AgentID: uuidToString(event.AgentID), CreatorID: user, Title: event.Title,
+		WorkspaceID: ws, ChatSessionID: session, AgentID: event.AgentID, CreatorID: user, Title: event.Title,
 		ChannelSource: protocol.ChatSessionChannelSource{
-			ChannelType: string(event.ChannelType), InstallationID: uuidToString(event.InstallationID), RouteRevision: event.RouteRevision,
+			ChannelType: string(event.ChannelType), InstallationID: event.InstallationID, RouteRevision: event.RouteRevision,
 		},
 		IsCurrentChannelRoute: true,
 	})
@@ -37,7 +36,7 @@ func (h *Handler) ChannelChatStarted(event engine.ChannelChatStartedEvent) {
 // ChannelChatTitleInitialized publishes the deterministic first-message or
 // media fallback immediately. LLM title generation is optional, so clients
 // must not depend on its later CAS update to observe the committed title.
-func (h *Handler) ChannelChatTitleInitialized(workspaceID, creatorID, sessionID pgtype.UUID, title string) {
+func (h *Handler) ChannelChatTitleInitialized(workspaceID, creatorID, sessionID string, title string) {
 	h.publishChat(protocol.EventChatSessionUpdated, uuidToString(workspaceID), "member", uuidToString(creatorID), uuidToString(sessionID), protocol.ChatSessionUpdatedPayload{
 		ChatSessionID: uuidToString(sessionID),
 		Title:         title,
@@ -46,7 +45,7 @@ func (h *Handler) ChannelChatTitleInitialized(workspaceID, creatorID, sessionID 
 
 // GenerateChannelChatTitle reuses the existing LLM + CAS title path after the
 // shared engine has persisted its deterministic first-message fallback.
-func (h *Handler) GenerateChannelChatTitle(workspaceID, creatorID, sessionID pgtype.UUID, currentTitle, sourceText string) {
+func (h *Handler) GenerateChannelChatTitle(workspaceID, creatorID, sessionID string, currentTitle, sourceText string) {
 	h.maybeGenerateChatTitleAsync(uuidToString(workspaceID), uuidToString(creatorID), sessionID, currentTitle, sourceText)
 }
 
@@ -89,7 +88,7 @@ Rules:
 // currentTitle is the session's title as observed at trigger time (the
 // default/original title). sourceText is the user's first message, which the
 // model condenses into a title.
-func (h *Handler) maybeGenerateChatTitleAsync(workspaceID, userID string, sessionID pgtype.UUID, currentTitle, sourceText string) {
+func (h *Handler) maybeGenerateChatTitleAsync(workspaceID, userID string, sessionID string, currentTitle, sourceText string) {
 	// Short-circuit before spawning a goroutine when the LLM layer is disabled
 	// (self-hosted without MULTICA_LLM_API_KEY / MULTICA_LLM_BASE_URL): the
 	// original title is kept as-is, exactly matching pre-feature behavior.
@@ -158,7 +157,7 @@ func (h *Handler) maybeGenerateChatTitleAsync(workspaceID, userID string, sessio
 //   - (zero, false, err):    the LLM layer is disabled or the call failed, OR
 //     the CAS write hit a real DB error. Callers treat this as best-effort and
 //     keep the original title.
-func (h *Handler) generateChatSessionTitle(ctx context.Context, sessionID pgtype.UUID, currentTitle, sourceText string) (db.ChatSession, bool, error) {
+func (h *Handler) generateChatSessionTitle(ctx context.Context, sessionID string, currentTitle, sourceText string) (db.ChatSession, bool, error) {
 	// DefaultModel() is used implicitly by GenerateText when model == "": a
 	// deployment configures MULTICA_LLM_DEFAULT_MODEL (or the built-in
 	// gpt-5.6-luna fallback) — no model is threaded through from the frontend.
@@ -180,7 +179,7 @@ func (h *Handler) generateChatSessionTitle(ctx context.Context, sessionID pgtype
 		NewTitle:      title,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			// Title changed since we observed currentTitle — a manual rename or
 			// a competing writer won. Do not clobber it.
 			return db.ChatSession{}, false, nil

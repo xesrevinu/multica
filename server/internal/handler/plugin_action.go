@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -157,10 +156,10 @@ func (h *Handler) pluginSessionCaller(w http.ResponseWriter, r *http.Request, sc
 // as the person who pressed the button and cannot elect to write as anyone
 // else. An install token is standing access and always acts as the plugin.
 func (h *Handler) pluginTokenCaller(w http.ResponseWriter, r *http.Request, token, scope string) (service.PluginActionCaller, pluginActor, bool) {
-	var installationID pgtype.UUID
+	var installationID string
 	actor := pluginActor{Type: "plugin"}
-	var memberUserID pgtype.UUID
-	var issueScope pgtype.UUID
+	var memberUserID string
+	var issueScope string
 
 	switch {
 	case strings.HasPrefix(token, "mpc_"):
@@ -200,7 +199,7 @@ func (h *Handler) pluginTokenCaller(w http.ResponseWriter, r *http.Request, toke
 	// A callback token that stands for a person is only as good as that
 	// person's membership TODAY. Re-checking here means revoking someone's
 	// access takes effect on a token already in flight.
-	if memberUserID.Valid {
+	if memberUserID != "" {
 		member, err := h.getWorkspaceMember(r.Context(), uuidToString(memberUserID), uuidToString(caller.WorkspaceID))
 		if err != nil {
 			publicapiv1.WriteProblem(w, r, http.StatusForbidden, "actor_membership_revoked", "the user this callback acts for is no longer a member")
@@ -236,7 +235,7 @@ func (h *Handler) pluginIssueForUser(w http.ResponseWriter, r *http.Request, cal
 	//
 	// 404 rather than 403: the caller may well be able to see this issue by
 	// other means, and "you are scoped elsewhere" would confirm the id exists.
-	if caller.IssueScope.Valid && uuidToString(issue.ID) != uuidToString(caller.IssueScope) {
+	if (caller.IssueScope != "") && uuidToString(issue.ID) != uuidToString(caller.IssueScope) {
 		publicapiv1.WriteProblem(w, r, http.StatusNotFound, "not_found", "issue not found")
 		return db.Issue{}, false
 	}
@@ -512,11 +511,11 @@ func publicPluginComment(comment db.Comment) publicapiv1.Comment {
 		AuthorID:   uuidToString(comment.AuthorID),
 		Content:    comment.Content,
 		Type:       comment.Type,
-		ParentID:   uuidToString(comment.ParentID),
-		CreatedAt:  comment.CreatedAt.Time.UTC().Format(timeFormatRFC3339),
+		ParentID:   uuidToString(comment.ParentID.String),
+		CreatedAt:  parseDBTime(comment.CreatedAt).UTC().Format(timeFormatRFC3339),
 	}
 	if comment.DeletedAt.Valid {
-		out.DeletedAt = comment.DeletedAt.Time.UTC().Format(timeFormatRFC3339)
+		out.DeletedAt = parseDBTime(comment.DeletedAt.String).UTC().Format(timeFormatRFC3339)
 	}
 	return out
 }
@@ -556,7 +555,7 @@ func (h *Handler) CreatePluginComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var parentID pgtype.UUID
+	var parentID string
 	var rootComment *db.Comment
 	if req.ParentID != nil && *req.ParentID != "" {
 		parsed, err := util.ParseUUID(*req.ParentID)
@@ -586,15 +585,15 @@ func (h *Handler) CreatePluginComment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	createdComment, err := h.Queries.CreateComment(r.Context(), db.CreateCommentParams{
-		ID:          dbid.NewV7(),
+		ID:          nullString(dbid.NewV7()),
 		IssueID:     issue.ID,
 		WorkspaceID: caller.WorkspaceID,
 		AuthorType:  authorType,
 		AuthorID:    authorID,
 		Content:     content,
 		Type:        "comment",
-		ParentID:    parentID,
-		ViaPluginID: caller.Installation.ID,
+		ParentID:    nullString(parentID),
+		ViaPluginID: nullString(caller.Installation.ID),
 	})
 	if err != nil {
 		publicapiv1.WriteProblem(w, r, http.StatusInternalServerError, "internal_error", "failed to create the comment")
@@ -615,7 +614,7 @@ func (h *Handler) CreatePluginComment(w http.ResponseWriter, r *http.Request) {
 		"issue_status":        issue.Status,
 	})
 	if rootComment != nil {
-		h.TaskService.AutoUnresolveThreadOnReply(r.Context(), rootComment, uuidToString(caller.WorkspaceID), authorType, uuidToString(authorID), pgtype.UUID{})
+		h.TaskService.AutoUnresolveThreadOnReply(r.Context(), rootComment, uuidToString(caller.WorkspaceID), authorType, uuidToString(authorID), "")
 	}
 
 	writeJSON(w, http.StatusCreated, publicPluginComment(comment))
@@ -628,7 +627,7 @@ const maxPluginCommentsPerRead = 200
 
 // --- Storage ---
 
-func (h *Handler) pluginStorageScope(w http.ResponseWriter, r *http.Request, caller service.PluginActionCaller, actor pluginActor) (string, pgtype.UUID, bool) {
+func (h *Handler) pluginStorageScope(w http.ResponseWriter, r *http.Request, caller service.PluginActionCaller, actor pluginActor) (string, string, bool) {
 	scopeType := chi.URLParam(r, "scope")
 	required := plugincontract.ScopeStorageWorkspace
 	if scopeType == service.PluginStorageUser {
@@ -636,18 +635,18 @@ func (h *Handler) pluginStorageScope(w http.ResponseWriter, r *http.Request, cal
 	}
 	if !hasGrantedScope(caller.Scopes, required) {
 		publicapiv1.WriteProblem(w, r, http.StatusForbidden, "missing_scope", "this Plugin was not granted the "+required+" scope")
-		return "", pgtype.UUID{}, false
+		return "", "", false
 	}
 	// storage:user is per-member state, so a caller with no member has no such
 	// scope to resolve. Falling through would key every plugin-actor write to
 	// the zero UUID — one shared bucket masquerading as somebody's private one.
 	if scopeType == service.PluginStorageUser && !actor.requireMember(w, r) {
-		return "", pgtype.UUID{}, false
+		return "", "", false
 	}
 	scopeID, err := service.ResolveStorageScope(scopeType, caller.WorkspaceID, actor.Member.UserID)
 	if err != nil {
 		writePluginActionError(w, r, err, "invalid storage scope")
-		return "", pgtype.UUID{}, false
+		return "", "", false
 	}
 	return scopeType, scopeID, true
 }

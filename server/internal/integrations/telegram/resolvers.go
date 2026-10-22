@@ -9,8 +9,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
@@ -90,11 +89,11 @@ func decodeTelegramRaw(msg channel.InboundMessage) (telegramRawEvent, error) {
 	return raw, nil
 }
 
-func nullText(s string) pgtype.Text {
+func nullText(s string) sql.NullString {
 	if s == "" {
-		return pgtype.Text{}
+		return sql.NullString{}
 	}
-	return pgtype.Text{String: s, Valid: true}
+	return sql.NullString{String: s, Valid: true}
 }
 
 // ---- installation routing ----
@@ -113,7 +112,7 @@ func (r *installationResolver) ResolveInstallation(ctx context.Context, msg chan
 		AppID: raw.BotID,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return engine.ResolvedInstallation{}, engine.ErrInstallationNotFound
 		}
 		return engine.ResolvedInstallation{}, err
@@ -138,7 +137,7 @@ func (r *identityResolver) ResolveSender(ctx context.Context, inst engine.Resolv
 		ChannelUserID:  msg.Source.SenderID,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return engine.ResolvedIdentity{}, engine.ErrSenderUnbound
 		}
 		return engine.ResolvedIdentity{}, err
@@ -148,7 +147,7 @@ func (r *identityResolver) ResolveSender(ctx context.Context, inst engine.Resolv
 		UserID:      binding.MulticaUserID,
 		WorkspaceID: inst.WorkspaceID,
 	}); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return engine.ResolvedIdentity{}, engine.ErrSenderNotMember
 		}
 		return engine.ResolvedIdentity{}, err
@@ -160,21 +159,21 @@ func (r *identityResolver) ResolveSender(ctx context.Context, inst engine.Resolv
 
 type deduper struct{ q *db.Queries }
 
-func (r *deduper) Claim(ctx context.Context, installationID pgtype.UUID, messageID string) (pgtype.UUID, error) {
+func (r *deduper) Claim(ctx context.Context, installationID string, messageID string) (string, error) {
 	claim, err := r.q.ClaimChannelInboundDedup(ctx, db.ClaimChannelInboundDedupParams{
 		InstallationID: installationID,
 		MessageID:      messageID,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return pgtype.UUID{}, engine.ErrDuplicate
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", engine.ErrDuplicate
 		}
-		return pgtype.UUID{}, err
+		return "", err
 	}
 	return claim.ClaimToken, nil
 }
 
-func (r *deduper) Mark(ctx context.Context, installationID pgtype.UUID, messageID string, claimToken pgtype.UUID) error {
+func (r *deduper) Mark(ctx context.Context, installationID string, messageID string, claimToken string) error {
 	_, err := r.q.MarkChannelInboundDedupProcessed(ctx, db.MarkChannelInboundDedupProcessedParams{
 		InstallationID: installationID,
 		MessageID:      messageID,
@@ -183,7 +182,7 @@ func (r *deduper) Mark(ctx context.Context, installationID pgtype.UUID, messageI
 	return err
 }
 
-func (r *deduper) Release(ctx context.Context, installationID pgtype.UUID, messageID string, claimToken pgtype.UUID) error {
+func (r *deduper) Release(ctx context.Context, installationID string, messageID string, claimToken string) error {
 	_, err := r.q.ReleaseChannelInboundDedup(ctx, db.ReleaseChannelInboundDedupParams{
 		InstallationID: installationID,
 		MessageID:      messageID,
@@ -198,16 +197,16 @@ func (r *deduper) Release(ctx context.Context, installationID pgtype.UUID, messa
 // adapter. Keeping the adapter behind this narrow seam makes its parameter
 // mapping testable without a database.
 type chatSession interface {
-	EnsureSession(ctx context.Context, in engine.EnsureSessionInput) (pgtype.UUID, error)
+	EnsureSession(ctx context.Context, in engine.EnsureSessionInput) (string, error)
 	StartSession(ctx context.Context, in engine.StartSessionInput) (engine.StartSessionResult, error)
-	MarkPendingFresh(ctx context.Context, sessionID pgtype.UUID, messageID string) error
+	MarkPendingFresh(ctx context.Context, sessionID string, messageID string) error
 	AppendUserMessage(ctx context.Context, in engine.AppendInput) (engine.AppendResult, error)
 	BindMediaRefs(ctx context.Context, in engine.BindMediaInput) error
 }
 
 type sessionBinder struct{ session chatSession }
 
-func (r *sessionBinder) EnsureSession(ctx context.Context, p engine.EnsureSessionParams) (pgtype.UUID, error) {
+func (r *sessionBinder) EnsureSession(ctx context.Context, p engine.EnsureSessionParams) (string, error) {
 	bindingKey, config, _ := telegramSessionRouting(p.Message)
 	return r.session.EnsureSession(ctx, engine.EnsureSessionInput{
 		WorkspaceID:    p.Installation.WorkspaceID,
@@ -240,7 +239,7 @@ func (r *sessionBinder) StartSession(ctx context.Context, p engine.StartSessionP
 	}, err
 }
 
-func (r *sessionBinder) MarkPendingFresh(ctx context.Context, sessionID pgtype.UUID, messageID string) error {
+func (r *sessionBinder) MarkPendingFresh(ctx context.Context, sessionID string, messageID string) error {
 	return r.session.MarkPendingFresh(ctx, sessionID, messageID)
 }
 
@@ -284,14 +283,14 @@ func (r *sessionBinder) BindMedia(ctx context.Context, p engine.BindMediaParams)
 
 type auditor struct{ q *db.Queries }
 
-func (r *auditor) RecordDrop(ctx context.Context, instID pgtype.UUID, msg channel.InboundMessage, reason engine.DropReason) error {
+func (r *auditor) RecordDrop(ctx context.Context, instID string, msg channel.InboundMessage, reason engine.DropReason) error {
 	raw, _ := decodeTelegramRaw(msg) // best-effort; a decode miss still audits
 	return r.q.RecordChannelInboundDrop(ctx, db.RecordChannelInboundDropParams{
 		ID:               dbid.NewV7(),
 		ChannelType:      string(TypeTelegram),
 		EventType:        raw.EventType,
 		DropReason:       string(reason),
-		InstallationID:   instID,
+		InstallationID:   nullText(instID),
 		ChannelChatID:    nullText(msg.Source.ChatID),
 		ChannelEventID:   nullText(msg.EventID),
 		ChannelMessageID: nullText(msg.MessageID),
@@ -318,7 +317,7 @@ func NewTypingNotifier(decrypt Decrypter, apiBase string, client *http.Client, l
 	return &typingNotifier{decrypt: decrypt, apiBase: apiBase, client: client, logger: logger}
 }
 
-func (n *typingNotifier) OnIngested(ctx context.Context, inst engine.ResolvedInstallation, msg channel.InboundMessage, sessionID pgtype.UUID, chatMessageID pgtype.UUID) {
+func (n *typingNotifier) OnIngested(ctx context.Context, inst engine.ResolvedInstallation, msg channel.InboundMessage, sessionID string, chatMessageID string) {
 	row, ok := inst.Platform.(db.ChannelInstallation)
 	if !ok {
 		return
@@ -341,5 +340,5 @@ func (n *typingNotifier) OnIngested(ctx context.Context, inst engine.ResolvedIns
 	}
 }
 
-func (n *typingNotifier) OnSettled(ctx context.Context, sessionID pgtype.UUID, scope engine.TypingSettlement) {
+func (n *typingNotifier) OnSettled(ctx context.Context, sessionID string, scope engine.TypingSettlement) {
 }

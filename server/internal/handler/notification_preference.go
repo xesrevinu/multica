@@ -1,12 +1,12 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/logger"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -45,7 +45,7 @@ func (h *Handler) GetNotificationPreferences(w http.ResponseWriter, r *http.Requ
 		UserID:      parseUUID(userID),
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"workspace_id": workspaceID,
 				"preferences":  map[string]any{},
@@ -58,7 +58,7 @@ func (h *Handler) GetNotificationPreferences(w http.ResponseWriter, r *http.Requ
 	}
 
 	var prefs map[string]string
-	if err := json.Unmarshal(pref.Preferences, &prefs); err != nil {
+	if err := json.Unmarshal([]byte(pref.Preferences), &prefs); err != nil {
 		prefs = map[string]string{}
 	}
 
@@ -109,7 +109,7 @@ func writeNotificationPreferenceResponse(
 	pref db.NotificationPreference,
 ) {
 	var prefs map[string]string
-	if err := json.Unmarshal(pref.Preferences, &prefs); err != nil {
+	if err := json.Unmarshal([]byte(pref.Preferences), &prefs); err != nil {
 		prefs = map[string]string{}
 	}
 
@@ -135,7 +135,7 @@ func (h *Handler) UpdateNotificationPreferences(w http.ResponseWriter, r *http.R
 	pref, err := h.Queries.UpsertNotificationPreference(r.Context(), db.UpsertNotificationPreferenceParams{
 		WorkspaceID: parseUUID(workspaceID),
 		UserID:      parseUUID(userID),
-		Preferences: prefsJSON,
+		Preferences: string(prefsJSON),
 	})
 	if err != nil {
 		slog.Warn("UpsertNotificationPreference failed", append(logger.RequestAttrs(r), "error", err)...)
@@ -161,7 +161,7 @@ func (h *Handler) PatchNotificationPreferences(w http.ResponseWriter, r *http.Re
 	pref, err := h.Queries.PatchNotificationPreference(r.Context(), db.PatchNotificationPreferenceParams{
 		WorkspaceID: parseUUID(workspaceID),
 		UserID:      parseUUID(userID),
-		Preferences: prefsJSON,
+		Preferences: string(prefsJSON),
 	})
 	if err != nil {
 		slog.Warn("PatchNotificationPreference failed", append(logger.RequestAttrs(r), "error", err)...)

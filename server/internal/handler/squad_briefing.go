@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -259,7 +258,7 @@ func buildSquadRoster(ctx context.Context, q *db.Queries, squad db.Squad) string
 }
 
 func loadSquadMemberSkillNames(ctx context.Context, q *db.Queries, members []db.SquadMember, leaderID string) (map[string][]string, bool) {
-	agentIDs := make([]pgtype.UUID, 0)
+	agentIDs := make([]string, 0)
 	seen := make(map[string]struct{}, len(members))
 	for _, m := range members {
 		if m.MemberType != "agent" {

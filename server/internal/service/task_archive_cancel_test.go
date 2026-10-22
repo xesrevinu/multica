@@ -2,13 +2,12 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -94,7 +93,7 @@ func TestCancelTasksForArchivedAgentPublishesCommittedChatCancellations(t *testi
 			}
 		}
 		var status string
-		if err := observer.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, e.TaskID).Scan(&status); err != nil {
+		if err := observer.QueryRowContext(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, e.TaskID).Scan(&status); err != nil {
 			t.Errorf("read cancellation from event observer: %v", err)
 		} else if status != "cancelled" {
 			t.Errorf("task %s event arrived before cancellation committed: status = %q", e.TaskID, status)
@@ -135,7 +134,7 @@ func TestCancelTasksForArchivedAgentPublishesCommittedChatCancellations(t *testi
 	}
 	for taskID, want := range unchanged {
 		var status string
-		if err := observer.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status); err != nil {
+		if err := observer.QueryRowContext(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status); err != nil {
 			t.Fatalf("read task %s: %v", taskID, err)
 		}
 		if status != want {
@@ -162,30 +161,30 @@ func TestCancelTasksForArchivedAgentPublishesCommittedChatCancellations(t *testi
 }
 
 type archiveCancelRejectCommit struct {
-	pool             *pgxpool.Pool
+	pool             *sql.DB
 	taskID           string
 	err              error
 	statusBeforeFail string
 }
 
-func (s *archiveCancelRejectCommit) Begin(ctx context.Context) (pgx.Tx, error) {
-	tx, err := s.pool.Begin(ctx)
+func (s *archiveCancelRejectCommit) BeginTx(ctx context.Context, _ *sql.TxOptions) (*sql.Tx, error) {
+	tx, err := s.pool.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	return &archiveCancelRejectCommitTx{Tx: tx, starter: s}, nil
+	return tx, nil
 }
 
 type archiveCancelRejectCommitTx struct {
-	pgx.Tx
+	*sql.Tx
 	starter *archiveCancelRejectCommit
 }
 
 func (tx *archiveCancelRejectCommitTx) Commit(ctx context.Context) error {
-	if err := tx.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, tx.starter.taskID).Scan(&tx.starter.statusBeforeFail); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, tx.starter.taskID).Scan(&tx.starter.statusBeforeFail); err != nil {
 		return err
 	}
-	if err := tx.Tx.Rollback(ctx); err != nil {
+	if err := tx.Tx.Rollback(); err != nil {
 		return err
 	}
 	return tx.starter.err
@@ -212,7 +211,7 @@ func TestCancelTasksForArchivedAgentCommitFailureDoesNotPublish(t *testing.T) {
 		t.Errorf("status inside failed transaction = %q, want cancelled", starter.statusBeforeFail)
 	}
 	var persistedStatus string
-	if err := fx.Pool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&persistedStatus); err != nil {
+	if err := fx.Pool.QueryRowContext(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&persistedStatus); err != nil {
 		t.Fatalf("read rolled-back task: %v", err)
 	}
 	if persistedStatus != "running" || published != 0 {

@@ -2,18 +2,17 @@ package issuestatus
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-var testWorkspace = pgtype.UUID{Bytes: [16]byte{1}, Valid: true}
+var testWorkspace = "00000000-0000-4000-8000-000000000001"
 
 func TestCategoryWithError(t *testing.T) {
 	ctx := context.Background()
@@ -32,11 +31,11 @@ func TestCategoryWithError(t *testing.T) {
 		t.Fatalf("catalog error: category=%q err=%v; want the original read error", got, err)
 	}
 	q.err = nil
-	if got, err := CategoryWithError(ctx, q, testWorkspace, "missing"); got != "" || !errors.Is(err, pgx.ErrNoRows) {
+	if got, err := CategoryWithError(ctx, q, testWorkspace, "missing"); got != "" || !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("missing status: category=%q err=%v; want no rows", got, err)
 	}
 	for _, category := range Categories() {
-		q.entries["custom"] = db.IssueStatus{Key: "custom", Category: category, Name: "Custom", ArchivedAt: pgtype.Timestamptz{Valid: true}}
+		q.entries["custom"] = db.IssueStatus{Key: "custom", Category: category, Name: "Custom", ArchivedAt: sql.NullString{String: "2020-01-01T00:00:00Z", Valid: true}}
 		if got, err := CategoryWithError(ctx, q, testWorkspace, "custom"); err != nil || got != category {
 			t.Errorf("archived custom %s: category=%q err=%v", category, got, err)
 		}
@@ -75,7 +74,7 @@ func (f *fakeQuerier) GetIssueStatusEntryByKey(_ context.Context, arg db.GetIssu
 	}
 	entry, ok := f.entries[arg.Key]
 	if !ok {
-		return db.IssueStatus{}, pgx.ErrNoRows
+		return db.IssueStatus{}, sql.ErrNoRows
 	}
 	return entry, nil
 }
@@ -95,7 +94,7 @@ func (f *fakeQuerier) ListIssueStatusEntries(_ context.Context, _ db.ListIssueSt
 	return out, nil
 }
 
-func (f *fakeQuerier) SeedIssueStatusEntries(_ context.Context, _ pgtype.UUID) error {
+func (f *fakeQuerier) SeedIssueStatusEntries(_ context.Context, _ string) error {
 	return f.err
 }
 
@@ -105,8 +104,10 @@ func (f *fakeQuerier) ListIssueStatusKeysByCategories(_ context.Context, arg db.
 		return nil, f.err
 	}
 	wanted := map[string]bool{}
-	for _, c := range arg.Categories {
-		wanted[c] = true
+	if cats, ok := arg.Categories.([]string); ok {
+		for _, c := range cats {
+			wanted[c] = true
+		}
 	}
 	var out []string
 	for _, e := range f.entries {
@@ -213,7 +214,7 @@ func TestResolveAcceptsBuiltInsWithoutACatalogRow(t *testing.T) {
 
 func TestResolveRejectsUnknownAndArchived(t *testing.T) {
 	archived := custom("retired", InProgress)
-	archived.ArchivedAt = pgtype.Timestamptz{Valid: true}
+	archived.ArchivedAt = sql.NullString{String: "2020-01-01T00:00:00Z", Valid: true}
 	q := newFakeQuerier(custom("human_review", InReview), archived)
 
 	if _, err := Resolve(context.Background(), q, testWorkspace, "human_review"); err != nil {
@@ -683,7 +684,7 @@ func TestExpandCategories(t *testing.T) {
 // and "" for an archived, unknown or unreadable one.
 func TestResolverWritableCategory(t *testing.T) {
 	archived := custom("retired", InProgress)
-	archived.ArchivedAt = pgtype.Timestamptz{Valid: true}
+	archived.ArchivedAt = sql.NullString{String: "2020-01-01T00:00:00Z", Valid: true}
 	q := newFakeQuerier(custom("awaiting_regression", InReview), archived)
 	r := NewResolver(testWorkspace)
 	ctx := context.Background()

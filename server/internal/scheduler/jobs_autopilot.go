@@ -7,9 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
 
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -45,7 +43,7 @@ type AutopilotScheduleDispatcher interface {
 	DispatchAutopilotForPlan(
 		ctx context.Context,
 		autopilot db.Autopilot,
-		triggerID pgtype.UUID,
+		triggerID string,
 		source string,
 		payload []byte,
 		plannedAt time.Time,
@@ -87,7 +85,7 @@ type AutopilotScheduleDispatcher interface {
 //     re-enter dispatch — DispatchAutopilotForPlan's idempotent lookup
 //     then returns the already-created run rather than duplicating it.
 func AutopilotScheduleDispatchJob(
-	pool *pgxpool.Pool,
+	pool *sql.DB,
 	queries *db.Queries,
 	dispatcher AutopilotScheduleDispatcher,
 ) JobSpec {
@@ -167,7 +165,7 @@ func (c *autopilotScheduleCache) get(id string) (autopilotTriggerConfig, bool) {
 // triggers and paused/archived autopilots fall out naturally because
 // the SQL filter excludes them.
 func autopilotScopes(
-	pool *pgxpool.Pool,
+	pool *sql.DB,
 	queries *db.Queries,
 	cache *autopilotScheduleCache,
 ) ScopeProvider {
@@ -195,13 +193,10 @@ func autopilotScopes(
 			if cron == "" {
 				continue
 			}
-			createdAt := time.Time{}
-			if r.CreatedAt.Valid {
-				createdAt = r.CreatedAt.Time.UTC()
-			}
+			createdAt := parseDBTime(r.CreatedAt)
 			lastFiredAt := time.Time{}
 			if r.LastFiredAt.Valid {
-				lastFiredAt = r.LastFiredAt.Time.UTC()
+				lastFiredAt = parseDBTime(r.LastFiredAt.String)
 			}
 			next[id] = autopilotTriggerConfig{
 				TriggerID:      id,
@@ -333,7 +328,7 @@ func autopilotHandler(
 
 		trigger, err := queries.GetAutopilotTrigger(ctx, triggerID)
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+			if errors.Is(err, sql.ErrNoRows) {
 				// Trigger was deleted between scope-list and run.
 				// A SUCCESS row in sys_cron_executions for a vanished
 				// trigger is fine — there is nothing to dispatch and
@@ -344,7 +339,7 @@ func autopilotHandler(
 			}
 			return HandlerResult{}, fmt.Errorf("load trigger: %w", err)
 		}
-		if !trigger.Enabled || trigger.Kind != "schedule" {
+		if trigger.Enabled == 0 || trigger.Kind != "schedule" {
 			return HandlerResult{RowsAffected: 0, Result: map[string]any{
 				"skipped_reason": "trigger_disabled",
 			}}, nil
@@ -352,7 +347,7 @@ func autopilotHandler(
 
 		autopilot, err := queries.GetAutopilot(ctx, trigger.AutopilotID)
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+			if errors.Is(err, sql.ErrNoRows) {
 				return HandlerResult{RowsAffected: 0, Result: map[string]any{
 					"skipped_reason": "autopilot_not_found",
 				}}, nil
@@ -391,7 +386,7 @@ func autopilotHandler(
 		if next, ok := advancedNextRun(trigger.CronExpression.String, tz, in.PlanTime, time.Now()); ok {
 			_ = queries.AdvanceTriggerNextRun(ctx, db.AdvanceTriggerNextRunParams{
 				ID:        trigger.ID,
-				NextRunAt: pgtype.Timestamptz{Time: next, Valid: true},
+				NextRunAt: sql.NullString{String: next.UTC().Format(time.RFC3339Nano), Valid: true},
 			})
 		} else {
 			_ = queries.TouchAutopilotTriggerFiredAt(ctx, trigger.ID)
@@ -429,16 +424,7 @@ func advancedNextRun(cronExpr, timezone string, planTime, now time.Time) (time.T
 	return next, true
 }
 
-// parseScopeUUID converts a scope.ID string back into pgtype.UUID.
-// We accept both the standard hyphenated form and the unhyphenated
-// raw 32-hex form to keep the contract forgiving.
-func parseScopeUUID(s string) (pgtype.UUID, error) {
-	var u pgtype.UUID
-	if err := u.Scan(s); err != nil {
-		return pgtype.UUID{}, err
-	}
-	if !u.Valid {
-		return pgtype.UUID{}, errors.New("invalid uuid")
-	}
-	return u, nil
+// parseScopeUUID converts a scope.ID string back into a UUID string.
+func parseScopeUUID(s string) (string, error) {
+	return util.ParseUUID(s)
 }

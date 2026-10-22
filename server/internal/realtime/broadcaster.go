@@ -8,10 +8,17 @@ const (
 	ScopeUser      = "user"
 	ScopeTask      = "task"
 	ScopeChat      = "chat"
-	// ScopeDaemonRuntime routes daemon wakeup frames through the Redis relay.
-	// It is consumed by the daemon WebSocket hub, not by browser clients.
+	// ScopeDaemonRuntime is the daemon wakeup scope. The single-process
+	// server delivers it on the local daemon hub.
 	ScopeDaemonRuntime = "daemon_runtime"
 )
+
+// RelayPublisher publishes a caller-supplied event id. The embedded server
+// does not run a cross-node relay; daemonws keeps the interface so a
+// notifier can target the local hub alone or a test double.
+type RelayPublisher interface {
+	PublishWithID(scopeType, scopeID, exclude string, frame []byte, id string) error
+}
 
 // Broadcaster is the abstraction every realtime event producer should depend
 // on instead of *Hub directly.

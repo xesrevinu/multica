@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/plugincontract"
 	"github.com/multica-ai/multica/server/pkg/remotemcp"
@@ -62,7 +61,7 @@ func (s *PluginService) DiscoverMCPHookTools(ctx context.Context, installation d
 	// manifest that installed cleanly — kept because the destination check below
 	// takes its allow-list from here, and an empty one must fail closed rather
 	// than read as "no restriction".
-	domains := plugincontract.NetDomains(decodeScopes(installation.GrantedScopes))
+	domains := plugincontract.NetDomains(decodeScopes([]byte(installation.GrantedScopes)))
 	if len(domains) == 0 {
 		return nil, pluginErrf(PluginErrorForbidden, "this Plugin was granted no net: scope, so it cannot reach an MCP server")
 	}
@@ -85,7 +84,7 @@ func (s *PluginService) DiscoverMCPHookTools(ctx context.Context, installation d
 // Pinned by digest, not just by name: a server that keeps a tool's name and
 // changes its arguments has changed what the agent is calling, and the agent
 // would have no way to notice.
-func (s *PluginService) ApproveMCPHookTools(ctx context.Context, installation db.PluginInstallation, hookKey string, names []string, userID pgtype.UUID) (db.PluginInstallation, error) {
+func (s *PluginService) ApproveMCPHookTools(ctx context.Context, installation db.PluginInstallation, hookKey string, names []string, userID string) (db.PluginInstallation, error) {
 	discovered, err := s.DiscoverMCPHookTools(ctx, installation, hookKey)
 	if err != nil {
 		return db.PluginInstallation{}, err
@@ -107,7 +106,7 @@ func (s *PluginService) ApproveMCPHookTools(ctx context.Context, installation db
 		approved = append(approved, tool)
 	}
 
-	approvals := decodeMCPApprovals(installation.McpApprovals)
+	approvals := decodeMCPApprovals([]byte(installation.McpApprovals))
 	if len(approved) == 0 {
 		// Approving nothing is how an administrator withdraws a hook, so it
 		// removes the entry rather than storing an empty allow-list that reads
@@ -127,7 +126,7 @@ func (s *PluginService) ApproveMCPHookTools(ctx context.Context, installation db
 	}
 	updated, err := s.Queries.SetPluginMCPApprovals(ctx, db.SetPluginMCPApprovalsParams{
 		ID:           installation.ID,
-		McpApprovals: encoded,
+		McpApprovals: string(encoded),
 	})
 	if err != nil {
 		return db.PluginInstallation{}, &PluginError{Kind: PluginErrorUnavailable, Message: "store approvals", Err: err}
@@ -144,7 +143,7 @@ func (s *PluginService) ApproveMCPHookTools(ctx context.Context, installation db
 //
 // A hook with no approval yields no connection. That is the point — installing
 // the plugin is not the grant, approving the tools is.
-func (s *PluginService) AgentMCPConnections(ctx context.Context, workspaceID pgtype.UUID) ([]remotemcp.Connection, error) {
+func (s *PluginService) AgentMCPConnections(ctx context.Context, workspaceID string) ([]remotemcp.Connection, error) {
 	installations, err := s.Queries.ListWorkspacePluginInstallations(ctx, workspaceID)
 	if err != nil {
 		return nil, &PluginError{Kind: PluginErrorUnavailable, Message: "list plugin installations", Err: err}
@@ -152,7 +151,7 @@ func (s *PluginService) AgentMCPConnections(ctx context.Context, workspaceID pgt
 
 	connections := make([]remotemcp.Connection, 0)
 	for _, installation := range installations {
-		if !installation.Enabled {
+		if installation.Enabled == 0 {
 			continue
 		}
 		connections = append(connections, mcpConnectionsFor(installation)...)
@@ -170,8 +169,8 @@ func mcpConnectionsFor(installation db.PluginInstallation) []remotemcp.Connectio
 		// One unreadable manifest must not hide every other plugin's tools.
 		return nil
 	}
-	approvals := decodeMCPApprovals(installation.McpApprovals)
-	domains := plugincontract.NetDomains(decodeScopes(installation.GrantedScopes))
+	approvals := decodeMCPApprovals([]byte(installation.McpApprovals))
+	domains := plugincontract.NetDomains(decodeScopes([]byte(installation.GrantedScopes)))
 
 	connections := make([]remotemcp.Connection, 0)
 	for _, hook := range manifest.Contributes.Hooks {
@@ -253,7 +252,7 @@ func (s *PluginService) mcpCredentialHeaders(ctx context.Context, installation d
 // here to authenticate to the plugin author's OWN server — never echoed back
 // through any read endpoint, which is the rule the separate secret table
 // exists to make structural.
-func (s *PluginService) decryptedSecret(ctx context.Context, installationID pgtype.UUID, key string) (string, error) {
+func (s *PluginService) decryptedSecret(ctx context.Context, installationID string, key string) (string, error) {
 	if s.Secrets == nil {
 		return "", pluginErrf(PluginErrorUnavailable, "plugin secrets are disabled: MULTICA_PLUGIN_SECRET_KEY is not configured")
 	}
@@ -270,7 +269,7 @@ func (s *PluginService) decryptedSecret(ctx context.Context, installationID pgty
 
 // ApprovedMCPTools is the pinned set for one hook, by name.
 func (s *PluginService) ApprovedMCPTools(installation db.PluginInstallation, hookKey string) map[string]remotemcp.Tool {
-	approval, ok := decodeMCPApprovals(installation.McpApprovals)[hookKey]
+	approval, ok := decodeMCPApprovals([]byte(installation.McpApprovals))[hookKey]
 	if !ok {
 		return map[string]remotemcp.Tool{}
 	}

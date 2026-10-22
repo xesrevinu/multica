@@ -7,33 +7,32 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const childIssueProgress = `-- name: ChildIssueProgress :many
 SELECT parent_issue_id,
-       COUNT(*)::bigint AS total,
-       COUNT(*) FILTER (WHERE status = ANY($2::text[]))::bigint AS done
+       COUNT(*) AS total,
+       COUNT(CASE WHEN status IN (SELECT value FROM json_each(?2)) THEN 1 END) AS done
 FROM issue
-WHERE workspace_id = $1
+WHERE workspace_id = ?1
   AND parent_issue_id IS NOT NULL
 GROUP BY parent_issue_id
 `
 
 type ChildIssueProgressParams struct {
-	WorkspaceID        pgtype.UUID `json:"workspace_id"`
-	TerminalStatusKeys []string    `json:"terminal_status_keys"`
+	WorkspaceID        string      `json:"workspace_id"`
+	TerminalStatusKeys interface{} `json:"terminal_status_keys"`
 }
 
 type ChildIssueProgressRow struct {
-	ParentIssueID pgtype.UUID `json:"parent_issue_id"`
-	Total         int64       `json:"total"`
-	Done          int64       `json:"done"`
+	ParentIssueID sql.NullString `json:"parent_issue_id"`
+	Total         int64          `json:"total"`
+	Done          int64          `json:"done"`
 }
 
 func (q *Queries) ChildIssueProgress(ctx context.Context, arg ChildIssueProgressParams) ([]ChildIssueProgressRow, error) {
-	rows, err := q.db.Query(ctx, childIssueProgress, arg.WorkspaceID, arg.TerminalStatusKeys)
+	rows, err := q.db.QueryContext(ctx, childIssueProgress, arg.WorkspaceID, arg.TerminalStatusKeys)
 	if err != nil {
 		return nil, err
 	}
@@ -45,6 +44,9 @@ func (q *Queries) ChildIssueProgress(ctx context.Context, arg ChildIssueProgress
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -58,23 +60,23 @@ SET duplicate_of_issue_id = NULL,
     revision = revision + 1,
     updated_at = now(),
     last_activity_at = GREATEST(COALESCE(last_activity_at, updated_at), now())
-WHERE workspace_id = $1
-  AND duplicate_of_issue_id = $2::uuid
-  AND NOT COALESCE(id = ANY($3::uuid[]), false)
+WHERE workspace_id = ?1
+  AND duplicate_of_issue_id = ?2
+  AND NOT COALESCE(id IN (SELECT value FROM json_each(?3)), false)
 RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id
 `
 
 type ClearIssueDuplicatesOfParams struct {
-	WorkspaceID      pgtype.UUID   `json:"workspace_id"`
-	IssueID          pgtype.UUID   `json:"issue_id"`
-	ExcludedIssueIds []pgtype.UUID `json:"excluded_issue_ids"`
+	WorkspaceID      string         `json:"workspace_id"`
+	IssueID          sql.NullString `json:"issue_id"`
+	ExcludedIssueIds interface{}    `json:"excluded_issue_ids"`
 }
 
 // Deleting an issue clears the pointers of its duplicates, the way deleting a
 // parent detaches its children. They stay cancelled. Issues deleted in the
 // same batch are skipped.
 func (q *Queries) ClearIssueDuplicatesOf(ctx context.Context, arg ClearIssueDuplicatesOfParams) ([]Issue, error) {
-	rows, err := q.db.Query(ctx, clearIssueDuplicatesOf, arg.WorkspaceID, arg.IssueID, arg.ExcludedIssueIds)
+	rows, err := q.db.QueryContext(ctx, clearIssueDuplicatesOf, arg.WorkspaceID, arg.IssueID, arg.ExcludedIssueIds)
 	if err != nil {
 		return nil, err
 	}
@@ -118,6 +120,9 @@ func (q *Queries) ClearIssueDuplicatesOf(ctx context.Context, arg ClearIssueDupl
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -128,10 +133,10 @@ const countCreatedIssueAssignees = `-- name: CountCreatedIssueAssignees :many
 SELECT
   assignee_type,
   assignee_id,
-  COUNT(*)::bigint as frequency
+  COUNT(*) as frequency
 FROM issue
-WHERE workspace_id = $1
-  AND creator_id = $2
+WHERE workspace_id = ?1
+  AND creator_id = ?2
   AND creator_type = 'member'
   AND assignee_type IS NOT NULL
   AND assignee_id IS NOT NULL
@@ -139,19 +144,19 @@ GROUP BY assignee_type, assignee_id
 `
 
 type CountCreatedIssueAssigneesParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	CreatorID   pgtype.UUID `json:"creator_id"`
+	WorkspaceID string `json:"workspace_id"`
+	CreatorID   string `json:"creator_id"`
 }
 
 type CountCreatedIssueAssigneesRow struct {
-	AssigneeType pgtype.Text `json:"assignee_type"`
-	AssigneeID   pgtype.UUID `json:"assignee_id"`
-	Frequency    int64       `json:"frequency"`
+	AssigneeType sql.NullString `json:"assignee_type"`
+	AssigneeID   sql.NullString `json:"assignee_id"`
+	Frequency    int64          `json:"frequency"`
 }
 
 // Count assignees on issues created by a specific user.
 func (q *Queries) CountCreatedIssueAssignees(ctx context.Context, arg CountCreatedIssueAssigneesParams) ([]CountCreatedIssueAssigneesRow, error) {
-	rows, err := q.db.Query(ctx, countCreatedIssueAssignees, arg.WorkspaceID, arg.CreatorID)
+	rows, err := q.db.QueryContext(ctx, countCreatedIssueAssignees, arg.WorkspaceID, arg.CreatorID)
 	if err != nil {
 		return nil, err
 	}
@@ -164,6 +169,9 @@ func (q *Queries) CountCreatedIssueAssignees(ctx context.Context, arg CountCreat
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -172,65 +180,68 @@ func (q *Queries) CountCreatedIssueAssignees(ctx context.Context, arg CountCreat
 
 const countIssues = `-- name: CountIssues :one
 SELECT count(*) FROM issue i
-WHERE i.workspace_id = $1
-  AND ($2::text IS NULL OR i.status = $2)
-  AND ($3::text IS NULL OR i.priority = $3)
-  AND ($4::uuid IS NULL OR i.assignee_id = $4)
-  AND ($5::uuid[] IS NULL OR i.assignee_id = ANY($5::uuid[]))
-  AND ($6::uuid IS NULL OR i.creator_id = $6)
-  AND ($7::uuid IS NULL OR i.project_id = $7)
-  AND ($8::bool IS NULL OR (i.start_date IS NOT NULL OR i.due_date IS NOT NULL))
-  AND ($9::jsonb IS NULL OR i.metadata @> $9::jsonb)
+WHERE i.workspace_id = ?1
+  AND (?2 IS NULL OR i.status = ?2)
+  AND (?3 IS NULL OR i.priority = ?3)
+  AND (?4 IS NULL OR i.assignee_id = ?4)
+  AND (?5 IS NULL OR i.assignee_id IN (SELECT value FROM json_each(?5)))
+  AND (?6 IS NULL OR i.creator_id = ?6)
+  AND (?7 IS NULL OR i.project_id = ?7)
+  AND (?8 IS NULL OR (i.start_date IS NOT NULL OR i.due_date IS NOT NULL))
+  AND (?9 IS NULL OR NOT EXISTS (
+      SELECT 1 FROM json_each(?9) AS mf
+      WHERE json_extract(i.metadata, '$.' || mf.key) IS NOT mf.value
+  ))
   AND (
-    $10::uuid IS NULL
+    ?10 IS NULL
     OR (i.assignee_type = 'agent' AND i.assignee_id IN (
           SELECT a.id FROM agent a
-           WHERE a.workspace_id = $1
-             AND a.owner_id     = $10::uuid
+           WHERE a.workspace_id = ?1
+             AND a.owner_id     = ?10
     ))
     OR (i.assignee_type = 'squad' AND i.assignee_id IN (
           SELECT sm.squad_id
             FROM squad_member sm
             JOIN squad s ON s.id = sm.squad_id
-           WHERE s.workspace_id = $1
+           WHERE s.workspace_id = ?1
              AND sm.member_type = 'member'
-             AND sm.member_id   = $10::uuid
+             AND sm.member_id   = ?10
           UNION
           SELECT s.id
             FROM squad s
             JOIN agent a ON a.id = s.leader_id
-           WHERE s.workspace_id = $1
-             AND a.workspace_id = $1
-             AND a.owner_id     = $10::uuid
+           WHERE s.workspace_id = ?1
+             AND a.workspace_id = ?1
+             AND a.owner_id     = ?10
           UNION
           SELECT sm.squad_id
             FROM squad_member sm
             JOIN squad s ON s.id = sm.squad_id
             JOIN agent a ON a.id = sm.member_id
-           WHERE s.workspace_id = $1
+           WHERE s.workspace_id = ?1
              AND sm.member_type = 'agent'
-             AND a.workspace_id = $1
-             AND a.owner_id     = $10::uuid
+             AND a.workspace_id = ?1
+             AND a.owner_id     = ?10
     ))
   )
 `
 
 type CountIssuesParams struct {
-	WorkspaceID    pgtype.UUID   `json:"workspace_id"`
-	Status         pgtype.Text   `json:"status"`
-	Priority       pgtype.Text   `json:"priority"`
-	AssigneeID     pgtype.UUID   `json:"assignee_id"`
-	AssigneeIds    []pgtype.UUID `json:"assignee_ids"`
-	CreatorID      pgtype.UUID   `json:"creator_id"`
-	ProjectID      pgtype.UUID   `json:"project_id"`
-	Scheduled      pgtype.Bool   `json:"scheduled"`
-	MetadataFilter []byte        `json:"metadata_filter"`
-	InvolvesUserID pgtype.UUID   `json:"involves_user_id"`
+	WorkspaceID    string      `json:"workspace_id"`
+	Status         interface{} `json:"status"`
+	Priority       interface{} `json:"priority"`
+	AssigneeID     interface{} `json:"assignee_id"`
+	AssigneeIds    interface{} `json:"assignee_ids"`
+	CreatorID      interface{} `json:"creator_id"`
+	ProjectID      interface{} `json:"project_id"`
+	Scheduled      interface{} `json:"scheduled"`
+	MetadataFilter interface{} `json:"metadata_filter"`
+	InvolvesUserID interface{} `json:"involves_user_id"`
 }
 
 // See ListIssues for the semantics of involves_user_id.
 func (q *Queries) CountIssues(ctx context.Context, arg CountIssuesParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countIssues,
+	row := q.db.QueryRowContext(ctx, countIssues,
 		arg.WorkspaceID,
 		arg.Status,
 		arg.Priority,
@@ -249,48 +260,48 @@ func (q *Queries) CountIssues(ctx context.Context, arg CountIssuesParams) (int64
 
 const countIssuesInTriage = `-- name: CountIssuesInTriage :one
 SELECT count(*) FROM issue
-WHERE workspace_id = $1
-  AND id = ANY($2::uuid[])
+WHERE workspace_id = ?1
+  AND id IN (SELECT value FROM json_each(?2))
   AND triage_state IS NOT NULL
 `
 
 type CountIssuesInTriageParams struct {
-	WorkspaceID pgtype.UUID   `json:"workspace_id"`
-	IssueIds    []pgtype.UUID `json:"issue_ids"`
+	WorkspaceID string      `json:"workspace_id"`
+	IssueIds    interface{} `json:"issue_ids"`
 }
 
 // How many of these issues are in Triage. The batch parent-write guard only
 // needs "any", and a count keeps the check one round trip regardless of size.
 func (q *Queries) CountIssuesInTriage(ctx context.Context, arg CountIssuesInTriageParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countIssuesInTriage, arg.WorkspaceID, arg.IssueIds)
+	row := q.db.QueryRowContext(ctx, countIssuesInTriage, arg.WorkspaceID, arg.IssueIds)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
 }
 
 const countIssuesUpTo = `-- name: CountIssuesUpTo :one
-SELECT COUNT(*)::bigint
+SELECT COUNT(*)
 FROM (
     SELECT 1
     FROM issue
-    WHERE workspace_id = $1
-    LIMIT $2::bigint
+    WHERE workspace_id = ?1
+    LIMIT ?2
 ) bounded_issues
 `
 
 type CountIssuesUpToParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Limit       int64       `json:"limit"`
+	WorkspaceID string `json:"workspace_id"`
+	Limit       int64  `json:"limit"`
 }
 
 // Bounded count for issue-limit admission and display. Callers pass only the
 // threshold needed for their decision, avoiding a full scan in an oversized
 // workspace.
 func (q *Queries) CountIssuesUpTo(ctx context.Context, arg CountIssuesUpToParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countIssuesUpTo, arg.WorkspaceID, arg.Limit)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
+	row := q.db.QueryRowContext(ctx, countIssuesUpTo, arg.WorkspaceID, arg.Limit)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const createIssue = `-- name: CreateIssue :one
@@ -300,34 +311,34 @@ INSERT INTO issue (
     parent_issue_id, position, start_date, due_date, number, project_id,
     stage, properties, last_activity_at, id
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-    $16, COALESCE($17::jsonb, '{}'::jsonb), now(), COALESCE($18::uuid, gen_random_uuid())
+    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+    ?16, COALESCE(?17, '{}'), now(), COALESCE(?18, gen_random_uuid())
 ) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id
 `
 
 type CreateIssueParams struct {
-	WorkspaceID   pgtype.UUID `json:"workspace_id"`
-	Title         string      `json:"title"`
-	Description   pgtype.Text `json:"description"`
-	Status        string      `json:"status"`
-	Priority      string      `json:"priority"`
-	AssigneeType  pgtype.Text `json:"assignee_type"`
-	AssigneeID    pgtype.UUID `json:"assignee_id"`
-	CreatorType   string      `json:"creator_type"`
-	CreatorID     pgtype.UUID `json:"creator_id"`
-	ParentIssueID pgtype.UUID `json:"parent_issue_id"`
-	Position      float64     `json:"position"`
-	StartDate     pgtype.Date `json:"start_date"`
-	DueDate       pgtype.Date `json:"due_date"`
-	Number        int32       `json:"number"`
-	ProjectID     pgtype.UUID `json:"project_id"`
-	Stage         pgtype.Int4 `json:"stage"`
-	Properties    []byte      `json:"properties"`
-	ID            pgtype.UUID `json:"id"`
+	WorkspaceID   string         `json:"workspace_id"`
+	Title         string         `json:"title"`
+	Description   sql.NullString `json:"description"`
+	Status        string         `json:"status"`
+	Priority      string         `json:"priority"`
+	AssigneeType  sql.NullString `json:"assignee_type"`
+	AssigneeID    sql.NullString `json:"assignee_id"`
+	CreatorType   string         `json:"creator_type"`
+	CreatorID     string         `json:"creator_id"`
+	ParentIssueID sql.NullString `json:"parent_issue_id"`
+	Position      float64        `json:"position"`
+	StartDate     sql.NullString `json:"start_date"`
+	DueDate       sql.NullString `json:"due_date"`
+	Number        int64          `json:"number"`
+	ProjectID     sql.NullString `json:"project_id"`
+	Stage         sql.NullInt64  `json:"stage"`
+	Properties    interface{}    `json:"properties"`
+	ID            interface{}    `json:"id"`
 }
 
 func (q *Queries) CreateIssue(ctx context.Context, arg CreateIssueParams) (Issue, error) {
-	row := q.db.QueryRow(ctx, createIssue,
+	row := q.db.QueryRowContext(ctx, createIssue,
 		arg.WorkspaceID,
 		arg.Title,
 		arg.Description,
@@ -390,36 +401,36 @@ INSERT INTO issue (
     parent_issue_id, position, start_date, due_date, number, project_id,
     origin_type, origin_id, stage, properties, last_activity_at, id
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-    $16, $17, $18, COALESCE($19::jsonb, '{}'::jsonb), now(), COALESCE($20::uuid, gen_random_uuid())
+    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+    ?16, ?17, ?18, COALESCE(?19, '{}'), now(), COALESCE(?20, gen_random_uuid())
 ) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id
 `
 
 type CreateIssueWithOriginParams struct {
-	WorkspaceID   pgtype.UUID `json:"workspace_id"`
-	Title         string      `json:"title"`
-	Description   pgtype.Text `json:"description"`
-	Status        string      `json:"status"`
-	Priority      string      `json:"priority"`
-	AssigneeType  pgtype.Text `json:"assignee_type"`
-	AssigneeID    pgtype.UUID `json:"assignee_id"`
-	CreatorType   string      `json:"creator_type"`
-	CreatorID     pgtype.UUID `json:"creator_id"`
-	ParentIssueID pgtype.UUID `json:"parent_issue_id"`
-	Position      float64     `json:"position"`
-	StartDate     pgtype.Date `json:"start_date"`
-	DueDate       pgtype.Date `json:"due_date"`
-	Number        int32       `json:"number"`
-	ProjectID     pgtype.UUID `json:"project_id"`
-	OriginType    pgtype.Text `json:"origin_type"`
-	OriginID      pgtype.UUID `json:"origin_id"`
-	Stage         pgtype.Int4 `json:"stage"`
-	Properties    []byte      `json:"properties"`
-	ID            pgtype.UUID `json:"id"`
+	WorkspaceID   string         `json:"workspace_id"`
+	Title         string         `json:"title"`
+	Description   sql.NullString `json:"description"`
+	Status        string         `json:"status"`
+	Priority      string         `json:"priority"`
+	AssigneeType  sql.NullString `json:"assignee_type"`
+	AssigneeID    sql.NullString `json:"assignee_id"`
+	CreatorType   string         `json:"creator_type"`
+	CreatorID     string         `json:"creator_id"`
+	ParentIssueID sql.NullString `json:"parent_issue_id"`
+	Position      float64        `json:"position"`
+	StartDate     sql.NullString `json:"start_date"`
+	DueDate       sql.NullString `json:"due_date"`
+	Number        int64          `json:"number"`
+	ProjectID     sql.NullString `json:"project_id"`
+	OriginType    sql.NullString `json:"origin_type"`
+	OriginID      sql.NullString `json:"origin_id"`
+	Stage         sql.NullInt64  `json:"stage"`
+	Properties    interface{}    `json:"properties"`
+	ID            interface{}    `json:"id"`
 }
 
 func (q *Queries) CreateIssueWithOrigin(ctx context.Context, arg CreateIssueWithOriginParams) (Issue, error) {
-	row := q.db.QueryRow(ctx, createIssueWithOrigin,
+	row := q.db.QueryRowContext(ctx, createIssueWithOrigin,
 		arg.WorkspaceID,
 		arg.Title,
 		arg.Description,
@@ -478,90 +489,52 @@ func (q *Queries) CreateIssueWithOrigin(ctx context.Context, arg CreateIssueWith
 }
 
 const deleteIssue = `-- name: DeleteIssue :exec
-WITH target AS (
-    SELECT issue.id FROM issue WHERE issue.id = $1 AND issue.workspace_id = $2
-),
-cleared_wakeup_receipts AS (
- DELETE FROM issue_wakeup_receipt WHERE wakeup_id IN (SELECT id FROM issue_wakeup WHERE issue_id IN (SELECT target.id FROM target))
-),
-cleared_wakeups AS (
- DELETE FROM issue_wakeup WHERE issue_id IN (SELECT target.id FROM target)
-),
-cleared_child_events AS (
- DELETE FROM issue_child_event WHERE parent_id IN (SELECT target.id FROM target) OR child_id IN (SELECT target.id FROM target)
-),
-cleared_task_supplements AS (
- DELETE FROM task_supplement WHERE issue_id IN (SELECT target.id FROM target)
-),
-cleared_task_supplement_capabilities AS (
- DELETE FROM task_supplement_capability WHERE issue_id IN (SELECT target.id FROM target)
-),
-cleared_vcs_pr_links AS (
-    DELETE FROM issue_vcs_pull_request WHERE issue_id IN (SELECT target.id FROM target)
-),
-cleared_pr_automation AS (
-    DELETE FROM issue_pr_automation WHERE issue_id IN (SELECT target.id FROM target)
-),
-cleared_pr_exclusions AS (
-    DELETE FROM issue_pull_request_exclusion WHERE issue_id IN (SELECT target.id FROM target)
+DELETE FROM issue_wakeup_receipt
+WHERE wakeup_id IN (
+    SELECT id FROM issue_wakeup
+    WHERE issue_id = ?1 AND workspace_id = ?2
 )
-DELETE FROM issue WHERE issue.id IN (SELECT target.id FROM target)
 `
 
 type DeleteIssueParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	IssueID     string `json:"issue_id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
-// Defense-in-depth: the workspace_id predicate makes the tenant invariant a
-// SQL-layer guarantee rather than a handler-layer one. Handler loaders
-// (loadIssueForUser / GetIssueInWorkspace) already enforce membership today,
-// but a future loader bypass or a new caller skipping the loader would be
-// silently catastrophic without this guard. See incident #1661.
-//
-// issue_vcs_pull_request (migration 213) has no FK to issue, so the link rows
-// are not cascaded away. Sweep them here so they go atomically with the issue.
-// The mirrored PR rows themselves belong to the connection, not the issue, so
-// they persist (matching the GitHub link behaviour).
-//
-// The sweep MUST route through the same workspace-checked target as the issue
-// delete: deleting links by bare issue_id would drop another tenant's link rows
-// when a caller passes a foreign issue_id with its own workspace_id (the issue
-// itself is correctly untouched, but the links are already gone) — the exact
-// cross-tenant leak the #1661 guard above exists to prevent.
+// Child rows are removed by the following steps. There is no FK cascade.
 func (q *Queries) DeleteIssue(ctx context.Context, arg DeleteIssueParams) error {
-	_, err := q.db.Exec(ctx, deleteIssue, arg.ID, arg.WorkspaceID)
+	_, err := q.db.ExecContext(ctx, deleteIssue, arg.IssueID, arg.WorkspaceID)
 	return err
 }
 
 const deleteIssueMetadataKey = `-- name: DeleteIssueMetadataKey :one
 UPDATE issue SET
-    metadata = metadata - $1::text,
+    metadata = json_remove(metadata, '$.' || ?1),
     revision = revision + 1,
     last_activity_at = GREATEST(COALESCE(last_activity_at, updated_at), now()),
     updated_at = now()
-WHERE id = $2 AND workspace_id = $3
-  AND metadata ? $1::text
+WHERE id = ?2 AND workspace_id = ?3
+  AND json_type(metadata, '$.' || ?1) IS NOT NULL
 RETURNING id, workspace_id, metadata, revision
 `
 
 type DeleteIssueMetadataKeyParams struct {
-	Key         string      `json:"key"`
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Key         sql.NullString `json:"key"`
+	ID          string         `json:"id"`
+	WorkspaceID string         `json:"workspace_id"`
 }
 
 type DeleteIssueMetadataKeyRow struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Metadata    []byte      `json:"metadata"`
-	Revision    int64       `json:"revision"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	Metadata    string `json:"metadata"`
+	Revision    int64  `json:"revision"`
 }
 
 // Atomically removes a single key from the issue's metadata JSONB.
 // Deleting a missing key is a no-op (returns no rows).
 func (q *Queries) DeleteIssueMetadataKey(ctx context.Context, arg DeleteIssueMetadataKeyParams) (DeleteIssueMetadataKeyRow, error) {
-	row := q.db.QueryRow(ctx, deleteIssueMetadataKey, arg.Key, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, deleteIssueMetadataKey, arg.Key, arg.ID, arg.WorkspaceID)
 	var i DeleteIssueMetadataKeyRow
 	err := row.Scan(
 		&i.ID,
@@ -572,6 +545,127 @@ func (q *Queries) DeleteIssueMetadataKey(ctx context.Context, arg DeleteIssueMet
 	return i, err
 }
 
+const deleteIssue_Step2 = `-- name: DeleteIssue_Step2 :exec
+DELETE FROM issue_wakeup
+WHERE issue_id = ?1 AND workspace_id = ?2
+`
+
+type DeleteIssue_Step2Params struct {
+	IssueID     string `json:"issue_id"`
+	WorkspaceID string `json:"workspace_id"`
+}
+
+func (q *Queries) DeleteIssue_Step2(ctx context.Context, arg DeleteIssue_Step2Params) error {
+	_, err := q.db.ExecContext(ctx, deleteIssue_Step2, arg.IssueID, arg.WorkspaceID)
+	return err
+}
+
+const deleteIssue_Step3 = `-- name: DeleteIssue_Step3 :exec
+DELETE FROM issue_child_event
+WHERE workspace_id = ?2 AND (parent_id = ?1 OR child_id = ?1)
+`
+
+type DeleteIssue_Step3Params struct {
+	ParentID    string `json:"parent_id"`
+	WorkspaceID string `json:"workspace_id"`
+}
+
+func (q *Queries) DeleteIssue_Step3(ctx context.Context, arg DeleteIssue_Step3Params) error {
+	_, err := q.db.ExecContext(ctx, deleteIssue_Step3, arg.ParentID, arg.WorkspaceID)
+	return err
+}
+
+const deleteIssue_Step4 = `-- name: DeleteIssue_Step4 :exec
+DELETE FROM task_supplement
+WHERE issue_id = ?1 AND workspace_id = ?2
+`
+
+type DeleteIssue_Step4Params struct {
+	IssueID     string `json:"issue_id"`
+	WorkspaceID string `json:"workspace_id"`
+}
+
+func (q *Queries) DeleteIssue_Step4(ctx context.Context, arg DeleteIssue_Step4Params) error {
+	_, err := q.db.ExecContext(ctx, deleteIssue_Step4, arg.IssueID, arg.WorkspaceID)
+	return err
+}
+
+const deleteIssue_Step5 = `-- name: DeleteIssue_Step5 :exec
+DELETE FROM task_supplement_capability
+WHERE issue_id = ?1 AND workspace_id = ?2
+`
+
+type DeleteIssue_Step5Params struct {
+	IssueID     string `json:"issue_id"`
+	WorkspaceID string `json:"workspace_id"`
+}
+
+func (q *Queries) DeleteIssue_Step5(ctx context.Context, arg DeleteIssue_Step5Params) error {
+	_, err := q.db.ExecContext(ctx, deleteIssue_Step5, arg.IssueID, arg.WorkspaceID)
+	return err
+}
+
+const deleteIssue_Step6 = `-- name: DeleteIssue_Step6 :exec
+DELETE FROM issue_vcs_pull_request
+WHERE issue_id = ?1
+  AND EXISTS (SELECT 1 FROM issue WHERE issue.id = ?1 AND issue.workspace_id = ?2)
+`
+
+type DeleteIssue_Step6Params struct {
+	IssueID     string `json:"issue_id"`
+	WorkspaceID string `json:"workspace_id"`
+}
+
+func (q *Queries) DeleteIssue_Step6(ctx context.Context, arg DeleteIssue_Step6Params) error {
+	_, err := q.db.ExecContext(ctx, deleteIssue_Step6, arg.IssueID, arg.WorkspaceID)
+	return err
+}
+
+const deleteIssue_Step7 = `-- name: DeleteIssue_Step7 :exec
+DELETE FROM issue_pr_automation
+WHERE issue_id = ?1 AND workspace_id = ?2
+`
+
+type DeleteIssue_Step7Params struct {
+	IssueID     string `json:"issue_id"`
+	WorkspaceID string `json:"workspace_id"`
+}
+
+func (q *Queries) DeleteIssue_Step7(ctx context.Context, arg DeleteIssue_Step7Params) error {
+	_, err := q.db.ExecContext(ctx, deleteIssue_Step7, arg.IssueID, arg.WorkspaceID)
+	return err
+}
+
+const deleteIssue_Step8 = `-- name: DeleteIssue_Step8 :exec
+DELETE FROM issue_pull_request_exclusion
+WHERE issue_id = ?1 AND workspace_id = ?2
+`
+
+type DeleteIssue_Step8Params struct {
+	IssueID     string `json:"issue_id"`
+	WorkspaceID string `json:"workspace_id"`
+}
+
+func (q *Queries) DeleteIssue_Step8(ctx context.Context, arg DeleteIssue_Step8Params) error {
+	_, err := q.db.ExecContext(ctx, deleteIssue_Step8, arg.IssueID, arg.WorkspaceID)
+	return err
+}
+
+const deleteIssue_Step9 = `-- name: DeleteIssue_Step9 :exec
+DELETE FROM issue
+WHERE id = ?1 AND workspace_id = ?2
+`
+
+type DeleteIssue_Step9Params struct {
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+}
+
+func (q *Queries) DeleteIssue_Step9(ctx context.Context, arg DeleteIssue_Step9Params) error {
+	_, err := q.db.ExecContext(ctx, deleteIssue_Step9, arg.ID, arg.WorkspaceID)
+	return err
+}
+
 const detachDirectChildIssues = `-- name: DetachDirectChildIssues :many
 UPDATE issue
 SET parent_issue_id = NULL,
@@ -579,20 +673,20 @@ SET parent_issue_id = NULL,
     revision = revision + 1,
     updated_at = now(),
     last_activity_at = GREATEST(COALESCE(last_activity_at, updated_at), now())
-WHERE workspace_id = $1
-  AND parent_issue_id = $2
-  AND NOT COALESCE(id = ANY($3::uuid[]), false)
+WHERE workspace_id = ?1
+  AND parent_issue_id = ?2
+  AND NOT COALESCE(id IN (SELECT value FROM json_each(?3)), false)
 RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id
 `
 
 type DetachDirectChildIssuesParams struct {
-	WorkspaceID      pgtype.UUID   `json:"workspace_id"`
-	ParentIssueID    pgtype.UUID   `json:"parent_issue_id"`
-	ExcludedIssueIds []pgtype.UUID `json:"excluded_issue_ids"`
+	WorkspaceID      string         `json:"workspace_id"`
+	ParentIssueID    sql.NullString `json:"parent_issue_id"`
+	ExcludedIssueIds interface{}    `json:"excluded_issue_ids"`
 }
 
 func (q *Queries) DetachDirectChildIssues(ctx context.Context, arg DetachDirectChildIssuesParams) ([]Issue, error) {
-	rows, err := q.db.Query(ctx, detachDirectChildIssues, arg.WorkspaceID, arg.ParentIssueID, arg.ExcludedIssueIds)
+	rows, err := q.db.QueryContext(ctx, detachDirectChildIssues, arg.WorkspaceID, arg.ParentIssueID, arg.ExcludedIssueIds)
 	if err != nil {
 		return nil, err
 	}
@@ -636,6 +730,9 @@ func (q *Queries) DetachDirectChildIssues(ctx context.Context, arg DetachDirectC
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -644,30 +741,30 @@ func (q *Queries) DetachDirectChildIssues(ctx context.Context, arg DetachDirectC
 
 const findActiveDuplicateIssue = `-- name: FindActiveDuplicateIssue :one
 SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id FROM issue
-WHERE workspace_id = $1
+WHERE workspace_id = ?1
   -- Negate only known terminal keys so an unknown legacy key remains active.
-  AND NOT (status = ANY($2::text[]))
+  AND NOT (status IN (SELECT value FROM json_each(?2)))
   -- An entry waiting in Triage has not been taken on, so it never blocks
   -- someone filing the same work; a duplicate there is resolved by merging
-  -- it out of Triage (MUL-7189 §2.6).
+  -- it out of Triage (MUL-7189  2.6).
   AND triage_state IS NULL
-  AND project_id IS NOT DISTINCT FROM $3::uuid
-  AND parent_issue_id IS NOT DISTINCT FROM $4::uuid
-  AND lower(btrim(regexp_replace(title, '[[:space:]]+', ' ', 'g'))) = $5
+  AND project_id IS ?3
+  AND parent_issue_id IS ?4
+  AND lower(trim(replace(replace(replace(replace(replace(replace(replace(replace(title, char(9), ' '), char(10), ' '), char(13), ' '), char(12), ' '), '  ', ' '), '  ', ' '), '  ', ' '), '  ', ' '))) = ?5
 ORDER BY created_at ASC
 LIMIT 1
 `
 
 type FindActiveDuplicateIssueParams struct {
-	WorkspaceID        pgtype.UUID `json:"workspace_id"`
-	TerminalStatusKeys []string    `json:"terminal_status_keys"`
-	ProjectID          pgtype.UUID `json:"project_id"`
-	ParentIssueID      pgtype.UUID `json:"parent_issue_id"`
-	NormalizedTitle    string      `json:"normalized_title"`
+	WorkspaceID        string         `json:"workspace_id"`
+	TerminalStatusKeys interface{}    `json:"terminal_status_keys"`
+	ProjectID          sql.NullString `json:"project_id"`
+	ParentIssueID      sql.NullString `json:"parent_issue_id"`
+	NormalizedTitle    string         `json:"normalized_title"`
 }
 
 func (q *Queries) FindActiveDuplicateIssue(ctx context.Context, arg FindActiveDuplicateIssueParams) (Issue, error) {
-	row := q.db.QueryRow(ctx, findActiveDuplicateIssue,
+	row := q.db.QueryRowContext(ctx, findActiveDuplicateIssue,
 		arg.WorkspaceID,
 		arg.TerminalStatusKeys,
 		arg.ProjectID,
@@ -712,18 +809,18 @@ func (q *Queries) FindActiveDuplicateIssue(ctx context.Context, arg FindActiveDu
 
 const findRecentAutopilotDuplicateIssue = `-- name: FindRecentAutopilotDuplicateIssue :one
 SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id FROM issue i
-WHERE i.workspace_id = $1
+WHERE i.workspace_id = ?1
   -- Negate only known terminal keys so an unknown legacy key remains active.
-  AND NOT (i.status = ANY($3::text[]))
+  AND NOT (i.status IN (SELECT value FROM json_each(?3)))
   -- An entry waiting in Triage has not been taken on, so it never blocks
   -- someone filing the same work; a duplicate there is resolved by merging
-  -- it out of Triage (MUL-7189 §2.6).
+  -- it out of Triage (MUL-7189  2.6).
   AND i.triage_state IS NULL
   AND i.origin_type = 'autopilot'
-  AND i.origin_id = $2
-  AND i.project_id IS NOT DISTINCT FROM $4::uuid
-  AND lower(btrim(regexp_replace(i.title, '[[:space:]]+', ' ', 'g'))) = $5
-  AND i.created_at >= $6::timestamptz
+  AND i.origin_id = ?2
+  AND i.project_id IS ?4
+  AND lower(trim(replace(replace(replace(replace(replace(replace(replace(replace(i.title, char(9), ' '), char(10), ' '), char(13), ' '), char(12), ' '), '  ', ' '), '  ', ' '), '  ', ' '), '  ', ' '))) = ?5
+  AND i.created_at >= ?6
   AND EXISTS (
     SELECT 1
     FROM autopilot_run r
@@ -736,16 +833,16 @@ LIMIT 1
 `
 
 type FindRecentAutopilotDuplicateIssueParams struct {
-	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
-	OriginID           pgtype.UUID        `json:"origin_id"`
-	TerminalStatusKeys []string           `json:"terminal_status_keys"`
-	ProjectID          pgtype.UUID        `json:"project_id"`
-	NormalizedTitle    string             `json:"normalized_title"`
-	CreatedAfter       pgtype.Timestamptz `json:"created_after"`
+	WorkspaceID        string         `json:"workspace_id"`
+	OriginID           sql.NullString `json:"origin_id"`
+	TerminalStatusKeys interface{}    `json:"terminal_status_keys"`
+	ProjectID          sql.NullString `json:"project_id"`
+	NormalizedTitle    string         `json:"normalized_title"`
+	CreatedAfter       string         `json:"created_after"`
 }
 
 func (q *Queries) FindRecentAutopilotDuplicateIssue(ctx context.Context, arg FindRecentAutopilotDuplicateIssueParams) (Issue, error) {
-	row := q.db.QueryRow(ctx, findRecentAutopilotDuplicateIssue,
+	row := q.db.QueryRowContext(ctx, findRecentAutopilotDuplicateIssue,
 		arg.WorkspaceID,
 		arg.OriginID,
 		arg.TerminalStatusKeys,
@@ -791,11 +888,11 @@ func (q *Queries) FindRecentAutopilotDuplicateIssue(ctx context.Context, arg Fin
 
 const getIssue = `-- name: GetIssue :one
 SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id FROM issue
-WHERE id = $1
+WHERE id = ?1
 `
 
-func (q *Queries) GetIssue(ctx context.Context, id pgtype.UUID) (Issue, error) {
-	row := q.db.QueryRow(ctx, getIssue, id)
+func (q *Queries) GetIssue(ctx context.Context, id string) (Issue, error) {
+	row := q.db.QueryRowContext(ctx, getIssue, id)
 	var i Issue
 	err := row.Scan(
 		&i.ID,
@@ -834,16 +931,16 @@ func (q *Queries) GetIssue(ctx context.Context, id pgtype.UUID) (Issue, error) {
 
 const getIssueByNumber = `-- name: GetIssueByNumber :one
 SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id FROM issue
-WHERE workspace_id = $1 AND number = $2
+WHERE workspace_id = ?1 AND number = ?2
 `
 
 type GetIssueByNumberParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Number      int32       `json:"number"`
+	WorkspaceID string `json:"workspace_id"`
+	Number      int64  `json:"number"`
 }
 
 func (q *Queries) GetIssueByNumber(ctx context.Context, arg GetIssueByNumberParams) (Issue, error) {
-	row := q.db.QueryRow(ctx, getIssueByNumber, arg.WorkspaceID, arg.Number)
+	row := q.db.QueryRowContext(ctx, getIssueByNumber, arg.WorkspaceID, arg.Number)
 	var i Issue
 	err := row.Scan(
 		&i.ID,
@@ -882,25 +979,25 @@ func (q *Queries) GetIssueByNumber(ctx context.Context, arg GetIssueByNumberPara
 
 const getIssueByOrigin = `-- name: GetIssueByOrigin :one
 SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id FROM issue
-WHERE workspace_id = $1
-  AND origin_type = $2
-  AND origin_id = $3
+WHERE workspace_id = ?1
+  AND origin_type = ?2
+  AND origin_id = ?3
 LIMIT 1
 `
 
 type GetIssueByOriginParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	OriginType  pgtype.Text `json:"origin_type"`
-	OriginID    pgtype.UUID `json:"origin_id"`
+	WorkspaceID string         `json:"workspace_id"`
+	OriginType  sql.NullString `json:"origin_type"`
+	OriginID    sql.NullString `json:"origin_id"`
 }
 
 // Finds the issue stamped with a specific (origin_type, origin_id) pair.
 // Used by quick-create completion to deterministically locate the issue
-// produced by a given agent_task_queue.id — robust against concurrent
+// produced by a given agent_task_queue.id - robust against concurrent
 // issue creates by the same agent (assignment task + quick-create both
 // running with max_concurrent_tasks > 1).
 func (q *Queries) GetIssueByOrigin(ctx context.Context, arg GetIssueByOriginParams) (Issue, error) {
-	row := q.db.QueryRow(ctx, getIssueByOrigin, arg.WorkspaceID, arg.OriginType, arg.OriginID)
+	row := q.db.QueryRowContext(ctx, getIssueByOrigin, arg.WorkspaceID, arg.OriginType, arg.OriginID)
 	var i Issue
 	err := row.Scan(
 		&i.ID,
@@ -940,17 +1037,17 @@ func (q *Queries) GetIssueByOrigin(ctx context.Context, arg GetIssueByOriginPara
 const getIssueGCStatus = `-- name: GetIssueGCStatus :one
 SELECT workspace_id, status, updated_at
 FROM issue
-WHERE id = $1
+WHERE id = ?1
 `
 
 type GetIssueGCStatusRow struct {
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	Status      string             `json:"status"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	WorkspaceID string `json:"workspace_id"`
+	Status      string `json:"status"`
+	UpdatedAt   string `json:"updated_at"`
 }
 
-func (q *Queries) GetIssueGCStatus(ctx context.Context, id pgtype.UUID) (GetIssueGCStatusRow, error) {
-	row := q.db.QueryRow(ctx, getIssueGCStatus, id)
+func (q *Queries) GetIssueGCStatus(ctx context.Context, id string) (GetIssueGCStatusRow, error) {
+	row := q.db.QueryRowContext(ctx, getIssueGCStatus, id)
 	var i GetIssueGCStatusRow
 	err := row.Scan(&i.WorkspaceID, &i.Status, &i.UpdatedAt)
 	return i, err
@@ -958,16 +1055,16 @@ func (q *Queries) GetIssueGCStatus(ctx context.Context, id pgtype.UUID) (GetIssu
 
 const getIssueInWorkspace = `-- name: GetIssueInWorkspace :one
 SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id FROM issue
-WHERE id = $1 AND workspace_id = $2
+WHERE id = ?1 AND workspace_id = ?2
 `
 
 type GetIssueInWorkspaceParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 func (q *Queries) GetIssueInWorkspace(ctx context.Context, arg GetIssueInWorkspaceParams) (Issue, error) {
-	row := q.db.QueryRow(ctx, getIssueInWorkspace, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, getIssueInWorkspace, arg.ID, arg.WorkspaceID)
 	var i Issue
 	err := row.Scan(
 		&i.ID,
@@ -1006,23 +1103,23 @@ func (q *Queries) GetIssueInWorkspace(ctx context.Context, arg GetIssueInWorkspa
 
 const getIssueMetadataInWorkspace = `-- name: GetIssueMetadataInWorkspace :one
 SELECT metadata, revision FROM issue
-WHERE id = $1 AND workspace_id = $2
+WHERE id = ?1 AND workspace_id = ?2
 `
 
 type GetIssueMetadataInWorkspaceParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 type GetIssueMetadataInWorkspaceRow struct {
-	Metadata []byte `json:"metadata"`
+	Metadata string `json:"metadata"`
 	Revision int64  `json:"revision"`
 }
 
 // Reloads the committed metadata snapshot after a conditional mutation
 // returns no rows, without fetching the rest of the issue payload.
 func (q *Queries) GetIssueMetadataInWorkspace(ctx context.Context, arg GetIssueMetadataInWorkspaceParams) (GetIssueMetadataInWorkspaceRow, error) {
-	row := q.db.QueryRow(ctx, getIssueMetadataInWorkspace, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, getIssueMetadataInWorkspace, arg.ID, arg.WorkspaceID)
 	var i GetIssueMetadataInWorkspaceRow
 	err := row.Scan(&i.Metadata, &i.Revision)
 	return i, err
@@ -1030,24 +1127,24 @@ func (q *Queries) GetIssueMetadataInWorkspace(ctx context.Context, arg GetIssueM
 
 const getIssueRefInWorkspace = `-- name: GetIssueRefInWorkspace :one
 SELECT id, number, title, status FROM issue
-WHERE id = $1 AND workspace_id = $2
+WHERE id = ?1 AND workspace_id = ?2
 `
 
 type GetIssueRefInWorkspaceParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 type GetIssueRefInWorkspaceRow struct {
-	ID     pgtype.UUID `json:"id"`
-	Number int32       `json:"number"`
-	Title  string      `json:"title"`
-	Status string      `json:"status"`
+	ID     string `json:"id"`
+	Number int64  `json:"number"`
+	Title  string `json:"title"`
+	Status string `json:"status"`
 }
 
 // The summary a duplicate's response carries for its original (MUL-7349).
 func (q *Queries) GetIssueRefInWorkspace(ctx context.Context, arg GetIssueRefInWorkspaceParams) (GetIssueRefInWorkspaceRow, error) {
-	row := q.db.QueryRow(ctx, getIssueRefInWorkspace, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, getIssueRefInWorkspace, arg.ID, arg.WorkspaceID)
 	var i GetIssueRefInWorkspaceRow
 	err := row.Scan(
 		&i.ID,
@@ -1059,15 +1156,15 @@ func (q *Queries) GetIssueRefInWorkspace(ctx context.Context, arg GetIssueRefInW
 }
 
 const getIssueTriageState = `-- name: GetIssueTriageState :one
-SELECT triage_state FROM issue WHERE id = $1
+SELECT triage_state FROM issue WHERE id = ?1
 `
 
 // Answers "is this issue in Triage" for the queue door, which runs immediately
 // before an INSERT and must see the status its own transaction wrote. NULL is
 // an ordinary issue.
-func (q *Queries) GetIssueTriageState(ctx context.Context, id pgtype.UUID) (pgtype.Text, error) {
-	row := q.db.QueryRow(ctx, getIssueTriageState, id)
-	var triage_state pgtype.Text
+func (q *Queries) GetIssueTriageState(ctx context.Context, id string) (sql.NullString, error) {
+	row := q.db.QueryRowContext(ctx, getIssueTriageState, id)
+	var triage_state sql.NullString
 	err := row.Scan(&triage_state)
 	return triage_state, err
 }
@@ -1076,15 +1173,15 @@ const issueHasDuplicates = `-- name: IssueHasDuplicates :one
 
 SELECT EXISTS (
     SELECT 1 FROM issue
-    WHERE workspace_id = $1
-      AND duplicate_of_issue_id = $2::uuid
+    WHERE workspace_id = ?1
+      AND duplicate_of_issue_id = ?2
       AND status = 'cancelled'
 ) AS has_duplicates
 `
 
 type IssueHasDuplicatesParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	IssueID     pgtype.UUID `json:"issue_id"`
+	WorkspaceID string         `json:"workspace_id"`
+	IssueID     sql.NullString `json:"issue_id"`
 }
 
 // A mark only counts while the duplicate is cancelled and its original still
@@ -1092,7 +1189,7 @@ type IssueHasDuplicatesParams struct {
 // rollback that kept the column) can reopen a duplicate or delete an original
 // without touching the pointer, so every read applies the rule itself.
 func (q *Queries) IssueHasDuplicates(ctx context.Context, arg IssueHasDuplicatesParams) (bool, error) {
-	row := q.db.QueryRow(ctx, issueHasDuplicates, arg.WorkspaceID, arg.IssueID)
+	row := q.db.QueryRowContext(ctx, issueHasDuplicates, arg.WorkspaceID, arg.IssueID)
 	var has_duplicates bool
 	err := row.Scan(&has_duplicates)
 	return has_duplicates, err
@@ -1100,7 +1197,7 @@ func (q *Queries) IssueHasDuplicates(ctx context.Context, arg IssueHasDuplicates
 
 const listChildIssues = `-- name: ListChildIssues :many
 SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id FROM issue
-WHERE parent_issue_id = $1
+WHERE parent_issue_id = ?1
 ORDER BY number ASC
 `
 
@@ -1110,8 +1207,8 @@ ORDER BY number ASC
 // not relative to siblings, so ordering by it interleaves children
 // unpredictably across batches and statuses; number is a per-workspace
 // monotonic counter and is sibling-stable.
-func (q *Queries) ListChildIssues(ctx context.Context, parentIssueID pgtype.UUID) ([]Issue, error) {
-	rows, err := q.db.Query(ctx, listChildIssues, parentIssueID)
+func (q *Queries) ListChildIssues(ctx context.Context, parentIssueID sql.NullString) ([]Issue, error) {
+	rows, err := q.db.QueryContext(ctx, listChildIssues, parentIssueID)
 	if err != nil {
 		return nil, err
 	}
@@ -1155,6 +1252,9 @@ func (q *Queries) ListChildIssues(ctx context.Context, parentIssueID pgtype.UUID
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -1163,14 +1263,14 @@ func (q *Queries) ListChildIssues(ctx context.Context, parentIssueID pgtype.UUID
 
 const listChildrenByParents = `-- name: ListChildrenByParents :many
 SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id FROM issue
-WHERE workspace_id = $1
-  AND parent_issue_id = ANY($2::uuid[])
+WHERE workspace_id = ?1
+  AND parent_issue_id IN (SELECT value FROM json_each(?2))
 ORDER BY parent_issue_id, number ASC
 `
 
 type ListChildrenByParentsParams struct {
-	WorkspaceID pgtype.UUID   `json:"workspace_id"`
-	ParentIds   []pgtype.UUID `json:"parent_ids"`
+	WorkspaceID string      `json:"workspace_id"`
+	ParentIds   interface{} `json:"parent_ids"`
 }
 
 // Batched variant of ListChildIssues: returns all children for the given
@@ -1181,7 +1281,7 @@ type ListChildrenByParentsParams struct {
 // Within each parent, order by number ASC for the same sibling-stable
 // creation order as ListChildIssues.
 func (q *Queries) ListChildrenByParents(ctx context.Context, arg ListChildrenByParentsParams) ([]Issue, error) {
-	rows, err := q.db.Query(ctx, listChildrenByParents, arg.WorkspaceID, arg.ParentIds)
+	rows, err := q.db.QueryContext(ctx, listChildrenByParents, arg.WorkspaceID, arg.ParentIds)
 	if err != nil {
 		return nil, err
 	}
@@ -1224,6 +1324,9 @@ func (q *Queries) ListChildrenByParents(ctx context.Context, arg ListChildrenByP
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -1233,19 +1336,19 @@ func (q *Queries) ListChildrenByParents(ctx context.Context, arg ListChildrenByP
 
 const listIssueDuplicates = `-- name: ListIssueDuplicates :many
 SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id FROM issue
-WHERE workspace_id = $1
-  AND duplicate_of_issue_id = $2::uuid
+WHERE workspace_id = ?1
+  AND duplicate_of_issue_id = ?2
   AND status = 'cancelled'
 ORDER BY created_at ASC, id ASC
 `
 
 type ListIssueDuplicatesParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	IssueID     pgtype.UUID `json:"issue_id"`
+	WorkspaceID string         `json:"workspace_id"`
+	IssueID     sql.NullString `json:"issue_id"`
 }
 
 func (q *Queries) ListIssueDuplicates(ctx context.Context, arg ListIssueDuplicatesParams) ([]Issue, error) {
-	rows, err := q.db.Query(ctx, listIssueDuplicates, arg.WorkspaceID, arg.IssueID)
+	rows, err := q.db.QueryContext(ctx, listIssueDuplicates, arg.WorkspaceID, arg.IssueID)
 	if err != nil {
 		return nil, err
 	}
@@ -1288,6 +1391,9 @@ func (q *Queries) ListIssueDuplicates(ctx context.Context, arg ListIssueDuplicat
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -1298,23 +1404,23 @@ func (q *Queries) ListIssueDuplicates(ctx context.Context, arg ListIssueDuplicat
 const listIssueGCStatuses = `-- name: ListIssueGCStatuses :many
 SELECT id, status, updated_at
 FROM issue
-WHERE workspace_id = $1
-  AND id = ANY($2::uuid[])
+WHERE workspace_id = ?1
+  AND id IN (SELECT value FROM json_each(?2))
 `
 
 type ListIssueGCStatusesParams struct {
-	WorkspaceID pgtype.UUID   `json:"workspace_id"`
-	IssueIds    []pgtype.UUID `json:"issue_ids"`
+	WorkspaceID string      `json:"workspace_id"`
+	IssueIds    interface{} `json:"issue_ids"`
 }
 
 type ListIssueGCStatusesRow struct {
-	ID        pgtype.UUID        `json:"id"`
-	Status    string             `json:"status"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	ID        string `json:"id"`
+	Status    string `json:"status"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 func (q *Queries) ListIssueGCStatuses(ctx context.Context, arg ListIssueGCStatusesParams) ([]ListIssueGCStatusesRow, error) {
-	rows, err := q.db.Query(ctx, listIssueGCStatuses, arg.WorkspaceID, arg.IssueIds)
+	rows, err := q.db.QueryContext(ctx, listIssueGCStatuses, arg.WorkspaceID, arg.IssueIds)
 	if err != nil {
 		return nil, err
 	}
@@ -1327,6 +1433,9 @@ func (q *Queries) ListIssueGCStatuses(ctx context.Context, arg ListIssueGCStatus
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -1335,26 +1444,26 @@ func (q *Queries) ListIssueGCStatuses(ctx context.Context, arg ListIssueGCStatus
 
 const listIssueRefsInWorkspace = `-- name: ListIssueRefsInWorkspace :many
 SELECT id, number, title, status FROM issue
-WHERE workspace_id = $1
-  AND id = ANY($2::uuid[])
+WHERE workspace_id = ?1
+  AND id IN (SELECT value FROM json_each(?2))
 `
 
 type ListIssueRefsInWorkspaceParams struct {
-	WorkspaceID pgtype.UUID   `json:"workspace_id"`
-	Ids         []pgtype.UUID `json:"ids"`
+	WorkspaceID string      `json:"workspace_id"`
+	Ids         interface{} `json:"ids"`
 }
 
 type ListIssueRefsInWorkspaceRow struct {
-	ID     pgtype.UUID `json:"id"`
-	Number int32       `json:"number"`
-	Title  string      `json:"title"`
-	Status string      `json:"status"`
+	ID     string `json:"id"`
+	Number int64  `json:"number"`
+	Title  string `json:"title"`
+	Status string `json:"status"`
 }
 
 // GetIssueRefInWorkspace for a page: every original the page's duplicates
 // point at, in one read.
 func (q *Queries) ListIssueRefsInWorkspace(ctx context.Context, arg ListIssueRefsInWorkspaceParams) ([]ListIssueRefsInWorkspaceRow, error) {
-	rows, err := q.db.Query(ctx, listIssueRefsInWorkspace, arg.WorkspaceID, arg.Ids)
+	rows, err := q.db.QueryContext(ctx, listIssueRefsInWorkspace, arg.WorkspaceID, arg.Ids)
 	if err != nil {
 		return nil, err
 	}
@@ -1372,6 +1481,9 @@ func (q *Queries) ListIssueRefsInWorkspace(ctx context.Context, arg ListIssueRef
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -1384,32 +1496,35 @@ SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
        i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.last_activity_at, i.number, i.project_id, i.metadata, i.stage, i.properties,
        i.revision, i.duplicate_of_issue_id
 FROM issue i
-WHERE i.workspace_id = $1
-  AND ($4::text IS NULL OR i.status = $4)
-  AND ($5::text IS NULL OR i.priority = $5)
-  AND ($6::uuid IS NULL OR i.assignee_id = $6)
-  AND ($7::uuid[] IS NULL OR i.assignee_id = ANY($7::uuid[]))
-  AND ($8::uuid IS NULL OR i.creator_id = $8)
-  AND ($9::uuid IS NULL OR i.project_id = $9)
-  AND ($10::bool IS NULL OR (i.start_date IS NOT NULL OR i.due_date IS NOT NULL))
-  AND ($11::jsonb IS NULL OR i.metadata @> $11::jsonb)
+WHERE i.workspace_id = ?1
+  AND (?4 IS NULL OR i.status = ?4)
+  AND (?5 IS NULL OR i.priority = ?5)
+  AND (?6 IS NULL OR i.assignee_id = ?6)
+  AND (?7 IS NULL OR i.assignee_id IN (SELECT value FROM json_each(?7)))
+  AND (?8 IS NULL OR i.creator_id = ?8)
+  AND (?9 IS NULL OR i.project_id = ?9)
+  AND (?10 IS NULL OR (i.start_date IS NOT NULL OR i.due_date IS NOT NULL))
+  AND (?11 IS NULL OR NOT EXISTS (
+      SELECT 1 FROM json_each(?11) AS mf
+      WHERE json_extract(i.metadata, '$.' || mf.key) IS NOT mf.value
+  ))
   AND (
-    $12::uuid IS NULL
+    ?12 IS NULL
     -- (1) assignee is an agent owned by the user
     OR (i.assignee_type = 'agent' AND i.assignee_id IN (
           SELECT a.id FROM agent a
-           WHERE a.workspace_id = $1
-             AND a.owner_id     = $12::uuid
+           WHERE a.workspace_id = ?1
+             AND a.owner_id     = ?12
     ))
-    -- (2)(3)(4) assignee is a squad related to the user — three relations
+    -- (2)(3)(4) assignee is a squad related to the user - three relations
     OR (i.assignee_type = 'squad' AND i.assignee_id IN (
           -- (2) the user is a human member of the squad
           SELECT sm.squad_id
             FROM squad_member sm
             JOIN squad s ON s.id = sm.squad_id
-           WHERE s.workspace_id = $1
+           WHERE s.workspace_id = ?1
              AND sm.member_type = 'member'
-             AND sm.member_id   = $12::uuid
+             AND sm.member_id   = ?12
           UNION
           -- (3) the squad's canonical leader is an agent owned by the user.
           -- We read squad.leader_id directly rather than relying on a
@@ -1418,75 +1533,75 @@ WHERE i.workspace_id = $1
           SELECT s.id
             FROM squad s
             JOIN agent a ON a.id = s.leader_id
-           WHERE s.workspace_id = $1
-             AND a.workspace_id = $1
-             AND a.owner_id     = $12::uuid
+           WHERE s.workspace_id = ?1
+             AND a.workspace_id = ?1
+             AND a.owner_id     = ?12
           UNION
           -- (4) the squad has an agent member owned by the user
           SELECT sm.squad_id
             FROM squad_member sm
             JOIN squad s ON s.id = sm.squad_id
             JOIN agent a ON a.id = sm.member_id
-           WHERE s.workspace_id = $1
+           WHERE s.workspace_id = ?1
              AND sm.member_type = 'agent'
-             AND a.workspace_id = $1
-             AND a.owner_id     = $12::uuid
+             AND a.workspace_id = ?1
+             AND a.owner_id     = ?12
     ))
   )
 ORDER BY i.position ASC, i.created_at DESC
-LIMIT $2 OFFSET $3
+LIMIT ?2 OFFSET ?3
 `
 
 type ListIssuesParams struct {
-	WorkspaceID    pgtype.UUID   `json:"workspace_id"`
-	Limit          int32         `json:"limit"`
-	Offset         int32         `json:"offset"`
-	Status         pgtype.Text   `json:"status"`
-	Priority       pgtype.Text   `json:"priority"`
-	AssigneeID     pgtype.UUID   `json:"assignee_id"`
-	AssigneeIds    []pgtype.UUID `json:"assignee_ids"`
-	CreatorID      pgtype.UUID   `json:"creator_id"`
-	ProjectID      pgtype.UUID   `json:"project_id"`
-	Scheduled      pgtype.Bool   `json:"scheduled"`
-	MetadataFilter []byte        `json:"metadata_filter"`
-	InvolvesUserID pgtype.UUID   `json:"involves_user_id"`
+	WorkspaceID    string      `json:"workspace_id"`
+	Limit          int64       `json:"limit"`
+	Offset         int64       `json:"offset"`
+	Status         interface{} `json:"status"`
+	Priority       interface{} `json:"priority"`
+	AssigneeID     interface{} `json:"assignee_id"`
+	AssigneeIds    interface{} `json:"assignee_ids"`
+	CreatorID      interface{} `json:"creator_id"`
+	ProjectID      interface{} `json:"project_id"`
+	Scheduled      interface{} `json:"scheduled"`
+	MetadataFilter interface{} `json:"metadata_filter"`
+	InvolvesUserID interface{} `json:"involves_user_id"`
 }
 
 type ListIssuesRow struct {
-	ID                 pgtype.UUID        `json:"id"`
-	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
-	Title              string             `json:"title"`
-	Description        pgtype.Text        `json:"description"`
-	Status             string             `json:"status"`
-	Priority           string             `json:"priority"`
-	AssigneeType       pgtype.Text        `json:"assignee_type"`
-	AssigneeID         pgtype.UUID        `json:"assignee_id"`
-	CreatorType        string             `json:"creator_type"`
-	CreatorID          pgtype.UUID        `json:"creator_id"`
-	ParentIssueID      pgtype.UUID        `json:"parent_issue_id"`
-	Position           float64            `json:"position"`
-	StartDate          pgtype.Date        `json:"start_date"`
-	DueDate            pgtype.Date        `json:"due_date"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-	LastActivityAt     pgtype.Timestamptz `json:"last_activity_at"`
-	Number             int32              `json:"number"`
-	ProjectID          pgtype.UUID        `json:"project_id"`
-	Metadata           []byte             `json:"metadata"`
-	Stage              pgtype.Int4        `json:"stage"`
-	Properties         []byte             `json:"properties"`
-	Revision           int64              `json:"revision"`
-	DuplicateOfIssueID pgtype.UUID        `json:"duplicate_of_issue_id"`
+	ID                 string         `json:"id"`
+	WorkspaceID        string         `json:"workspace_id"`
+	Title              string         `json:"title"`
+	Description        sql.NullString `json:"description"`
+	Status             string         `json:"status"`
+	Priority           string         `json:"priority"`
+	AssigneeType       sql.NullString `json:"assignee_type"`
+	AssigneeID         sql.NullString `json:"assignee_id"`
+	CreatorType        string         `json:"creator_type"`
+	CreatorID          string         `json:"creator_id"`
+	ParentIssueID      sql.NullString `json:"parent_issue_id"`
+	Position           float64        `json:"position"`
+	StartDate          sql.NullString `json:"start_date"`
+	DueDate            sql.NullString `json:"due_date"`
+	CreatedAt          string         `json:"created_at"`
+	UpdatedAt          string         `json:"updated_at"`
+	LastActivityAt     sql.NullString `json:"last_activity_at"`
+	Number             int64          `json:"number"`
+	ProjectID          sql.NullString `json:"project_id"`
+	Metadata           string         `json:"metadata"`
+	Stage              sql.NullInt64  `json:"stage"`
+	Properties         string         `json:"properties"`
+	Revision           int64          `json:"revision"`
+	DuplicateOfIssueID sql.NullString `json:"duplicate_of_issue_id"`
 }
 
 // involves_user_id widens the assignee filter to surface issues where the user
-// is *indirectly* the assignee — via an owned agent or a squad they belong to /
+// is *indirectly* the assignee - via an owned agent or a squad they belong to /
 // lead / have an agent inside. The semantics intentionally exclude direct
 // member assignment (`assignee_type='member' AND assignee_id=involves_user_id`)
 // because that is already the meaning of the `assignee_id` filter (tab 1
 // "Assigned to me"), and the two filters must produce disjoint result sets.
 func (q *Queries) ListIssues(ctx context.Context, arg ListIssuesParams) ([]ListIssuesRow, error) {
-	rows, err := q.db.Query(ctx, listIssues,
+	rows, err := q.db.QueryContext(ctx, listIssues,
 		arg.WorkspaceID,
 		arg.Limit,
 		arg.Offset,
@@ -1537,6 +1652,9 @@ func (q *Queries) ListIssues(ctx context.Context, arg ListIssuesParams) ([]ListI
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -1549,23 +1667,26 @@ SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
        i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.last_activity_at, i.number, i.project_id, i.metadata, i.stage, i.properties,
        i.revision, i.duplicate_of_issue_id
 FROM issue i
-WHERE i.workspace_id = $1
+WHERE i.workspace_id = ?1
   -- Negate only known terminal keys so an unknown legacy key remains visible.
-  AND NOT (i.status = ANY($2::text[]))
-  AND ($3::text IS NULL OR i.priority = $3)
-  AND ($4::uuid IS NULL OR i.assignee_id = $4)
-  AND ($5::uuid[] IS NULL OR i.assignee_id = ANY($5::uuid[]))
-  AND ($6::uuid IS NULL OR i.creator_id = $6)
-  AND ($7::uuid IS NULL OR i.project_id = $7)
-  AND ($8::jsonb IS NULL OR i.metadata @> $8::jsonb)
+  AND NOT (i.status IN (SELECT value FROM json_each(?2)))
+  AND (?3 IS NULL OR i.priority = ?3)
+  AND (?4 IS NULL OR i.assignee_id = ?4)
+  AND (?5 IS NULL OR i.assignee_id IN (SELECT value FROM json_each(?5)))
+  AND (?6 IS NULL OR i.creator_id = ?6)
+  AND (?7 IS NULL OR i.project_id = ?7)
+  AND (?8 IS NULL OR NOT EXISTS (
+      SELECT 1 FROM json_each(?8) AS mf
+      WHERE json_extract(i.metadata, '$.' || mf.key) IS NOT mf.value
+  ))
   -- properties_filter is a jsonb array of groups, each group an array of
   -- patterns (built by parsePropertiesFilterParam): the issue must match at
   -- least one pattern from EVERY group (AND of ORs). Three pattern shapes:
-  --   {"__none__": "<definitionId>"}                         — "no value" marker;
-  --   {"<definitionId>": <value>, ...}                        — containment;
-  --   {"__op__": "<op>", "def": "<id>", "value": "<v>"}       — scalar operator
+  --   {"__none__": "<definitionId>"}                         - "no value" marker;
+  --   {"<definitionId>": <value>, ...}                        - containment;
+  --   {"__op__": "<op>", "def": "<id>", "value": "<v>"}       - scalar operator
   -- (contains / gt / gte / lt / lte / before / after), where the contains
-  -- value arrives already ILIKE-escaped and the op was validated in Go, so
+  -- value arrives already LIKE-escaped and the op was validated in Go, so
   -- the per-op branches below only ever see legal values. A contains pattern
   -- additionally carries "prefilter" when its needle survives jsonb text
   -- serialization intact; the clause it enables is redundant by construction
@@ -1575,125 +1696,128 @@ WHERE i.workspace_id = $1
   -- terminal-status predicate intentionally remains a filter rather than a
   -- positive index narrowing so unknown legacy status keys stay visible.
   AND (
-    $9::jsonb IS NULL
+    ?9 IS NULL
     OR NOT EXISTS (
       SELECT 1
-      FROM jsonb_array_elements($9::jsonb) AS pf(alternatives)
+      FROM json_each(?9) AS pf
       WHERE NOT EXISTS (
         SELECT 1
-        FROM jsonb_array_elements(pf.alternatives) AS alt(pattern)
-        WHERE (alt.pattern ? '__none__' AND NOT (i.properties ? (alt.pattern ->> '__none__')))
-           OR (NOT (alt.pattern ? '__none__') AND NOT (alt.pattern ? '__op__')
-               AND i.properties @> alt.pattern)
-           OR (alt.pattern ? '__op__'
-               AND i.properties ->> (alt.pattern ->> 'def') IS NOT NULL
+        FROM json_each(pf.value) AS alt
+        WHERE (json_type(alt.value, '$.__none__') IS NOT NULL AND json_type(i.properties, '$.' || json_extract(alt.value, '$.__none__')) IS NULL)
+           OR (json_type(alt.value, '$.__none__') IS NULL AND json_type(alt.value, '$.__op__') IS NULL
+               AND NOT EXISTS (
+                    SELECT 1 FROM json_each(alt.value) AS kv
+                    WHERE json_extract(i.properties, '$.' || kv.key) IS NOT kv.value
+               ))
+           OR (json_type(alt.value, '$.__op__') IS NOT NULL
+               AND json_extract(i.properties, '$.' || json_extract(alt.value, '$.def')) IS NOT NULL
                AND (
-                 (alt.pattern ->> '__op__' = 'contains'
-                  AND (NOT (alt.pattern ? 'prefilter')
-                       OR LOWER(i.properties::text) LIKE LOWER('%' || (alt.pattern ->> 'prefilter') || '%'))
-                  AND jsonb_typeof(i.properties -> (alt.pattern ->> 'def')) = 'string'
-                  AND (i.properties ->> (alt.pattern ->> 'def')) ILIKE '%' || (alt.pattern ->> 'value') || '%')
-                 OR (alt.pattern ->> '__op__' = 'gt'
-                  AND CASE WHEN jsonb_typeof(i.properties -> (alt.pattern ->> 'def')) = 'number'
-                    THEN (i.properties ->> (alt.pattern ->> 'def'))::numeric END > (alt.pattern ->> 'value')::numeric)
-                 OR (alt.pattern ->> '__op__' = 'gte'
-                  AND CASE WHEN jsonb_typeof(i.properties -> (alt.pattern ->> 'def')) = 'number'
-                    THEN (i.properties ->> (alt.pattern ->> 'def'))::numeric END >= (alt.pattern ->> 'value')::numeric)
-                 OR (alt.pattern ->> '__op__' = 'lt'
-                  AND CASE WHEN jsonb_typeof(i.properties -> (alt.pattern ->> 'def')) = 'number'
-                    THEN (i.properties ->> (alt.pattern ->> 'def'))::numeric END < (alt.pattern ->> 'value')::numeric)
-                 OR (alt.pattern ->> '__op__' = 'lte'
-                  AND CASE WHEN jsonb_typeof(i.properties -> (alt.pattern ->> 'def')) = 'number'
-                    THEN (i.properties ->> (alt.pattern ->> 'def'))::numeric END <= (alt.pattern ->> 'value')::numeric)
-                 OR (alt.pattern ->> '__op__' = 'before'
-                  AND jsonb_typeof(i.properties -> (alt.pattern ->> 'def')) = 'string'
-                  AND i.properties ->> (alt.pattern ->> 'def') < (alt.pattern ->> 'value'))
-                 OR (alt.pattern ->> '__op__' = 'after'
-                  AND jsonb_typeof(i.properties -> (alt.pattern ->> 'def')) = 'string'
-                  AND i.properties ->> (alt.pattern ->> 'def') > (alt.pattern ->> 'value'))
+                 (json_extract(alt.value, '$.__op__') = 'contains'
+                  AND (json_type(alt.value, '$.prefilter') IS NULL
+                       OR lower(i.properties) LIKE lower('%' || json_extract(alt.value, '$.prefilter') || '%'))
+                  AND json_type(i.properties, '$.' || json_extract(alt.value, '$.def')) = 'text'
+                  AND lower(json_extract(i.properties, '$.' || json_extract(alt.value, '$.def'))) LIKE lower('%' || json_extract(alt.value, '$.value') || '%'))
+                 OR (json_extract(alt.value, '$.__op__') = 'gt'
+                  AND json_type(i.properties, '$.' || json_extract(alt.value, '$.def')) IN ('integer', 'real')
+                  AND json_extract(i.properties, '$.' || json_extract(alt.value, '$.def')) > json_extract(alt.value, '$.value'))
+                 OR (json_extract(alt.value, '$.__op__') = 'gte'
+                  AND json_type(i.properties, '$.' || json_extract(alt.value, '$.def')) IN ('integer', 'real')
+                  AND json_extract(i.properties, '$.' || json_extract(alt.value, '$.def')) >= json_extract(alt.value, '$.value'))
+                 OR (json_extract(alt.value, '$.__op__') = 'lt'
+                  AND json_type(i.properties, '$.' || json_extract(alt.value, '$.def')) IN ('integer', 'real')
+                  AND json_extract(i.properties, '$.' || json_extract(alt.value, '$.def')) < json_extract(alt.value, '$.value'))
+                 OR (json_extract(alt.value, '$.__op__') = 'lte'
+                  AND json_type(i.properties, '$.' || json_extract(alt.value, '$.def')) IN ('integer', 'real')
+                  AND json_extract(i.properties, '$.' || json_extract(alt.value, '$.def')) <= json_extract(alt.value, '$.value'))
+                 OR (json_extract(alt.value, '$.__op__') = 'before'
+                  AND json_type(i.properties, '$.' || json_extract(alt.value, '$.def')) = 'text'
+                  AND json_extract(i.properties, '$.' || json_extract(alt.value, '$.def')) < json_extract(alt.value, '$.value'))
+                 OR (json_extract(alt.value, '$.__op__') = 'after'
+                  AND json_type(i.properties, '$.' || json_extract(alt.value, '$.def')) = 'text'
+                  AND json_extract(i.properties, '$.' || json_extract(alt.value, '$.def')) > json_extract(alt.value, '$.value'))
                ))
       )
     )
   )
   AND (
-    $10::uuid IS NULL
+    ?10 IS NULL
     OR (i.assignee_type = 'agent' AND i.assignee_id IN (
           SELECT a.id FROM agent a
-           WHERE a.workspace_id = $1
-             AND a.owner_id     = $10::uuid
+           WHERE a.workspace_id = ?1
+             AND a.owner_id     = ?10
     ))
     OR (i.assignee_type = 'squad' AND i.assignee_id IN (
           SELECT sm.squad_id
             FROM squad_member sm
             JOIN squad s ON s.id = sm.squad_id
-           WHERE s.workspace_id = $1
+           WHERE s.workspace_id = ?1
              AND sm.member_type = 'member'
-             AND sm.member_id   = $10::uuid
+             AND sm.member_id   = ?10
           UNION
           SELECT s.id
             FROM squad s
             JOIN agent a ON a.id = s.leader_id
-           WHERE s.workspace_id = $1
-             AND a.workspace_id = $1
-             AND a.owner_id     = $10::uuid
+           WHERE s.workspace_id = ?1
+             AND a.workspace_id = ?1
+             AND a.owner_id     = ?10
           UNION
           SELECT sm.squad_id
             FROM squad_member sm
             JOIN squad s ON s.id = sm.squad_id
             JOIN agent a ON a.id = sm.member_id
-           WHERE s.workspace_id = $1
+           WHERE s.workspace_id = ?1
              AND sm.member_type = 'agent'
-             AND a.workspace_id = $1
-             AND a.owner_id     = $10::uuid
+             AND a.workspace_id = ?1
+             AND a.owner_id     = ?10
     ))
   )
 ORDER BY i.position ASC, i.created_at DESC
 `
 
 type ListOpenIssuesParams struct {
-	WorkspaceID        pgtype.UUID   `json:"workspace_id"`
-	TerminalStatusKeys []string      `json:"terminal_status_keys"`
-	Priority           pgtype.Text   `json:"priority"`
-	AssigneeID         pgtype.UUID   `json:"assignee_id"`
-	AssigneeIds        []pgtype.UUID `json:"assignee_ids"`
-	CreatorID          pgtype.UUID   `json:"creator_id"`
-	ProjectID          pgtype.UUID   `json:"project_id"`
-	MetadataFilter     []byte        `json:"metadata_filter"`
-	PropertiesFilter   []byte        `json:"properties_filter"`
-	InvolvesUserID     pgtype.UUID   `json:"involves_user_id"`
+	WorkspaceID        string      `json:"workspace_id"`
+	TerminalStatusKeys interface{} `json:"terminal_status_keys"`
+	Priority           interface{} `json:"priority"`
+	AssigneeID         interface{} `json:"assignee_id"`
+	AssigneeIds        interface{} `json:"assignee_ids"`
+	CreatorID          interface{} `json:"creator_id"`
+	ProjectID          interface{} `json:"project_id"`
+	MetadataFilter     interface{} `json:"metadata_filter"`
+	PropertiesFilter   interface{} `json:"properties_filter"`
+	InvolvesUserID     interface{} `json:"involves_user_id"`
 }
 
 type ListOpenIssuesRow struct {
-	ID                 pgtype.UUID        `json:"id"`
-	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
-	Title              string             `json:"title"`
-	Description        pgtype.Text        `json:"description"`
-	Status             string             `json:"status"`
-	Priority           string             `json:"priority"`
-	AssigneeType       pgtype.Text        `json:"assignee_type"`
-	AssigneeID         pgtype.UUID        `json:"assignee_id"`
-	CreatorType        string             `json:"creator_type"`
-	CreatorID          pgtype.UUID        `json:"creator_id"`
-	ParentIssueID      pgtype.UUID        `json:"parent_issue_id"`
-	Position           float64            `json:"position"`
-	StartDate          pgtype.Date        `json:"start_date"`
-	DueDate            pgtype.Date        `json:"due_date"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-	LastActivityAt     pgtype.Timestamptz `json:"last_activity_at"`
-	Number             int32              `json:"number"`
-	ProjectID          pgtype.UUID        `json:"project_id"`
-	Metadata           []byte             `json:"metadata"`
-	Stage              pgtype.Int4        `json:"stage"`
-	Properties         []byte             `json:"properties"`
-	Revision           int64              `json:"revision"`
-	DuplicateOfIssueID pgtype.UUID        `json:"duplicate_of_issue_id"`
+	ID                 string         `json:"id"`
+	WorkspaceID        string         `json:"workspace_id"`
+	Title              string         `json:"title"`
+	Description        sql.NullString `json:"description"`
+	Status             string         `json:"status"`
+	Priority           string         `json:"priority"`
+	AssigneeType       sql.NullString `json:"assignee_type"`
+	AssigneeID         sql.NullString `json:"assignee_id"`
+	CreatorType        string         `json:"creator_type"`
+	CreatorID          string         `json:"creator_id"`
+	ParentIssueID      sql.NullString `json:"parent_issue_id"`
+	Position           float64        `json:"position"`
+	StartDate          sql.NullString `json:"start_date"`
+	DueDate            sql.NullString `json:"due_date"`
+	CreatedAt          string         `json:"created_at"`
+	UpdatedAt          string         `json:"updated_at"`
+	LastActivityAt     sql.NullString `json:"last_activity_at"`
+	Number             int64          `json:"number"`
+	ProjectID          sql.NullString `json:"project_id"`
+	Metadata           string         `json:"metadata"`
+	Stage              sql.NullInt64  `json:"stage"`
+	Properties         string         `json:"properties"`
+	Revision           int64          `json:"revision"`
+	DuplicateOfIssueID sql.NullString `json:"duplicate_of_issue_id"`
 }
 
 // See ListIssues for the semantics of involves_user_id (mirrors the 4-branch
 // filter; member-direct assignment is intentionally excluded).
 func (q *Queries) ListOpenIssues(ctx context.Context, arg ListOpenIssuesParams) ([]ListOpenIssuesRow, error) {
-	rows, err := q.db.Query(ctx, listOpenIssues,
+	rows, err := q.db.QueryContext(ctx, listOpenIssues,
 		arg.WorkspaceID,
 		arg.TerminalStatusKeys,
 		arg.Priority,
@@ -1742,6 +1866,9 @@ func (q *Queries) ListOpenIssues(ctx context.Context, arg ListOpenIssuesParams) 
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -1749,95 +1876,91 @@ func (q *Queries) ListOpenIssues(ctx context.Context, arg ListOpenIssuesParams) 
 }
 
 const lockIssueDuplicateKey = `-- name: LockIssueDuplicateKey :exec
-SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
+SELECT 1
 `
 
-func (q *Queries) LockIssueDuplicateKey(ctx context.Context, dollar_1 string) error {
-	_, err := q.db.Exec(ctx, lockIssueDuplicateKey, dollar_1)
+func (q *Queries) LockIssueDuplicateKey(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, lockIssueDuplicateKey)
 	return err
 }
 
 const lockIssueForAttachmentWrite = `-- name: LockIssueForAttachmentWrite :one
 SELECT id FROM issue
-WHERE id = $1 AND workspace_id = $2
-FOR NO KEY UPDATE
+WHERE id = ?1 AND workspace_id = ?2
 `
 
 type LockIssueForAttachmentWriteParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // Owner-first guard for a write to one of an issue's attachments: take the
 // issue before the attachment row, so a writer that reaches the same row
-// through the issue — teardown's issue_id cascade, or the revision bump this
-// write itself performs — either waits for this transaction or is waited on,
+// through the issue - teardown's issue_id cascade, or the revision bump this
+// write itself performs - either waits for this transaction or is waited on,
 // never both.
 //
-// FOR NO KEY UPDATE, the mode of that revision bump, is the weakest mode that
-// actually serializes issue writers. FOR KEY SHARE is NOT enough: it is
-// compatible with FOR NO KEY UPDATE (see LockLiveComment), so a concurrent
+// , the mode of that revision bump, is the weakest mode that
+// actually serializes issue writers. is NOT enough: it is
+// compatible with (see LockLiveComment), so a concurrent
 // CreateComment would take the issue anyway, wait on the attachment this
 // transaction holds, and deadlock with its bump.
-func (q *Queries) LockIssueForAttachmentWrite(ctx context.Context, arg LockIssueForAttachmentWriteParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, lockIssueForAttachmentWrite, arg.ID, arg.WorkspaceID)
-	var id pgtype.UUID
+func (q *Queries) LockIssueForAttachmentWrite(ctx context.Context, arg LockIssueForAttachmentWriteParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, lockIssueForAttachmentWrite, arg.ID, arg.WorkspaceID)
+	var id string
 	err := row.Scan(&id)
 	return id, err
 }
 
 const lockIssueForChannelMediaBind = `-- name: LockIssueForChannelMediaBind :one
 SELECT id FROM issue
-WHERE id = $1 AND workspace_id = $2
-FOR KEY SHARE
+WHERE id = ?1 AND workspace_id = ?2
 `
 
 type LockIssueForChannelMediaBindParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // Channel media resolves after /issue creation. Hold a key-share lock while
 // the attachment row is written so a concurrent issue delete cannot land
 // between the workspace-scoped validation and the attachment insert.
-func (q *Queries) LockIssueForChannelMediaBind(ctx context.Context, arg LockIssueForChannelMediaBindParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, lockIssueForChannelMediaBind, arg.ID, arg.WorkspaceID)
-	var id pgtype.UUID
+func (q *Queries) LockIssueForChannelMediaBind(ctx context.Context, arg LockIssueForChannelMediaBindParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, lockIssueForChannelMediaBind, arg.ID, arg.WorkspaceID)
+	var id string
 	err := row.Scan(&id)
 	return id, err
 }
 
 const lockIssueForDelete = `-- name: LockIssueForDelete :one
 SELECT id FROM issue
-WHERE id = $1 AND workspace_id = $2
-FOR UPDATE
+WHERE id = ?1 AND workspace_id = ?2
 `
 
 type LockIssueForDeleteParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // Issue deletion must collect every attachment URL after it has won the same
-// row-lock race used by channel media binding. FOR UPDATE conflicts with the
-// binder's FOR KEY SHARE: either bind commits first and its URL is collected,
+// row-lock race used by channel media binding. conflicts with the
+// binder's: either bind commits first and its URL is collected,
 // or delete commits first and the binder leaves its durable intent for cleanup.
-func (q *Queries) LockIssueForDelete(ctx context.Context, arg LockIssueForDeleteParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, lockIssueForDelete, arg.ID, arg.WorkspaceID)
-	var id pgtype.UUID
+func (q *Queries) LockIssueForDelete(ctx context.Context, arg LockIssueForDeleteParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, lockIssueForDelete, arg.ID, arg.WorkspaceID)
+	var id string
 	err := row.Scan(&id)
 	return id, err
 }
 
 const lockIssueForDescriptionUpdate = `-- name: LockIssueForDescriptionUpdate :one
 SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id FROM issue
-WHERE id = $1 AND workspace_id = $2
-FOR UPDATE
+WHERE id = ?1 AND workspace_id = ?2
 `
 
 type LockIssueForDescriptionUpdateParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // Serialize field-baseline checks and combined attachment binding on the
@@ -1845,7 +1968,7 @@ type LockIssueForDescriptionUpdateParams struct {
 // submitted base, updates the issue, and binds this request's attachments in
 // the same transaction while holding this lock.
 func (q *Queries) LockIssueForDescriptionUpdate(ctx context.Context, arg LockIssueForDescriptionUpdateParams) (Issue, error) {
-	row := q.db.QueryRow(ctx, lockIssueForDescriptionUpdate, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, lockIssueForDescriptionUpdate, arg.ID, arg.WorkspaceID)
 	var i Issue
 	err := row.Scan(
 		&i.ID,
@@ -1888,22 +2011,21 @@ SELECT i.id,
            SELECT 1 FROM issue AS original
            WHERE original.id = i.duplicate_of_issue_id
              AND original.workspace_id = i.workspace_id
-       ))::boolean AS is_duplicate
+       )) AS is_duplicate
 FROM issue AS i
-WHERE i.workspace_id = $1
-  AND i.id = ANY($2::uuid[])
+WHERE i.workspace_id = ?1
+  AND i.id IN (SELECT value FROM json_each(?2))
 ORDER BY i.id
-FOR UPDATE OF i
 `
 
 type LockIssuesForDuplicateMarkParams struct {
-	WorkspaceID pgtype.UUID   `json:"workspace_id"`
-	IssueIds    []pgtype.UUID `json:"issue_ids"`
+	WorkspaceID string      `json:"workspace_id"`
+	IssueIds    interface{} `json:"issue_ids"`
 }
 
 type LockIssuesForDuplicateMarkRow struct {
-	ID          pgtype.UUID `json:"id"`
-	IsDuplicate bool        `json:"is_duplicate"`
+	ID          string      `json:"id"`
+	IsDuplicate interface{} `json:"is_duplicate"`
 }
 
 // Locks the issue being marked and its target, in id order, before the mark is
@@ -1912,7 +2034,7 @@ type LockIssuesForDuplicateMarkRow struct {
 // against what the first wrote. A target outside the workspace is not returned.
 // is_duplicate applies the same validity rule as the reads below.
 func (q *Queries) LockIssuesForDuplicateMark(ctx context.Context, arg LockIssuesForDuplicateMarkParams) ([]LockIssuesForDuplicateMarkRow, error) {
-	rows, err := q.db.Query(ctx, lockIssuesForDuplicateMark, arg.WorkspaceID, arg.IssueIds)
+	rows, err := q.db.QueryContext(ctx, lockIssuesForDuplicateMark, arg.WorkspaceID, arg.IssueIds)
 	if err != nil {
 		return nil, err
 	}
@@ -1925,6 +2047,9 @@ func (q *Queries) LockIssuesForDuplicateMark(ctx context.Context, arg LockIssues
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -1934,24 +2059,24 @@ func (q *Queries) LockIssuesForDuplicateMark(ctx context.Context, arg LockIssues
 const markIssueFirstExecuted = `-- name: MarkIssueFirstExecuted :one
 UPDATE issue
 SET first_executed_at = now()
-WHERE id = $1 AND first_executed_at IS NULL
+WHERE id = ?1 AND first_executed_at IS NULL
 RETURNING id, workspace_id, creator_type, creator_id, first_executed_at
 `
 
 type MarkIssueFirstExecutedRow struct {
-	ID              pgtype.UUID        `json:"id"`
-	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
-	CreatorType     string             `json:"creator_type"`
-	CreatorID       pgtype.UUID        `json:"creator_id"`
-	FirstExecutedAt pgtype.Timestamptz `json:"first_executed_at"`
+	ID              string         `json:"id"`
+	WorkspaceID     string         `json:"workspace_id"`
+	CreatorType     string         `json:"creator_type"`
+	CreatorID       string         `json:"creator_id"`
+	FirstExecutedAt sql.NullString `json:"first_executed_at"`
 }
 
 // Flips first_executed_at from NULL to now() atomically. Returns the row if
 // this was the first time the issue was executed; no rows otherwise. The
-// analytics issue_executed event fires exactly when this returns a row —
+// analytics issue_executed event fires exactly when this returns a row -
 // retries and re-assignments hit the WHERE clause and no-op.
-func (q *Queries) MarkIssueFirstExecuted(ctx context.Context, id pgtype.UUID) (MarkIssueFirstExecutedRow, error) {
-	row := q.db.QueryRow(ctx, markIssueFirstExecuted, id)
+func (q *Queries) MarkIssueFirstExecuted(ctx context.Context, id string) (MarkIssueFirstExecutedRow, error) {
+	row := q.db.QueryRowContext(ctx, markIssueFirstExecuted, id)
 	var i MarkIssueFirstExecutedRow
 	err := row.Scan(
 		&i.ID,
@@ -1966,25 +2091,25 @@ func (q *Queries) MarkIssueFirstExecuted(ctx context.Context, id pgtype.UUID) (M
 const materializeIssueChannelMediaMarkdown = `-- name: MaterializeIssueChannelMediaMarkdown :one
 UPDATE issue
 SET description = CASE
-        WHEN $1::text IS NOT NULL
-             AND COALESCE(description, '') = $1::text
-            THEN $2::text
-        WHEN description IS NULL OR description = '' THEN $3
-        ELSE description || E'\n\n' || $3
+        WHEN ?1 IS NOT NULL
+             AND COALESCE(description, '') = ?1
+            THEN ?2
+        WHEN description IS NULL OR description = '' THEN ?3
+        ELSE description || char(10) || char(10) || ?3
     END,
     revision = revision + 1,
     updated_at = now()
-WHERE id = $4
-  AND workspace_id = $5
+WHERE id = ?4
+  AND workspace_id = ?5
 RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id
 `
 
 type MaterializeIssueChannelMediaMarkdownParams struct {
-	BaseDescription pgtype.Text `json:"base_description"`
-	Description     string      `json:"description"`
-	Markdown        pgtype.Text `json:"markdown"`
-	ID              pgtype.UUID `json:"id"`
-	WorkspaceID     pgtype.UUID `json:"workspace_id"`
+	BaseDescription interface{}    `json:"base_description"`
+	Description     sql.NullString `json:"description"`
+	Markdown        sql.NullString `json:"markdown"`
+	ID              string         `json:"id"`
+	WorkspaceID     string         `json:"workspace_id"`
 }
 
 // Detached channel media resolves after /issue creation. When the description
@@ -1995,7 +2120,7 @@ type MaterializeIssueChannelMediaMarkdownParams struct {
 // This is asynchronous system materialization, not a new user action, so it
 // intentionally preserves last_activity_at while still advancing revision.
 func (q *Queries) MaterializeIssueChannelMediaMarkdown(ctx context.Context, arg MaterializeIssueChannelMediaMarkdownParams) (Issue, error) {
-	row := q.db.QueryRow(ctx, materializeIssueChannelMediaMarkdown,
+	row := q.db.QueryRowContext(ctx, materializeIssueChannelMediaMarkdown,
 		arg.BaseDescription,
 		arg.Description,
 		arg.Markdown,
@@ -2041,37 +2166,37 @@ func (q *Queries) MaterializeIssueChannelMediaMarkdown(ctx context.Context, arg 
 const setIssueMetadataKey = `-- name: SetIssueMetadataKey :one
 
 UPDATE issue SET
-    metadata = jsonb_set(metadata, ARRAY[$1::text], $2::jsonb),
+    metadata = json_set(COALESCE(metadata, '{}'), '$.' || ?1, json(?2)),
     revision = revision + 1,
     last_activity_at = GREATEST(COALESCE(last_activity_at, updated_at), now()),
     updated_at = now()
-WHERE id = $3 AND workspace_id = $4
-  AND metadata -> $1::text IS DISTINCT FROM $2::jsonb
+WHERE id = ?3 AND workspace_id = ?4
+  AND json_extract(metadata, '$.' || ?1) IS NOT json_extract(?2, '$')
 RETURNING id, workspace_id, metadata, revision
 `
 
 type SetIssueMetadataKeyParams struct {
-	Key         string      `json:"key"`
-	Value       []byte      `json:"value"`
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Key         sql.NullString `json:"key"`
+	Value       interface{}    `json:"value"`
+	ID          string         `json:"id"`
+	WorkspaceID string         `json:"workspace_id"`
 }
 
 type SetIssueMetadataKeyRow struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Metadata    []byte      `json:"metadata"`
-	Revision    int64       `json:"revision"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	Metadata    string `json:"metadata"`
+	Revision    int64  `json:"revision"`
 }
 
 // SearchIssues: moved to handler (dynamic SQL for multi-word search support).
 // Atomically sets a single key in the issue's metadata JSONB. The
-// workspace_id filter is the authorization gate — handler resolves the
+// workspace_id filter is the authorization gate - handler resolves the
 // issue first so this is also the tenant check. A no-op, a missing issue, or
 // a workspace mismatch returns no rows; callers that must distinguish those
 // cases need a separate workspace-scoped read.
 func (q *Queries) SetIssueMetadataKey(ctx context.Context, arg SetIssueMetadataKeyParams) (SetIssueMetadataKeyRow, error) {
-	row := q.db.QueryRow(ctx, setIssueMetadataKey,
+	row := q.db.QueryRowContext(ctx, setIssueMetadataKey,
 		arg.Key,
 		arg.Value,
 		arg.ID,
@@ -2088,150 +2213,65 @@ func (q *Queries) SetIssueMetadataKey(ctx context.Context, arg SetIssueMetadataK
 }
 
 const updateIssue = `-- name: UpdateIssue :one
-WITH wakeup_source AS MATERIALIZED (SELECT set_config('multica.source_task_id', COALESCE($3::uuid::text, ''), true)), candidate AS MATERIALIZED (
-    -- FOR UPDATE, so every next_* value below is computed from the row this
-    -- statement is about to write rather than from the snapshot the statement
-    -- started with. Without it a write that waits here behind a concurrent one
-    -- resumes with stale values and writes them back: an ordinary priority edit
-    -- could restore a duplicate mark another transaction had just cleared, and
-    -- did_change/did_activity would be decided against the pre-wait row too.
-    -- Materialized so the locking clause is never inlined away.
-    SELECT
-        i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id,
-        COALESCE($4::text, i.title) AS next_title,
-        COALESCE($5::text, i.description) AS next_description,
-        COALESCE($6::text, i.status) AS next_status,
-        COALESCE($7::text, i.priority) AS next_priority,
-        $8::text AS next_assignee_type,
-        $9::uuid AS next_assignee_id,
-        CASE
-            -- An explicit position wins. Cross-column drag-and-drop sends
-            -- status and position together and means the slot it dropped on.
-            WHEN $10::double precision IS NOT NULL
-                THEN $10::double precision
-            -- position ranks an issue *within* its (workspace, status)
-            -- column, so it stops meaning anything the moment the column
-            -- changes: the value that put the issue on top of Todo lands it
-            -- below every hand-dragged issue in Done. Re-rank to the top of
-            -- the destination, the same policy new issues get from
-            -- NextTopPosition. Keep the two in sync.
-            --
-            -- Two status changes running at once can read the same MIN and
-            -- claim one slot. Every position-ordered query carries a unique
-            -- final key (created_at DESC, id DESC), so a tie leaves the
-            -- relative order of simultaneous moves arbitrary but never
-            -- unstable across pages. Creation avoids the tie by computing its
-            -- min under the workspace counter lock; a status change holds no
-            -- such lock and is not worth taking one for.
-            WHEN i.status IS DISTINCT FROM COALESCE($6::text, i.status)
-                THEN (
-                    SELECT COALESCE(MIN(target.position), 0) - 1
-                    FROM issue AS target
-                    WHERE target.workspace_id = i.workspace_id
-                      AND target.status = $6::text
-                )
-            ELSE i.position
-        END AS next_position,
-        $11::date AS next_start_date,
-        $12::date AS next_due_date,
-        $13::uuid AS next_parent_issue_id,
-        $14::uuid AS next_project_id,
-        $15::integer AS next_stage,
-        -- A supplied pointer marks the issue (the handler also sets cancelled).
-        -- Otherwise a mark only survives a write that leaves an already
-        -- cancelled issue cancelled. Every other write drops it: reopening is
-        -- how a mark is removed, and re-entering cancelled does not revive a
-        -- pointer that a server predating this rule left on a reopened issue.
-        CASE
-            WHEN $16::uuid IS NOT NULL
-                THEN $16::uuid
-            WHEN i.status = 'cancelled' AND COALESCE($6::text, i.status) = 'cancelled'
-                THEN i.duplicate_of_issue_id
-            ELSE NULL
-        END AS next_duplicate_of_issue_id
-    FROM issue AS i
-    WHERE i.id = $1
-      AND ($2::bigint IS NULL OR i.revision = $2::bigint)
-    FOR UPDATE
-), changed AS (
-    SELECT
-        candidate.id, candidate.workspace_id, candidate.title, candidate.description, candidate.status, candidate.priority, candidate.assignee_type, candidate.assignee_id, candidate.creator_type, candidate.creator_id, candidate.parent_issue_id, candidate.acceptance_criteria, candidate.context_refs, candidate.position, candidate.due_date, candidate.created_at, candidate.updated_at, candidate.number, candidate.project_id, candidate.origin_type, candidate.origin_id, candidate.first_executed_at, candidate.start_date, candidate.metadata, candidate.stage, candidate.properties, candidate.revision, candidate.last_activity_at, candidate.triage_state, candidate.duplicate_of_issue_id, candidate.next_title, candidate.next_description, candidate.next_status, candidate.next_priority, candidate.next_assignee_type, candidate.next_assignee_id, candidate.next_position, candidate.next_start_date, candidate.next_due_date, candidate.next_parent_issue_id, candidate.next_project_id, candidate.next_stage, candidate.next_duplicate_of_issue_id,
-        ROW(
-            title, description, status, priority, assignee_type, assignee_id,
-            position, start_date, due_date, parent_issue_id, project_id, stage,
-            duplicate_of_issue_id
-        ) IS DISTINCT FROM ROW(
-            next_title, next_description, next_status, next_priority,
-            next_assignee_type, next_assignee_id, next_position, next_start_date,
-            next_due_date, next_parent_issue_id, next_project_id, next_stage,
-            next_duplicate_of_issue_id
-        ) AS did_change,
-        ROW(
-            title, description, status, priority, assignee_type, assignee_id,
-            start_date, due_date, parent_issue_id, project_id, stage,
-            duplicate_of_issue_id
-        ) IS DISTINCT FROM ROW(
-            next_title, next_description, next_status, next_priority,
-            next_assignee_type, next_assignee_id, next_start_date, next_due_date,
-            next_parent_issue_id, next_project_id, next_stage,
-            next_duplicate_of_issue_id
-        ) AS did_activity
-    FROM candidate
-)
-UPDATE issue AS i SET
-    title = changed.next_title,
-    description = changed.next_description,
-    status = changed.next_status,
-    priority = changed.next_priority,
-    assignee_type = changed.next_assignee_type,
-    assignee_id = changed.next_assignee_id,
-    position = changed.next_position,
-    start_date = changed.next_start_date,
-    due_date = changed.next_due_date,
-    parent_issue_id = changed.next_parent_issue_id,
-    project_id = changed.next_project_id,
-    stage = changed.next_stage,
-    duplicate_of_issue_id = changed.next_duplicate_of_issue_id,
-    revision = i.revision + changed.did_change::integer,
-    last_activity_at = CASE WHEN changed.did_activity
-        THEN GREATEST(COALESCE(i.last_activity_at, i.updated_at), now())
-        ELSE i.last_activity_at
+UPDATE issue SET
+    title = COALESCE(?1, issue.title),
+    description = COALESCE(?2, issue.description),
+    status = COALESCE(?3, issue.status),
+    priority = COALESCE(?4, issue.priority),
+    assignee_type = ?5,
+    assignee_id = ?6,
+    position = CASE
+        WHEN ?7 IS NOT NULL THEN ?7
+        WHEN issue.status IS NOT COALESCE(?3, issue.status) THEN (
+            SELECT COALESCE(MIN(target.position), 0) - 1
+            FROM issue AS target
+            WHERE target.workspace_id = issue.workspace_id
+              AND target.status = COALESCE(?3, issue.status)
+        )
+        ELSE issue.position
     END,
-    updated_at = CASE WHEN changed.did_change THEN now() ELSE i.updated_at END
-FROM changed CROSS JOIN wakeup_source
-WHERE i.id = changed.id
-  -- Re-check the precondition on the row version that UPDATE actually locks.
-  -- Under READ COMMITTED, concurrent statements may both populate candidate
-  -- from the same snapshot; EvalPlanQual re-evaluates this target-row predicate
-  -- after waiting for the first writer, leaving the stale writer with 0 rows.
-  AND ($2::bigint IS NULL OR i.revision = $2::bigint)
-RETURNING i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id
+    start_date = ?8,
+    due_date = ?9,
+    parent_issue_id = ?10,
+    project_id = ?11,
+    stage = ?12,
+    duplicate_of_issue_id = CASE
+        WHEN ?13 IS NOT NULL THEN ?13
+        WHEN issue.status = 'cancelled' AND COALESCE(?3, issue.status) = 'cancelled' THEN issue.duplicate_of_issue_id
+        ELSE NULL
+    END,
+    revision = issue.revision + 1,
+    last_activity_at = GREATEST(COALESCE(issue.last_activity_at, issue.updated_at), now()),
+    updated_at = now()
+WHERE issue.id = ?14
+  AND (?15 IS NULL OR issue.revision = ?15)
+  AND COALESCE(?16, '') = COALESCE(?16, '')
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id
 `
 
 type UpdateIssueParams struct {
-	ID                 pgtype.UUID   `json:"id"`
-	ExpectedRevision   pgtype.Int8   `json:"expected_revision"`
-	SourceTaskID       pgtype.UUID   `json:"source_task_id"`
-	Title              pgtype.Text   `json:"title"`
-	Description        pgtype.Text   `json:"description"`
-	Status             pgtype.Text   `json:"status"`
-	Priority           pgtype.Text   `json:"priority"`
-	AssigneeType       pgtype.Text   `json:"assignee_type"`
-	AssigneeID         pgtype.UUID   `json:"assignee_id"`
-	Position           pgtype.Float8 `json:"position"`
-	StartDate          pgtype.Date   `json:"start_date"`
-	DueDate            pgtype.Date   `json:"due_date"`
-	ParentIssueID      pgtype.UUID   `json:"parent_issue_id"`
-	ProjectID          pgtype.UUID   `json:"project_id"`
-	Stage              pgtype.Int4   `json:"stage"`
-	DuplicateOfIssueID pgtype.UUID   `json:"duplicate_of_issue_id"`
+	Title              sql.NullString `json:"title"`
+	Description        sql.NullString `json:"description"`
+	Status             sql.NullString `json:"status"`
+	Priority           sql.NullString `json:"priority"`
+	AssigneeType       sql.NullString `json:"assignee_type"`
+	AssigneeID         sql.NullString `json:"assignee_id"`
+	Position           interface{}    `json:"position"`
+	StartDate          sql.NullString `json:"start_date"`
+	DueDate            sql.NullString `json:"due_date"`
+	ParentIssueID      sql.NullString `json:"parent_issue_id"`
+	ProjectID          sql.NullString `json:"project_id"`
+	Stage              sql.NullInt64  `json:"stage"`
+	DuplicateOfIssueID interface{}    `json:"duplicate_of_issue_id"`
+	ID                 string         `json:"id"`
+	ExpectedRevision   interface{}    `json:"expected_revision"`
+	SourceTaskID       interface{}    `json:"source_task_id"`
 }
 
+// source_task_id is referenced so the parameter stays on the query. SQLite has
+// no session GUC, so the Postgres set_config side effect is a no-op compare.
 func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Issue, error) {
-	row := q.db.QueryRow(ctx, updateIssue,
-		arg.ID,
-		arg.ExpectedRevision,
-		arg.SourceTaskID,
+	row := q.db.QueryRowContext(ctx, updateIssue,
 		arg.Title,
 		arg.Description,
 		arg.Status,
@@ -2245,6 +2285,9 @@ func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Issue
 		arg.ProjectID,
 		arg.Stage,
 		arg.DuplicateOfIssueID,
+		arg.ID,
+		arg.ExpectedRevision,
+		arg.SourceTaskID,
 	)
 	var i Issue
 	err := row.Scan(
@@ -2283,44 +2326,41 @@ func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Issue
 }
 
 const updateIssueStatus = `-- name: UpdateIssueStatus :one
-WITH wakeup_source AS MATERIALIZED (SELECT set_config('multica.source_task_id', COALESCE($4::uuid::text, ''), true))
-UPDATE issue AS i SET
-    status = $2,
-    -- Same rule as UpdateIssue: a mark only survives cancelled -> cancelled.
-    -- Background writers (GitHub, task recovery) go through here, so they
-    -- cannot leave a pointer on a reopened issue.
-    duplicate_of_issue_id = CASE WHEN $2 = 'cancelled' AND i.status = 'cancelled' THEN i.duplicate_of_issue_id ELSE NULL END,
-    position = CASE WHEN i.status IS DISTINCT FROM $2 THEN (
+UPDATE issue SET
+    status = ?2,
+    duplicate_of_issue_id = CASE
+        WHEN ?2 = 'cancelled' AND issue.status = 'cancelled' THEN issue.duplicate_of_issue_id
+        ELSE NULL
+    END,
+    position = CASE WHEN issue.status IS NOT ?2 THEN (
         SELECT COALESCE(MIN(target.position), 0) - 1
         FROM issue AS target
-        WHERE target.workspace_id = i.workspace_id
-          AND target.status = $2
-    ) ELSE i.position END,
-    revision = i.revision + CASE WHEN i.status IS DISTINCT FROM $2 THEN 1 ELSE 0 END,
-    last_activity_at = CASE WHEN i.status IS DISTINCT FROM $2
-        THEN GREATEST(COALESCE(i.last_activity_at, i.updated_at), now())
-        ELSE i.last_activity_at
+        WHERE target.workspace_id = issue.workspace_id
+          AND target.status = ?2
+    ) ELSE issue.position END,
+    revision = issue.revision + CASE WHEN issue.status IS NOT ?2 THEN 1 ELSE 0 END,
+    last_activity_at = CASE WHEN issue.status IS NOT ?2
+        THEN GREATEST(COALESCE(issue.last_activity_at, issue.updated_at), now())
+        ELSE issue.last_activity_at
     END,
     updated_at = now()
-FROM wakeup_source
-WHERE i.id = $1 AND i.workspace_id = $3
-RETURNING i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id
+WHERE issue.id = ?1 AND issue.workspace_id = ?3
+  AND COALESCE(?4, '') = COALESCE(?4, '')
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id
 `
 
 type UpdateIssueStatusParams struct {
-	ID           pgtype.UUID `json:"id"`
+	ID           string      `json:"id"`
 	Status       string      `json:"status"`
-	WorkspaceID  pgtype.UUID `json:"workspace_id"`
-	SourceTaskID pgtype.UUID `json:"source_task_id"`
+	WorkspaceID  string      `json:"workspace_id"`
+	SourceTaskID interface{} `json:"source_task_id"`
 }
 
-// Workspace_id in the WHERE clause is a SQL-layer tenant guard; see DeleteIssue.
-// Repositioning lives here rather than in the callers (GitHub sync, agent task
-// completion) so a status write cannot land without one: an issue carrying its
-// old column's rank into a new column is the bug this guards against. See the
-// next_position CASE in UpdateIssue for the policy.
+// Workspace_id in the WHERE clause is a SQL-layer tenant guard.
+// Reposition to the top of the destination status column when the status changes.
+// source_task_id is retained as a parameter; SQLite has no set_config GUC.
 func (q *Queries) UpdateIssueStatus(ctx context.Context, arg UpdateIssueStatusParams) (Issue, error) {
-	row := q.db.QueryRow(ctx, updateIssueStatus,
+	row := q.db.QueryRowContext(ctx, updateIssueStatus,
 		arg.ID,
 		arg.Status,
 		arg.WorkspaceID,

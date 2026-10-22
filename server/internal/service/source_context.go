@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,11 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	"github.com/multica-ai/multica/server/pkg/dbid"
 )
 
 const (
@@ -74,8 +72,8 @@ func validateSourceContextAgentBytes(snapshotBytes int, prompt string) error {
 // including capture metadata, cloned attachment IDs, and rewritten URLs, so
 // the preview payload cannot undercount what the daemon will actually quote.
 // This runs before object cloning or task enqueue and has no external effects.
-func ValidateSourceContextAgentInput(build SourceContextBuild, capturedBy pgtype.UUID, prompt string) error {
-	projectedCloneID := pgtype.UUID{Valid: true}
+func ValidateSourceContextAgentInput(build SourceContextBuild, capturedBy string, prompt string) error {
+	projectedCloneID := "00000000-0000-4000-8000-000000000001"
 	clones := make([]SourceContextClone, len(build.Rows))
 	for i := range clones {
 		clones[i].ID = projectedCloneID
@@ -84,8 +82,8 @@ func ValidateSourceContextAgentInput(build SourceContextBuild, capturedBy pgtype
 	projectedCapturedAt := time.Date(2000, time.January, 1, 0, 0, 0, 999999999, time.UTC)
 	projected, err := PrepareSourceContextCapture(
 		build,
-		pgtype.UUID{Valid: true},
-		pgtype.UUID{Valid: true},
+		"00000000-0000-4000-8000-000000000001",
+		"00000000-0000-4000-8000-000000000001",
 		capturedBy,
 		projectedCapturedAt,
 		clones,
@@ -170,7 +168,7 @@ type SourceContextBuild struct {
 }
 
 type SourceContextClone struct {
-	ID          pgtype.UUID
+	ID          string
 	Filename    string
 	URL         string
 	ContentType string
@@ -178,22 +176,22 @@ type SourceContextClone struct {
 }
 
 type SourceContextCapture struct {
-	ID               pgtype.UUID
-	WorkspaceID      pgtype.UUID
-	SourceIssueID    pgtype.UUID
-	AnchorCommentID  pgtype.UUID
-	CapturedByUserID pgtype.UUID
+	ID               string
+	WorkspaceID      string
+	SourceIssueID    string
+	AnchorCommentID  string
+	CapturedByUserID string
 	CapturedAt       time.Time
 	Snapshot         SourceContextSnapshot
 	Digest           string
 	Clones           []SourceContextClone
 }
 
-func sourceContextTime(v pgtype.Timestamptz) string {
-	return v.Time.UTC().Format(time.RFC3339Nano)
+func sourceContextTime(v sql.NullString) string {
+	return asTime(v).UTC().Format(time.RFC3339Nano)
 }
 
-func sourceContextText(v pgtype.Text) *string {
+func sourceContextText(v sql.NullString) *string {
 	if !v.Valid {
 		return nil
 	}
@@ -201,7 +199,7 @@ func sourceContextText(v pgtype.Text) *string {
 	return &s
 }
 
-func sourceContextAuthorName(ctx context.Context, q *db.Queries, workspaceID pgtype.UUID, authorType string, authorID pgtype.UUID) (string, error) {
+func sourceContextAuthorName(ctx context.Context, q *db.Queries, workspaceID string, authorType string, authorID string) (string, error) {
 	switch authorType {
 	case "member":
 		user, err := q.GetUser(ctx, authorID)
@@ -227,7 +225,7 @@ func attachmentSnapshot(row db.Attachment, ownerType, ownerID string) SourceCont
 		Filename:    row.Filename,
 		ContentType: row.ContentType,
 		SizeBytes:   row.SizeBytes,
-		CreatedAt:   sourceContextTime(row.CreatedAt),
+		CreatedAt:   sourceContextTime(nullString(row.CreatedAt)),
 	}
 }
 
@@ -262,9 +260,9 @@ func sourceContextDigest(snapshot SourceContextSnapshot) (string, error) {
 // snapshot without requiring the anchor comment to still exist. Detail
 // rendering uses it to report source_issue_state accurately after a source
 // comment (or one of its ancestors) has been deleted.
-func BuildSourceIssueSnapshot(ctx context.Context, q *db.Queries, workspaceID, issueID pgtype.UUID) (SourceContextIssueSnapshot, []db.Attachment, error) {
+func BuildSourceIssueSnapshot(ctx context.Context, q *db.Queries, workspaceID, issueID string) (SourceContextIssueSnapshot, []db.Attachment, error) {
 	issue, err := q.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{ID: issueID, WorkspaceID: workspaceID})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return SourceContextIssueSnapshot{}, nil, ErrSourceIssueDeleted
 	}
 	if err != nil {
@@ -274,7 +272,7 @@ func BuildSourceIssueSnapshot(ctx context.Context, q *db.Queries, workspaceID, i
 	if err != nil {
 		return SourceContextIssueSnapshot{}, nil, fmt.Errorf("load source workspace: %w", err)
 	}
-	attachments, err := q.ListSourceContextIssueAttachments(ctx, db.ListSourceContextIssueAttachmentsParams{IssueID: issue.ID, WorkspaceID: workspaceID})
+	attachments, err := q.ListSourceContextIssueAttachments(ctx, db.ListSourceContextIssueAttachmentsParams{IssueID: nullString(issue.ID), WorkspaceID: workspaceID})
 	if err != nil {
 		return SourceContextIssueSnapshot{}, nil, fmt.Errorf("load issue attachments: %w", err)
 	}
@@ -286,9 +284,9 @@ func BuildSourceIssueSnapshot(ctx context.Context, q *db.Queries, workspaceID, i
 		attachmentSnapshots = append(attachmentSnapshots, attachmentSnapshot(attachment, "issue", util.UUIDToString(issue.ID)))
 	}
 	return SourceContextIssueSnapshot{
-		ID: util.UUIDToString(issue.ID), Identifier: workspace.IssuePrefix + "-" + fmt.Sprint(issue.Number), Number: issue.Number,
+		ID: util.UUIDToString(issue.ID), Identifier: workspace.IssuePrefix + "-" + fmt.Sprint(issue.Number), Number: int32(issue.Number),
 		Title: issue.Title, Description: sourceContextText(issue.Description),
-		CreatedAt: sourceContextTime(issue.CreatedAt), UpdatedAt: sourceContextTime(issue.UpdatedAt), Revision: issue.Revision,
+		CreatedAt: sourceContextTime(nullString(issue.CreatedAt)), UpdatedAt: sourceContextTime(nullString(issue.UpdatedAt)), Revision: issue.Revision,
 		Attachments: attachmentSnapshots,
 	}, attachments, nil
 }
@@ -296,11 +294,11 @@ func BuildSourceIssueSnapshot(ctx context.Context, q *db.Queries, workspaceID, i
 func buildSourceContextCommentSnapshots(
 	ctx context.Context,
 	q *db.Queries,
-	workspaceID pgtype.UUID,
-	issueID pgtype.UUID,
+	workspaceID string,
+	issueID string,
 	historyRows []db.ListCommentThreadHistoryRow,
 ) ([]SourceContextCommentSnapshot, []db.Attachment, error) {
-	commentIDs := make([]pgtype.UUID, 0, len(historyRows))
+	commentIDs := make([]string, 0, len(historyRows))
 	for _, row := range historyRows {
 		commentIDs = append(commentIDs, row.ID)
 	}
@@ -308,7 +306,7 @@ func buildSourceContextCommentSnapshots(
 	if len(commentIDs) > 0 {
 		var err error
 		commentAttachments, err = q.ListSourceContextCommentAttachments(ctx, db.ListSourceContextCommentAttachmentsParams{
-			WorkspaceID: workspaceID, IssueID: issueID, CommentIds: commentIDs,
+			WorkspaceID: workspaceID, IssueID: nullString(issueID), CommentIds: commentIDs,
 		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("load comment attachments: %w", err)
@@ -320,7 +318,7 @@ func buildSourceContextCommentSnapshots(
 
 	byComment := make(map[string][]SourceContextAttachment)
 	for _, attachment := range commentAttachments {
-		commentID := util.UUIDToString(attachment.CommentID)
+		commentID := util.UUIDToString(attachment.CommentID.String)
 		byComment[commentID] = append(byComment[commentID], attachmentSnapshot(attachment, "comment", commentID))
 	}
 	commentThread := make([]SourceContextCommentSnapshot, 0, len(historyRows))
@@ -332,7 +330,7 @@ func buildSourceContextCommentSnapshots(
 		}
 		var parentID *string
 		if row.ParentID.Valid {
-			value := util.UUIDToString(row.ParentID)
+			value := util.UUIDToString(row.ParentID.String)
 			parentID = &value
 		}
 		attachments := byComment[commentID]
@@ -342,7 +340,7 @@ func buildSourceContextCommentSnapshots(
 		commentThread = append(commentThread, SourceContextCommentSnapshot{
 			ID: commentID, ParentID: parentID, Type: row.Type, Content: row.Content,
 			Author:    SourceContextAuthor{Type: row.AuthorType, ID: util.UUIDToString(row.AuthorID), Name: authorName},
-			CreatedAt: sourceContextTime(row.CreatedAt), UpdatedAt: sourceContextTime(row.UpdatedAt), Revision: row.Revision,
+			CreatedAt: sourceContextTime(nullString(row.CreatedAt)), UpdatedAt: sourceContextTime(nullString(row.UpdatedAt)), Revision: row.Revision,
 			Attachments: attachments, Deleted: row.DeletedAt.Valid,
 		})
 	}
@@ -357,7 +355,7 @@ func buildSourceContextCommentSnapshots(
 func BuildSourceContextThreadAtCaptureBoundary(
 	ctx context.Context,
 	q *db.Queries,
-	workspaceID pgtype.UUID,
+	workspaceID string,
 	captured SourceContextSnapshot,
 ) ([]SourceContextCommentSnapshot, error) {
 	if len(captured.CommentThread) == 0 || captured.CommentThread[0].ParentID != nil {
@@ -391,7 +389,7 @@ func BuildSourceContextThreadAtCaptureBoundary(
 	}
 	historyRows, err := q.ListCommentThreadHistory(ctx, db.ListCommentThreadHistoryParams{
 		RootID: rootID, WorkspaceID: workspaceID, IssueID: issueID,
-		AnchorCreatedAt: pgtype.Timestamptz{Time: anchorCreatedAt, Valid: true}, AnchorID: anchorID,
+		AnchorCreatedAt: nullTime(anchorCreatedAt, true).String, AnchorID: anchorID,
 		RowLimit: SourceContextMaxComments + 1,
 	})
 	if err != nil {
@@ -401,9 +399,9 @@ func BuildSourceContextThreadAtCaptureBoundary(
 	return commentThread, err
 }
 
-func BuildSourceContext(ctx context.Context, q *db.Queries, workspaceID, anchorCommentID pgtype.UUID) (SourceContextBuild, error) {
+func BuildSourceContext(ctx context.Context, q *db.Queries, workspaceID, anchorCommentID string) (SourceContextBuild, error) {
 	anchor, err := q.GetCommentInWorkspace(ctx, db.GetCommentInWorkspaceParams{ID: anchorCommentID, WorkspaceID: workspaceID})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return SourceContextBuild{}, ErrAnchorCommentDeleted
 	}
 	if err != nil {
@@ -434,7 +432,7 @@ func BuildSourceContext(ctx context.Context, q *db.Queries, workspaceID, anchorC
 	seenAncestors := make(map[string]struct{}, len(ancestorRows))
 	for _, row := range ancestorRows {
 		id := util.UUIDToString(row.ID)
-		if row.Cycle {
+		if row.Cycle != 0 {
 			return SourceContextBuild{}, ErrSourceContextInvalid
 		}
 		if _, exists := seenAncestors[id]; exists {
@@ -513,22 +511,22 @@ func BuildSourceContext(ctx context.Context, q *db.Queries, workspaceID, anchorC
 	}, nil
 }
 
-func ParseSourceContextToken(token string) (digest string, sourceIssueID pgtype.UUID, ok bool) {
+func ParseSourceContextToken(token string) (digest string, sourceIssueID string, ok bool) {
 	parts := strings.Split(token, ":")
 	if len(parts) != 3 || parts[0] != "sha256" || len(parts[1]) != sha256.Size*2 {
-		return "", pgtype.UUID{}, false
+		return "", "", false
 	}
 	if _, err := hex.DecodeString(parts[1]); err != nil {
-		return "", pgtype.UUID{}, false
+		return "", "", false
 	}
 	id, err := util.ParseUUID(parts[2])
 	if err != nil {
-		return "", pgtype.UUID{}, false
+		return "", "", false
 	}
 	return parts[1], id, true
 }
 
-func PrepareSourceContextCapture(build SourceContextBuild, contextID, workspaceID, capturedBy pgtype.UUID, capturedAt time.Time, clones []SourceContextClone) (SourceContextCapture, error) {
+func PrepareSourceContextCapture(build SourceContextBuild, contextID, workspaceID, capturedBy string, capturedAt time.Time, clones []SourceContextClone) (SourceContextCapture, error) {
 	if len(clones) != len(build.Rows) {
 		return SourceContextCapture{}, fmt.Errorf("source context clone count mismatch")
 	}
@@ -593,7 +591,7 @@ func PrepareSourceContextCapture(build SourceContextBuild, contextID, workspaceI
 	}, nil
 }
 
-func issueUUID(value string) pgtype.UUID {
+func issueUUID(value string) string {
 	id, err := util.ParseUUID(value)
 	if err != nil {
 		panic(err)
@@ -601,30 +599,30 @@ func issueUUID(value string) pgtype.UUID {
 	return id
 }
 
-func PersistSourceContext(ctx context.Context, q *db.Queries, capture SourceContextCapture, issueID, taskID pgtype.UUID) (db.IssueSourceContext, error) {
+func PersistSourceContext(ctx context.Context, q *db.Queries, capture SourceContextCapture, issueID, taskID string) (db.IssueSourceContext, error) {
 	state := "pending"
-	var attachedAt pgtype.Timestamptz
-	if issueID.Valid {
+	var attachedAt sql.NullString
+	if issueID != "" {
 		state = "attached"
-		attachedAt = pgtype.Timestamptz{Time: capture.CapturedAt, Valid: true}
+		attachedAt = nullTime(capture.CapturedAt, true)
 	}
 	snapshotJSON, err := json.Marshal(capture.Snapshot)
 	if err != nil {
 		return db.IssueSourceContext{}, err
 	}
 	row, err := q.CreateIssueSourceContext(ctx, db.CreateIssueSourceContextParams{
-		ID: capture.ID, WorkspaceID: capture.WorkspaceID, IssueID: issueID, OriginTaskID: taskID,
+		ID: capture.ID, WorkspaceID: capture.WorkspaceID, IssueID: nullString(issueID), OriginTaskID: nullString(taskID),
 		SourceIssueID: capture.SourceIssueID, AnchorCommentID: capture.AnchorCommentID,
-		CapturedByUserID: capture.CapturedByUserID, SnapshotVersion: SourceContextVersion,
-		Snapshot: snapshotJSON, CaptureDigest: capture.Digest, State: state,
-		CapturedAt: pgtype.Timestamptz{Time: capture.CapturedAt, Valid: true}, AttachedAt: attachedAt,
+		CapturedByUserID: capture.CapturedByUserID, SnapshotVersion: int64(SourceContextVersion),
+		Snapshot: string(snapshotJSON), CaptureDigest: capture.Digest, State: state,
+		CapturedAt: nullTime(capture.CapturedAt, true).String, AttachedAt: attachedAt,
 	})
 	if err != nil {
 		return db.IssueSourceContext{}, err
 	}
 	for _, clone := range capture.Clones {
 		if _, err := q.CreateSourceContextAttachment(ctx, db.CreateSourceContextAttachmentParams{
-			ID: clone.ID, WorkspaceID: capture.WorkspaceID, SourceContextID: capture.ID,
+			ID: clone.ID, WorkspaceID: capture.WorkspaceID, SourceContextID: nullString(capture.ID),
 			UploaderType: "member", UploaderID: capture.CapturedByUserID,
 			Filename: clone.Filename, Url: clone.URL, ContentType: clone.ContentType, SizeBytes: clone.SizeBytes,
 		}); err != nil {
@@ -662,9 +660,9 @@ func (s *TaskService) CleanupSourceContextObjectIntents(ctx context.Context, lim
 		if ctx.Err() != nil {
 			return cleaned, nil
 		}
-		leaseToken := dbid.NewV7()
-		intent, err := s.Queries.ClaimSourceContextObjectIntentForCleanup(ctx, leaseToken)
-		if errors.Is(err, pgx.ErrNoRows) {
+		leaseToken := newV7()
+		intent, err := s.Queries.ClaimSourceContextObjectIntentForCleanup(ctx, nullString(leaseToken))
+		if errors.Is(err, sql.ErrNoRows) {
 			break
 		}
 		if err != nil {
@@ -676,7 +674,7 @@ func (s *TaskService) CleanupSourceContextObjectIntents(ctx context.Context, lim
 			return cleaned, fmt.Errorf("claim source context object intent: %w", err)
 		}
 		referenced, err := s.Queries.SourceContextObjectIntentIsReferenced(ctx, db.SourceContextObjectIntentIsReferencedParams{
-			WorkspaceID: intent.WorkspaceID, SourceContextID: intent.SourceContextID,
+			WorkspaceID: intent.WorkspaceID, SourceContextID: nullString(intent.SourceContextID),
 			AttachmentID: intent.AttachmentID, ObjectUrl: intent.ObjectUrl,
 		})
 		if err != nil {
@@ -693,7 +691,7 @@ func (s *TaskService) CleanupSourceContextObjectIntents(ctx context.Context, lim
 			}
 		}
 		changed, err := s.Queries.DeleteClaimedSourceContextObjectIntent(ctx, db.DeleteClaimedSourceContextObjectIntentParams{
-			StorageKey: intent.StorageKey, WorkspaceID: intent.WorkspaceID, LeaseToken: leaseToken,
+			StorageKey: intent.StorageKey, WorkspaceID: intent.WorkspaceID, LeaseToken: nullString(leaseToken),
 		})
 		if err != nil || changed != 1 {
 			return cleaned, fmt.Errorf("delete source context object intent: changed=%d: %w", changed, err)
@@ -708,12 +706,12 @@ func (s *TaskService) CleanupSourceContextObjectIntents(ctx context.Context, lim
 // purpose: when the budget is what stopped the delete, a cancelled release
 // would leave the row claimable with no backoff, so the next round would pick
 // the same unhealthy object again instead of making progress on the rest.
-func (s *TaskService) releaseSourceContextObjectIntent(ctx context.Context, intent db.IssueSourceContextObjectIntent, leaseToken pgtype.UUID, cause error) {
+func (s *TaskService) releaseSourceContextObjectIntent(ctx context.Context, intent db.IssueSourceContextObjectIntent, leaseToken string, cause error) {
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sourceContextIntentReleaseTimeout)
 	defer cancel()
 	if _, err := s.Queries.ReleaseSourceContextObjectIntent(releaseCtx, db.ReleaseSourceContextObjectIntentParams{
-		LastError: pgtype.Text{String: cause.Error(), Valid: true}, StorageKey: intent.StorageKey,
-		WorkspaceID: intent.WorkspaceID, LeaseToken: leaseToken,
+		LastError: sql.NullString{String: cause.Error(), Valid: true}, StorageKey: intent.StorageKey,
+		WorkspaceID: intent.WorkspaceID, LeaseToken: nullString(leaseToken),
 	}); err != nil {
 		slog.Warn("source context cleanup: failed to record object intent retry backoff",
 			"storage_key", intent.StorageKey, "error", err)
@@ -731,13 +729,13 @@ func (s *TaskService) CleanupAbandonedSourceContexts(ctx context.Context, limit 
 	if s == nil || s.TxStarter == nil || s.SourceContextStorage == nil || limit <= 0 {
 		return 0, nil
 	}
-	tx, err := s.TxStarter.Begin(ctx)
+	tx, err := s.TxStarter.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin source context cleanup: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	qtx := s.Queries.WithTx(tx)
-	contexts, err := qtx.ListExpiredPendingSourceContextsForCleanup(ctx, limit)
+	contexts, err := qtx.ListExpiredPendingSourceContextsForCleanup(ctx, int64(limit))
 	if err != nil {
 		return 0, fmt.Errorf("list expired source contexts: %w", err)
 	}
@@ -749,11 +747,11 @@ func (s *TaskService) CleanupAbandonedSourceContexts(ctx context.Context, limit 
 			return 0, fmt.Errorf("abandon expired source context: changed=%d: %w", changed, err)
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit source context cleanup: %w", err)
 	}
 
-	abandoned, err := s.Queries.ListAbandonedSourceContextsForCleanup(ctx, limit)
+	abandoned, err := s.Queries.ListAbandonedSourceContextsForCleanup(ctx, int64(limit))
 	if err != nil {
 		return 0, fmt.Errorf("list abandoned source contexts: %w", err)
 	}
@@ -765,7 +763,7 @@ func (s *TaskService) CleanupAbandonedSourceContexts(ctx context.Context, limit 
 			return removed, nil
 		}
 		attachments, err := s.Queries.ListAttachmentsBySourceContext(ctx, db.ListAttachmentsBySourceContextParams{
-			WorkspaceID: sourceContext.WorkspaceID, SourceContextID: sourceContext.ID,
+			WorkspaceID: sourceContext.WorkspaceID, SourceContextID: nullString(sourceContext.ID),
 		})
 		if err != nil {
 			return removed, fmt.Errorf("list abandoned source context attachments: %w", err)
@@ -789,7 +787,7 @@ func (s *TaskService) CleanupAbandonedSourceContexts(ctx context.Context, limit 
 			continue
 		}
 		if _, err := s.Queries.DeleteAttachmentsBySourceContext(ctx, db.DeleteAttachmentsBySourceContextParams{
-			WorkspaceID: sourceContext.WorkspaceID, SourceContextID: sourceContext.ID,
+			WorkspaceID: sourceContext.WorkspaceID, SourceContextID: nullString(sourceContext.ID),
 		}); err != nil {
 			return removed, fmt.Errorf("delete abandoned source context attachment rows: %w", err)
 		}

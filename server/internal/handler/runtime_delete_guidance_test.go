@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,8 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -623,7 +622,7 @@ func TestBlockingAgentClassMatchesSQLClassification(t *testing.T) {
 	createSystemFixtureAgent(t, ctx, runtimeID, "Pin Wildcard", "system", "agentXbuilder:not-a-carrier")
 
 	rows, err := testHandler.Queries.ListActiveAgentsByProfile(ctx, db.ListActiveAgentsByProfileParams{
-		ProfileID:   parseUUID(profileID),
+		ProfileID:   nullString(parseUUID(profileID)),
 		WorkspaceID: parseUUID(testWorkspaceID),
 		MaxRows:     maxReportedBlockingAgents,
 	})
@@ -650,10 +649,10 @@ func TestBlockingAgentClassMatchesSQLClassification(t *testing.T) {
 		got   int64
 		class blockingAgentClass
 	}{
-		{"user", summary.UserCount, blockingAgentUser},
-		{"mika", summary.MikaCount, blockingAgentMika},
-		{"agent_builder", summary.AgentBuilderCount, blockingAgentBuilderCarrier},
-		{"other_system", summary.OtherSystemCount, blockingAgentOtherSystem},
+		{"user", int64(summary.UserCount.Float64), blockingAgentUser},
+		{"mika", int64(summary.MikaCount.Float64), blockingAgentMika},
+		{"agent_builder", int64(summary.AgentBuilderCount.Float64), blockingAgentBuilderCarrier},
+		{"other_system", int64(summary.OtherSystemCount.Float64), blockingAgentOtherSystem},
 	} {
 		var want int64
 		for _, row := range rows {
@@ -783,7 +782,7 @@ func TestDeleteRuntimeProfile_BuilderRemedyAddressesTheSessionCreator(t *testing
 // how a task is realistically left behind on an agent that then gets archived.
 type reviewArchiveCancelUnavailable struct{}
 
-func (reviewArchiveCancelUnavailable) Begin(context.Context) (pgx.Tx, error) {
+func (reviewArchiveCancelUnavailable) BeginTx(_ context.Context, _ *sql.TxOptions) (*sql.Tx, error) {
 	return nil, errors.New("injected task cancellation database outage")
 }
 
@@ -840,15 +839,15 @@ func TestDeleteAgentRuntime_OfflineInstanceMatchesTheRealGCDrainGate(t *testing.
 	if _, err := q.LockAgentRuntime(ctx, parseUUID(runtimeID)); err != nil {
 		t.Fatal(err)
 	}
-	agents, err := q.ListUserAgentsByRuntimeForUpdate(ctx, parseUUID(runtimeID))
+	agents, err := q.ListUserAgentsByRuntimeForUpdate(ctx, nullString(parseUUID(runtimeID)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	ids := make([]pgtype.UUID, len(agents))
+	ids := make([]string, len(agents))
 	for i, a := range agents {
 		ids[i] = a.ID
 	}
-	undrained, err := q.CountUndrainedTasksByRuntimeOrAgent(ctx, db.CountUndrainedTasksByRuntimeOrAgentParams{RuntimeIds: []pgtype.UUID{parseUUID(runtimeID)}, AgentIds: ids})
+	undrained, err := q.CountUndrainedTasksByRuntimeOrAgent(ctx, db.CountUndrainedTasksByRuntimeOrAgentParams{RuntimeIds: []string{parseUUID(runtimeID)}, AgentIds: ids})
 	if err != nil || undrained != 1 {
 		t.Fatalf("actual GC drain check = %d, err=%v", undrained, err)
 	}

@@ -1,7 +1,8 @@
 package metrics
 
 import (
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
+
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -25,10 +26,10 @@ type DBCollector struct {
 
 type namedDBPool struct {
 	role string
-	pool *pgxpool.Pool
+	pool *sql.DB
 }
 
-func NewDBCollector(primary, replica *pgxpool.Pool) *DBCollector {
+func NewDBCollector(primary, replica *sql.DB) *DBCollector {
 	pools := make([]namedDBPool, 0, 2)
 	if primary != nil {
 		pools = append(pools, namedDBPool{role: "primary", pool: primary})
@@ -81,22 +82,22 @@ func (c *DBCollector) Describe(ch chan<- *prometheus.Desc) {
 
 func (c *DBCollector) Collect(ch chan<- prometheus.Metric) {
 	for _, namedPool := range c.pools {
-		collectDBPool(ch, namedPool.role, namedPool.pool.Stat(), c)
+		collectDBPool(ch, namedPool.role, namedPool.pool.Stats(), c)
 	}
 }
 
-func collectDBPool(ch chan<- prometheus.Metric, role string, stat *pgxpool.Stat, c *DBCollector) {
-	ch <- prometheus.MustNewConstMetric(c.acquiredConns, prometheus.GaugeValue, float64(stat.AcquiredConns()), role)
-	ch <- prometheus.MustNewConstMetric(c.idleConns, prometheus.GaugeValue, float64(stat.IdleConns()), role)
-	ch <- prometheus.MustNewConstMetric(c.maxConns, prometheus.GaugeValue, float64(stat.MaxConns()), role)
-	ch <- prometheus.MustNewConstMetric(c.totalConns, prometheus.GaugeValue, float64(stat.TotalConns()), role)
-	ch <- prometheus.MustNewConstMetric(c.constructingConns, prometheus.GaugeValue, float64(stat.ConstructingConns()), role)
-	ch <- prometheus.MustNewConstMetric(c.acquireCount, prometheus.CounterValue, float64(stat.AcquireCount()), role)
-	ch <- prometheus.MustNewConstMetric(c.acquireDuration, prometheus.CounterValue, stat.AcquireDuration().Seconds(), role)
-	ch <- prometheus.MustNewConstMetric(c.emptyAcquireCount, prometheus.CounterValue, float64(stat.EmptyAcquireCount()), role)
-	ch <- prometheus.MustNewConstMetric(c.emptyAcquireWaitTime, prometheus.CounterValue, stat.EmptyAcquireWaitTime().Seconds(), role)
-	ch <- prometheus.MustNewConstMetric(c.canceledAcquireCount, prometheus.CounterValue, float64(stat.CanceledAcquireCount()), role)
-	ch <- prometheus.MustNewConstMetric(c.newConnsCount, prometheus.CounterValue, float64(stat.NewConnsCount()), role)
-	ch <- prometheus.MustNewConstMetric(c.maxIdleDestroyCount, prometheus.CounterValue, float64(stat.MaxIdleDestroyCount()), role)
-	ch <- prometheus.MustNewConstMetric(c.maxLifetimeDestroyCnt, prometheus.CounterValue, float64(stat.MaxLifetimeDestroyCount()), role)
+func collectDBPool(ch chan<- prometheus.Metric, role string, stat sql.DBStats, c *DBCollector) {
+	ch <- prometheus.MustNewConstMetric(c.acquiredConns, prometheus.GaugeValue, float64(stat.InUse), role)
+	ch <- prometheus.MustNewConstMetric(c.idleConns, prometheus.GaugeValue, float64(stat.Idle), role)
+	ch <- prometheus.MustNewConstMetric(c.maxConns, prometheus.GaugeValue, float64(stat.MaxOpenConnections), role)
+	ch <- prometheus.MustNewConstMetric(c.totalConns, prometheus.GaugeValue, float64(stat.OpenConnections), role)
+	ch <- prometheus.MustNewConstMetric(c.constructingConns, prometheus.GaugeValue, 0, role)
+	ch <- prometheus.MustNewConstMetric(c.acquireCount, prometheus.CounterValue, float64(stat.WaitCount), role)
+	ch <- prometheus.MustNewConstMetric(c.acquireDuration, prometheus.CounterValue, stat.WaitDuration.Seconds(), role)
+	ch <- prometheus.MustNewConstMetric(c.emptyAcquireCount, prometheus.CounterValue, float64(stat.WaitCount), role)
+	ch <- prometheus.MustNewConstMetric(c.emptyAcquireWaitTime, prometheus.CounterValue, stat.WaitDuration.Seconds(), role)
+	ch <- prometheus.MustNewConstMetric(c.canceledAcquireCount, prometheus.CounterValue, 0, role)
+	ch <- prometheus.MustNewConstMetric(c.newConnsCount, prometheus.CounterValue, float64(stat.MaxIdleClosed+stat.MaxLifetimeClosed), role)
+	ch <- prometheus.MustNewConstMetric(c.maxIdleDestroyCount, prometheus.CounterValue, float64(stat.MaxIdleClosed), role)
+	ch <- prometheus.MustNewConstMetric(c.maxLifetimeDestroyCnt, prometheus.CounterValue, float64(stat.MaxLifetimeClosed), role)
 }

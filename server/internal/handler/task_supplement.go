@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -9,17 +10,15 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func (h *Handler) hydrateTaskSupplementMetadata(ctx context.Context, r *http.Request, workspaceID pgtype.UUID, tasks []db.AgentTaskQueue, resp []AgentTaskResponse) {
+func (h *Handler) hydrateTaskSupplementMetadata(ctx context.Context, r *http.Request, workspaceID string, tasks []db.AgentTaskQueue, resp []AgentTaskResponse) {
 	if len(tasks) == 0 || len(tasks) != len(resp) {
 		return
 	}
-	taskIDs := make([]pgtype.UUID, 0, len(tasks))
+	taskIDs := make([]string, 0, len(tasks))
 	for i := range tasks {
 		if tasks[i].IssueID.Valid {
 			taskIDs = append(taskIDs, tasks[i].ID)
@@ -93,7 +92,7 @@ type CommentSupplementResponse struct {
 
 // listCommentSupplements groups every receipt by comment id, oldest first.
 // Receipts are optional metadata: a failed read leaves comments without them.
-func (h *Handler) listCommentSupplements(ctx context.Context, workspaceID pgtype.UUID, commentIDs []pgtype.UUID) map[string][]CommentSupplementResponse {
+func (h *Handler) listCommentSupplements(ctx context.Context, workspaceID string, commentIDs []string) map[string][]CommentSupplementResponse {
 	out := make(map[string][]CommentSupplementResponse)
 	if len(commentIDs) == 0 {
 		return out
@@ -108,7 +107,7 @@ func (h *Handler) listCommentSupplements(ctx context.Context, workspaceID pgtype
 		id := uuidToString(row.CommentID)
 		out[id] = append(out[id], CommentSupplementResponse{
 			TaskID:        uuidToString(row.TaskID),
-			AgentID:       uuidToString(row.AgentID),
+			AgentID:       uuidToString(row.AgentID.String),
 			Status:        row.Status,
 			FailureReason: textToPtr(row.FailureReason),
 			DeliveredAt:   timestampToPtr(row.DeliveredAt),
@@ -137,15 +136,15 @@ func applyCommentSupplements(resp *CommentResponse, receipts []CommentSupplement
 // for another turn of the same agent; that recipient keeps its normal
 // queued / coalesced / deferred handling, so losing a race never drops or
 // misdirects the comment.
-func (h *Handler) steerCommentAgentTriggers(ctx context.Context, issue db.Issue, comment db.Comment, actorType string, triggers []commentAgentTrigger, steerTaskIDs []pgtype.UUID) ([]commentAgentTrigger, map[string]commentEnqueueResult) {
+func (h *Handler) steerCommentAgentTriggers(ctx context.Context, issue db.Issue, comment db.Comment, actorType string, triggers []commentAgentTrigger, steerTaskIDs []string) ([]commentAgentTrigger, map[string]commentEnqueueResult) {
 	if len(steerTaskIDs) == 0 || len(triggers) == 0 || actorType != "member" {
 		return triggers, nil
 	}
 	// Each chosen turn names its agent; only a turn of this issue counts.
-	chosen := make(map[string]pgtype.UUID, len(steerTaskIDs))
+	chosen := make(map[string]string, len(steerTaskIDs))
 	for _, taskID := range steerTaskIDs {
 		task, err := h.Queries.GetAgentTask(ctx, taskID)
-		if err != nil || task.IssueID != issue.ID {
+		if err != nil || !task.IssueID.Valid || task.IssueID.String != issue.ID {
 			continue
 		}
 		chosen[uuidToString(task.AgentID)] = task.ID
@@ -161,11 +160,11 @@ func (h *Handler) steerCommentAgentTriggers(ctx context.Context, issue db.Issue,
 		}
 		// The comment is its own request id: it binds to a turn at most once.
 		bound, err := h.Queries.BindCommentTaskSupplement(ctx, db.BindCommentTaskSupplementParams{
-			TaskID: taskID, IssueID: issue.ID, AgentID: trigger.Agent.ID, WorkspaceID: issue.WorkspaceID,
+			TaskID: taskID, IssueID: nullString(issue.ID), AgentID: trigger.Agent.ID, WorkspaceID: issue.WorkspaceID,
 			CommentID: comment.ID, AuthorID: comment.AuthorID, ClientRequestID: comment.ID,
 		})
 		if err != nil {
-			if !errors.Is(err, pgx.ErrNoRows) {
+			if !errors.Is(err, sql.ErrNoRows) {
 				slog.Warn("steer comment into running turn failed",
 					"issue_id", uuidToString(issue.ID), "comment_id", uuidToString(comment.ID), "task_id", uuidToString(taskID), "error", err)
 			}
@@ -174,7 +173,7 @@ func (h *Handler) steerCommentAgentTriggers(ctx context.Context, issue db.Issue,
 		}
 		steered[agentID] = commentEnqueueResult{status: DispatchSteered, reason: ReasonSteered}
 		if h.DaemonTaskSupplement != nil && bound.RuntimeID.Valid {
-			h.DaemonTaskSupplement.NotifyTaskSupplementAvailable(uuidToString(bound.RuntimeID), uuidToString(bound.TaskID))
+			h.DaemonTaskSupplement.NotifyTaskSupplementAvailable(uuidToString(bound.RuntimeID.String), uuidToString(bound.TaskID))
 		}
 	}
 	if len(steered) > 0 {
@@ -183,34 +182,34 @@ func (h *Handler) steerCommentAgentTriggers(ctx context.Context, issue db.Issue,
 	return kept, steered
 }
 
-func (h *Handler) loadTaskSupplementTarget(w http.ResponseWriter, r *http.Request) (db.Issue, db.AgentTaskQueue, pgtype.UUID, bool) {
+func (h *Handler) loadTaskSupplementTarget(w http.ResponseWriter, r *http.Request) (db.Issue, db.AgentTaskQueue, string, bool) {
 	issue, ok := h.loadIssueForUser(w, r, chi.URLParam(r, "id"))
 	if !ok {
-		return db.Issue{}, db.AgentTaskQueue{}, pgtype.UUID{}, false
+		return db.Issue{}, db.AgentTaskQueue{}, "", false
 	}
 	userID, ok := requireUserID(w, r)
 	if !ok {
-		return db.Issue{}, db.AgentTaskQueue{}, pgtype.UUID{}, false
+		return db.Issue{}, db.AgentTaskQueue{}, "", false
 	}
 	authorID, ok := parseUUIDOrBadRequest(w, userID, "user id")
 	if !ok {
-		return db.Issue{}, db.AgentTaskQueue{}, pgtype.UUID{}, false
+		return db.Issue{}, db.AgentTaskQueue{}, "", false
 	}
 	taskID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "taskId"), "task id")
 	if !ok {
-		return db.Issue{}, db.AgentTaskQueue{}, pgtype.UUID{}, false
+		return db.Issue{}, db.AgentTaskQueue{}, "", false
 	}
 	task, err := h.Queries.GetAgentTask(r.Context(), taskID)
-	if err != nil || uuidToString(task.IssueID) != uuidToString(issue.ID) {
+	if err != nil || uuidToString(task.IssueID.String) != uuidToString(issue.ID) {
 		writeError(w, http.StatusNotFound, "task not found")
-		return db.Issue{}, db.AgentTaskQueue{}, pgtype.UUID{}, false
+		return db.Issue{}, db.AgentTaskQueue{}, "", false
 	}
 	agent, err := h.Queries.GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{
 		ID: task.AgentID, WorkspaceID: issue.WorkspaceID,
 	})
 	if err != nil || !h.canInvokeAgent(r.Context(), agent, "member", userID, userID, uuidToString(issue.WorkspaceID)) {
 		writeErrorCode(w, http.StatusForbidden, "invocation_not_allowed", "you cannot run this agent")
-		return db.Issue{}, db.AgentTaskQueue{}, pgtype.UUID{}, false
+		return db.Issue{}, db.AgentTaskQueue{}, "", false
 	}
 	return issue, task, authorID, true
 }
@@ -253,7 +252,7 @@ func (h *Handler) CreateTaskSupplement(w http.ResponseWriter, r *http.Request) {
 		h.notifyTaskSupplementAvailable(task)
 		h.writeExistingTaskSupplement(w, r, existing)
 		return
-	} else if !errors.Is(err, pgx.ErrNoRows) {
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusInternalServerError, "failed to check additional message")
 		return
 	}
@@ -262,7 +261,7 @@ func (h *Handler) CreateTaskSupplement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	capability, err := h.Queries.GetTaskSupplementCapability(r.Context(), task.ID)
-	if errors.Is(err, pgx.ErrNoRows) || capability.Capability != protocol.DaemonCapabilityTaskSupplementV1 {
+	if errors.Is(err, sql.ErrNoRows) || capability.Capability != protocol.DaemonCapabilityTaskSupplementV1 {
 		writeErrorCode(w, http.StatusPreconditionFailed, "task_supplement_unsupported", "this run does not support additional messages")
 		return
 	}
@@ -272,22 +271,22 @@ func (h *Handler) CreateTaskSupplement(w http.ResponseWriter, r *http.Request) {
 	}
 
 	created, err := h.Queries.CreateTaskSupplement(r.Context(), db.CreateTaskSupplementParams{
-		TaskID: task.ID, IssueID: issue.ID, WorkspaceID: issue.WorkspaceID,
-		AuthorID: authorID, Content: req.Content, ClientRequestID: requestID,
+		TaskID: task.ID, IssueID: nullString(issue.ID), WorkspaceID: issue.WorkspaceID,
+		AuthorID: authorID, Content: req.Content,
 	})
 	if isUniqueViolation(err) {
 		if existing, loadErr := h.Queries.GetTaskSupplementByRequest(r.Context(), lookup); loadErr == nil {
 			h.notifyTaskSupplementAvailable(task)
 			h.writeExistingTaskSupplement(w, r, existing)
 			return
-		} else if !errors.Is(loadErr, pgx.ErrNoRows) {
+		} else if !errors.Is(loadErr, sql.ErrNoRows) {
 			writeError(w, http.StatusInternalServerError, "failed to check additional message")
 			return
 		}
 		writeError(w, http.StatusConflict, "client_request_id is already in use")
 		return
 	}
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		writeErrorCode(w, http.StatusConflict, "task_supplement_turn_ended", "this run has ended")
 		return
 	}
@@ -306,16 +305,18 @@ func (h *Handler) CreateTaskSupplement(w http.ResponseWriter, r *http.Request) {
 		RecoverySettledAt: created.RecoverySettledAt, DeletedAt: created.DeletedAt,
 	}
 	resp := commentToResponse(comment, nil, nil)
-	resp.IssueRevision = created.IssueRevision
+	issueRevision := sqliteIfaceInt64(created.Coalesce)
+	supplementTaskID, _ := sqliteIfaceString(created.Column2)
+	resp.IssueRevision = issueRevision
 	applyCommentSupplements(&resp, []CommentSupplementResponse{{
-		TaskID:        uuidToString(created.SupplementTaskID),
+		TaskID:        uuidToString(supplementTaskID),
 		AgentID:       uuidToString(task.AgentID),
-		Status:        created.SupplementStatus,
-		FailureReason: textToPtr(created.SupplementFailureReason),
-		DeliveredAt:   timestampToPtr(created.SupplementDeliveredAt),
+		Status:        created.Column3,
+		FailureReason: textToPtr(sqliteIfaceNullString(created.Column4)),
+		DeliveredAt:   timestampToPtr(sqliteIfaceNullString(created.Column5)),
 	}})
 	h.publish(protocol.EventCommentCreated, uuidToString(issue.WorkspaceID), "member", uuidToString(authorID), map[string]any{
-		"comment": resp, "issue_title": issue.Title, "issue_revision": created.IssueRevision,
+		"comment": resp, "issue_title": issue.Title, "issue_revision": issueRevision,
 	})
 	h.notifyTaskSupplementAvailable(task)
 	writeJSON(w, http.StatusCreated, resp)
@@ -325,7 +326,7 @@ func (h *Handler) notifyTaskSupplementAvailable(task db.AgentTaskQueue) {
 	if h.DaemonTaskSupplement == nil || task.Status != "running" || !task.RuntimeID.Valid {
 		return
 	}
-	h.DaemonTaskSupplement.NotifyTaskSupplementAvailable(uuidToString(task.RuntimeID), uuidToString(task.ID))
+	h.DaemonTaskSupplement.NotifyTaskSupplementAvailable(uuidToString(task.RuntimeID.String), uuidToString(task.ID))
 }
 
 func (h *Handler) writeExistingTaskSupplement(w http.ResponseWriter, r *http.Request, existing db.TaskSupplement) {
@@ -337,7 +338,7 @@ func (h *Handler) writeExistingTaskSupplement(w http.ResponseWriter, r *http.Req
 		return
 	}
 	resp := commentToResponse(comment, nil, nil)
-	applyCommentSupplements(&resp, h.listCommentSupplements(r.Context(), existing.WorkspaceID, []pgtype.UUID{existing.CommentID})[uuidToString(existing.CommentID)])
+	applyCommentSupplements(&resp, h.listCommentSupplements(r.Context(), existing.WorkspaceID, []string{existing.CommentID})[uuidToString(existing.CommentID)])
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -351,9 +352,9 @@ func (h *Handler) RetryTaskSupplement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	row, err := h.Queries.RetryTaskSupplement(r.Context(), db.RetryTaskSupplementParams{
-		CommentID: commentID, WorkspaceID: issue.WorkspaceID, TaskID: task.ID, IssueID: issue.ID,
+		CommentID: commentID, WorkspaceID: issue.WorkspaceID, TaskID: task.ID, IssueID: nullString(issue.ID),
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		existing, loadErr := h.Queries.GetTaskSupplementForRun(r.Context(), db.GetTaskSupplementForRunParams{
 			CommentID: commentID, TaskID: task.ID, WorkspaceID: issue.WorkspaceID,
 		})
@@ -362,7 +363,7 @@ func (h *Handler) RetryTaskSupplement(w http.ResponseWriter, r *http.Request) {
 			err = nil
 		}
 	}
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		writeErrorCode(w, http.StatusConflict, "task_supplement_not_retryable", "this message cannot be retried")
 		return
 	}
@@ -386,7 +387,7 @@ func (h *Handler) ClaimTaskSupplement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	row, err := h.Queries.ClaimNextTaskSupplement(r.Context(), parseUUID(taskID))
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		writeJSON(w, http.StatusOK, map[string]any{})
 		return
 	}
@@ -394,8 +395,9 @@ func (h *Handler) ClaimTaskSupplement(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to claim additional message")
 		return
 	}
+	authorName, _ := sqliteIfaceString(row.Coalesce)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"comment_id": uuidToString(row.CommentID), "author_name": row.AuthorName, "content": row.Content,
+		"comment_id": uuidToString(row.CommentID), "author_name": authorName, "content": row.Content,
 	})
 }
 
@@ -423,10 +425,10 @@ func (h *Handler) AckTaskSupplement(w http.ResponseWriter, r *http.Request) {
 		reason := stableTaskSupplementFailureReason(req.Error)
 		row, err = h.Queries.AckTaskSupplementFailed(r.Context(), db.AckTaskSupplementFailedParams{
 			TaskID: parseUUID(taskID), CommentID: commentID,
-			FailureReason: pgtype.Text{String: reason, Valid: true},
+			FailureReason: sql.NullString{String: reason, Valid: true},
 		})
 	}
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusConflict, "additional message is no longer deliverable")
 		return
 	}
@@ -457,7 +459,7 @@ func (h *Handler) publishTaskSupplementUpdate(r *http.Request, row db.TaskSupple
 
 // publishCommentSupplementUpdate rebroadcasts a comment with every receipt it
 // carries, so a change to one run's delivery never hides another run's.
-func (h *Handler) publishCommentSupplementUpdate(ctx context.Context, workspaceID, commentID pgtype.UUID) {
+func (h *Handler) publishCommentSupplementUpdate(ctx context.Context, workspaceID, commentID string) {
 	comment, err := h.Queries.GetCommentInWorkspace(ctx, db.GetCommentInWorkspaceParams{
 		ID: commentID, WorkspaceID: workspaceID,
 	})
@@ -465,6 +467,6 @@ func (h *Handler) publishCommentSupplementUpdate(ctx context.Context, workspaceI
 		return
 	}
 	resp := commentToResponse(comment, nil, nil)
-	applyCommentSupplements(&resp, h.listCommentSupplements(ctx, workspaceID, []pgtype.UUID{commentID})[uuidToString(commentID)])
+	applyCommentSupplements(&resp, h.listCommentSupplements(ctx, workspaceID, []string{commentID})[uuidToString(commentID)])
 	h.publish(protocol.EventCommentUpdated, uuidToString(workspaceID), "system", "", map[string]any{"comment": resp})
 }

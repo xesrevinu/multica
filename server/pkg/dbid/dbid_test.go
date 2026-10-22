@@ -9,10 +9,13 @@ import (
 
 func TestNewV7ReturnsAValidVersion7UUID(t *testing.T) {
 	got := NewV7()
-	if !got.Valid {
-		t.Fatal("NewV7 returned an invalid pgtype.UUID; the insert would fall back to the DB default")
+	if got == "" {
+		t.Fatal("NewV7 returned an empty id")
 	}
-	parsed := uuid.UUID(got.Bytes)
+	parsed, err := uuid.Parse(got)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if v := parsed.Version(); v != 7 {
 		t.Fatalf("uuid version = %d, want 7 (%s)", v, parsed)
 	}
@@ -27,11 +30,14 @@ func TestNewV7IsUniqueAndNonDecreasing(t *testing.T) {
 	seen := make(map[uuid.UUID]struct{}, n)
 	var prev []byte
 	for i := 0; i < n; i++ {
-		id := NewV7()
-		if !id.Valid {
-			t.Fatalf("call %d returned an invalid uuid", i)
+		raw := NewV7()
+		if raw == "" {
+			t.Fatalf("call %d returned an empty uuid", i)
 		}
-		parsed := uuid.UUID(id.Bytes)
+		parsed, err := uuid.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if _, dup := seen[parsed]; dup {
 			t.Fatalf("call %d produced a duplicate id %s", i, parsed)
 		}
@@ -41,10 +47,10 @@ func TestNewV7IsUniqueAndNonDecreasing(t *testing.T) {
 		// process they must never go backwards, which is the whole point of using
 		// v7 for a primary key: byte order tracks insert order, so consecutive
 		// rows land on the same B-tree page.
-		ts := id.Bytes[:6]
+		ts := parsed[:6]
 		if prev != nil && bytes.Compare(ts, prev) < 0 {
 			t.Fatalf("call %d timestamp prefix went backwards: %x < %x", i, ts, prev)
 		}
-		prev = append(prev[:0:0], ts...)
+		prev = append([]byte(nil), ts...)
 	}
 }

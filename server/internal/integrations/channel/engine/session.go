@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -9,9 +11,6 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/channelmedia"
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
@@ -29,50 +28,48 @@ import (
 // `/issue` parse — is identical across platforms and carries the channel_type
 // discriminator through the generalized channel_* tables.
 
-const pgSQLStateUniqueViolation = "23505"
-
 // TxStarter abstracts transaction creation. Satisfied by *pgxpool.Pool. Kept
 // local to the engine so the integration layer never back-references
 // internal/service.
 type TxStarter interface {
-	Begin(ctx context.Context) (pgx.Tx, error)
+	Begin(ctx context.Context) (*sql.Tx, error)
 }
 
 // SessionQueries is the narrow slice of the generated queries the ChatSession
 // service needs. *db.Queries satisfies it through the dbSessionQueries adapter
 // (whose WithTx returns the interface type); tests supply an in-memory fake.
 type SessionQueries interface {
-	WithTx(tx pgx.Tx) SessionQueries
+	WithTx(tx *sql.Tx) SessionQueries
 	GetChannelChatSessionBinding(ctx context.Context, arg db.GetChannelChatSessionBindingParams) (db.ChannelChatSessionBinding, error)
-	LockWorkspaceForChatSessionCreate(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error)
+	LockWorkspaceForChatSessionCreate(ctx context.Context, id string) (string, error)
 	CreateChatSession(ctx context.Context, arg db.CreateChatSessionParams) (db.ChatSession, error)
 	CreateChannelChatSessionBinding(ctx context.Context, arg db.CreateChannelChatSessionBindingParams) (db.ChannelChatSessionBinding, error)
 	CreateChannelChatSessionBindingGeneration(ctx context.Context, arg db.CreateChannelChatSessionBindingGenerationParams) (db.ChannelChatSessionBinding, error)
 	LockCurrentChannelChatSessionBinding(ctx context.Context, arg db.LockCurrentChannelChatSessionBindingParams) (db.ChannelChatSessionBinding, error)
-	LockCurrentChannelChatSessionBindingBySession(ctx context.Context, chatSessionID pgtype.UUID) (db.ChannelChatSessionBinding, error)
+	LockCurrentChannelChatSessionBindingBySession(ctx context.Context, chatSessionID string) (db.ChannelChatSessionBinding, error)
 	RetireChannelChatSessionBinding(ctx context.Context, arg db.RetireChannelChatSessionBindingParams) (db.ChannelChatSessionBinding, error)
-	LockChatSessionForAppend(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error)
-	GetChatSession(ctx context.Context, id pgtype.UUID) (db.ChatSession, error)
-	ChatSessionHasPublicUserMessage(ctx context.Context, id pgtype.UUID) (bool, error)
-	MarkChatSessionExplicitlyCreated(ctx context.Context, id pgtype.UUID) (db.ChatSession, error)
+	LockChatSessionForAppend(ctx context.Context, id string) (string, error)
+	GetChatSession(ctx context.Context, id string) (db.ChatSession, error)
+	ChatSessionHasPublicUserMessage(ctx context.Context, id string) (bool, error)
+	MarkChatSessionExplicitlyCreated(ctx context.Context, id string) (db.ChatSession, error)
 	InitializeChatSessionTitle(ctx context.Context, arg db.InitializeChatSessionTitleParams) (db.ChatSession, error)
 	ReplaceImplicitChatSessionTitle(ctx context.Context, arg db.ReplaceImplicitChatSessionTitleParams) (db.ChatSession, error)
 	InitializeChatSessionMediaTitle(ctx context.Context, arg db.InitializeChatSessionMediaTitleParams) (db.ChatSession, error)
 	CreateChatMessage(ctx context.Context, arg db.CreateChatMessageParams) (db.ChatMessage, error)
-	ListUnownedChannelChatContextRevisions(ctx context.Context, chatSessionID pgtype.UUID) ([]PendingContext, error)
+	ListUnownedChannelChatContextRevisions(ctx context.Context, chatSessionID string) ([]PendingContext, error)
 	ClearChatMessageChannelMediaPending(ctx context.Context, arg db.ClearChatMessageChannelMediaPendingParams) error
-	LockIssueForChannelMediaBind(ctx context.Context, arg db.LockIssueForChannelMediaBindParams) (pgtype.UUID, error)
+	LockIssueForChannelMediaBind(ctx context.Context, arg db.LockIssueForChannelMediaBindParams) (string, error)
 	UpdateChatMessageContentForChannelMedia(ctx context.Context, arg db.UpdateChatMessageContentForChannelMediaParams) (int64, error)
 	MaterializeIssueChannelMediaMarkdown(ctx context.Context, arg db.MaterializeIssueChannelMediaMarkdownParams) (db.Issue, error)
 	CreateAttachment(ctx context.Context, arg db.CreateAttachmentParams) (db.Attachment, error)
-	LinkAttachmentsToChatMessage(ctx context.Context, arg db.LinkAttachmentsToChatMessageParams) ([]pgtype.UUID, error)
+	LinkAttachmentsToChatMessage(ctx context.Context, arg db.LinkAttachmentsToChatMessageParams) ([]string, error)
 	ClaimChannelMediaPendingObjectsForBind(ctx context.Context, arg db.ClaimChannelMediaPendingObjectsForBindParams) ([]string, error)
-	TouchChatSession(ctx context.Context, id pgtype.UUID) error
-	LockChannelChatSessionBindingForContext(ctx context.Context, chatSessionID pgtype.UUID) (db.ChannelChatSessionBinding, error)
+	TouchChatSession(ctx context.Context, id string) error
+	LockChannelChatSessionBindingForContext(ctx context.Context, chatSessionID string) (db.ChannelChatSessionBinding, error)
 	LockChannelChatContextGenerationByRevision(ctx context.Context, arg db.LockChannelChatContextGenerationByRevisionParams) (db.ChannelChatContextGeneration, error)
-	AdvanceChannelChatContextGeneration(ctx context.Context, arg db.AdvanceChannelChatContextGenerationParams) (db.AdvanceChannelChatContextGenerationRow, error)
+	AdvanceChannelChatContextGeneration(ctx context.Context, arg db.AdvanceChannelChatContextGenerationParams) (db.ChannelChatContextGeneration, error)
 	ResolveChannelChatContextHistoryStart(ctx context.Context, arg db.ResolveChannelChatContextHistoryStartParams) error
-	SetChannelChatContextInitiator(ctx context.Context, arg db.SetChannelChatContextInitiatorParams) (pgtype.UUID, error)
+	SetChannelChatContextInitiator(ctx context.Context, arg db.SetChannelChatContextInitiatorParams) (sql.NullString, error)
 	UpdateChannelChatSessionBindingReplyTarget(ctx context.Context, arg db.UpdateChannelChatSessionBindingReplyTargetParams) error
 	SetChannelChatContextReplyTarget(ctx context.Context, arg db.SetChannelChatContextReplyTargetParams) error
 	MarkChannelInboundDedupProcessed(ctx context.Context, arg db.MarkChannelInboundDedupProcessedParams) (int64, error)
@@ -83,13 +80,13 @@ type SessionQueries interface {
 // behind SessionQueries.
 type dbSessionQueries struct{ q *db.Queries }
 
-func (a dbSessionQueries) WithTx(tx pgx.Tx) SessionQueries {
+func (a dbSessionQueries) WithTx(tx *sql.Tx) SessionQueries {
 	return dbSessionQueries{q: a.q.WithTx(tx)}
 }
 func (a dbSessionQueries) GetChannelChatSessionBinding(ctx context.Context, arg db.GetChannelChatSessionBindingParams) (db.ChannelChatSessionBinding, error) {
 	return a.q.GetChannelChatSessionBinding(ctx, arg)
 }
-func (a dbSessionQueries) LockWorkspaceForChatSessionCreate(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+func (a dbSessionQueries) LockWorkspaceForChatSessionCreate(ctx context.Context, id string) (string, error) {
 	return a.q.LockWorkspaceForChatSessionCreate(ctx, id)
 }
 func (a dbSessionQueries) CreateChatSession(ctx context.Context, arg db.CreateChatSessionParams) (db.ChatSession, error) {
@@ -97,44 +94,44 @@ func (a dbSessionQueries) CreateChatSession(ctx context.Context, arg db.CreateCh
 }
 func (a dbSessionQueries) CreateChannelChatSessionBinding(ctx context.Context, arg db.CreateChannelChatSessionBindingParams) (db.ChannelChatSessionBinding, error) {
 	row, err := a.q.CreateChannelChatSessionBinding(ctx, arg)
-	return db.ChannelChatSessionBinding{
-		ID: row.ID, ChatSessionID: row.ChatSessionID, InstallationID: row.InstallationID,
-		ChannelType: row.ChannelType, ChannelChatID: row.ChannelChatID, ChatType: row.ChatType,
-		LastMessageID: row.LastMessageID, LastThreadID: row.LastThreadID, Config: row.Config,
-		CreatedAt: row.CreatedAt, PendingFresh: row.PendingFresh, ContextRevision: row.ContextRevision,
-	}, err
+	if err != nil {
+		return db.ChannelChatSessionBinding{}, err
+	}
+	// The pre-split query inserted the initial context generation in the same statement.
+	if err := a.q.CreateChannelChatSessionBinding_Step2(ctx, row.ChatSessionID); err != nil {
+		return db.ChannelChatSessionBinding{}, err
+	}
+	return row, nil
 }
 func (a dbSessionQueries) CreateChannelChatSessionBindingGeneration(ctx context.Context, arg db.CreateChannelChatSessionBindingGenerationParams) (db.ChannelChatSessionBinding, error) {
 	row, err := a.q.CreateChannelChatSessionBindingGeneration(ctx, arg)
-	return db.ChannelChatSessionBinding{
-		ID: row.ID, ChatSessionID: row.ChatSessionID, InstallationID: row.InstallationID,
-		ChannelType: row.ChannelType, ChannelChatID: row.ChannelChatID, ChatType: row.ChatType,
-		LastMessageID: row.LastMessageID, LastThreadID: row.LastThreadID, Config: row.Config,
-		CreatedAt: row.CreatedAt, PendingFresh: row.PendingFresh, ContextRevision: row.ContextRevision,
-		RouteRevision: row.RouteRevision, RetiredAt: row.RetiredAt,
-		HistoryStartMessageID: row.HistoryStartMessageID, HistoryEndMessageID: row.HistoryEndMessageID,
-		HistoryBoundaryPending: row.HistoryBoundaryPending,
-	}, err
+	if err != nil {
+		return db.ChannelChatSessionBinding{}, err
+	}
+	if err := a.q.CreateChannelChatSessionBindingGeneration_Step2(ctx, row.ChatSessionID); err != nil {
+		return db.ChannelChatSessionBinding{}, err
+	}
+	return row, nil
 }
 func (a dbSessionQueries) LockCurrentChannelChatSessionBinding(ctx context.Context, arg db.LockCurrentChannelChatSessionBindingParams) (db.ChannelChatSessionBinding, error) {
 	return a.q.LockCurrentChannelChatSessionBinding(ctx, arg)
 }
-func (a dbSessionQueries) LockCurrentChannelChatSessionBindingBySession(ctx context.Context, chatSessionID pgtype.UUID) (db.ChannelChatSessionBinding, error) {
+func (a dbSessionQueries) LockCurrentChannelChatSessionBindingBySession(ctx context.Context, chatSessionID string) (db.ChannelChatSessionBinding, error) {
 	return a.q.LockCurrentChannelChatSessionBindingBySession(ctx, chatSessionID)
 }
 func (a dbSessionQueries) RetireChannelChatSessionBinding(ctx context.Context, arg db.RetireChannelChatSessionBindingParams) (db.ChannelChatSessionBinding, error) {
 	return a.q.RetireChannelChatSessionBinding(ctx, arg)
 }
-func (a dbSessionQueries) LockChatSessionForAppend(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+func (a dbSessionQueries) LockChatSessionForAppend(ctx context.Context, id string) (string, error) {
 	return a.q.LockChatSessionForAppend(ctx, id)
 }
-func (a dbSessionQueries) GetChatSession(ctx context.Context, id pgtype.UUID) (db.ChatSession, error) {
+func (a dbSessionQueries) GetChatSession(ctx context.Context, id string) (db.ChatSession, error) {
 	return a.q.GetChatSession(ctx, id)
 }
-func (a dbSessionQueries) ChatSessionHasPublicUserMessage(ctx context.Context, id pgtype.UUID) (bool, error) {
+func (a dbSessionQueries) ChatSessionHasPublicUserMessage(ctx context.Context, id string) (bool, error) {
 	return a.q.ChatSessionHasPublicUserMessage(ctx, id)
 }
-func (a dbSessionQueries) MarkChatSessionExplicitlyCreated(ctx context.Context, id pgtype.UUID) (db.ChatSession, error) {
+func (a dbSessionQueries) MarkChatSessionExplicitlyCreated(ctx context.Context, id string) (db.ChatSession, error) {
 	return a.q.MarkChatSessionExplicitlyCreated(ctx, id)
 }
 func (a dbSessionQueries) InitializeChatSessionTitle(ctx context.Context, arg db.InitializeChatSessionTitleParams) (db.ChatSession, error) {
@@ -149,7 +146,7 @@ func (a dbSessionQueries) InitializeChatSessionMediaTitle(ctx context.Context, a
 func (a dbSessionQueries) CreateChatMessage(ctx context.Context, arg db.CreateChatMessageParams) (db.ChatMessage, error) {
 	return a.q.CreateChatMessage(ctx, arg)
 }
-func (a dbSessionQueries) ListUnownedChannelChatContextRevisions(ctx context.Context, chatSessionID pgtype.UUID) ([]PendingContext, error) {
+func (a dbSessionQueries) ListUnownedChannelChatContextRevisions(ctx context.Context, chatSessionID string) ([]PendingContext, error) {
 	rows, err := a.q.ListUnownedChannelChatContextRevisions(ctx, chatSessionID)
 	if err != nil {
 		return nil, err
@@ -158,7 +155,7 @@ func (a dbSessionQueries) ListUnownedChannelChatContextRevisions(ctx context.Con
 	for _, row := range rows {
 		contexts = append(contexts, PendingContext{
 			Revision:        row.ContextRevision,
-			InitiatorUserID: row.InitiatorUserID,
+			InitiatorUserID: row.InitiatorUserID.String,
 		})
 	}
 	return contexts, nil
@@ -166,7 +163,7 @@ func (a dbSessionQueries) ListUnownedChannelChatContextRevisions(ctx context.Con
 func (a dbSessionQueries) ClearChatMessageChannelMediaPending(ctx context.Context, arg db.ClearChatMessageChannelMediaPendingParams) error {
 	return a.q.ClearChatMessageChannelMediaPending(ctx, arg)
 }
-func (a dbSessionQueries) LockIssueForChannelMediaBind(ctx context.Context, arg db.LockIssueForChannelMediaBindParams) (pgtype.UUID, error) {
+func (a dbSessionQueries) LockIssueForChannelMediaBind(ctx context.Context, arg db.LockIssueForChannelMediaBindParams) (string, error) {
 	return a.q.LockIssueForChannelMediaBind(ctx, arg)
 }
 func (a dbSessionQueries) UpdateChatMessageContentForChannelMedia(ctx context.Context, arg db.UpdateChatMessageContentForChannelMediaParams) (int64, error) {
@@ -177,33 +174,70 @@ func (a dbSessionQueries) MaterializeIssueChannelMediaMarkdown(ctx context.Conte
 }
 func (a dbSessionQueries) CreateAttachment(ctx context.Context, arg db.CreateAttachmentParams) (db.Attachment, error) {
 	created, err := a.q.CreateAttachment(ctx, arg)
-	return created.Attachment(), err
+	if err != nil {
+		return db.Attachment{}, err
+	}
+	// Step2/Step3 are the issue and comment revision bumps the old CTE applied
+	// in the same statement as the insert.
+	if err := a.q.CreateAttachment_Step2(ctx, arg.IssueID); err != nil {
+		return db.Attachment{}, err
+	}
+	if err := a.q.CreateAttachment_Step3(ctx, arg.CommentID); err != nil {
+		return db.Attachment{}, err
+	}
+	return created.Attachment(), nil
 }
-func (a dbSessionQueries) LinkAttachmentsToChatMessage(ctx context.Context, arg db.LinkAttachmentsToChatMessageParams) ([]pgtype.UUID, error) {
+func (a dbSessionQueries) LinkAttachmentsToChatMessage(ctx context.Context, arg db.LinkAttachmentsToChatMessageParams) ([]string, error) {
 	return a.q.LinkAttachmentsToChatMessage(ctx, arg)
 }
 func (a dbSessionQueries) ClaimChannelMediaPendingObjectsForBind(ctx context.Context, arg db.ClaimChannelMediaPendingObjectsForBindParams) ([]string, error) {
 	return a.q.ClaimChannelMediaPendingObjectsForBind(ctx, arg)
 }
-func (a dbSessionQueries) TouchChatSession(ctx context.Context, id pgtype.UUID) error {
+func (a dbSessionQueries) TouchChatSession(ctx context.Context, id string) error {
 	return a.q.TouchChatSession(ctx, id)
 }
-func (a dbSessionQueries) LockChannelChatSessionBindingForContext(ctx context.Context, chatSessionID pgtype.UUID) (db.ChannelChatSessionBinding, error) {
+func (a dbSessionQueries) LockChannelChatSessionBindingForContext(ctx context.Context, chatSessionID string) (db.ChannelChatSessionBinding, error) {
 	return a.q.LockChannelChatSessionBindingForContext(ctx, chatSessionID)
 }
 func (a dbSessionQueries) LockChannelChatContextGenerationByRevision(ctx context.Context, arg db.LockChannelChatContextGenerationByRevisionParams) (db.ChannelChatContextGeneration, error) {
 	return a.q.LockChannelChatContextGenerationByRevision(ctx, arg)
 }
-func (a dbSessionQueries) AdvanceChannelChatContextGeneration(ctx context.Context, arg db.AdvanceChannelChatContextGenerationParams) (db.AdvanceChannelChatContextGenerationRow, error) {
+func (a dbSessionQueries) AdvanceChannelChatContextGeneration(ctx context.Context, arg db.AdvanceChannelChatContextGenerationParams) (db.ChannelChatContextGeneration, error) {
+	revision, err := contextRevision(arg.CurrentRevision)
+	if err != nil {
+		return db.ChannelChatContextGeneration{}, err
+	}
+	// channel.sql: Step2 closes the previous generation, Step3 bumps the
+	// binding, then the insert opens the next generation. The old query did
+	// all three as one CTE.
+	if err := a.q.AdvanceChannelChatContextGeneration_Step2(ctx, db.AdvanceChannelChatContextGeneration_Step2Params{
+		HistoryBoundaryMessageID: arg.HistoryBoundaryMessageID,
+		ChatSessionID:            arg.ChatSessionID,
+		CurrentRevision:          revision,
+	}); err != nil {
+		return db.ChannelChatContextGeneration{}, err
+	}
+	if err := a.q.AdvanceChannelChatContextGeneration_Step3(ctx, db.AdvanceChannelChatContextGeneration_Step3Params{
+		ChatSessionID:   arg.ChatSessionID,
+		CurrentRevision: revision,
+	}); err != nil {
+		return db.ChannelChatContextGeneration{}, err
+	}
 	return a.q.AdvanceChannelChatContextGeneration(ctx, arg)
 }
 func (a dbSessionQueries) ResolveChannelChatContextHistoryStart(ctx context.Context, arg db.ResolveChannelChatContextHistoryStartParams) error {
 	return a.q.ResolveChannelChatContextHistoryStart(ctx, arg)
 }
-func (a dbSessionQueries) SetChannelChatContextInitiator(ctx context.Context, arg db.SetChannelChatContextInitiatorParams) (pgtype.UUID, error) {
+func (a dbSessionQueries) SetChannelChatContextInitiator(ctx context.Context, arg db.SetChannelChatContextInitiatorParams) (sql.NullString, error) {
 	return a.q.SetChannelChatContextInitiator(ctx, arg)
 }
 func (a dbSessionQueries) UpdateChannelChatSessionBindingReplyTarget(ctx context.Context, arg db.UpdateChannelChatSessionBindingReplyTargetParams) error {
+	if err := a.q.UpdateChannelChatSessionBindingReplyTarget_Step2(ctx, db.UpdateChannelChatSessionBindingReplyTarget_Step2Params{
+		LastMessageID:      arg.LastMessageID,
+		ReplyChatSessionID: arg.ReplyChatSessionID,
+	}); err != nil {
+		return err
+	}
 	return a.q.UpdateChannelChatSessionBindingReplyTarget(ctx, arg)
 }
 func (a dbSessionQueries) SetChannelChatContextReplyTarget(ctx context.Context, arg db.SetChannelChatContextReplyTargetParams) error {
@@ -277,10 +311,10 @@ func newChatSessionWith(q SessionQueries, tx TxStarter, channelType channel.Type
 // Sender is the already-resolved Multica user (the session creator: the sole
 // human for p2p, the installer for group chats — the caller decides which).
 type EnsureSessionInput struct {
-	WorkspaceID    pgtype.UUID
-	AgentID        pgtype.UUID
-	InstallationID pgtype.UUID
-	Sender         pgtype.UUID
+	WorkspaceID    string
+	AgentID        string
+	InstallationID string
+	Sender         string
 	BindingKey     string
 	BindingConfig  []byte
 	ChatType       channel.ChatType
@@ -291,15 +325,15 @@ type EnsureSessionInput struct {
 // race between two concurrent first messages is resolved by the
 // UNIQUE (installation_id, channel_chat_id) constraint: the loser re-reads the
 // winner's row.
-func (s *ChatSession) EnsureSession(ctx context.Context, in EnsureSessionInput) (pgtype.UUID, error) {
+func (s *ChatSession) EnsureSession(ctx context.Context, in EnsureSessionInput) (string, error) {
 	lookup := db.GetChannelChatSessionBindingParams{InstallationID: in.InstallationID, ChannelChatID: in.BindingKey}
 
 	existing, err := s.q.GetChannelChatSessionBinding(ctx, lookup)
 	if err == nil {
 		return existing.ChatSessionID, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return pgtype.UUID{}, fmt.Errorf("lookup chat session binding: %w", err)
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("lookup chat session binding: %w", err)
 	}
 
 	id, err := s.createSessionAndBinding(ctx, in)
@@ -311,24 +345,24 @@ func (s *ChatSession) EnsureSession(ctx context.Context, in EnsureSessionInput) 
 		if lookupErr == nil {
 			return existing.ChatSessionID, nil
 		}
-		return pgtype.UUID{}, fmt.Errorf("race re-read after unique violation: %w", lookupErr)
+		return "", fmt.Errorf("race re-read after unique violation: %w", lookupErr)
 	}
-	return pgtype.UUID{}, err
+	return "", err
 }
 
-func (s *ChatSession) createSessionAndBinding(ctx context.Context, in EnsureSessionInput) (pgtype.UUID, error) {
+func (s *ChatSession) createSessionAndBinding(ctx context.Context, in EnsureSessionInput) (string, error) {
 	tx, err := s.tx.Begin(ctx)
 	if err != nil {
-		return pgtype.UUID{}, fmt.Errorf("begin tx: %w", err)
+		return "", fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	qtx := s.q.WithTx(tx)
 
 	// FOR KEY SHARE on the workspace row before creating the session — the creator
 	// half of the #5219 delete/create protocol, so a channel session cannot be
 	// created into a workspace mid-delete (see LockWorkspaceForChatSessionCreate).
 	if _, err := qtx.LockWorkspaceForChatSessionCreate(ctx, in.WorkspaceID); err != nil {
-		return pgtype.UUID{}, fmt.Errorf("lock workspace for chat session create: %w", err)
+		return "", fmt.Errorf("lock workspace for chat session create: %w", err)
 	}
 
 	session, err := qtx.CreateChatSession(ctx, db.CreateChatSessionParams{
@@ -339,7 +373,7 @@ func (s *ChatSession) createSessionAndBinding(ctx context.Context, in EnsureSess
 		Title:       "",
 	})
 	if err != nil {
-		return pgtype.UUID{}, fmt.Errorf("create chat session: %w", err)
+		return "", fmt.Errorf("create chat session: %w", err)
 	}
 	bindingConfig := in.BindingConfig
 	if len(bindingConfig) == 0 {
@@ -351,12 +385,12 @@ func (s *ChatSession) createSessionAndBinding(ctx context.Context, in EnsureSess
 		ChannelType:    string(s.channelType),
 		ChannelChatID:  in.BindingKey,
 		ChatType:       string(in.ChatType),
-		Config:         bindingConfig,
+		Config:         string(bindingConfig),
 	}); err != nil {
-		return pgtype.UUID{}, err
+		return "", err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return pgtype.UUID{}, fmt.Errorf("commit: %w", err)
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("commit: %w", err)
 	}
 	return session.ID, nil
 }
@@ -383,9 +417,9 @@ func (s *ChatSession) createSessionAndBinding(ctx context.Context, in EnsureSess
 // its own binding row, recording the real thread here per session does not clash
 // across sibling threads.
 type AppendInput struct {
-	SessionID      pgtype.UUID
-	Sender         pgtype.UUID
-	InstallationID pgtype.UUID
+	SessionID      string
+	Sender         string
+	InstallationID string
 	Body           string
 	CommandText    string
 	MessageID      string
@@ -397,13 +431,13 @@ type AppendInput struct {
 	// platform id to render a native @-mention, and a Multica user can hold
 	// more than one platform identity on the same installation.
 	SenderChannelID     string
-	ClaimToken          pgtype.UUID
+	ClaimToken          string
 	MediaPendingSeconds float64
 	ForceFresh          bool
 	// BeforeCommit adds work that must be atomic with this message and its
 	// context-generation change. Native slash commands use it to snapshot and
 	// enqueue the task before the message becomes visible.
-	BeforeCommit func(context.Context, pgx.Tx, db.ChatSession, int64, pgtype.UUID, int64) error
+	BeforeCommit func(context.Context, *sql.Tx, db.ChatSession, int64, string, int64) error
 }
 
 // StartSessionInput is the shared, transactional implementation of /new.
@@ -412,7 +446,7 @@ type StartSessionInput struct {
 	EnsureSessionInput
 	// Initiator is the authenticated sender of the /new command. Sender in the
 	// embedded EnsureSessionInput remains the owner of the newly created Chat.
-	Initiator pgtype.UUID
+	Initiator string
 	Body      string
 	// CommandText is the current member-authored instruction before adapter
 	// context enrichment. It is used only for the initial Chat title; Body
@@ -423,15 +457,15 @@ type StartSessionInput struct {
 	ThreadID       string
 	// SenderChannelID mirrors AppendInput.SenderChannelID.
 	SenderChannelID        string
-	ClaimToken             pgtype.UUID
+	ClaimToken             string
 	MediaPendingSeconds    float64
 	PersistMessage         bool
 	HistoryBoundaryPending bool
-	BeforeWrite            func(context.Context, pgx.Tx) error
+	BeforeWrite            func(context.Context, *sql.Tx) error
 	// BeforeCommit can add work that must be atomic with the route rotation and
 	// first message. The newly created session is visible through tx, but none of
 	// these writes are externally observable until StartSession commits.
-	BeforeCommit func(context.Context, pgx.Tx, db.ChatSession) error
+	BeforeCommit func(context.Context, *sql.Tx, db.ChatSession) error
 }
 
 // StartSession atomically retires the current route generation, creates an
@@ -442,7 +476,7 @@ func (s *ChatSession) StartSession(ctx context.Context, in StartSessionInput) (S
 	if err != nil {
 		return StartSessionResult{}, fmt.Errorf("begin start chat tx: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	qtx := s.q.WithTx(tx)
 	if _, err := qtx.LockWorkspaceForChatSessionCreate(ctx, in.WorkspaceID); err != nil {
 		return StartSessionResult{}, fmt.Errorf("lock workspace for start chat: %w", err)
@@ -450,7 +484,7 @@ func (s *ChatSession) StartSession(ctx context.Context, in StartSessionInput) (S
 
 	lookup := db.GetChannelChatSessionBindingParams{InstallationID: in.InstallationID, ChannelChatID: in.BindingKey}
 	current, currentErr := qtx.GetChannelChatSessionBinding(ctx, lookup)
-	if currentErr != nil && !errors.Is(currentErr, pgx.ErrNoRows) {
+	if currentErr != nil && !errors.Is(currentErr, sql.ErrNoRows) {
 		return StartSessionResult{}, fmt.Errorf("load current chat route: %w", currentErr)
 	}
 	nextRevision := int64(1)
@@ -476,7 +510,7 @@ func (s *ChatSession) StartSession(ctx context.Context, in StartSessionInput) (S
 			// A native command has no public platform cursor. Keep the old end
 			// open until the next real inbound atomically closes it and opens the
 			// pending generation at the same message id.
-			historyEnd = pgtype.Text{}
+			historyEnd = sql.NullString{}
 		} else if in.MessageID != "" {
 			historyEnd = textOrNull(in.MessageID)
 		}
@@ -514,9 +548,9 @@ func (s *ChatSession) StartSession(ctx context.Context, in StartSessionInput) (S
 	binding, err := qtx.CreateChannelChatSessionBindingGeneration(ctx, db.CreateChannelChatSessionBindingGenerationParams{
 		ChatSessionID: session.ID, InstallationID: in.InstallationID,
 		ChannelType: string(s.channelType), ChannelChatID: in.BindingKey,
-		ChatType: string(in.ChatType), Config: config, RouteRevision: nextRevision,
+		ChatType: string(in.ChatType), Config: string(config), RouteRevision: nextRevision,
 		HistoryStartMessageID:  startMessageID,
-		HistoryBoundaryPending: in.HistoryBoundaryPending && in.MessageID == "",
+		HistoryBoundaryPending: boolToInt(in.HistoryBoundaryPending && in.MessageID == ""),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -531,15 +565,15 @@ func (s *ChatSession) StartSession(ctx context.Context, in StartSessionInput) (S
 	result.Append.ContextRevision = 1
 	if in.PersistMessage {
 		if _, err := qtx.SetChannelChatContextInitiator(ctx, db.SetChannelChatContextInitiatorParams{
-			ChatSessionID: session.ID, Revision: 1, InitiatorUserID: in.Initiator,
+			ChatSessionID: session.ID, Revision: 1, InitiatorUserID: textOrNull(in.Initiator),
 		}); err != nil {
 			return StartSessionResult{}, fmt.Errorf("snapshot started chat initiator: %w", err)
 		}
 		msg, err := qtx.CreateChatMessage(ctx, db.CreateChatMessageParams{
 			ID: dbid.NewV7(), ChatSessionID: session.ID, Role: "user", Content: in.Body,
-			ChannelMediaPendingSecs: pgtype.Float8{Float64: in.MediaPendingSeconds, Valid: in.MediaPendingSeconds > 0},
-			ChannelIngested:         pgtype.Bool{Bool: true, Valid: true},
-			ChannelContextRevision:  pgtype.Int8{Int64: 1, Valid: true},
+			ChannelMediaPendingSecs: mediaPendingSecs(in.MediaPendingSeconds),
+			ChannelIngested:         true,
+			ChannelContextRevision:  sql.NullInt64{Int64: 1, Valid: true},
 		})
 		if err != nil {
 			return StartSessionResult{}, fmt.Errorf("create first chat message: %w", err)
@@ -572,7 +606,7 @@ func (s *ChatSession) StartSession(ctx context.Context, in StartSessionInput) (S
 	if dedupMessageID == "" {
 		dedupMessageID = in.MessageID
 	}
-	if in.ClaimToken.Valid && dedupMessageID != "" {
+	if in.ClaimToken != "" && dedupMessageID != "" {
 		rows, err := qtx.MarkChannelInboundDedupProcessed(ctx, db.MarkChannelInboundDedupProcessedParams{
 			InstallationID: in.InstallationID, MessageID: dedupMessageID, ClaimToken: in.ClaimToken,
 		})
@@ -589,7 +623,7 @@ func (s *ChatSession) StartSession(ctx context.Context, in StartSessionInput) (S
 			return StartSessionResult{}, err
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return StartSessionResult{}, fmt.Errorf("commit start chat: %w", err)
 	}
 	startOutcome := "chat_started"
@@ -606,12 +640,7 @@ func (s *ChatSession) StartSession(ctx context.Context, in StartSessionInput) (S
 	return result, nil
 }
 
-func utilUUID(id pgtype.UUID) string {
-	if !id.Valid {
-		return ""
-	}
-	return uuid.UUID(id.Bytes).String()
-}
+func utilUUID(id string) string { return id }
 
 // BindMediaInput links already-uploaded media to either an /issue target or a
 // durable chat message in a short database-only transaction. A valid
@@ -620,12 +649,12 @@ func utilUUID(id pgtype.UUID) string {
 // concurrency-safe fallback. Remote downloads/uploads happen before this call
 // and outside the connector ACK path.
 type BindMediaInput struct {
-	MessageID            pgtype.UUID
-	SessionID            pgtype.UUID
-	WorkspaceID          pgtype.UUID
-	Sender               pgtype.UUID
-	IssueID              pgtype.UUID
-	IssueDescriptionBase pgtype.Text
+	MessageID            string
+	SessionID            string
+	WorkspaceID          string
+	Sender               string
+	IssueID              string
+	IssueDescriptionBase sql.NullString
 	IssueCommandText     string
 	Body                 string
 	MediaRefs            []channel.MediaRef
@@ -647,7 +676,7 @@ func (s *ChatSession) AppendUserMessage(ctx context.Context, in AppendInput) (Ap
 	if err != nil {
 		return AppendResult{}, fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	qtx := s.q.WithTx(tx)
 	commandSource := in.CommandText
 	if commandSource == "" {
@@ -662,7 +691,7 @@ func (s *ChatSession) AppendUserMessage(ctx context.Context, in AppendInput) (Ap
 	}
 	binding, err := qtx.LockCurrentChannelChatSessionBindingBySession(ctx, in.SessionID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return AppendResult{}, ErrRouteChanged
 		}
 		return AppendResult{}, fmt.Errorf("lock channel chat binding: %w", err)
@@ -691,7 +720,7 @@ func (s *ChatSession) AppendUserMessage(ctx context.Context, in AppendInput) (Ap
 		} else if title != "" {
 			if _, err := qtx.InitializeChatSessionTitle(ctx, db.InitializeChatSessionTitleParams{ID: in.SessionID, Title: title}); err == nil {
 				initializedTitle = title
-			} else if !errors.Is(err, pgx.ErrNoRows) {
+			} else if !errors.Is(err, sql.ErrNoRows) {
 				return AppendResult{}, fmt.Errorf("initialize chat title: %w", err)
 			}
 		}
@@ -706,13 +735,13 @@ func (s *ChatSession) AppendUserMessage(ctx context.Context, in AppendInput) (Ap
 	if in.ForceFresh {
 		advanced, err := qtx.AdvanceChannelChatContextGeneration(ctx, db.AdvanceChannelChatContextGenerationParams{
 			ChatSessionID: in.SessionID, CurrentRevision: contextRevision,
-			HistoryBoundaryMessageID: textOrNull(in.MessageID), HasMessageBody: in.MessageID != "",
+			HistoryBoundaryMessageID: textOrNull(in.MessageID), HasMessageBody: sqliteBool(in.MessageID != ""),
 		})
 		if err != nil {
 			return AppendResult{}, fmt.Errorf("advance channel chat context: %w", err)
 		}
 		contextRevision = advanced.Revision
-	} else if contextState.HistoryBoundaryPending && in.MessageID != "" {
+	} else if contextState.HistoryBoundaryPending != 0 && in.MessageID != "" {
 		if err := qtx.ResolveChannelChatContextHistoryStart(ctx, db.ResolveChannelChatContextHistoryStartParams{
 			HistoryStartMessageID: textOrNull(in.MessageID), ChatSessionID: in.SessionID, Revision: contextRevision,
 		}); err != nil {
@@ -723,7 +752,7 @@ func (s *ChatSession) AppendUserMessage(ctx context.Context, in AppendInput) (Ap
 	// the principal used to recover earlier unowned agent-visible messages.
 	if contextRevision > 0 && cmd == nil {
 		if _, err := qtx.SetChannelChatContextInitiator(ctx, db.SetChannelChatContextInitiatorParams{
-			ChatSessionID: in.SessionID, Revision: contextRevision, InitiatorUserID: in.Sender,
+			ChatSessionID: in.SessionID, Revision: contextRevision, InitiatorUserID: textOrNull(in.Sender),
 		}); err != nil {
 			return AppendResult{}, fmt.Errorf("snapshot channel context initiator: %w", err)
 		}
@@ -752,9 +781,9 @@ func (s *ChatSession) AppendUserMessage(ctx context.Context, in AppendInput) (Ap
 		Role:                    "user",
 		Content:                 in.Body,
 		MessageKind:             textOrNullIf(cmd != nil, channelCommandMessageKind),
-		ChannelMediaPendingSecs: pgtype.Float8{Float64: in.MediaPendingSeconds, Valid: in.MediaPendingSeconds > 0},
-		ChannelIngested:         pgtype.Bool{Bool: true, Valid: true},
-		ChannelContextRevision:  pgtype.Int8{Int64: contextRevision, Valid: contextRevision > 0},
+		ChannelMediaPendingSecs: mediaPendingSecs(in.MediaPendingSeconds),
+		ChannelIngested:         true,
+		ChannelContextRevision:  sql.NullInt64{Int64: contextRevision, Valid: contextRevision > 0},
 	})
 	if err != nil {
 		return AppendResult{}, fmt.Errorf("create chat message: %w", err)
@@ -786,7 +815,7 @@ func (s *ChatSession) AppendUserMessage(ctx context.Context, in AppendInput) (Ap
 	if dedupMessageID == "" {
 		dedupMessageID = in.MessageID
 	}
-	if in.ClaimToken.Valid && dedupMessageID != "" {
+	if in.ClaimToken != "" && dedupMessageID != "" {
 		rows, err := qtx.MarkChannelInboundDedupProcessed(ctx, db.MarkChannelInboundDedupProcessedParams{
 			InstallationID: in.InstallationID,
 			MessageID:      dedupMessageID,
@@ -808,7 +837,7 @@ func (s *ChatSession) AppendUserMessage(ctx context.Context, in AppendInput) (Ap
 		}
 	}
 
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return AppendResult{}, fmt.Errorf("commit: %w", err)
 	}
 	return AppendResult{
@@ -826,8 +855,8 @@ func (s *ChatSession) AppendUserMessage(ctx context.Context, in AppendInput) (Ap
 
 // MarkPendingFresh persists a bare `/clear` command. Non-bare `/clear` messages
 // mark the same flag inside AppendUserMessage's transaction instead.
-func (s *ChatSession) MarkPendingFresh(ctx context.Context, sessionID pgtype.UUID, messageID string) error {
-	return s.MarkPendingFreshWithDedup(ctx, sessionID, messageID, pgtype.UUID{}, "", pgtype.UUID{})
+func (s *ChatSession) MarkPendingFresh(ctx context.Context, sessionID string, messageID string) error {
+	return s.MarkPendingFreshWithDedup(ctx, sessionID, messageID, "", "", "")
 }
 
 // MarkPendingFreshWithDedup atomically advances the context generation and
@@ -836,24 +865,24 @@ func (s *ChatSession) MarkPendingFresh(ctx context.Context, sessionID pgtype.UUI
 // the durable Socket Mode envelope id.
 func (s *ChatSession) MarkPendingFreshWithDedup(
 	ctx context.Context,
-	sessionID pgtype.UUID,
+	sessionID string,
 	messageID string,
-	installationID pgtype.UUID,
+	installationID string,
 	dedupMessageID string,
-	claimToken pgtype.UUID,
+	claimToken string,
 ) error {
 	tx, err := s.tx.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin fresh context tx: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	qtx := s.q.WithTx(tx)
 	if _, err := qtx.LockChatSessionForAppend(ctx, sessionID); err != nil {
 		return fmt.Errorf("lock chat session for fresh context: %w", err)
 	}
 	binding, err := qtx.LockCurrentChannelChatSessionBindingBySession(ctx, sessionID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return ErrRouteChanged
 		}
 		return fmt.Errorf("lock channel chat binding: %w", err)
@@ -866,11 +895,11 @@ func (s *ChatSession) MarkPendingFreshWithDedup(
 	}
 	if _, err := qtx.AdvanceChannelChatContextGeneration(ctx, db.AdvanceChannelChatContextGenerationParams{
 		ChatSessionID: sessionID, CurrentRevision: binding.ContextRevision,
-		HistoryBoundaryMessageID: textOrNull(messageID), HasMessageBody: false,
+		HistoryBoundaryMessageID: textOrNull(messageID), HasMessageBody: sqliteBool(false),
 	}); err != nil {
 		return fmt.Errorf("advance channel chat context: %w", err)
 	}
-	if claimToken.Valid && dedupMessageID != "" {
+	if claimToken != "" && dedupMessageID != "" {
 		rows, err := qtx.MarkChannelInboundDedupProcessed(ctx, db.MarkChannelInboundDedupProcessedParams{
 			InstallationID: installationID,
 			MessageID:      dedupMessageID,
@@ -883,7 +912,7 @@ func (s *ChatSession) MarkPendingFreshWithDedup(
 			return ErrClaimLost
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit fresh context: %w", err)
 	}
 	return nil
@@ -909,11 +938,11 @@ func (s *ChatSession) BindMediaRefsWithResult(ctx context.Context, in BindMediaI
 	if err != nil {
 		return result, fmt.Errorf("begin media tx: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	qtx := s.q.WithTx(tx)
 	if len(in.MediaRefs) > 0 {
 		if err := s.bindMediaRefs(ctx, qtx, in, &result); err != nil {
-			_ = tx.Rollback(ctx)
+			_ = tx.Rollback()
 			if clearErr := s.clearMediaPending(ctx, s.q, in); clearErr != nil {
 				return BindMediaResult{}, errors.Join(err, clearErr)
 			}
@@ -923,7 +952,7 @@ func (s *ChatSession) BindMediaRefsWithResult(ctx context.Context, in BindMediaI
 	if err := s.clearMediaPending(ctx, qtx, in); err != nil {
 		return BindMediaResult{}, err
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		// An ambiguous commit needs no adjudication: the intent-ledger rows
 		// were deleted in this same transaction, so commit landed ⇔ intents
 		// gone, atomically. Either way the reconciler settles the objects.
@@ -943,10 +972,10 @@ func (s *ChatSession) clearMediaPending(ctx context.Context, q SessionQueries, i
 }
 
 func (s *ChatSession) bindMediaRefs(ctx context.Context, qtx SessionQueries, in BindMediaInput, result *BindMediaResult) error {
-	if !in.WorkspaceID.Valid {
+	if in.WorkspaceID == "" {
 		return errors.New("bind media refs: workspace_id is required")
 	}
-	if !in.MessageID.Valid {
+	if in.MessageID == "" {
 		return errors.New("bind media refs: message_id is required")
 	}
 	keys := make([]string, 0, len(in.MediaRefs))
@@ -959,7 +988,7 @@ func (s *ChatSession) bindMediaRefs(ctx context.Context, qtx SessionQueries, in 
 		}
 		keys = append(keys, ref.StorageKey)
 	}
-	if in.IssueID.Valid {
+	if in.IssueID != "" {
 		if _, err := qtx.LockIssueForChannelMediaBind(ctx, db.LockIssueForChannelMediaBindParams{
 			ID:          in.IssueID,
 			WorkspaceID: in.WorkspaceID,
@@ -973,7 +1002,7 @@ func (s *ChatSession) bindMediaRefs(ctx context.Context, qtx SessionQueries, in 
 	// returned and its ref must NOT attach — the object is being deleted and
 	// the placeholder stays.
 	claimedKeys, err := qtx.ClaimChannelMediaPendingObjectsForBind(ctx, db.ClaimChannelMediaPendingObjectsForBindParams{
-		StorageKeys: keys,
+		StorageKeys: jsonStringList(keys),
 		WorkspaceID: in.WorkspaceID,
 	})
 	if err != nil {
@@ -984,12 +1013,12 @@ func (s *ChatSession) bindMediaRefs(ctx context.Context, qtx SessionQueries, in 
 		claimed[k] = true
 	}
 	type createdMedia struct {
-		id       pgtype.UUID
+		id       string
 		ref      channel.MediaRef
 		filename string
 	}
 	created := make([]createdMedia, 0, len(in.MediaRefs))
-	ids := make([]pgtype.UUID, 0, len(in.MediaRefs))
+	ids := make([]string, 0, len(in.MediaRefs))
 	for _, ref := range in.MediaRefs {
 		if !claimed[ref.StorageKey] {
 			slog.Warn("channel media: intent claimed by reconciler; skipping attach",
@@ -1008,14 +1037,15 @@ func (s *ChatSession) bindMediaRefs(ctx context.Context, qtx SessionQueries, in 
 		if filename == "" {
 			filename = defaultMediaFilename(ref.Type, id.String(), contentType)
 		}
-		chatSessionID := in.SessionID
-		if in.IssueID.Valid {
-			chatSessionID = pgtype.UUID{}
+		chatSessionID := textOrNull(in.SessionID)
+		issueID := textOrNull(in.IssueID)
+		if in.IssueID != "" {
+			chatSessionID = sql.NullString{}
 		}
 		att, err := qtx.CreateAttachment(ctx, db.CreateAttachmentParams{
-			ID:            pgtype.UUID{Bytes: id, Valid: true},
+			ID:            id.String(),
 			WorkspaceID:   in.WorkspaceID,
-			IssueID:       in.IssueID,
+			IssueID:       issueID,
 			ChatSessionID: chatSessionID,
 			UploaderType:  "member",
 			UploaderID:    in.Sender,
@@ -1033,7 +1063,7 @@ func (s *ChatSession) bindMediaRefs(ctx context.Context, qtx SessionQueries, in 
 	if len(ids) == 0 {
 		return nil
 	}
-	if !in.IssueID.Valid {
+	if in.IssueID == "" {
 		for _, media := range created {
 			source := media.ref.Filename
 			if strings.TrimSpace(source) == "" {
@@ -1046,7 +1076,7 @@ func (s *ChatSession) bindMediaRefs(ctx context.Context, qtx SessionQueries, in 
 			if _, err := qtx.InitializeChatSessionMediaTitle(ctx, db.InitializeChatSessionMediaTitleParams{
 				ID: in.SessionID, MessageID: in.MessageID, Title: title,
 			}); err != nil {
-				if !errors.Is(err, pgx.ErrNoRows) {
+				if !errors.Is(err, sql.ErrNoRows) {
 					return fmt.Errorf("initialize media chat title: %w", err)
 				}
 			} else {
@@ -1056,12 +1086,12 @@ func (s *ChatSession) bindMediaRefs(ctx context.Context, qtx SessionQueries, in 
 			break
 		}
 	}
-	if in.IssueID.Valid {
+	if in.IssueID != "" {
 		issueMarkdown := make([]string, 0, len(created))
 		replacements := make([]inlineMediaReplacement, 0, len(created))
 		for _, media := range created {
 			block := channelmedia.Block(
-				uuid.UUID(media.id.Bytes).String(),
+				media.id,
 				media.filename,
 				media.ref.Type == channel.MsgTypeImage,
 			)
@@ -1075,8 +1105,8 @@ func (s *ChatSession) bindMediaRefs(ctx context.Context, qtx SessionQueries, in 
 			}
 		}
 
-		base := pgtype.Text{}
-		description := pgtype.Text{}
+		var base any
+		description := sql.NullString{}
 		if in.IssueDescriptionBase.Valid {
 			if composed, changed := composeIssueCommandMediaDescription(
 				in.Body,
@@ -1084,34 +1114,34 @@ func (s *ChatSession) bindMediaRefs(ctx context.Context, qtx SessionQueries, in 
 				replacements,
 				in.IssueDescriptionBase.String,
 			); changed {
-				base = in.IssueDescriptionBase
-				description = pgtype.Text{String: composed, Valid: true}
+				base = in.IssueDescriptionBase.String
+				description = sql.NullString{String: composed, Valid: true}
 			}
 		}
 		if _, err := qtx.MaterializeIssueChannelMediaMarkdown(ctx, db.MaterializeIssueChannelMediaMarkdownParams{
 			ID:              in.IssueID,
 			WorkspaceID:     in.WorkspaceID,
 			BaseDescription: base,
-			Description:     description.String,
-			Markdown:        pgtype.Text{String: strings.Join(issueMarkdown, "\n\n"), Valid: true},
+			Description:     description,
+			Markdown:        sql.NullString{String: strings.Join(issueMarkdown, "\n\n"), Valid: true},
 		}); err != nil {
 			return fmt.Errorf("materialize issue channel media markdown: %w", err)
 		}
 		return nil
 	}
 	linkedIDs, err := qtx.LinkAttachmentsToChatMessage(ctx, db.LinkAttachmentsToChatMessageParams{
-		ChatMessageID: in.MessageID,
-		ChatSessionID: in.SessionID,
+		ChatMessageID: textOrNull(in.MessageID),
+		ChatSessionID: textOrNull(in.SessionID),
 		WorkspaceID:   in.WorkspaceID,
 		UploaderType:  "member",
 		UploaderID:    in.Sender,
-		AttachmentIds: ids,
+		AttachmentIds: jsonStringList(ids),
 	})
 	if err != nil {
 		return fmt.Errorf("link chat attachments: %w", err)
 	}
 
-	linked := make(map[pgtype.UUID]bool, len(linkedIDs))
+	linked := make(map[string]bool, len(linkedIDs))
 	for _, id := range linkedIDs {
 		linked[id] = true
 	}
@@ -1256,8 +1286,8 @@ func nthSubstringIndex(body, marker string, target int) int {
 	}
 }
 
-func inlineAttachmentMarkdown(ref channel.MediaRef, id pgtype.UUID) string {
-	downloadPath := "/api/attachments/" + uuid.UUID(id.Bytes).String() + "/download"
+func inlineAttachmentMarkdown(ref channel.MediaRef, id string) string {
+	downloadPath := "/api/attachments/" + id + "/download"
 	if ref.Type == channel.MsgTypeImage {
 		return "![](" + downloadPath + ")"
 	}
@@ -1297,20 +1327,59 @@ func defaultMediaFilename(kind channel.MsgType, id, contentType string) string {
 }
 
 func isUniqueViolation(err error) bool {
-	var pg *pgconn.PgError
-	if errors.As(err, &pg) {
-		return pg.Code == pgSQLStateUniqueViolation
-	}
-	return false
+	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
 }
 
-func textOrNull(s string) pgtype.Text {
+func textOrNull(s string) sql.NullString {
 	if s == "" {
-		return pgtype.Text{}
+		return sql.NullString{}
 	}
-	return pgtype.Text{String: s, Valid: true}
+	return sql.NullString{String: s, Valid: true}
 }
 
-func textOrNullIf(valid bool, s string) pgtype.Text {
-	return pgtype.Text{String: s, Valid: valid}
+func textOrNullIf(valid bool, s string) sql.NullString {
+	return sql.NullString{String: s, Valid: valid}
+}
+
+func sqliteBool(v bool) sql.NullString {
+	if v {
+		return sql.NullString{String: "1", Valid: true}
+	}
+	return sql.NullString{String: "0", Valid: true}
+}
+
+func boolToInt(v bool) int64 {
+	if v {
+		return 1
+	}
+	return 0
+}
+
+func mediaPendingSecs(seconds float64) any {
+	if seconds <= 0 {
+		return nil
+	}
+	return seconds
+}
+
+func jsonStringList(items []string) string {
+	if items == nil {
+		items = []string{}
+	}
+	b, err := json.Marshal(items)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
+func contextRevision(v any) (int64, error) {
+	switch n := v.(type) {
+	case int64:
+		return n, nil
+	case int:
+		return int64(n), nil
+	default:
+		return 0, fmt.Errorf("channel context revision has type %T", v)
+	}
 }

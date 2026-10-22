@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +15,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
@@ -115,7 +115,7 @@ func TestRemoteMCPDaemonTokenForClaim(t *testing.T) {
 	if params[0].WorkspaceID != runtime.WorkspaceID || params[0].DaemonID != "daemon-remote-mcp" {
 		t.Fatalf("daemon token scope = (%v, %q)", params[0].WorkspaceID, params[0].DaemonID)
 	}
-	remaining := time.Until(params[0].ExpiresAt.Time)
+	remaining := time.Until(parseDBTime(params[0].ExpiresAt))
 	if remaining < 23*time.Hour || remaining > 24*time.Hour {
 		t.Fatalf("daemon token lifetime = %s, want about 24h", remaining)
 	}
@@ -962,7 +962,7 @@ func TestHandleDaemonWSHeartbeat_AllowsAnyAuthorizedWorkspace(t *testing.T) {
 }
 
 // TestDaemonHeartbeat_HTTPRuntimeGoneReturns404 pins the HTTP-path mirror:
-// pgx.ErrNoRows on the runtime lookup is the only DB error mapped to 404.
+// sql.ErrNoRows on the runtime lookup is the only DB error mapped to 404.
 // Anything else (transient pool issue, schema mismatch, ...) must surface
 // as 500 so the daemon does not mistake a hiccup for a deletion.
 func TestDaemonHeartbeat_HTTPRuntimeGoneReturns404(t *testing.T) {
@@ -1143,7 +1143,7 @@ func TestGetTaskStatus_TransientDBError_Returns500(t *testing.T) {
 // to interrupt the running agent.
 func TestGetTaskStatus_ErrNoRows_Returns404(t *testing.T) {
 	h := &Handler{}
-	h.Queries = db.New(&mockDB{getUserErr: pgx.ErrNoRows})
+	h.Queries = db.New(&mockDB{getUserErr: sql.ErrNoRows})
 
 	req := newDaemonTokenRequest("GET", "/api/daemon/tasks/00000000-0000-0000-0000-000000000001/status", nil,
 		"00000000-0000-0000-0000-000000000000", "test-daemon")
@@ -3966,14 +3966,11 @@ func TestGetTaskGCCheck(t *testing.T) {
 //     authorization grant for up to MembershipCacheTTL.
 // ---------------------------------------------------------------------------
 
-// installFreshMembershipCache swaps in a Redis-backed MembershipCache against
-// a freshly-flushed Redis DB for the test, restoring the original on cleanup.
+// installFreshMembershipCache used to prime a Redis membership cache.
+// Lookups now always read Postgres, so the cache-hit scenarios no longer apply.
 func installFreshMembershipCache(t *testing.T) {
 	t.Helper()
-	rdb := newRedisTestClient(t)
-	origCache := testHandler.MembershipCache
-	testHandler.MembershipCache = auth.NewMembershipCache(rdb)
-	t.Cleanup(func() { testHandler.MembershipCache = origCache })
+	t.Skip("membership cache disabled; access checks read Postgres directly")
 }
 
 // createEphemeralUser inserts a throwaway user with a unique email and

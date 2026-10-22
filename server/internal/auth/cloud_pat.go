@@ -11,8 +11,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/redis/go-redis/v9"
 )
 
 // CloudPATPrefix is the literal token prefix that identifies an mcn_
@@ -22,27 +20,6 @@ import (
 // owner of the token's lifecycle, status, and (owner_id, instance_id)
 // binding.
 const CloudPATPrefix = "mcn_"
-
-// cloudPATCachePrefix namespaces cloud-PAT cache keys away from
-// mul_/mdt_ caches so the three token kinds can't accidentally share
-// keys. The trailing slash mirrors the existing patCachePrefix /
-// daemonTokenCachePrefix conventions.
-const cloudPATCachePrefix = "mul:auth:mcn:"
-
-// cloudPATCacheTTL bounds how long a verified mcn_ token stays cached
-// before we re-ask Fleet. The Cloud doc explicitly recommends 30–60s
-// "if upstream really needs to cache" — anything longer widens the
-// revocation window beyond what Cloud is comfortable with. We pick the
-// upper bound: short enough that a revoked / instance-terminated PAT
-// stops working within ~1 minute, long enough that a busy daemon /
-// CLI on a node collapses to one verify call per minute per token.
-//
-// We deliberately do NOT reuse AuthCacheTTL (10m) — that's tuned for
-// our own DB-backed PAT/daemon-token paths where revocation
-// invalidates the cache key directly. We have no way to invalidate
-// when Cloud revokes a PAT, so the TTL itself IS the revocation
-// latency bound.
-const cloudPATCacheTTL = 60 * time.Second
 
 // cloudPATVerifyPath is the Fleet endpoint we POST to. The Cloud doc
 // places this under /api/v1/pat/verify; the upstream runs no app-layer
@@ -157,8 +134,7 @@ const CloudPATInvalidReasonOwnerUnknown = "owner_unknown"
 type OwnerLookupFunc func(ctx context.Context, ownerID string) (bool, error)
 
 // CloudPATVerifier resolves mcn_ PATs by calling
-// POST <fleetURL>/api/v1/pat/verify and caches verified results in
-// Redis for cloudPATCacheTTL.
+// POST <fleetURL>/api/v1/pat/verify. Results are not cached.
 //
 // A nil *CloudPATVerifier is safe — Verify returns
 // ErrCloudPATNotConfigured. The Auth/DaemonAuth middlewares treat
@@ -168,7 +144,6 @@ type OwnerLookupFunc func(ctx context.Context, ownerID string) (bool, error)
 type CloudPATVerifier struct {
 	baseURL string
 	http    *http.Client
-	rdb     redis.UniversalClient // may be nil — disables caching
 }
 
 // CloudPATVerifierConfig assembles the dependencies for
@@ -186,11 +161,6 @@ type CloudPATVerifierConfig struct {
 	// Pass a shared client when you want connection pooling /
 	// per-deployment transport tuning.
 	HTTPClient *http.Client
-
-	// Redis backs the positive-result cache. Nil disables caching —
-	// every Verify call hits Fleet. Same nil-safe contract as
-	// PATCache / DaemonTokenCache.
-	Redis redis.UniversalClient
 }
 
 // NewCloudPATVerifier returns a verifier for cfg.FleetBaseURL. If the
@@ -208,7 +178,6 @@ func NewCloudPATVerifier(cfg CloudPATVerifierConfig) *CloudPATVerifier {
 	return &CloudPATVerifier{
 		baseURL: base,
 		http:    client,
-		rdb:     cfg.Redis,
 	}
 }
 
@@ -221,20 +190,15 @@ func (v *CloudPATVerifier) Configured() bool {
 
 // Verify resolves token to a CloudPATIdentity by consulting (in order):
 //
-//  1. Redis cache, keyed by sha256(token). Hit → return cached
-//     identity, no Fleet round-trip and no DB lookup. The cache only
-//     ever contains identities that have already passed both Cloud's
-//     verify AND the local owner-existence check, so a cache hit is
-//     a fully-validated decision.
-//  2. Fleet POST /api/v1/pat/verify. The response distinguishes:
-//     - HTTP 200 + valid=true   → continues to step 3
+//  1. Fleet POST /api/v1/pat/verify. The response distinguishes:
+//     - HTTP 200 + valid=true   → continues to step 2
 //     - HTTP 200 + valid=false  → CloudPATInvalidError{Reason:...}
 //     (also wraps as ErrCloudPATInvalid via Is)
 //     - HTTP 4xx/5xx, network, timeout, decode failure
 //     → ErrCloudPATUnavailable
-//  3. Local owner-existence check via lookup(owner_id):
-//     - exists  → cache + return success
-//     - missing → ErrCloudPATInvalid (reason="owner_unknown"), NOT cached
+//  2. Local owner-existence check via lookup(owner_id):
+//     - exists  → return success
+//     - missing → ErrCloudPATInvalid (reason="owner_unknown")
 //     - error   → ErrCloudPATUnavailable
 //
 // `lookup` may be nil — Verify then skips step 3. Production callers
@@ -398,43 +362,8 @@ func (v *CloudPATVerifier) fetch(ctx context.Context, token string) (CloudPATIde
 	}, nil
 }
 
-func cloudPATCacheKey(hash string) string { return cloudPATCachePrefix + hash }
-
-func (v *CloudPATVerifier) cacheGet(ctx context.Context, hash string) (CloudPATIdentity, bool) {
-	if v == nil || v.rdb == nil {
-		return CloudPATIdentity{}, false
-	}
-	raw, err := v.rdb.Get(ctx, cloudPATCacheKey(hash)).Bytes()
-	if err != nil {
-		if !errors.Is(err, redis.Nil) {
-			slog.Warn("cloud_pat: cache get failed; falling back to fleet", "error", err)
-		}
-		return CloudPATIdentity{}, false
-	}
-	var id CloudPATIdentity
-	if err := json.Unmarshal(raw, &id); err != nil {
-		slog.Warn("cloud_pat: cache entry malformed; falling back to fleet", "error", err)
-		return CloudPATIdentity{}, false
-	}
-	if id.OwnerID == "" {
-		// Safety net: a malformed cache entry (e.g. left over from a
-		// prior schema) without an owner_id must not be treated as a
-		// hit, otherwise the middleware would set X-User-ID to "".
-		return CloudPATIdentity{}, false
-	}
-	return id, true
+func (v *CloudPATVerifier) cacheGet(context.Context, string) (CloudPATIdentity, bool) {
+	return CloudPATIdentity{}, false
 }
 
-func (v *CloudPATVerifier) cacheSet(ctx context.Context, hash string, id CloudPATIdentity) {
-	if v == nil || v.rdb == nil {
-		return
-	}
-	raw, err := json.Marshal(id)
-	if err != nil {
-		slog.Warn("cloud_pat: cache marshal failed", "error", err)
-		return
-	}
-	if err := v.rdb.Set(ctx, cloudPATCacheKey(hash), raw, cloudPATCacheTTL).Err(); err != nil {
-		slog.Warn("cloud_pat: cache set failed", "error", err)
-	}
-}
+func (v *CloudPATVerifier) cacheSet(context.Context, string, CloudPATIdentity) {}

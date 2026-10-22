@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -12,8 +13,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -563,7 +562,7 @@ func (h *Handler) requireRuntimeCapabilityReadAccess(w http.ResponseWriter, r *h
 		workspaceID: wsID,
 		provider:    rt.Provider,
 		status:      rt.Status,
-		ownerID:     uuidToString(rt.OwnerID),
+		ownerID:     uuidToString(rt.OwnerID.String),
 	}, member, true
 }
 
@@ -1022,7 +1021,7 @@ func (h *Handler) reportLocalSkillConflict(w http.ResponseWriter, r *http.Reques
 		CanOverwrite:    canOverwriteSkillByLocalImport(creatorID, existing),
 	}
 	if existing.CreatedBy.Valid {
-		info.ExistingCreatedBy = uuidToString(existing.CreatedBy)
+		info.ExistingCreatedBy = uuidToString(existing.CreatedBy.String)
 	}
 	if err := h.LocalSkillImportStore.Conflict(r.Context(), requestID, info); err != nil {
 		slog.Error("local skill import Conflict failed", "error", err, "request_id", requestID)
@@ -1034,13 +1033,13 @@ func (h *Handler) reportLocalSkillConflict(w http.ResponseWriter, r *http.Reques
 
 // lookupSkillByName resolves a skill by (workspace, name). found=false with a
 // nil error means there is no such skill — i.e. no conflict.
-func (h *Handler) lookupSkillByName(ctx context.Context, workspaceID pgtype.UUID, name string) (db.Skill, bool, error) {
+func (h *Handler) lookupSkillByName(ctx context.Context, workspaceID string, name string) (db.Skill, bool, error) {
 	skill, err := h.Queries.GetSkillByWorkspaceAndName(ctx, db.GetSkillByWorkspaceAndNameParams{
 		WorkspaceID: workspaceID,
 		Name:        name,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return db.Skill{}, false, nil
 		}
 		return db.Skill{}, false, err

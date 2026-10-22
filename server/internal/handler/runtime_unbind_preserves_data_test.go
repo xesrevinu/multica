@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -233,8 +232,8 @@ func TestCountUndrainedTasksByRuntimeOrAgent_IncludesCrossRuntimeTask(t *testing
 	count, err := testHandler.Queries.CountUndrainedTasksByRuntimeOrAgent(
 		ctx,
 		db.CountUndrainedTasksByRuntimeOrAgentParams{
-			RuntimeIds: []pgtype.UUID{parseUUID(runtimeID)},
-			AgentIds:   []pgtype.UUID{parseUUID(agentID)},
+			RuntimeIds: []string{parseUUID(runtimeID)},
+			AgentIds:   []string{parseUUID(agentID)},
 		},
 	)
 	if err != nil {

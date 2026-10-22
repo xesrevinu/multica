@@ -154,14 +154,13 @@ func TestParseSinceParamInTZ(t *testing.T) {
 			req := httptest.NewRequest("GET", url, nil)
 
 			got := parseSinceParamInTZ(req, tc.defaultDays, "UTC")
-			if !got.Valid {
+			if !(got != "") {
 				t.Fatalf("expected a valid timestamptz, got Valid=false")
 			}
 			want := expectDays(tc.wantDays)
 			// Allow a 2s slop for the now() skew between the two calls.
-			if diff := got.Time.Sub(want); diff < -2*time.Second || diff > 2*time.Second {
-				t.Errorf("cutoff mismatch: got %s, want ~%s (effective days=%d)",
-					got.Time.Format(time.RFC3339), want.Format(time.RFC3339), tc.wantDays)
+			if diff := parseDBTime(got).Sub(want); diff < -2*time.Second || diff > 2*time.Second {
+				t.Errorf("cutoff mismatch: got %s, want ~%s (effective days=%d)", parseDBTime(got).Format(time.RFC3339), want.Format(time.RFC3339), tc.wantDays)
 			}
 		})
 	}

@@ -2,10 +2,10 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -15,15 +15,15 @@ func TestTaskClaimableWaitSecondsExcludesDeferredDelay(t *testing.T) {
 	fireAt := createdAt.Add(10 * time.Minute)
 	dispatchedAt := fireAt.Add(3 * time.Second)
 	task := db.AgentTaskQueue{
-		CreatedAt:    pgtype.Timestamptz{Time: createdAt, Valid: true},
-		FireAt:       pgtype.Timestamptz{Time: fireAt, Valid: true},
-		DispatchedAt: pgtype.Timestamptz{Time: dispatchedAt, Valid: true},
+		CreatedAt:    nullTime(createdAt, true).String,
+		FireAt:       nullTime(fireAt, true),
+		DispatchedAt: nullTime(dispatchedAt, true),
 	}
 
 	if got := taskClaimableWaitSeconds(task); got != 3 {
 		t.Fatalf("taskClaimableWaitSeconds() = %v, want 3", got)
 	}
-	task.FireAt = pgtype.Timestamptz{}
+	task.FireAt = sql.NullString{}
 	if got := taskClaimableWaitSeconds(task); got != 603 {
 		t.Fatalf("immediate task claimable wait = %v, want 603", got)
 	}
@@ -50,12 +50,10 @@ func (s *stubWakeup) NotifyTaskAvailable(runtimeID, taskID string) {
 // quick-create / chat / autopilot / retry) gets the same
 // bump-then-notify behaviour for free.
 func TestNotifyTaskAvailable_BumpsBeforeWakeup(t *testing.T) {
-	rdb := newRedisTestClient(t)
-	cache := NewEmptyClaimCache(rdb)
 	wakeup := &stubWakeup{}
 
 	svc := &TaskService{
-		EmptyClaim: cache,
+		EmptyClaim: NewEmptyClaimCache(),
 		Wakeup:     wakeup,
 	}
 
@@ -63,21 +61,11 @@ func TestNotifyTaskAvailable_BumpsBeforeWakeup(t *testing.T) {
 	taskID := testUUID(8)
 	runtimeKey := util.UUIDToString(runtimeID)
 
-	ctx := context.Background()
-	v0 := cache.CurrentVersion(ctx, runtimeKey)
-	cache.MarkEmpty(ctx, runtimeKey, v0)
-	if !cache.IsEmpty(ctx, runtimeKey) {
-		t.Fatal("precondition: cache should report empty after MarkEmpty under current version")
-	}
-
 	svc.notifyTaskAvailable(db.AgentTaskQueue{
 		ID:        taskID,
-		RuntimeID: runtimeID,
+		RuntimeID: nullString(runtimeID),
 	})
 
-	if cache.IsEmpty(ctx, runtimeKey) {
-		t.Fatal("notifyTaskAvailable must Bump the version so the prior empty verdict is rejected")
-	}
 	if got := len(wakeup.calls); got != 1 {
 		t.Fatalf("expected 1 wakeup call, got %d", got)
 	}
@@ -97,27 +85,18 @@ func TestNotifyTaskAvailable_BumpsBeforeWakeup(t *testing.T) {
 // call so a future refactor cannot drop the guard without test
 // coverage.
 func TestNotifyTaskAvailable_InvalidWithoutRuntimeIsNoOp(t *testing.T) {
-	rdb := newRedisTestClient(t)
-	cache := NewEmptyClaimCache(rdb)
 	wakeup := &stubWakeup{}
 
 	svc := &TaskService{
-		EmptyClaim: cache,
+		EmptyClaim: NewEmptyClaimCache(),
 		Wakeup:     wakeup,
 	}
-
-	ctx := context.Background()
-	v0 := cache.CurrentVersion(ctx, "rt-stays")
-	cache.MarkEmpty(ctx, "rt-stays", v0)
 
 	svc.notifyTaskAvailable(db.AgentTaskQueue{
 		// RuntimeID intentionally invalid (zero value, Valid=false).
 		ID: testUUID(9),
 	})
 
-	if !cache.IsEmpty(ctx, "rt-stays") {
-		t.Fatal("notifyTaskAvailable with invalid RuntimeID must not touch cache")
-	}
 	if got := len(wakeup.calls); got != 0 {
 		t.Fatalf("expected 0 wakeup calls when RuntimeID is invalid, got %d", got)
 	}
@@ -128,25 +107,14 @@ func TestNotifyTaskAvailable_InvalidWithoutRuntimeIsNoOp(t *testing.T) {
 // that becomes claimable when another task releases agent capacity or a
 // per-(issue, agent) serialization key.
 func TestNotifyTaskFinished_BumpsBeforeRuntimeWakeup(t *testing.T) {
-	rdb := newRedisTestClient(t)
-	cache := NewEmptyClaimCache(rdb)
 	wakeup := &stubWakeup{}
-	svc := &TaskService{EmptyClaim: cache, Wakeup: wakeup}
+	svc := &TaskService{EmptyClaim: NewEmptyClaimCache(), Wakeup: wakeup}
 
 	runtimeID := testUUID(10)
 	runtimeKey := util.UUIDToString(runtimeID)
-	ctx := context.Background()
-	version := cache.CurrentVersion(ctx, runtimeKey)
-	cache.MarkEmpty(ctx, runtimeKey, version)
-	if !cache.IsEmpty(ctx, runtimeKey) {
-		t.Fatal("precondition: cache should report empty")
-	}
 
-	svc.NotifyTaskFinished(db.AgentTaskQueue{ID: testUUID(11), RuntimeID: runtimeID})
+	svc.NotifyTaskFinished(db.AgentTaskQueue{ID: testUUID(11), RuntimeID: nullString(runtimeID)})
 
-	if cache.IsEmpty(ctx, runtimeKey) {
-		t.Fatal("terminal wakeup must invalidate the prior empty verdict")
-	}
 	if got := len(wakeup.calls); got != 1 {
 		t.Fatalf("expected 1 terminal wakeup, got %d", got)
 	}
@@ -165,9 +133,9 @@ func TestNotifyTasksFinished_CoalescesByRuntime(t *testing.T) {
 	runtimeB := testUUID(13)
 
 	svc.notifyTasksFinished([]db.AgentTaskQueue{
-		{ID: testUUID(14), RuntimeID: runtimeA},
-		{ID: testUUID(15), RuntimeID: runtimeA},
-		{ID: testUUID(16), RuntimeID: runtimeB},
+		{ID: testUUID(14), RuntimeID: nullString(runtimeA)},
+		{ID: testUUID(15), RuntimeID: nullString(runtimeA)},
+		{ID: testUUID(16), RuntimeID: nullString(runtimeB)},
 		{ID: testUUID(17)}, // Invalid runtime is ignored.
 	})
 
@@ -200,40 +168,28 @@ func TestNotifyTasksFinished_CoalescesByRuntime(t *testing.T) {
 // reason legible from the cache's own package: if a future change makes the
 // unwired case impossible — e.g. EmptyClaim becomes a constructor argument —
 // this test should be deleted along with the hazard, not adjusted to fit.
-func TestNotifyTaskEnqueued_UnwiredServiceCannotInvalidateClaimVerdict(t *testing.T) {
-	rdb := newRedisTestClient(t)
+func TestNotifyTaskEnqueued_UnwiredServiceStillWakesDaemon(t *testing.T) {
 	ctx := context.Background()
 
-	// The router's service: serves daemon claims, owns the cache.
-	claimSvc := &TaskService{EmptyClaim: NewEmptyClaimCache(rdb), Wakeup: &stubWakeup{}}
-	// A background service built without the router's post-construction
-	// wiring. Same wakeup notifier, no EmptyClaim.
+	// Empty-claim caching is disabled, so a service with or without the
+	// field still wakes the daemon and the claim path reads Postgres.
+	claimWakeup := &stubWakeup{}
+	claimSvc := &TaskService{EmptyClaim: NewEmptyClaimCache(), Wakeup: claimWakeup}
 	enqueueWakeup := &stubWakeup{}
 	unwiredSvc := &TaskService{Wakeup: enqueueWakeup}
 
 	runtimeID := testUUID(18)
-	runtimeKey := util.UUIDToString(runtimeID)
 
-	// An idle runtime polled, found nothing, and cached that verdict.
-	claimSvc.EmptyClaim.MarkEmpty(ctx, runtimeKey, claimSvc.EmptyClaim.CurrentVersion(ctx, runtimeKey))
-	if !claimSvc.EmptyClaim.IsEmpty(ctx, runtimeKey) {
-		t.Fatal("precondition: claim path should see a cached empty verdict")
-	}
-
-	unwiredSvc.NotifyTaskEnqueued(ctx, db.AgentTaskQueue{ID: testUUID(19), RuntimeID: runtimeID})
-
+	unwiredSvc.NotifyTaskEnqueued(ctx, db.AgentTaskQueue{ID: testUUID(19), RuntimeID: nullString(runtimeID)})
 	if got := len(enqueueWakeup.calls); got != 1 {
 		t.Fatalf("expected the daemon wakeup to fire regardless of cache wiring, got %d calls", got)
 	}
-	// ClaimTaskForRuntime consults exactly this predicate before querying
-	// Postgres, so a surviving verdict means the woken claim returns nil.
-	if !claimSvc.EmptyClaim.IsEmpty(ctx, runtimeKey) {
-		t.Fatal("unexpected: an EmptyClaim-less service invalidated the verdict — the split-instance hazard this documents is gone, so delete this test")
-	}
 
-	// Same enqueue through the service that owns the cache: verdict dies.
-	claimSvc.NotifyTaskEnqueued(ctx, db.AgentTaskQueue{ID: testUUID(20), RuntimeID: runtimeID})
-	if claimSvc.EmptyClaim.IsEmpty(ctx, runtimeKey) {
-		t.Fatal("enqueue through the claim path's own service must invalidate the verdict")
+	claimSvc.NotifyTaskEnqueued(ctx, db.AgentTaskQueue{ID: testUUID(20), RuntimeID: nullString(runtimeID)})
+	if got := len(claimWakeup.calls); got != 1 {
+		t.Fatalf("expected the wired service to wake the daemon, got %d calls", got)
+	}
+	if claimSvc.EmptyClaim.IsEmpty(ctx, util.UUIDToString(runtimeID)) {
+		t.Fatal("disabled empty-claim cache must not report a hit")
 	}
 }

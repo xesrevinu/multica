@@ -2,10 +2,10 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -25,14 +25,14 @@ func TestCreateRetryTaskFireAtControlsDeferral(t *testing.T) {
 
 	// agent_task_queue.runtime_id is NOT NULL; reuse the fixture agent's runtime.
 	var runtimeID string
-	if err := pool.QueryRow(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, agentID).Scan(&runtimeID); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, agentID).Scan(&runtimeID); err != nil {
 		t.Fatalf("read agent runtime: %v", err)
 	}
 
 	// Parent: a provider_network failure on its second attempt — the point at
 	// which the schedule wants the next (final) retry deferred.
-	var parentID pgtype.UUID
-	if err := pool.QueryRow(ctx, `
+	var parentID string
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, attempt, max_attempts, failure_reason, session_id, work_dir, channel_context_revision)
 		VALUES ($1, $2, $3, 'failed', 0, 2, 2, 'agent_error.provider_network', 'src-session', '/tmp/src-workdir', 7)
 		RETURNING id
@@ -40,22 +40,22 @@ func TestCreateRetryTaskFireAtControlsDeferral(t *testing.T) {
 		t.Fatalf("insert parent task: %v", err)
 	}
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE parent_task_id = $1 OR id = $1`, parentID)
+		pool.ExecContext(context.Background(), `DELETE FROM agent_task_queue WHERE parent_task_id = $1 OR id = $1`, parentID)
 	})
 
 	cases := []struct {
 		name            string
-		fireAt          pgtype.Timestamptz
-		maxAttempts     pgtype.Int4
+		fireAt          sql.NullString
+		maxAttempts     sql.NullInt64
 		wantStatus      string
 		wantFireAt      bool
 		wantMaxAttempts int32
 	}{
 		// Final tier: deferred, and the effective budget (3) written into the row
 		// so it self-describes as attempt=3/max_attempts=3, not attempt=3/max=2.
-		{"deferred final tier persists budget", pgtype.Timestamptz{Time: time.Now().Add(5 * time.Second), Valid: true}, pgtype.Int4{Int32: 3, Valid: true}, "deferred", true, 3},
+		{"deferred final tier persists budget", nullTime(time.Now().Add(5*time.Second), true), nullInt64(int64(3), true), "deferred", true, 3},
 		// NULL max_attempts inherits the parent's column (COALESCE fallback).
-		{"queued immediate tier inherits budget", pgtype.Timestamptz{}, pgtype.Int4{}, "queued", false, 2},
+		{"queued immediate tier inherits budget", sql.NullString{}, sql.NullInt64{}, "queued", false, 2},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -63,7 +63,7 @@ func TestCreateRetryTaskFireAtControlsDeferral(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CreateRetryTask: %v", err)
 			}
-			t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, child.ID) })
+			t.Cleanup(func() { pool.ExecContext(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, child.ID) })
 
 			if child.Status != tc.wantStatus {
 				t.Errorf("status = %q, want %q", child.Status, tc.wantStatus)
@@ -74,11 +74,11 @@ func TestCreateRetryTaskFireAtControlsDeferral(t *testing.T) {
 			if child.Attempt != 3 {
 				t.Errorf("attempt = %d, want 3 (parent attempt 2 + 1)", child.Attempt)
 			}
-			if child.MaxAttempts != tc.wantMaxAttempts {
+			if child.MaxAttempts != int64(tc.wantMaxAttempts) {
 				t.Errorf("max_attempts = %d, want %d", child.MaxAttempts, tc.wantMaxAttempts)
 			}
 			// provider_network is resume-safe: the retry must continue the session.
-			if child.ForceFreshSession {
+			if child.ForceFreshSession != 0 {
 				t.Errorf("force_fresh_session = true, want false (provider_network resumes) for %s", util.UUIDToString(child.ID))
 			}
 			if !child.ChannelContextRevision.Valid || child.ChannelContextRevision.Int64 != 7 {
@@ -99,18 +99,18 @@ func TestRuntimeOfflineRetryWaitsForHealthyRuntime(t *testing.T) {
 	_, _, agentID, issueID := seedAttributionFixture(t, pool)
 
 	var runtimeID string
-	if err := pool.QueryRow(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, agentID).Scan(&runtimeID); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, agentID).Scan(&runtimeID); err != nil {
 		t.Fatalf("read agent runtime: %v", err)
 	}
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `UPDATE agent_runtime SET status='online', last_seen_at=now() WHERE id=$1`, runtimeID)
+		pool.ExecContext(context.Background(), `UPDATE agent_runtime SET status='online', last_seen_at=now() WHERE id=$1`, runtimeID)
 	})
-	if _, err := pool.Exec(ctx, `UPDATE agent_runtime SET status='offline', last_seen_at=now() - interval '4 hours' WHERE id=$1`, runtimeID); err != nil {
+	if _, err := pool.ExecContext(ctx, `UPDATE agent_runtime SET status='offline', last_seen_at=now() - interval '4 hours' WHERE id=$1`, runtimeID); err != nil {
 		t.Fatalf("mark runtime offline: %v", err)
 	}
 
-	var parentID pgtype.UUID
-	if err := pool.QueryRow(ctx, `
+	var parentID string
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, attempt, max_attempts, session_id, work_dir)
 		VALUES ($1, $2, $3, 'running', 0, 1, 2, 'src-session', '/tmp/src-workdir')
 		RETURNING id
@@ -118,7 +118,7 @@ func TestRuntimeOfflineRetryWaitsForHealthyRuntime(t *testing.T) {
 		t.Fatalf("insert parent task: %v", err)
 	}
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE parent_task_id = $1 OR id = $1`, parentID)
+		pool.ExecContext(context.Background(), `DELETE FROM agent_task_queue WHERE parent_task_id = $1 OR id = $1`, parentID)
 	})
 
 	svc := NewTaskService(q, pool, nil, events.New())
@@ -126,10 +126,10 @@ func TestRuntimeOfflineRetryWaitsForHealthyRuntime(t *testing.T) {
 		t.Fatalf("FailTask: %v", err)
 	}
 
-	var childID pgtype.UUID
+	var childID string
 	var childStatus string
-	var fireAt pgtype.Timestamptz
-	if err := pool.QueryRow(ctx, `
+	var fireAt sql.NullString
+	if err := pool.QueryRowContext(ctx, `
 		SELECT id, status, fire_at FROM agent_task_queue WHERE parent_task_id = $1
 	`, parentID).Scan(&childID, &childStatus, &fireAt); err != nil {
 		t.Fatalf("read retry child: %v", err)
@@ -137,7 +137,7 @@ func TestRuntimeOfflineRetryWaitsForHealthyRuntime(t *testing.T) {
 	if childStatus != "deferred" || !fireAt.Valid {
 		t.Fatalf("runtime_offline child = status:%q fire_at_valid:%v, want deferred with fire_at", childStatus, fireAt.Valid)
 	}
-	if _, err := pool.Exec(ctx, `UPDATE agent_task_queue SET fire_at=now() - interval '1 second' WHERE id=$1`, childID); err != nil {
+	if _, err := pool.ExecContext(ctx, `UPDATE agent_task_queue SET fire_at=now() - interval '1 second' WHERE id=$1`, childID); err != nil {
 		t.Fatalf("make retry due: %v", err)
 	}
 
@@ -148,14 +148,14 @@ func TestRuntimeOfflineRetryWaitsForHealthyRuntime(t *testing.T) {
 	if claimed != nil {
 		t.Fatalf("offline runtime claimed retry %s", util.UUIDToString(claimed.ID))
 	}
-	if err := pool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id=$1`, childID).Scan(&childStatus); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT status FROM agent_task_queue WHERE id=$1`, childID).Scan(&childStatus); err != nil {
 		t.Fatalf("read child after offline claim: %v", err)
 	}
 	if childStatus != "deferred" {
 		t.Fatalf("offline claim changed child to %q, want deferred", childStatus)
 	}
 
-	if _, err := pool.Exec(ctx, `UPDATE agent_runtime SET status='online', last_seen_at=now() WHERE id=$1`, runtimeID); err != nil {
+	if _, err := pool.ExecContext(ctx, `UPDATE agent_runtime SET status='online', last_seen_at=now() WHERE id=$1`, runtimeID); err != nil {
 		t.Fatalf("restore runtime heartbeat: %v", err)
 	}
 	claimed, err = svc.ClaimTaskForRuntime(ctx, util.MustParseUUID(runtimeID))
@@ -178,22 +178,22 @@ func TestMaybeRetryFailedTaskCopiesChannelDelivery(t *testing.T) {
 	workspaceID, userID, agentID, _ := seedAttributionFixture(t, pool)
 
 	var runtimeID, sessionID, installationID, bindingID, parentID string
-	if err := pool.QueryRow(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, agentID).Scan(&runtimeID); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, agentID).Scan(&runtimeID); err != nil {
 		t.Fatalf("read agent runtime: %v", err)
 	}
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO chat_session (workspace_id, agent_id, creator_id, title)
 		VALUES ($1, $2, $3, 'channel retry') RETURNING id
 	`, workspaceID, agentID, userID).Scan(&sessionID); err != nil {
 		t.Fatalf("insert chat session: %v", err)
 	}
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO channel_installation (workspace_id, agent_id, channel_type, config, status, installer_user_id)
 		VALUES ($1, $2, 'slack', '{}'::jsonb, 'active', $3) RETURNING id
 	`, workspaceID, agentID, userID).Scan(&installationID); err != nil {
 		t.Fatalf("insert channel installation: %v", err)
 	}
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO channel_chat_session_binding (
 			chat_session_id, installation_id, channel_type, channel_chat_id, chat_type,
 			last_message_id, last_thread_id, route_revision, config
@@ -202,7 +202,7 @@ func TestMaybeRetryFailedTaskCopiesChannelDelivery(t *testing.T) {
 	`, sessionID, installationID).Scan(&bindingID); err != nil {
 		t.Fatalf("insert channel binding: %v", err)
 	}
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO agent_task_queue (
 			agent_id, runtime_id, chat_session_id, status, priority, attempt,
 			max_attempts, failure_reason, originator_user_id, accountable_user_id, originator_source
@@ -211,7 +211,7 @@ func TestMaybeRetryFailedTaskCopiesChannelDelivery(t *testing.T) {
 	`, agentID, runtimeID, sessionID, userID).Scan(&parentID); err != nil {
 		t.Fatalf("insert failed channel task: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO channel_task_delivery (
 			task_id, binding_id, installation_id, channel_type, channel_chat_id, chat_type,
 			channel_message_id, channel_thread_id, route_revision, config
@@ -246,14 +246,14 @@ func TestMaybeRetryFailedTaskCopiesChannelDelivery(t *testing.T) {
 	// Exercise the independent FailTask retry path as well. It creates the
 	// child inside the same transaction that marks this attempt failed, and its
 	// delivery copy must commit atomically with that child.
-	if _, err := pool.Exec(ctx, `UPDATE agent_task_queue SET status = 'running' WHERE id = $1`, child.ID); err != nil {
+	if _, err := pool.ExecContext(ctx, `UPDATE agent_task_queue SET status = 'running' WHERE id = $1`, child.ID); err != nil {
 		t.Fatalf("mark retry running: %v", err)
 	}
 	if _, err := svc.FailTask(ctx, child.ID, "runtime timed out", "", "", "", "timeout", false, "", ""); err != nil {
 		t.Fatalf("FailTask: %v", err)
 	}
-	var grandchildID pgtype.UUID
-	if err := pool.QueryRow(ctx, `
+	var grandchildID string
+	if err := pool.QueryRowContext(ctx, `
 		SELECT id FROM agent_task_queue WHERE parent_task_id = $1 ORDER BY created_at DESC LIMIT 1
 	`, child.ID).Scan(&grandchildID); err != nil {
 		t.Fatalf("load FailTask retry child: %v", err)
@@ -279,7 +279,7 @@ func TestFailTaskProviderNetworkBudget(t *testing.T) {
 	svc := &TaskService{Queries: q, TxStarter: pool, Bus: events.New()}
 
 	var runtimeID string
-	if err := pool.QueryRow(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, agentID).Scan(&runtimeID); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, agentID).Scan(&runtimeID); err != nil {
 		t.Fatalf("read agent runtime: %v", err)
 	}
 
@@ -302,8 +302,8 @@ func TestFailTaskProviderNetworkBudget(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var parentID pgtype.UUID
-			if err := pool.QueryRow(ctx, `
+			var parentID string
+			if err := pool.QueryRowContext(ctx, `
 				INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, attempt, max_attempts, session_id, work_dir)
 				VALUES ($1, $2, $3, 'running', 0, $4, $5, 'src-session', '/tmp/src-workdir')
 				RETURNING id
@@ -311,7 +311,7 @@ func TestFailTaskProviderNetworkBudget(t *testing.T) {
 				t.Fatalf("insert parent task: %v", err)
 			}
 			t.Cleanup(func() {
-				pool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE parent_task_id = $1 OR id = $1`, parentID)
+				pool.ExecContext(context.Background(), `DELETE FROM agent_task_queue WHERE parent_task_id = $1 OR id = $1`, parentID)
 			})
 
 			if _, err := svc.FailTask(ctx, parentID, "API Error: Connection closed mid-response.", "src-session", "/tmp/src-workdir", "", "agent_error.provider_network", false, "", ""); err != nil {
@@ -323,7 +323,7 @@ func TestFailTaskProviderNetworkBudget(t *testing.T) {
 				childStatus            string
 				n                      int
 			)
-			row := pool.QueryRow(ctx, `SELECT count(*), coalesce(max(attempt),0), coalesce(max(max_attempts),0), coalesce(max(status),'') FROM agent_task_queue WHERE parent_task_id = $1`, parentID)
+			row := pool.QueryRowContext(ctx, `SELECT count(*), coalesce(max(attempt),0), coalesce(max(max_attempts),0), coalesce(max(status),'') FROM agent_task_queue WHERE parent_task_id = $1`, parentID)
 			if err := row.Scan(&n, &childAttempt, &childMax, &childStatus); err != nil {
 				t.Fatalf("read child: %v", err)
 			}

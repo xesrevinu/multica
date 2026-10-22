@@ -7,31 +7,30 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const createTaskMessage = `-- name: CreateTaskMessage :one
 INSERT INTO task_message (id, task_id, seq, type, tool, content, input, output, output_truncated, call_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
 RETURNING id, task_id, seq, type, tool, content, input, output, created_at, output_truncated, call_id
 `
 
 type CreateTaskMessageParams struct {
-	ID              pgtype.UUID `json:"id"`
-	TaskID          pgtype.UUID `json:"task_id"`
-	Seq             int32       `json:"seq"`
-	Type            string      `json:"type"`
-	Tool            pgtype.Text `json:"tool"`
-	Content         pgtype.Text `json:"content"`
-	Input           []byte      `json:"input"`
-	Output          pgtype.Text `json:"output"`
-	OutputTruncated pgtype.Bool `json:"output_truncated"`
-	CallID          pgtype.Text `json:"call_id"`
+	ID              string         `json:"id"`
+	TaskID          string         `json:"task_id"`
+	Seq             int64          `json:"seq"`
+	Type            string         `json:"type"`
+	Tool            sql.NullString `json:"tool"`
+	Content         sql.NullString `json:"content"`
+	Input           sql.NullString `json:"input"`
+	Output          sql.NullString `json:"output"`
+	OutputTruncated sql.NullInt64  `json:"output_truncated"`
+	CallID          sql.NullString `json:"call_id"`
 }
 
 func (q *Queries) CreateTaskMessage(ctx context.Context, arg CreateTaskMessageParams) (TaskMessage, error) {
-	row := q.db.QueryRow(ctx, createTaskMessage,
+	row := q.db.QueryRowContext(ctx, createTaskMessage,
 		arg.ID,
 		arg.TaskID,
 		arg.Seq,
@@ -61,73 +60,31 @@ func (q *Queries) CreateTaskMessage(ctx context.Context, arg CreateTaskMessagePa
 }
 
 const createTaskMessages = `-- name: CreateTaskMessages :many
-WITH incoming AS (
-    -- Several single-argument unnest calls in one SELECT list expand in
-    -- lockstep (PostgreSQL 10+ set-returning-function semantics), which is the
-    -- same row-wise zip the multi-argument unnest(a, b, ...) form gives — but
-    -- sqlc's analyzer only knows the single-argument signature, so this is the
-    -- shape that survives code generation.
-    SELECT
-        unnest($1::uuid[]) AS id,
-        unnest($2::int4[]) AS seq,
-        unnest($3::text[]) AS type,
-        unnest($4::text[]) AS tool,
-        unnest($5::text[]) AS call_id,
-        unnest($6::text[]) AS content,
-        unnest($7::text[]) AS input,
-        unnest($8::text[]) AS output,
-        unnest($9::text[]) AS created_at,
-        unnest($10::text[]) AS output_truncated
-), inserted AS (
-    INSERT INTO task_message (id, task_id, seq, type, tool, content, input, output, created_at, output_truncated, call_id)
-    SELECT
-        m.id,
-        $11::uuid,
-        m.seq,
-        m.type,
-        NULLIF(m.tool, ''),
-        NULLIF(m.content, ''),
-        NULLIF(m.input, '')::jsonb,
-        NULLIF(m.output, ''),
-        COALESCE(NULLIF(m.created_at, '')::timestamptz, now()),
-        NULLIF(m.output_truncated, '')::bool,
-        NULLIF(m.call_id, '')
-    FROM incoming AS m
-    RETURNING id, task_id, seq, type, tool, content, input, output, created_at, output_truncated, call_id
-)
-SELECT id, task_id, seq, type, tool, content, input, output, created_at, output_truncated, call_id FROM inserted ORDER BY seq ASC
+INSERT INTO task_message (id, task_id, seq, type, tool, content, input, output, created_at, output_truncated, call_id)
+SELECT
+    json_extract(m.value, '$.id') AS id,
+    ?1 AS task_id,
+    json_extract(m.value, '$.seq') AS seq,
+    json_extract(m.value, '$.type') AS type,
+    NULLIF(json_extract(m.value, '$.tool'), '') AS tool,
+    NULLIF(json_extract(m.value, '$.content'), '') AS content,
+    NULLIF(json_extract(m.value, '$.input'), '') AS input,
+    NULLIF(json_extract(m.value, '$.output'), '') AS output,
+    COALESCE(NULLIF(json_extract(m.value, '$.created_at'), ''), now()) AS created_at,
+    NULLIF(json_extract(m.value, '$.output_truncated'), '') AS output_truncated,
+    NULLIF(json_extract(m.value, '$.call_id'), '') AS call_id
+FROM json_each(?2) AS m
+ORDER BY json_extract(m.value, '$.seq') ASC
+RETURNING id, task_id, seq, type, tool, content, input, output, created_at, output_truncated, call_id
 `
 
 type CreateTaskMessagesParams struct {
-	Ids               []pgtype.UUID `json:"ids"`
-	Seqs              []int32       `json:"seqs"`
-	Types             []string      `json:"types"`
-	Tools             []string      `json:"tools"`
-	CallIds           []string      `json:"call_ids"`
-	Contents          []string      `json:"contents"`
-	Inputs            []string      `json:"inputs"`
-	Outputs           []string      `json:"outputs"`
-	CreatedAts        []string      `json:"created_ats"`
-	OutputTruncations []string      `json:"output_truncations"`
-	TaskID            pgtype.UUID   `json:"task_id"`
-}
-
-type CreateTaskMessagesRow struct {
-	ID              pgtype.UUID        `json:"id"`
-	TaskID          pgtype.UUID        `json:"task_id"`
-	Seq             int32              `json:"seq"`
-	Type            string             `json:"type"`
-	Tool            pgtype.Text        `json:"tool"`
-	Content         pgtype.Text        `json:"content"`
-	Input           []byte             `json:"input"`
-	Output          pgtype.Text        `json:"output"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	OutputTruncated pgtype.Bool        `json:"output_truncated"`
-	CallID          pgtype.Text        `json:"call_id"`
+	TaskID   string      `json:"task_id"`
+	Messages interface{} `json:"messages"`
 }
 
 // Batch variant of CreateTaskMessage: persists a whole daemon-reported batch in
-// ONE statement — therefore one round trip and, more importantly, one commit
+// ONE statement - therefore one round trip and, more importantly, one commit
 // instead of one per message. Commit acknowledgement (IO:XactSync) is ~94% of
 // this SQL's load in production, so the commit count is the thing being
 // optimized; the round trip is a bonus.
@@ -136,14 +93,14 @@ type CreateTaskMessagesRow struct {
 // though a jsonb document is the tidier Go side. content and output routinely
 // carry tens of KB and occasionally megabytes, and wrapping them in JSON makes
 // the server escape every byte a second time and Postgres parse the whole
-// envelope back out — measured at 1.2x the old per-row insert at 128KB and
+// envelope back out - measured at 1.2x the old per-row insert at 128KB and
 // ~1.8x at 1MB, i.e. a regression on exactly the most expensive requests, which
 // are also the ones least likely to be batched. Native text[] elements are
 // length-prefixed by the wire protocol, so they cost neither pass.
 //
 // NULLIF is what makes per-row NULL expressible through a non-nullable []string
 // (the Go type sqlc gives a text[] parameter): it reproduces, exactly, the
-// `pgtype.Text{Valid: x != ""}` mapping the single-row query carries — empty
+// `pgtype.Text{Valid: x != ""}` mapping the single-row query carries - empty
 // string means SQL NULL. input is passed as text and cast here for the same
 // reason; it is the one column that genuinely has to be parsed as JSON, because
 // it is a jsonb column. created_at also rides this transport so an older daemon
@@ -153,43 +110,37 @@ type CreateTaskMessagesRow struct {
 // []bool, which has no way to spell the third state.
 //
 // Callers MUST still run the Postgres text sanitizer first. A NUL anywhere in
-// the batch fails the whole statement (GH #7098) — that is inherent to batching
+// the batch fails the whole statement (GH #7098) - that is inherent to batching
 // into one statement, not to the parameter shape.
 //
 // Atomicity is a deliberate side effect, not just a speedup: the per-message
 // loop this replaces could persist part of a batch and then fail, leaving the
-// transcript with a prefix of the batch and no way to complete it — the daemon
+// transcript with a prefix of the batch and no way to complete it - the daemon
 // does not retry this endpoint. One statement makes the batch all-or-nothing,
 // which buys consistency; a batch that fails is still lost whole, so closing
 // the gap for real needs a retry plus a (task_id, seq) uniqueness rule.
 //
 // The ORDER BY is a contract, not decoration. A bare `INSERT ... RETURNING`
 // has no defined row order, and the caller republishes these rows as realtime
-// events in the order they arrive — the per-row loop this replaces implicitly
+// events in the order they arrive - the per-row loop this replaces implicitly
 // published in request order, so the ordering has to be restored explicitly or
 // subscribers can see a batch out of order. seq is assigned by the daemon and
 // increases within a batch, so it is the request order.
-func (q *Queries) CreateTaskMessages(ctx context.Context, arg CreateTaskMessagesParams) ([]CreateTaskMessagesRow, error) {
-	rows, err := q.db.Query(ctx, createTaskMessages,
-		arg.Ids,
-		arg.Seqs,
-		arg.Types,
-		arg.Tools,
-		arg.CallIds,
-		arg.Contents,
-		arg.Inputs,
-		arg.Outputs,
-		arg.CreatedAts,
-		arg.OutputTruncations,
-		arg.TaskID,
-	)
+// JSON shape: sqlc.arg('messages') is one JSON array, one object per row:
+// [{"id":"...","seq":1,"type":"...","tool":"","call_id":"","content":"",
+//
+//	"input":"","output":"","created_at":"","output_truncated":""}]
+//
+// Empty string means NULL, matching the single-row insert.
+func (q *Queries) CreateTaskMessages(ctx context.Context, arg CreateTaskMessagesParams) ([]TaskMessage, error) {
+	rows, err := q.db.QueryContext(ctx, createTaskMessages, arg.TaskID, arg.Messages)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []CreateTaskMessagesRow{}
+	items := []TaskMessage{}
 	for rows.Next() {
-		var i CreateTaskMessagesRow
+		var i TaskMessage
 		if err := rows.Scan(
 			&i.ID,
 			&i.TaskID,
@@ -206,6 +157,9 @@ func (q *Queries) CreateTaskMessages(ctx context.Context, arg CreateTaskMessages
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -215,22 +169,22 @@ func (q *Queries) CreateTaskMessages(ctx context.Context, arg CreateTaskMessages
 
 const deleteTaskMessages = `-- name: DeleteTaskMessages :exec
 DELETE FROM task_message
-WHERE task_id = $1
+WHERE task_id = ?1
 `
 
-func (q *Queries) DeleteTaskMessages(ctx context.Context, taskID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteTaskMessages, taskID)
+func (q *Queries) DeleteTaskMessages(ctx context.Context, taskID string) error {
+	_, err := q.db.ExecContext(ctx, deleteTaskMessages, taskID)
 	return err
 }
 
 const listTaskMessages = `-- name: ListTaskMessages :many
 SELECT id, task_id, seq, type, tool, content, input, output, created_at, output_truncated, call_id FROM task_message
-WHERE task_id = $1
+WHERE task_id = ?1
 ORDER BY seq ASC
 `
 
-func (q *Queries) ListTaskMessages(ctx context.Context, taskID pgtype.UUID) ([]TaskMessage, error) {
-	rows, err := q.db.Query(ctx, listTaskMessages, taskID)
+func (q *Queries) ListTaskMessages(ctx context.Context, taskID string) ([]TaskMessage, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskMessages, taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -254,6 +208,9 @@ func (q *Queries) ListTaskMessages(ctx context.Context, taskID pgtype.UUID) ([]T
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -263,17 +220,17 @@ func (q *Queries) ListTaskMessages(ctx context.Context, taskID pgtype.UUID) ([]T
 
 const listTaskMessagesSince = `-- name: ListTaskMessagesSince :many
 SELECT id, task_id, seq, type, tool, content, input, output, created_at, output_truncated, call_id FROM task_message
-WHERE task_id = $1 AND seq > $2
+WHERE task_id = ?1 AND seq > ?2
 ORDER BY seq ASC
 `
 
 type ListTaskMessagesSinceParams struct {
-	TaskID pgtype.UUID `json:"task_id"`
-	Seq    int32       `json:"seq"`
+	TaskID string `json:"task_id"`
+	Seq    int64  `json:"seq"`
 }
 
 func (q *Queries) ListTaskMessagesSince(ctx context.Context, arg ListTaskMessagesSinceParams) ([]TaskMessage, error) {
-	rows, err := q.db.Query(ctx, listTaskMessagesSince, arg.TaskID, arg.Seq)
+	rows, err := q.db.QueryContext(ctx, listTaskMessagesSince, arg.TaskID, arg.Seq)
 	if err != nil {
 		return nil, err
 	}
@@ -297,6 +254,9 @@ func (q *Queries) ListTaskMessagesSince(ctx context.Context, arg ListTaskMessage
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

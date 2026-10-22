@@ -4,37 +4,37 @@
 -- Permission to actually RUN an action is decided only at run time, so this
 -- query does no permission work at all.
 --
--- Ordering is use_count DESC everywhere — the list's job is to answer "what
+-- Ordering is use_count DESC everywhere - the list's job is to answer "what
 -- does this workspace actually use". LOWER(name) breaks ties so equal counts
 -- never render in random order.
 SELECT * FROM quick_action
-WHERE workspace_id = sqlc.arg('workspace_id')::uuid
-  AND (sqlc.arg('include_archived')::bool OR status = 'active')
-  AND (visibility = 'public' OR created_by_id = sqlc.arg('viewer_id')::uuid)
+WHERE workspace_id = sqlc.arg('workspace_id')
+  AND (sqlc.arg('include_archived') OR status = 'active')
+  AND (visibility = 'public' OR created_by_id = sqlc.arg('viewer_id'))
 ORDER BY use_count DESC, LOWER(name) ASC;
 
 -- name: GetQuickAction :one
 SELECT * FROM quick_action
-WHERE id = $1 AND workspace_id = $2;
+WHERE id = ?1 AND workspace_id = ?2;
 
 -- name: CountActiveQuickActions :one
 SELECT COUNT(*) FROM quick_action
-WHERE workspace_id = $1 AND status = 'active';
+WHERE workspace_id = ?1 AND status = 'active';
 
 -- name: CreateQuickAction :one
 INSERT INTO quick_action (
     workspace_id, name, description, assignee_type, assignee_id, prompt,
     visibility, created_by_type, created_by_id
 ) VALUES (
-    sqlc.arg('workspace_id')::uuid,
-    sqlc.arg('name')::text,
-    sqlc.arg('description')::text,
-    sqlc.arg('assignee_type')::text,
-    sqlc.arg('assignee_id')::uuid,
-    sqlc.arg('prompt')::text,
-    sqlc.arg('visibility')::text,
-    sqlc.arg('created_by_type')::text,
-    sqlc.arg('created_by_id')::uuid
+    sqlc.arg('workspace_id'),
+    sqlc.arg('name'),
+    sqlc.arg('description'),
+    sqlc.arg('assignee_type'),
+    sqlc.arg('assignee_id'),
+    sqlc.arg('prompt'),
+    sqlc.arg('visibility'),
+    sqlc.arg('created_by_type'),
+    sqlc.arg('created_by_id')
 )
 RETURNING *;
 
@@ -51,21 +51,21 @@ UPDATE quick_action SET
     visibility = COALESCE(sqlc.narg('visibility'), visibility),
     status = COALESCE(sqlc.narg('status'), status),
     updated_at = now()
-WHERE id = $1 AND workspace_id = $2
+WHERE id = ?1 AND workspace_id = ?2
 RETURNING *;
 
 -- name: DeleteQuickAction :exec
 -- workspace_id is a SQL-layer tenant guard, matching DeleteComment.
-DELETE FROM quick_action WHERE id = $1 AND workspace_id = $2;
+DELETE FROM quick_action WHERE id = ?1 AND workspace_id = ?2;
 
 -- name: DeletePrivateQuickActionsByCreator :exec
 -- Run when a member leaves or is removed. A private action is visible and
 -- runnable ONLY by its creator, so once they are gone nobody can see it, run
--- it, or clean it up — while it still counts against the workspace's active
+-- it, or clean it up - while it still counts against the workspace's active
 -- limit. Public actions are workspace furniture and deliberately survive their
 -- author's departure.
 DELETE FROM quick_action
-WHERE workspace_id = $1 AND created_by_id = $2 AND visibility = 'private';
+WHERE workspace_id = ?1 AND created_by_id = ?2 AND visibility = 'private';
 
 -- name: TouchQuickActionUsage :exec
 -- Best-effort usage telemetry, written after a successful run. Deliberately
@@ -74,4 +74,4 @@ WHERE workspace_id = $1 AND created_by_id = $2 AND visibility = 'private';
 -- place ordering state changes.
 UPDATE quick_action
 SET use_count = use_count + 1, last_used_at = now()
-WHERE id = $1 AND workspace_id = $2;
+WHERE id = ?1 AND workspace_id = ?2;

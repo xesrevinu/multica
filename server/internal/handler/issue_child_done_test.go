@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/testutil"
 )
@@ -495,7 +495,7 @@ func TestChildDoneAndConditionRuleWakeOnce(t *testing.T) {
 	agentID := handlerTestAgentID(t)
 	setIssueAssigneeDirect(t, fx.parent.ID, "agent", agentID)
 	svc := service.IssueWakeupService{Tasks: testHandler.TaskService}
-	if _, err := svc.Create(context.Background(), parseUUID(fx.parent.ID), parseUUID(testUserID), pgtype.UUID{}, service.WakeupInput{
+	if _, err := svc.Create(context.Background(), parseUUID(fx.parent.ID), parseUUID(testUserID), "", service.WakeupInput{
 		AgentID: agentID, Instruction: "Summarize the children", Kind: "event", Condition: json.RawMessage(`{"type":"children_done"}`),
 	}); err != nil {
 		t.Fatal(err)
@@ -539,7 +539,7 @@ func TestChildDoneRateLimitPausesRule(t *testing.T) {
 	updateChildStatus(t, fx.child.ID, "in_progress")
 	updateChildStatus(t, fx.child.ID, "done")
 
-	var paused pgtype.Text
+	var paused sql.NullString
 	var enabled bool
 	dbfx.QueryRow(t, `SELECT paused_reason, enabled FROM issue_wakeup WHERE issue_id = $1 AND system_rule = 'child_done'`, fx.parent.ID).Scan(&paused, &enabled)
 	if paused.String != "rate" || enabled {

@@ -81,7 +81,7 @@ func TestRunSearchQuery_StatementTimeoutFires(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	err := runSearchQuery(ctx, testPool, "SELECT pg_sleep(2)", nil, func(rows pgx.Rows) error {
+	err := runSearchQuery(ctx, sqlDBBeginner{DB: testSQLite}, "SELECT pg_sleep(2)", nil, func(rows pgx.Rows) error {
 		for rows.Next() {
 			// nothing to scan — but iterate so pgx surfaces the
 			// server error once the statement_timeout fires

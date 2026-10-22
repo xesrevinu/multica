@@ -7,18 +7,17 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const countAssigneeChangesByActor = `-- name: CountAssigneeChangesByActor :many
 SELECT
   details->>'to_type' as assignee_type,
   details->>'to_id' as assignee_id,
-  COUNT(*)::bigint as frequency
+  COUNT(*) as frequency
 FROM activity_log
-WHERE workspace_id = $1
-  AND actor_id = $2
+WHERE workspace_id = ?1
+  AND actor_id = ?2
   AND actor_type = 'member'
   AND action = 'assignee_changed'
   AND details->>'to_type' IS NOT NULL
@@ -27,8 +26,8 @@ GROUP BY details->>'to_type', details->>'to_id'
 `
 
 type CountAssigneeChangesByActorParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	ActorID     pgtype.UUID `json:"actor_id"`
+	WorkspaceID string         `json:"workspace_id"`
+	ActorID     sql.NullString `json:"actor_id"`
 }
 
 type CountAssigneeChangesByActorRow struct {
@@ -39,7 +38,7 @@ type CountAssigneeChangesByActorRow struct {
 
 // Count how many times a user assigned each target via assignee_changed activities.
 func (q *Queries) CountAssigneeChangesByActor(ctx context.Context, arg CountAssigneeChangesByActorParams) ([]CountAssigneeChangesByActorRow, error) {
-	rows, err := q.db.Query(ctx, countAssigneeChangesByActor, arg.WorkspaceID, arg.ActorID)
+	rows, err := q.db.QueryContext(ctx, countAssigneeChangesByActor, arg.WorkspaceID, arg.ActorID)
 	if err != nil {
 		return nil, err
 	}
@@ -52,6 +51,9 @@ func (q *Queries) CountAssigneeChangesByActor(ctx context.Context, arg CountAssi
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -61,22 +63,22 @@ func (q *Queries) CountAssigneeChangesByActor(ctx context.Context, arg CountAssi
 const createActivity = `-- name: CreateActivity :one
 INSERT INTO activity_log (
     workspace_id, issue_id, actor_type, actor_id, action, details, id
-) VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::uuid, gen_random_uuid()))
-RETURNING id, workspace_id, issue_id, actor_type, actor_id, action, details, created_at
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, COALESCE(?7, gen_random_uuid()))
+RETURNING id, workspace_id, issue_id, actor_type, actor_id, "action", details, created_at
 `
 
 type CreateActivityParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	IssueID     pgtype.UUID `json:"issue_id"`
-	ActorType   pgtype.Text `json:"actor_type"`
-	ActorID     pgtype.UUID `json:"actor_id"`
-	Action      string      `json:"action"`
-	Details     []byte      `json:"details"`
-	ID          pgtype.UUID `json:"id"`
+	WorkspaceID string         `json:"workspace_id"`
+	IssueID     sql.NullString `json:"issue_id"`
+	ActorType   sql.NullString `json:"actor_type"`
+	ActorID     sql.NullString `json:"actor_id"`
+	Action      string         `json:"action"`
+	Details     string         `json:"details"`
+	ID          interface{}    `json:"id"`
 }
 
 func (q *Queries) CreateActivity(ctx context.Context, arg CreateActivityParams) (ActivityLog, error) {
-	row := q.db.QueryRow(ctx, createActivity,
+	row := q.db.QueryRowContext(ctx, createActivity,
 		arg.WorkspaceID,
 		arg.IssueID,
 		arg.ActorType,
@@ -100,12 +102,12 @@ func (q *Queries) CreateActivity(ctx context.Context, arg CreateActivityParams) 
 }
 
 const getActivity = `-- name: GetActivity :one
-SELECT id, workspace_id, issue_id, actor_type, actor_id, action, details, created_at FROM activity_log
-WHERE id = $1
+SELECT id, workspace_id, issue_id, actor_type, actor_id, "action", details, created_at FROM activity_log
+WHERE id = ?1
 `
 
-func (q *Queries) GetActivity(ctx context.Context, id pgtype.UUID) (ActivityLog, error) {
-	row := q.db.QueryRow(ctx, getActivity, id)
+func (q *Queries) GetActivity(ctx context.Context, id string) (ActivityLog, error) {
+	row := q.db.QueryRowContext(ctx, getActivity, id)
 	var i ActivityLog
 	err := row.Scan(
 		&i.ID,
@@ -122,20 +124,20 @@ func (q *Queries) GetActivity(ctx context.Context, id pgtype.UUID) (ActivityLog,
 
 const getLastIssueStatusChange = `-- name: GetLastIssueStatusChange :one
 SELECT actor_type, actor_id FROM activity_log
-WHERE issue_id = $1 AND action = 'status_changed'
+WHERE issue_id = ?1 AND action = 'status_changed'
 ORDER BY created_at DESC, id DESC
 LIMIT 1
 `
 
 type GetLastIssueStatusChangeRow struct {
-	ActorType pgtype.Text `json:"actor_type"`
-	ActorID   pgtype.UUID `json:"actor_id"`
+	ActorType sql.NullString `json:"actor_type"`
+	ActorID   sql.NullString `json:"actor_id"`
 }
 
 // Who last changed an issue's status, and to what: names the mover when an
 // agent's status change is refused because the issue left its step (MUL-7420).
-func (q *Queries) GetLastIssueStatusChange(ctx context.Context, issueID pgtype.UUID) (GetLastIssueStatusChangeRow, error) {
-	row := q.db.QueryRow(ctx, getLastIssueStatusChange, issueID)
+func (q *Queries) GetLastIssueStatusChange(ctx context.Context, issueID sql.NullString) (GetLastIssueStatusChangeRow, error) {
+	row := q.db.QueryRowContext(ctx, getLastIssueStatusChange, issueID)
 	var i GetLastIssueStatusChangeRow
 	err := row.Scan(&i.ActorType, &i.ActorID)
 	return i, err
@@ -145,48 +147,48 @@ const hasSquadLeaderNoActionEvaluationForTask = `-- name: HasSquadLeaderNoAction
 SELECT EXISTS (
   SELECT 1
   FROM activity_log
-  WHERE issue_id = $1
+  WHERE issue_id = ?1
     AND actor_type = 'agent'
-    AND actor_id = $2
+    AND actor_id = ?2
     AND action = 'squad_leader_evaluated'
     AND details->>'outcome' = 'no_action'
-    AND details->>'task_id' = $3::text
-) AS exists
+    AND details->>'task_id' = ?3
+) AS "exists"
 `
 
 type HasSquadLeaderNoActionEvaluationForTaskParams struct {
-	IssueID pgtype.UUID `json:"issue_id"`
-	AgentID pgtype.UUID `json:"agent_id"`
-	TaskID  string      `json:"task_id"`
+	IssueID sql.NullString `json:"issue_id"`
+	AgentID sql.NullString `json:"agent_id"`
+	TaskID  string         `json:"task_id"`
 }
 
 func (q *Queries) HasSquadLeaderNoActionEvaluationForTask(ctx context.Context, arg HasSquadLeaderNoActionEvaluationForTaskParams) (bool, error) {
-	row := q.db.QueryRow(ctx, hasSquadLeaderNoActionEvaluationForTask, arg.IssueID, arg.AgentID, arg.TaskID)
+	row := q.db.QueryRowContext(ctx, hasSquadLeaderNoActionEvaluationForTask, arg.IssueID, arg.AgentID, arg.TaskID)
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
 }
 
 const listActivitiesForIssue = `-- name: ListActivitiesForIssue :many
-SELECT id, workspace_id, issue_id, actor_type, actor_id, action, details, created_at FROM (
-    SELECT id, workspace_id, issue_id, actor_type, actor_id, action, details, created_at FROM activity_log
-    WHERE issue_id = $1
+SELECT id, workspace_id, issue_id, actor_type, actor_id, "action", details, created_at FROM (
+    SELECT id, workspace_id, issue_id, actor_type, actor_id, "action", details, created_at FROM activity_log
+    WHERE issue_id = ?1
     ORDER BY created_at DESC, id DESC
-    LIMIT $2
+    LIMIT ?2
 ) AS recent
 ORDER BY created_at ASC, id ASC
 `
 
 type ListActivitiesForIssueParams struct {
-	IssueID pgtype.UUID `json:"issue_id"`
-	Limit   int32       `json:"limit"`
+	IssueID sql.NullString `json:"issue_id"`
+	Limit   int64          `json:"limit"`
 }
 
-// The NEWEST $2 activities for an issue, returned in chronological order.
+// The NEWEST arg2 activities for an issue, returned in chronological order.
 //
 // The cap has to bite at the OLD end, not the new one. The inner query takes
 // the window with the keyset ordering (created_at DESC, id DESC), which
-// idx_activity_log_issue_keyset (migration 068) satisfies without a sort step —
+// idx_activity_log_issue_keyset (migration 068) satisfies without a sort step -
 // it is not an index-only scan, since the index does not cover the columns
 // SELECT * needs, so the heap is still read for the rows in the window. The
 // outer query re-sorts ascending so every caller keeps the chronological
@@ -198,7 +200,7 @@ type ListActivitiesForIssueParams struct {
 // autosave, every agent run, status/assignee changes), so this was reachable in
 // normal use, not only on pathological issues (MUL-5492).
 func (q *Queries) ListActivitiesForIssue(ctx context.Context, arg ListActivitiesForIssueParams) ([]ActivityLog, error) {
-	rows, err := q.db.Query(ctx, listActivitiesForIssue, arg.IssueID, arg.Limit)
+	rows, err := q.db.QueryContext(ctx, listActivitiesForIssue, arg.IssueID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -219,6 +221,9 @@ func (q *Queries) ListActivitiesForIssue(ctx context.Context, arg ListActivities
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

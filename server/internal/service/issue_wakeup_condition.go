@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,12 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	"github.com/multica-ai/multica/server/pkg/dbid"
 )
 
 // conditionPollInterval bounds how long a platform-evaluated condition can
@@ -76,7 +74,7 @@ func badCondition(msg string) error {
 
 // validateCondition normalizes a condition against the issue's workspace and
 // returns the same-issue events that should trigger an early evaluation.
-func validateCondition(ctx context.Context, tx pgx.Tx, issue db.Issue, raw json.RawMessage) (json.RawMessage, []string, error) {
+func validateCondition(ctx context.Context, tx *sql.Tx, issue db.Issue, raw json.RawMessage) (json.RawMessage, []string, error) {
 	var c WakeupCondition
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -84,12 +82,12 @@ func validateCondition(ctx context.Context, tx pgx.Tx, issue db.Issue, raw json.
 		return nil, nil, badCondition("unreadable condition")
 	}
 	ws := issue.WorkspaceID
-	exists := func(sql string, args ...any) (bool, error) {
+	exists := func(query string, args ...any) (bool, error) {
 		var ok bool
-		err := tx.QueryRow(ctx, "SELECT EXISTS("+sql+")", args...).Scan(&ok)
+		err := tx.QueryRowContext(ctx, "SELECT EXISTS("+query+")", args...).Scan(&ok)
 		return ok, err
 	}
-	uuidArg := func(s, what string) (pgtype.UUID, error) {
+	uuidArg := func(s, what string) (string, error) {
 		id, err := util.ParseUUID(s)
 		if err != nil {
 			return id, badCondition(what + " must be a UUID")
@@ -202,8 +200,8 @@ func validateCondition(ctx context.Context, tx pgx.Tx, issue db.Issue, raw json.
 			return nil, nil, badCondition("state must be done, ended or in_review")
 		}
 		var identifier string
-		err = tx.QueryRow(ctx, "SELECT ws.issue_prefix||'-'||i.number FROM issue i JOIN workspace ws ON ws.id=i.workspace_id WHERE i.workspace_id=$1 AND i.id=$2", ws, id).Scan(&identifier)
-		if errors.Is(err, pgx.ErrNoRows) {
+		err = tx.QueryRowContext(ctx, "SELECT ws.issue_prefix||'-'||i.number FROM issue i JOIN workspace ws ON ws.id=i.workspace_id WHERE i.workspace_id=$1 AND i.id=$2", ws, id).Scan(&identifier)
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, badCondition("unknown issue")
 		}
 		if err != nil {
@@ -220,18 +218,18 @@ func validateCondition(ctx context.Context, tx pgx.Tx, issue db.Issue, raw json.
 // evaluateCondition reports whether the predicate holds, a fingerprint of the
 // satisfying facts (so a rule fires when they change, not on every tick) and a
 // small observation for the woken agent's trigger facts.
-func (s *IssueWakeupService) evaluateCondition(ctx context.Context, tx pgx.Tx, q *db.Queries, w db.IssueWakeup) (bool, string, map[string]any, error) {
+func (s *IssueWakeupService) evaluateCondition(ctx context.Context, tx *sql.Tx, q *db.Queries, w db.IssueWakeup) (bool, string, map[string]any, error) {
 	var c WakeupCondition
-	if err := json.Unmarshal(w.Condition, &c); err != nil {
+	if err := json.Unmarshal([]byte(w.Condition.String), &c); err != nil {
 		return false, "", nil, err
 	}
 	switch c.Type {
 	case "issue_field":
 		var status, assigneeType string
-		var assigneeID pgtype.UUID
+		var assigneeID string
 		var property json.RawMessage
 		var labeled bool
-		err := tx.QueryRow(ctx, `SELECT status,COALESCE(assignee_type,''),assignee_id,COALESCE(properties->($2::text),'null'::jsonb),
+		err := tx.QueryRowContext(ctx, `SELECT status,COALESCE(assignee_type,''),assignee_id,COALESCE(properties->($2::text),'null'::jsonb),
 			EXISTS(SELECT 1 FROM issue_to_label l WHERE l.issue_id=issue.id AND l.label_id::text=$3::text)
 			FROM issue WHERE id=$1`, w.IssueID, c.PropertyID, c.LabelID).Scan(&status, &assigneeType, &assigneeID, &property, &labeled)
 		if err != nil {
@@ -262,7 +260,7 @@ func (s *IssueWakeupService) evaluateCondition(ctx context.Context, tx pgx.Tx, q
 		if c.Event == "checks_finished" && (s.Tasks == nil || !s.Tasks.PRSnapshotsEnabled) {
 			return false, "", nil, errPRSnapshotsUnavailable
 		}
-		rows, err := tx.Query(ctx, `SELECT pr.pr_number,pr.state,COALESCE(pr.snapshot_head_sha,''),COALESCE(pr.checks_rollup_state,'')
+		rows, err := tx.QueryContext(ctx, `SELECT pr.pr_number,pr.state,COALESCE(pr.snapshot_head_sha,''),COALESCE(pr.checks_rollup_state,'')
 			FROM github_pull_request pr JOIN issue_pull_request ipr ON ipr.pull_request_id=pr.id WHERE ipr.issue_id=$1`, w.IssueID)
 		if err != nil {
 			return false, "", nil, err
@@ -308,8 +306,8 @@ func (s *IssueWakeupService) evaluateCondition(ctx context.Context, tx pgx.Tx, q
 	case "other_issue":
 		var status string
 		var number int32
-		err := tx.QueryRow(ctx, "SELECT status,number FROM issue WHERE id=$1 AND workspace_id=$2", c.IssueID, w.WorkspaceID).Scan(&status, &number)
-		if errors.Is(err, pgx.ErrNoRows) {
+		err := tx.QueryRowContext(ctx, "SELECT status,number FROM issue WHERE id=$1 AND workspace_id=$2", c.IssueID, w.WorkspaceID).Scan(&status, &number)
+		if errors.Is(err, sql.ErrNoRows) {
 			return false, "", map[string]any{"deleted": true}, nil
 		}
 		if err != nil {
@@ -341,8 +339,8 @@ const conditionHintSQL = "wakeup_id=$1 AND processed_at IS NULL AND event_type N
 // agent runs that caused them, or nil when any hint came from elsewhere (a
 // person, the platform, or several merged events), so a satisfied condition
 // can tell whether the target agent brought it about itself.
-func consumeConditionHints(ctx context.Context, tx pgx.Tx, id pgtype.UUID) (bool, []string, error) {
-	rows, err := tx.Query(ctx, "UPDATE issue_wakeup_receipt SET processed_at=now() WHERE "+conditionHintSQL+" RETURNING payload", id)
+func consumeConditionHints(ctx context.Context, tx *sql.Tx, id string) (bool, []string, error) {
+	rows, err := tx.QueryContext(ctx, "UPDATE issue_wakeup_receipt SET processed_at=now() WHERE "+conditionHintSQL+" RETURNING payload", id)
 	if err != nil {
 		return false, nil, err
 	}
@@ -382,12 +380,12 @@ func consumeConditionHints(ctx context.Context, tx pgx.Tx, id pgtype.UUID) (bool
 // pollCondition evaluates a condition rule when it is due or a related event
 // arrived, and returns the next scheduled evaluation. A newly satisfied
 // predicate becomes one condition.met input for the ordinary dispatch below.
-func (s *IssueWakeupService) pollCondition(ctx context.Context, tx pgx.Tx, q *db.Queries, w db.IssueWakeup, now time.Time) (pgtype.Timestamptz, error) {
+func (s *IssueWakeupService) pollCondition(ctx context.Context, tx *sql.Tx, q *db.Queries, w db.IssueWakeup, now time.Time) (sql.NullString, error) {
 	hinted, causes, err := consumeConditionHints(ctx, tx, w.ID)
 	if err != nil {
 		return w.NextFireAt, err
 	}
-	if !hinted && w.NextFireAt.Valid && w.NextFireAt.Time.After(now) {
+	if !hinted && w.NextFireAt.Valid && asTime(w.NextFireAt).After(now) {
 		return w.NextFireAt, nil
 	}
 	met, fingerprint, observed, err := s.evaluateCondition(ctx, tx, q, w)
@@ -408,7 +406,7 @@ func (s *IssueWakeupService) pollCondition(ctx context.Context, tx pgx.Tx, q *db
 	} else if !met {
 		state = ""
 	}
-	next := pgtype.Timestamptz{Time: now.Add(conditionPollInterval), Valid: true}
+	next := nullTime(now.Add(conditionPollInterval), true)
 	return next, q.SetWakeupConditionState(ctx, db.SetWakeupConditionStateParams{ID: w.ID, ConditionState: state, NextFireAt: next})
 }
 
@@ -424,7 +422,7 @@ func conditionFiresOnChange(raw []byte) bool {
 
 // baselineCondition records which facts already satisfy a new or re-enabled
 // rule, so it wakes the agent when they change rather than immediately.
-func (s *IssueWakeupService) baselineCondition(ctx context.Context, tx pgx.Tx, q *db.Queries, w db.IssueWakeup, now time.Time) error {
+func (s *IssueWakeupService) baselineCondition(ctx context.Context, tx *sql.Tx, q *db.Queries, w db.IssueWakeup, now time.Time) error {
 	met, fingerprint, _, err := s.evaluateCondition(ctx, tx, q, w)
 	if err != nil && !conditionDiagnostic(err) {
 		return err
@@ -435,7 +433,7 @@ func (s *IssueWakeupService) baselineCondition(ctx context.Context, tx pgx.Tx, q
 	if !met {
 		fingerprint = ""
 	}
-	return q.SetWakeupConditionState(ctx, db.SetWakeupConditionStateParams{ID: w.ID, ConditionState: fingerprint, NextFireAt: pgtype.Timestamptz{Time: now.Add(conditionPollInterval), Valid: true}})
+	return q.SetWakeupConditionState(ctx, db.SetWakeupConditionStateParams{ID: w.ID, ConditionState: fingerprint, NextFireAt: nullTime(now.Add(conditionPollInterval), true)})
 }
 
 // saveConditionDiagnostic owns only last_error values carrying its prefix.
@@ -443,9 +441,9 @@ func (s *IssueWakeupService) baselineCondition(ctx context.Context, tx pgx.Tx, q
 // rewriting an unchanged diagnostic on every polling interval as well.
 func saveConditionDiagnostic(ctx context.Context, q *db.Queries, w db.IssueWakeup, diagnostic error) error {
 	owned := w.LastError.Valid && strings.HasPrefix(w.LastError.String, conditionDiagnosticPrefix)
-	var lastError pgtype.Text
+	var lastError sql.NullString
 	if diagnostic != nil {
-		lastError = pgtype.Text{String: conditionDiagnosticPrefix + diagnostic.Error(), Valid: true}
+		lastError = sql.NullString{String: conditionDiagnosticPrefix + diagnostic.Error(), Valid: true}
 		if w.LastError.Valid {
 			if w.LastError.String == lastError.String {
 				return nil
@@ -464,14 +462,14 @@ func saveConditionDiagnostic(ctx context.Context, q *db.Queries, w db.IssueWakeu
 // covers the done and closed status categories; Cancelled is closed without
 // finishing.
 type subIssue struct {
-	ID        pgtype.UUID
-	Stage     pgtype.Int4
+	ID        string
+	Stage     sql.NullInt64
 	Closed    bool
 	Cancelled bool
 }
 
-func loadSubIssues(ctx context.Context, tx pgx.Tx, q *db.Queries, parent, workspace pgtype.UUID) ([]subIssue, error) {
-	rows, err := tx.Query(ctx, "SELECT id,status,stage FROM issue WHERE parent_issue_id=$1 AND workspace_id=$2 ORDER BY id", parent, workspace)
+func loadSubIssues(ctx context.Context, tx *sql.Tx, q *db.Queries, parent, workspace string) ([]subIssue, error) {
+	rows, err := tx.QueryContext(ctx, "SELECT id,status,stage FROM issue WHERE parent_issue_id=$1 AND workspace_id=$2 ORDER BY id", parent, workspace)
 	if err != nil {
 		return nil, err
 	}
@@ -515,10 +513,10 @@ func childrenDone(c WakeupCondition, children []subIssue) (bool, string, map[str
 	}
 	total, done, inStage := 0, 0, 0
 	for _, ch := range children {
-		if c.Stage != nil && (!ch.Stage.Valid || ch.Stage.Int32 > *c.Stage) {
+		if c.Stage != nil && (!ch.Stage.Valid || ch.Stage.Int64 > int64(*c.Stage)) {
 			continue
 		}
-		if c.Stage != nil && ch.Stage.Int32 == *c.Stage {
+		if c.Stage != nil && ch.Stage.Int64 == int64(*c.Stage) {
 			inStage++
 		}
 		total++
@@ -550,11 +548,11 @@ func stageProgress(children []subIssue) (bool, string, map[string]any) {
 	for _, ch := range children {
 		sc := &unstaged
 		if ch.Stage.Valid {
-			if counts[ch.Stage.Int32] == nil {
-				counts[ch.Stage.Int32] = &stageCount{Stage: ch.Stage.Int32}
-				stages = append(stages, ch.Stage.Int32)
+			if counts[int32(ch.Stage.Int64)] == nil {
+				counts[int32(ch.Stage.Int64)] = &stageCount{Stage: int32(ch.Stage.Int64)}
+				stages = append(stages, int32(ch.Stage.Int64))
 			}
-			sc = counts[ch.Stage.Int32]
+			sc = counts[int32(ch.Stage.Int64)]
 		}
 		sc.Total++
 		if ch.Closed {
@@ -600,11 +598,11 @@ func stageProgress(children []subIssue) (bool, string, map[string]any) {
 // recordConditionMet turns a newly satisfied condition into one run input. It
 // names the agent runs whose changes satisfied it, when all of them are known.
 func recordConditionMet(ctx context.Context, q *db.Queries, w db.IssueWakeup, observed map[string]any, causes []string, now time.Time) error {
-	facts := map[string]any{"condition": json.RawMessage(w.Condition), "observed": observed, "observed_at": now.UTC().Format(time.RFC3339)}
+	facts := map[string]any{"condition": json.RawMessage(w.Condition.String), "observed": observed, "observed_at": now.UTC().Format(time.RFC3339)}
 	if len(causes) > 0 {
 		facts["source_task_ids"] = causes
 	}
 	payload, _ := json.Marshal(facts)
-	_, err := q.RecordWakeupReceipt(ctx, db.RecordWakeupReceiptParams{ID: dbid.NewV7(), WakeupID: w.ID, Revision: w.Revision, EventKey: "condition:" + now.UTC().Format(time.RFC3339Nano), EventType: wakeupConditionEventType, Payload: payload})
+	_, err := q.RecordWakeupReceipt(ctx, db.RecordWakeupReceiptParams{ID: newV7(), WakeupID: w.ID, Revision: w.Revision, EventKey: "condition:" + now.UTC().Format(time.RFC3339Nano), EventType: wakeupConditionEventType, Payload: string(payload)})
 	return err
 }

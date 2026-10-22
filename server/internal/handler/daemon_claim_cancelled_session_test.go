@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -9,8 +10,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/testutil"
@@ -173,8 +172,7 @@ func TestCancelTask_AdvancesChatSessionResumePointer(t *testing.T) {
 		"work_dir":        "/tmp/turn2-workdir",
 	})
 
-	if _, err := testHandler.TaskService.CancelTaskWithResult(ctx, parseUUID(taskID),
-		service.CancelTaskOptions{ClientSupportsDraftRestore: true}); err != nil {
+	if _, err := testHandler.TaskService.CancelTaskWithResult(ctx, parseUUID(taskID), service.CancelTaskOptions{ClientSupportsDraftRestore: true}); err != nil {
 		t.Fatalf("cancel task: %v", err)
 	}
 
@@ -218,8 +216,7 @@ func TestCancelTask_KeepsChatPointerWhenNoSessionEstablished(t *testing.T) {
 		"started_at":      testutil.Raw("now()"),
 	})
 
-	if _, err := testHandler.TaskService.CancelTaskWithResult(ctx, parseUUID(taskID),
-		service.CancelTaskOptions{ClientSupportsDraftRestore: true}); err != nil {
+	if _, err := testHandler.TaskService.CancelTaskWithResult(ctx, parseUUID(taskID), service.CancelTaskOptions{ClientSupportsDraftRestore: true}); err != nil {
 		t.Fatalf("cancel task: %v", err)
 	}
 
@@ -281,8 +278,7 @@ func TestCancelTask_PointerAdvanceIsAtomicWithStatusFlip(t *testing.T) {
 	go func() {
 		callCtx, cancel := raceCtx()
 		defer cancel()
-		_, err := testHandler.TaskService.CancelTaskWithResult(callCtx, parseUUID(taskID),
-			service.CancelTaskOptions{ClientSupportsDraftRestore: true})
+		_, err := testHandler.TaskService.CancelTaskWithResult(callCtx, parseUUID(taskID), service.CancelTaskOptions{ClientSupportsDraftRestore: true})
 		cancelDone <- err
 	}()
 
@@ -300,7 +296,7 @@ func TestCancelTask_PointerAdvanceIsAtomicWithStatusFlip(t *testing.T) {
 		t.Fatalf("task became cancelled while the pointer advance was still blocked: a follow-up claimed in this gap resumes the stale session")
 	}
 
-	if err := blockTx.Rollback(ctx); err != nil {
+	if err := blockTx.Rollback(); err != nil {
 		t.Fatalf("release chat session lock: %v", err)
 	}
 	if err := <-cancelDone; err != nil {
@@ -483,7 +479,7 @@ func TestPinTaskSession_PointerAdvanceIsAtomicWithPin(t *testing.T) {
 		t.Fatalf("task carried session %q while the pointer advance was still blocked", *pinnedSoFar)
 	}
 
-	if err := blockTx.Rollback(ctx); err != nil {
+	if err := blockTx.Rollback(); err != nil {
 		t.Fatalf("release chat session lock: %v", err)
 	}
 	if code := <-pinDone; code != http.StatusNoContent {
@@ -544,8 +540,7 @@ func TestCancelTask_TakesChatSessionLockBeforeTask(t *testing.T) {
 	go func() {
 		callCtx, cancel := raceCtx()
 		defer cancel()
-		_, err := testHandler.TaskService.CancelTaskWithResult(callCtx, parseUUID(taskID),
-			service.CancelTaskOptions{ClientSupportsDraftRestore: true})
+		_, err := testHandler.TaskService.CancelTaskWithResult(callCtx, parseUUID(taskID), service.CancelTaskOptions{ClientSupportsDraftRestore: true})
 		cancelDone <- err
 	}()
 	if !waitForWaiterBlockedBy(t, holderBackendPID(t, ctx, deleterTx), 10*time.Second) {
@@ -558,16 +553,16 @@ func TestCancelTask_TakesChatSessionLockBeforeTask(t *testing.T) {
 	if err := probeTx.QueryRow(ctx,
 		`SELECT id FROM agent_task_queue WHERE id = $1 FOR UPDATE NOWAIT`, taskID,
 	).Scan(&probed); err != nil {
-		probeTx.Rollback(ctx)
-		deleterTx.Rollback(ctx)
+		probeTx.Rollback()
+		deleterTx.Rollback()
 		<-cancelDone
 		t.Fatalf("cancel holds the task row while waiting for the chat session — inverted lock order deadlocks against DeleteChatSession: %v", err)
 	}
-	if err := probeTx.Rollback(ctx); err != nil {
+	if err := probeTx.Rollback(); err != nil {
 		t.Fatalf("release probe: %v", err)
 	}
 
-	if err := deleterTx.Rollback(ctx); err != nil {
+	if err := deleterTx.Rollback(); err != nil {
 		t.Fatalf("release chat session lock: %v", err)
 	}
 	if err := <-cancelDone; err != nil {
@@ -612,8 +607,7 @@ func TestCancelTask_ConcurrentWithChatSessionDelete(t *testing.T) {
 			<-start
 			callCtx, cancel := raceCtx()
 			defer cancel()
-			_, err := testHandler.TaskService.CancelTaskWithResult(callCtx, parseUUID(taskID),
-				service.CancelTaskOptions{ClientSupportsDraftRestore: true})
+			_, err := testHandler.TaskService.CancelTaskWithResult(callCtx, parseUUID(taskID), service.CancelTaskOptions{ClientSupportsDraftRestore: true})
 			cancelErr <- err
 		}()
 		go func() {
@@ -649,15 +643,13 @@ func TestTerminalReports_TakeChatSessionLockBeforeTask(t *testing.T) {
 		"complete": func(taskID string) error {
 			callCtx, cancel := raceCtx()
 			defer cancel()
-			_, err := testHandler.TaskService.CompleteTask(callCtx, parseUUID(taskID),
-				[]byte(`"done"`), "turn2-session", "/tmp/turn2-workdir", "", false, "", "")
+			_, err := testHandler.TaskService.CompleteTask(callCtx, parseUUID(taskID), []byte(`"done"`), "turn2-session", "/tmp/turn2-workdir", "", false, "", "")
 			return err
 		},
 		"fail": func(taskID string) error {
 			callCtx, cancel := raceCtx()
 			defer cancel()
-			_, err := testHandler.TaskService.FailTask(callCtx, parseUUID(taskID),
-				"boom", "turn2-session", "/tmp/turn2-workdir", "", "agent_error", false, "", "")
+			_, err := testHandler.TaskService.FailTask(callCtx, parseUUID(taskID), "boom", "turn2-session", "/tmp/turn2-workdir", "", "agent_error", false, "", "")
 			return err
 		},
 	}
@@ -699,14 +691,14 @@ func TestTerminalReports_TakeChatSessionLockBeforeTask(t *testing.T) {
 			if err := probeTx.QueryRow(ctx,
 				`SELECT id FROM agent_task_queue WHERE id = $1 FOR UPDATE NOWAIT`, taskID,
 			).Scan(&probed); err != nil {
-				probeTx.Rollback(ctx)
-				holderTx.Rollback(ctx)
+				probeTx.Rollback()
+				holderTx.Rollback()
 				<-reportDone
 				t.Fatalf("%s holds the task row while waiting for the chat session — inverted lock order deadlocks against cancel/pin: %v", name, err)
 			}
-			probeTx.Rollback(ctx)
+			probeTx.Rollback()
 
-			if err := holderTx.Rollback(ctx); err != nil {
+			if err := holderTx.Rollback(); err != nil {
 				t.Fatalf("release chat session lock: %v", err)
 			}
 			if err := <-reportDone; err != nil {
@@ -737,15 +729,13 @@ func TestCancelAndPin_ConcurrentWithTerminalReport(t *testing.T) {
 			first: func(taskID string) error {
 				callCtx, cancel := raceCtx()
 				defer cancel()
-				_, err := testHandler.TaskService.CancelTaskWithResult(callCtx, parseUUID(taskID),
-					service.CancelTaskOptions{ClientSupportsDraftRestore: true})
+				_, err := testHandler.TaskService.CancelTaskWithResult(callCtx, parseUUID(taskID), service.CancelTaskOptions{ClientSupportsDraftRestore: true})
 				return err
 			},
 			other: func(taskID string) error {
 				callCtx, cancel := raceCtx()
 				defer cancel()
-				_, err := testHandler.TaskService.CompleteTask(callCtx, parseUUID(taskID),
-					[]byte(`"done"`), "turn2-session", "/tmp/turn2-workdir", "", false, "", "")
+				_, err := testHandler.TaskService.CompleteTask(callCtx, parseUUID(taskID), []byte(`"done"`), "turn2-session", "/tmp/turn2-workdir", "", false, "", "")
 				return err
 			},
 		},
@@ -774,8 +764,7 @@ func TestCancelAndPin_ConcurrentWithTerminalReport(t *testing.T) {
 			other: func(taskID string) error {
 				callCtx, cancel := raceCtx()
 				defer cancel()
-				_, err := testHandler.TaskService.FailTask(callCtx, parseUUID(taskID),
-					"boom", "turn3-session", "/tmp/turn3-workdir", "", "agent_error", false, "", "")
+				_, err := testHandler.TaskService.FailTask(callCtx, parseUUID(taskID), "boom", "turn3-session", "/tmp/turn3-workdir", "", "agent_error", false, "", "")
 				return err
 			},
 		},
@@ -819,29 +808,29 @@ func TestCancelAndPin_ConcurrentWithTerminalReport(t *testing.T) {
 // (lock the session, then cascade into agent_task_queue) so the concurrency
 // test exercises the real order without going through HTTP auth.
 func deleteChatSessionLikeHandler(ctx context.Context, chatSessionID string) error {
-	tx, err := testHandler.TxStarter.Begin(ctx)
+	tx, err := testHandler.TxStarter.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	qtx := testHandler.Queries.WithTx(tx)
 
 	id := parseUUID(chatSessionID)
 	if _, err := qtx.LockChatSessionForDelete(ctx, id); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
 		return err
 	}
-	if _, err := qtx.CancelAgentTasksByChatSession(ctx, id); err != nil {
+	if _, err := qtx.CancelAgentTasksByChatSession(ctx, nullString(id)); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return tx.Commit()
 }
 
 // assertRaceSucceeded fails on anything except the one benign outcome these
 // races have: whoever moved the task to a terminal state first leaves the loser
-// matching no row (pgx.ErrNoRows).
+// matching no row (sql.ErrNoRows).
 //
 // Deliberately NOT a 40P01-only check. A deadlock victim inside an HTTP handler
 // is reported as a plain 500 with no *pgconn.PgError to unwrap, so matching the
@@ -849,7 +838,7 @@ func deleteChatSessionLikeHandler(ctx context.Context, chatSessionID string) err
 // catch. Anything unexpected is a failure, and the error text says what it was.
 func assertRaceSucceeded(t *testing.T, iteration int, label string, err error) {
 	t.Helper()
-	if err == nil || errors.Is(err, pgx.ErrNoRows) {
+	if err == nil || errors.Is(err, sql.ErrNoRows) {
 		return
 	}
 	t.Fatalf("iteration %d: %s failed: %v", iteration, label, err)
@@ -869,7 +858,7 @@ func assertRaceSucceeded(t *testing.T, iteration int, label string, err error) {
 //
 // Taking both table locks up front means this transaction never asks for a new
 // one while holding a row, and the reads then ride the same connection.
-func beginWarmedTx(t *testing.T, ctx context.Context) pgx.Tx {
+func beginWarmedTx(t *testing.T, ctx context.Context) *sql.Tx {
 	t.Helper()
 
 	conn, err := testPool.Acquire(ctx)
@@ -883,7 +872,7 @@ func beginWarmedTx(t *testing.T, ctx context.Context) pgx.Tx {
 	}
 	t.Cleanup(func() {
 		// Both are no-ops when the test already released them explicitly.
-		tx.Rollback(context.Background())
+		tx.Rollback(ctx)
 		conn.Release()
 	})
 	for _, warm := range []string{
@@ -966,7 +955,7 @@ func TestPinTaskSession_LateCancelledPin(t *testing.T) {
 		t.Helper()
 		if err := testHandler.Queries.UpdateAgentTaskSession(ctx, db.UpdateAgentTaskSessionParams{
 			ID:        parseUUID(taskID),
-			SessionID: pgtype.Text{String: sessionID, Valid: true},
+			SessionID: sql.NullString{String: sessionID, Valid: true},
 		}); err != nil {
 			t.Fatalf("pin session: %v", err)
 		}

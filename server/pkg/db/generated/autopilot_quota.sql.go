@@ -7,43 +7,42 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const consumeAutopilotQuotaReservation = `-- name: ConsumeAutopilotQuotaReservation :one
-WITH locked AS (
-    SELECT qr.id, qr.workspace_id, qr.period_start, qr.period_end, qr.policy_revision, qr.subscription_version, qr.source, qr.idempotency_key, qr.state, qr.created_at, qr.finalized_at FROM autopilot_quota_reservation qr
-    WHERE qr.id = $1 AND qr.state = 'reserved'
-    FOR UPDATE
-), changed AS (
-    UPDATE autopilot_quota_reservation AS r
-    SET state = 'consumed', finalized_at = now()
-    FROM locked
-    WHERE r.id = locked.id
-      AND EXISTS (
-          SELECT 1 FROM autopilot_quota_period p
-          WHERE p.workspace_id = locked.workspace_id
-            AND p.period_start = locked.period_start
-            AND p.period_end = locked.period_end
-      )
-    RETURNING locked.workspace_id, locked.period_start, locked.period_end
-)
-UPDATE autopilot_quota_period AS p
+UPDATE autopilot_quota_period
 SET reserved_count = reserved_count - 1,
     used_count = used_count + 1,
     updated_at = now()
-FROM changed
-WHERE p.workspace_id = changed.workspace_id
-  AND p.period_start = changed.period_start
-  AND p.period_end = changed.period_end
-RETURNING p.workspace_id, p.period_start, p.period_end, p.used_count, p.reserved_count, p.blocked_counts, p.created_at, p.updated_at, p.rejection_notified_at
+WHERE workspace_id = (
+    SELECT qr.workspace_id
+    FROM autopilot_quota_reservation qr
+    WHERE qr.id = ?1
+      AND qr.state = 'reserved'
+      AND qr.workspace_id = autopilot_quota_period.workspace_id
+      AND qr.period_start = autopilot_quota_period.period_start
+      AND qr.period_end = autopilot_quota_period.period_end
+)
+  AND period_start = (
+    SELECT qr.period_start FROM autopilot_quota_reservation qr
+    WHERE qr.id = ?1 AND qr.state = 'reserved'
+)
+  AND period_end = (
+    SELECT qr.period_end FROM autopilot_quota_reservation qr
+    WHERE qr.id = ?1 AND qr.state = 'reserved'
+)
+RETURNING workspace_id, period_start, period_end, used_count, reserved_count, blocked_counts, created_at, updated_at, rejection_notified_at
 `
 
 // used_count is monotonic within a period: consuming a reserved slot is the
 // only write that changes it, and no release path decrements it.
-func (q *Queries) ConsumeAutopilotQuotaReservation(ctx context.Context, reservationID pgtype.UUID) (AutopilotQuotaPeriod, error) {
-	row := q.db.QueryRow(ctx, consumeAutopilotQuotaReservation, reservationID)
+// SQLite cannot update the reservation and the period in one statement. This
+// statement moves the counters (the returned row). MarkConsumedAutopilotQuotaReservation
+// must run in the same transaction, before or after, while state is still reserved
+// is checked here so a missing period does not change the counters.
+func (q *Queries) ConsumeAutopilotQuotaReservation(ctx context.Context, reservationID string) (AutopilotQuotaPeriod, error) {
+	row := q.db.QueryRowContext(ctx, consumeAutopilotQuotaReservation, reservationID)
 	var i AutopilotQuotaPeriod
 	err := row.Scan(
 		&i.WorkspaceID,
@@ -63,22 +62,22 @@ const createAutopilotQuotaReservation = `-- name: CreateAutopilotQuotaReservatio
 INSERT INTO autopilot_quota_reservation (
     workspace_id, period_start, period_end, policy_revision,
     subscription_version, source, idempotency_key
-) VALUES ($1, $2, $3, $4, $5, $6, $7)
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
 RETURNING id, workspace_id, period_start, period_end, policy_revision, subscription_version, source, idempotency_key, state, created_at, finalized_at
 `
 
 type CreateAutopilotQuotaReservationParams struct {
-	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
-	PeriodStart         pgtype.Timestamptz `json:"period_start"`
-	PeriodEnd           pgtype.Timestamptz `json:"period_end"`
-	PolicyRevision      int64              `json:"policy_revision"`
-	SubscriptionVersion int64              `json:"subscription_version"`
-	Source              string             `json:"source"`
-	IdempotencyKey      string             `json:"idempotency_key"`
+	WorkspaceID         string `json:"workspace_id"`
+	PeriodStart         string `json:"period_start"`
+	PeriodEnd           string `json:"period_end"`
+	PolicyRevision      int64  `json:"policy_revision"`
+	SubscriptionVersion int64  `json:"subscription_version"`
+	Source              string `json:"source"`
+	IdempotencyKey      string `json:"idempotency_key"`
 }
 
 func (q *Queries) CreateAutopilotQuotaReservation(ctx context.Context, arg CreateAutopilotQuotaReservationParams) (AutopilotQuotaReservation, error) {
-	row := q.db.QueryRow(ctx, createAutopilotQuotaReservation,
+	row := q.db.QueryRowContext(ctx, createAutopilotQuotaReservation,
 		arg.WorkspaceID,
 		arg.PeriodStart,
 		arg.PeriodEnd,
@@ -106,22 +105,22 @@ func (q *Queries) CreateAutopilotQuotaReservation(ctx context.Context, arg Creat
 
 const ensureAutopilotQuotaPeriod = `-- name: EnsureAutopilotQuotaPeriod :one
 INSERT INTO autopilot_quota_period (workspace_id, period_start, period_end)
-VALUES ($1, $2, $3)
+VALUES (?1, ?2, ?3)
 ON CONFLICT (workspace_id, period_start, period_end) DO UPDATE
 SET updated_at = autopilot_quota_period.updated_at
 RETURNING workspace_id, period_start, period_end, used_count, reserved_count, blocked_counts, created_at, updated_at, rejection_notified_at
 `
 
 type EnsureAutopilotQuotaPeriodParams struct {
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	PeriodStart pgtype.Timestamptz `json:"period_start"`
-	PeriodEnd   pgtype.Timestamptz `json:"period_end"`
+	WorkspaceID string `json:"workspace_id"`
+	PeriodStart string `json:"period_start"`
+	PeriodEnd   string `json:"period_end"`
 }
 
 // The no-op update is intentional: ON CONFLICT UPDATE locks the period row for
 // the caller's transaction, serialising admission for one workspace/period.
 func (q *Queries) EnsureAutopilotQuotaPeriod(ctx context.Context, arg EnsureAutopilotQuotaPeriodParams) (AutopilotQuotaPeriod, error) {
-	row := q.db.QueryRow(ctx, ensureAutopilotQuotaPeriod, arg.WorkspaceID, arg.PeriodStart, arg.PeriodEnd)
+	row := q.db.QueryRowContext(ctx, ensureAutopilotQuotaPeriod, arg.WorkspaceID, arg.PeriodStart, arg.PeriodEnd)
 	var i AutopilotQuotaPeriod
 	err := row.Scan(
 		&i.WorkspaceID,
@@ -139,17 +138,17 @@ func (q *Queries) EnsureAutopilotQuotaPeriod(ctx context.Context, arg EnsureAuto
 
 const getAutopilotQuotaPeriod = `-- name: GetAutopilotQuotaPeriod :one
 SELECT workspace_id, period_start, period_end, used_count, reserved_count, blocked_counts, created_at, updated_at, rejection_notified_at FROM autopilot_quota_period
-WHERE workspace_id = $1 AND period_start = $2 AND period_end = $3
+WHERE workspace_id = ?1 AND period_start = ?2 AND period_end = ?3
 `
 
 type GetAutopilotQuotaPeriodParams struct {
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	PeriodStart pgtype.Timestamptz `json:"period_start"`
-	PeriodEnd   pgtype.Timestamptz `json:"period_end"`
+	WorkspaceID string `json:"workspace_id"`
+	PeriodStart string `json:"period_start"`
+	PeriodEnd   string `json:"period_end"`
 }
 
 func (q *Queries) GetAutopilotQuotaPeriod(ctx context.Context, arg GetAutopilotQuotaPeriodParams) (AutopilotQuotaPeriod, error) {
-	row := q.db.QueryRow(ctx, getAutopilotQuotaPeriod, arg.WorkspaceID, arg.PeriodStart, arg.PeriodEnd)
+	row := q.db.QueryRowContext(ctx, getAutopilotQuotaPeriod, arg.WorkspaceID, arg.PeriodStart, arg.PeriodEnd)
 	var i AutopilotQuotaPeriod
 	err := row.Scan(
 		&i.WorkspaceID,
@@ -167,22 +166,22 @@ func (q *Queries) GetAutopilotQuotaPeriod(ctx context.Context, arg GetAutopilotQ
 
 const getAutopilotQuotaReservationByKey = `-- name: GetAutopilotQuotaReservationByKey :one
 SELECT id, workspace_id, period_start, period_end, policy_revision, subscription_version, source, idempotency_key, state, created_at, finalized_at FROM autopilot_quota_reservation
-WHERE workspace_id = $1
-  AND period_start = $2
-  AND period_end = $3
-  AND idempotency_key = $4
+WHERE workspace_id = ?1
+  AND period_start = ?2
+  AND period_end = ?3
+  AND idempotency_key = ?4
   AND state <> 'released'
 `
 
 type GetAutopilotQuotaReservationByKeyParams struct {
-	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
-	PeriodStart    pgtype.Timestamptz `json:"period_start"`
-	PeriodEnd      pgtype.Timestamptz `json:"period_end"`
-	IdempotencyKey string             `json:"idempotency_key"`
+	WorkspaceID    string `json:"workspace_id"`
+	PeriodStart    string `json:"period_start"`
+	PeriodEnd      string `json:"period_end"`
+	IdempotencyKey string `json:"idempotency_key"`
 }
 
 func (q *Queries) GetAutopilotQuotaReservationByKey(ctx context.Context, arg GetAutopilotQuotaReservationByKeyParams) (AutopilotQuotaReservation, error) {
-	row := q.db.QueryRow(ctx, getAutopilotQuotaReservationByKey,
+	row := q.db.QueryRowContext(ctx, getAutopilotQuotaReservationByKey,
 		arg.WorkspaceID,
 		arg.PeriodStart,
 		arg.PeriodEnd,
@@ -207,28 +206,27 @@ func (q *Queries) GetAutopilotQuotaReservationByKey(ctx context.Context, arg Get
 
 const incrementAutopilotQuotaBlocked = `-- name: IncrementAutopilotQuotaBlocked :one
 UPDATE autopilot_quota_period
-SET blocked_counts = jsonb_set(
+SET blocked_counts = json_set(
         blocked_counts,
-        ARRAY[$1::text],
-        to_jsonb(COALESCE((blocked_counts ->> $1::text)::bigint, 0) + 1),
-        true
+        '$.' || ?1,
+        COALESCE(json_extract(blocked_counts, '$.' || ?1), 0) + 1
     ),
     updated_at = now()
-WHERE workspace_id = $2
-  AND period_start = $3
-  AND period_end = $4
+WHERE workspace_id = ?2
+  AND period_start = ?3
+  AND period_end = ?4
 RETURNING workspace_id, period_start, period_end, used_count, reserved_count, blocked_counts, created_at, updated_at, rejection_notified_at
 `
 
 type IncrementAutopilotQuotaBlockedParams struct {
-	Source      string             `json:"source"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	PeriodStart pgtype.Timestamptz `json:"period_start"`
-	PeriodEnd   pgtype.Timestamptz `json:"period_end"`
+	Source      sql.NullString `json:"source"`
+	WorkspaceID string         `json:"workspace_id"`
+	PeriodStart string         `json:"period_start"`
+	PeriodEnd   string         `json:"period_end"`
 }
 
 func (q *Queries) IncrementAutopilotQuotaBlocked(ctx context.Context, arg IncrementAutopilotQuotaBlockedParams) (AutopilotQuotaPeriod, error) {
-	row := q.db.QueryRow(ctx, incrementAutopilotQuotaBlocked,
+	row := q.db.QueryRowContext(ctx, incrementAutopilotQuotaBlocked,
 		arg.Source,
 		arg.WorkspaceID,
 		arg.PeriodStart,
@@ -253,18 +251,18 @@ const incrementAutopilotQuotaReserved = `-- name: IncrementAutopilotQuotaReserve
 UPDATE autopilot_quota_period
 SET reserved_count = reserved_count + 1,
     updated_at = now()
-WHERE workspace_id = $1 AND period_start = $2 AND period_end = $3
+WHERE workspace_id = ?1 AND period_start = ?2 AND period_end = ?3
 RETURNING workspace_id, period_start, period_end, used_count, reserved_count, blocked_counts, created_at, updated_at, rejection_notified_at
 `
 
 type IncrementAutopilotQuotaReservedParams struct {
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	PeriodStart pgtype.Timestamptz `json:"period_start"`
-	PeriodEnd   pgtype.Timestamptz `json:"period_end"`
+	WorkspaceID string `json:"workspace_id"`
+	PeriodStart string `json:"period_start"`
+	PeriodEnd   string `json:"period_end"`
 }
 
 func (q *Queries) IncrementAutopilotQuotaReserved(ctx context.Context, arg IncrementAutopilotQuotaReservedParams) (AutopilotQuotaPeriod, error) {
-	row := q.db.QueryRow(ctx, incrementAutopilotQuotaReserved, arg.WorkspaceID, arg.PeriodStart, arg.PeriodEnd)
+	row := q.db.QueryRowContext(ctx, incrementAutopilotQuotaReserved, arg.WorkspaceID, arg.PeriodStart, arg.PeriodEnd)
 	var i AutopilotQuotaPeriod
 	err := row.Scan(
 		&i.WorkspaceID,
@@ -287,7 +285,7 @@ LEFT JOIN autopilot_run ar ON ar.quota_reservation_id = r.id
 WHERE r.state = 'reserved'
   AND (
       (
-          r.created_at < $1
+          r.created_at < ?1
           AND (ar.id IS NULL OR ar.status IN ('completed', 'failed', 'skipped'))
       )
       OR (
@@ -295,7 +293,7 @@ WHERE r.state = 'reserved'
           -- hours-old partial run with neither a linked side effect nor even
           -- an unlinked task row; schedule and webhook retries repair their
           -- own partial state and are deliberately excluded.
-          r.created_at < $2
+          r.created_at < ?2
           AND ar.source IN ('manual', 'api')
           AND (
               ar.status = 'pending'
@@ -310,17 +308,17 @@ WHERE r.state = 'reserved'
       )
   )
 ORDER BY r.created_at
-LIMIT $3
+LIMIT ?3
 `
 
 type ListRecoverableAutopilotQuotaReservationsParams struct {
-	TerminalCreatedBefore pgtype.Timestamptz `json:"terminal_created_before"`
-	PartialCreatedBefore  pgtype.Timestamptz `json:"partial_created_before"`
-	RowLimit              int32              `json:"row_limit"`
+	TerminalCreatedBefore string `json:"terminal_created_before"`
+	PartialCreatedBefore  string `json:"partial_created_before"`
+	RowLimit              int64  `json:"row_limit"`
 }
 
 func (q *Queries) ListRecoverableAutopilotQuotaReservations(ctx context.Context, arg ListRecoverableAutopilotQuotaReservationsParams) ([]AutopilotQuotaReservation, error) {
-	rows, err := q.db.Query(ctx, listRecoverableAutopilotQuotaReservations, arg.TerminalCreatedBefore, arg.PartialCreatedBefore, arg.RowLimit)
+	rows, err := q.db.QueryContext(ctx, listRecoverableAutopilotQuotaReservations, arg.TerminalCreatedBefore, arg.PartialCreatedBefore, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -345,6 +343,9 @@ func (q *Queries) ListRecoverableAutopilotQuotaReservations(ctx context.Context,
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -355,20 +356,20 @@ const markAutopilotQuotaRejectionNotified = `-- name: MarkAutopilotQuotaRejectio
 UPDATE autopilot_quota_period
 SET rejection_notified_at = COALESCE(rejection_notified_at, now()),
 	updated_at = now()
-WHERE workspace_id = $1
-	AND period_start = $2
-	AND period_end = $3
+WHERE workspace_id = ?1
+	AND period_start = ?2
+	AND period_end = ?3
 RETURNING workspace_id, period_start, period_end, used_count, reserved_count, blocked_counts, created_at, updated_at, rejection_notified_at
 `
 
 type MarkAutopilotQuotaRejectionNotifiedParams struct {
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	PeriodStart pgtype.Timestamptz `json:"period_start"`
-	PeriodEnd   pgtype.Timestamptz `json:"period_end"`
+	WorkspaceID string `json:"workspace_id"`
+	PeriodStart string `json:"period_start"`
+	PeriodEnd   string `json:"period_end"`
 }
 
 func (q *Queries) MarkAutopilotQuotaRejectionNotified(ctx context.Context, arg MarkAutopilotQuotaRejectionNotifiedParams) (AutopilotQuotaPeriod, error) {
-	row := q.db.QueryRow(ctx, markAutopilotQuotaRejectionNotified, arg.WorkspaceID, arg.PeriodStart, arg.PeriodEnd)
+	row := q.db.QueryRowContext(ctx, markAutopilotQuotaRejectionNotified, arg.WorkspaceID, arg.PeriodStart, arg.PeriodEnd)
 	var i AutopilotQuotaPeriod
 	err := row.Scan(
 		&i.WorkspaceID,
@@ -384,38 +385,76 @@ func (q *Queries) MarkAutopilotQuotaRejectionNotified(ctx context.Context, arg M
 	return i, err
 }
 
+const markConsumedAutopilotQuotaReservation = `-- name: MarkConsumedAutopilotQuotaReservation :exec
+UPDATE autopilot_quota_reservation
+SET state = 'consumed',
+    finalized_at = now()
+WHERE id = ?1
+  AND state = 'reserved'
+  AND EXISTS (
+      SELECT 1 FROM autopilot_quota_period p
+      WHERE p.workspace_id = autopilot_quota_reservation.workspace_id
+        AND p.period_start = autopilot_quota_reservation.period_start
+        AND p.period_end = autopilot_quota_reservation.period_end
+  )
+`
+
+// Second half of ConsumeAutopilotQuotaReservation. Marks the slot consumed when
+// its period row exists, so a replay does not move the counters again.
+func (q *Queries) MarkConsumedAutopilotQuotaReservation(ctx context.Context, reservationID string) error {
+	_, err := q.db.ExecContext(ctx, markConsumedAutopilotQuotaReservation, reservationID)
+	return err
+}
+
+const markReleasedAutopilotQuotaReservation = `-- name: MarkReleasedAutopilotQuotaReservation :exec
+UPDATE autopilot_quota_reservation
+SET state = 'released',
+    finalized_at = now()
+WHERE id = ?1
+  AND state = 'reserved'
+  AND EXISTS (
+      SELECT 1 FROM autopilot_quota_period p
+      WHERE p.workspace_id = autopilot_quota_reservation.workspace_id
+        AND p.period_start = autopilot_quota_reservation.period_start
+        AND p.period_end = autopilot_quota_reservation.period_end
+  )
+`
+
+func (q *Queries) MarkReleasedAutopilotQuotaReservation(ctx context.Context, reservationID string) error {
+	_, err := q.db.ExecContext(ctx, markReleasedAutopilotQuotaReservation, reservationID)
+	return err
+}
+
 const releaseAutopilotQuotaReservation = `-- name: ReleaseAutopilotQuotaReservation :one
-WITH locked AS (
-    SELECT qr.id, qr.workspace_id, qr.period_start, qr.period_end, qr.policy_revision, qr.subscription_version, qr.source, qr.idempotency_key, qr.state, qr.created_at, qr.finalized_at FROM autopilot_quota_reservation qr
-    WHERE qr.id = $1 AND qr.state = 'reserved'
-    FOR UPDATE
-), changed AS (
-    UPDATE autopilot_quota_reservation AS r
-    SET state = 'released', finalized_at = now()
-    FROM locked
-    WHERE r.id = locked.id
-      AND EXISTS (
-          SELECT 1 FROM autopilot_quota_period p
-          WHERE p.workspace_id = locked.workspace_id
-            AND p.period_start = locked.period_start
-            AND p.period_end = locked.period_end
-      )
-    RETURNING locked.workspace_id, locked.period_start, locked.period_end
-)
-UPDATE autopilot_quota_period AS p
+UPDATE autopilot_quota_period
 SET reserved_count = reserved_count - 1,
     updated_at = now()
-FROM changed
-WHERE p.workspace_id = changed.workspace_id
-  AND p.period_start = changed.period_start
-  AND p.period_end = changed.period_end
-RETURNING p.workspace_id, p.period_start, p.period_end, p.used_count, p.reserved_count, p.blocked_counts, p.created_at, p.updated_at, p.rejection_notified_at
+WHERE workspace_id = (
+    SELECT qr.workspace_id
+    FROM autopilot_quota_reservation qr
+    WHERE qr.id = ?1
+      AND qr.state = 'reserved'
+      AND qr.workspace_id = autopilot_quota_period.workspace_id
+      AND qr.period_start = autopilot_quota_period.period_start
+      AND qr.period_end = autopilot_quota_period.period_end
+)
+  AND period_start = (
+    SELECT qr.period_start FROM autopilot_quota_reservation qr
+    WHERE qr.id = ?1 AND qr.state = 'reserved'
+)
+  AND period_end = (
+    SELECT qr.period_end FROM autopilot_quota_reservation qr
+    WHERE qr.id = ?1 AND qr.state = 'reserved'
+)
+RETURNING workspace_id, period_start, period_end, used_count, reserved_count, blocked_counts, created_at, updated_at, rejection_notified_at
 `
 
 // Release is intentionally limited to still-reserved work. A consumed
 // create_issue slot remains counted after cancellation, blocking, or deletion.
-func (q *Queries) ReleaseAutopilotQuotaReservation(ctx context.Context, reservationID pgtype.UUID) (AutopilotQuotaPeriod, error) {
-	row := q.db.QueryRow(ctx, releaseAutopilotQuotaReservation, reservationID)
+// The reservation state flip is MarkReleasedAutopilotQuotaReservation; SQLite
+// cannot apply that write in this statement.
+func (q *Queries) ReleaseAutopilotQuotaReservation(ctx context.Context, reservationID string) (AutopilotQuotaPeriod, error) {
+	row := q.db.QueryRowContext(ctx, releaseAutopilotQuotaReservation, reservationID)
 	var i AutopilotQuotaPeriod
 	err := row.Scan(
 		&i.WorkspaceID,

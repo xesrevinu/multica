@@ -15,10 +15,8 @@ package lark
 
 import (
 	"context"
+	"database/sql"
 	"errors"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
@@ -41,7 +39,7 @@ func NewChannelStore(q *db.Queries) *ChannelStore {
 // WithTx returns a ChannelStore bound to tx. It shadows db.Queries.WithTx (which
 // returns *db.Queries) so transactional callers (chat ingest, token redemption)
 // keep the channel-backed store methods inside their tx.
-func (s *ChannelStore) WithTx(tx pgx.Tx) *ChannelStore {
+func (s *ChannelStore) WithTx(tx *sql.Tx) *ChannelStore {
 	return &ChannelStore{Queries: s.Queries.WithTx(tx)}
 }
 
@@ -49,13 +47,13 @@ func (s *ChannelStore) WithTx(tx pgx.Tx) *ChannelStore {
 // workspaceID. With the lark_user_binding -> member foreign key removed
 // (MUL-3515 §4), a binding row no longer proves membership, so the inbound
 // identity step calls this to re-check it explicitly. ErrNoRows -> not a member.
-func (s *ChannelStore) IsWorkspaceMember(ctx context.Context, workspaceID, userID pgtype.UUID) (bool, error) {
+func (s *ChannelStore) IsWorkspaceMember(ctx context.Context, workspaceID, userID string) (bool, error) {
 	_, err := s.Queries.GetMemberByUserAndWorkspace(ctx, db.GetMemberByUserAndWorkspaceParams{
 		UserID:      userID,
 		WorkspaceID: workspaceID,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil
 		}
 		return false, err
@@ -76,7 +74,7 @@ func (s *ChannelStore) GetLarkInstallationByAppID(ctx context.Context, appID str
 	return installationFromRow(row)
 }
 
-func (s *ChannelStore) GetLarkInstallation(ctx context.Context, id pgtype.UUID) (Installation, error) {
+func (s *ChannelStore) GetLarkInstallation(ctx context.Context, id string) (Installation, error) {
 	row, err := s.Queries.GetChannelInstallation(ctx, db.GetChannelInstallationParams{
 		ID:          id,
 		ChannelType: channelTypeFeishu,
@@ -99,7 +97,7 @@ func (s *ChannelStore) GetLarkInstallationInWorkspace(ctx context.Context, arg G
 	return installationFromRow(row)
 }
 
-func (s *ChannelStore) ListLarkInstallationsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]Installation, error) {
+func (s *ChannelStore) ListLarkInstallationsByWorkspace(ctx context.Context, workspaceID string) ([]Installation, error) {
 	rows, err := s.Queries.ListChannelInstallationsByWorkspace(ctx, db.ListChannelInstallationsByWorkspaceParams{
 		WorkspaceID: workspaceID,
 		ChannelType: channelTypeFeishu,
@@ -153,15 +151,15 @@ func (s *ChannelStore) UpsertLarkInstallation(ctx context.Context, arg UpsertIns
 // an ARCHIVED agent, since archiving is reversible — so the upsert surfaces a
 // conflict instead of silently stealing the bot. See the full contract, and the
 // TOCTOU / EvalPlanQual reasoning, on ReclaimDeadChannelInstallationByAppID.
-func (s *ChannelStore) ReclaimDeadInstallationByAppID(ctx context.Context, workspaceID, agentID pgtype.UUID, appID string) error {
+func (s *ChannelStore) ReclaimDeadInstallationByAppID(ctx context.Context, workspaceID, agentID string, appID string) error {
 	_, err := s.Queries.ReclaimDeadChannelInstallationByAppID(ctx, db.ReclaimDeadChannelInstallationByAppIDParams{
 		ChannelType: channelTypeFeishu,
 		AppID:       appID,
 		WorkspaceID: workspaceID,
 		AgentID:     agentID,
 	})
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		// pgx.ErrNoRows just means nothing was dead — a no-op, not a failure.
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		// sql.ErrNoRows just means nothing was dead — a no-op, not a failure.
 		return err
 	}
 	return nil
@@ -170,7 +168,7 @@ func (s *ChannelStore) ReclaimDeadInstallationByAppID(ctx context.Context, works
 // InstallationOwnerByAppID returns the current owner of the (feishu, app_id)
 // routing slot so the caller can build an accurate rebind-conflict message.
 // Called after ReclaimDeadInstallationByAppID, so a row here is a live owner;
-// pgx.ErrNoRows means the slot is free.
+// sql.ErrNoRows means the slot is free.
 func (s *ChannelStore) InstallationOwnerByAppID(ctx context.Context, appID string) (db.GetChannelInstallationOwnerByAppIDRow, error) {
 	return s.Queries.GetChannelInstallationOwnerByAppID(ctx, db.GetChannelInstallationOwnerByAppIDParams{
 		ChannelType: channelTypeFeishu,
@@ -283,7 +281,7 @@ func (s *ChannelStore) GetLarkChatSessionBinding(ctx context.Context, arg GetCha
 	return chatSessionBindingFromRow(row), nil
 }
 
-func (s *ChannelStore) GetLarkChatSessionBindingBySession(ctx context.Context, chatSessionID pgtype.UUID) (ChatSessionBinding, error) {
+func (s *ChannelStore) GetLarkChatSessionBindingBySession(ctx context.Context, chatSessionID string) (ChatSessionBinding, error) {
 	row, err := s.Queries.GetChannelChatSessionBindingBySession(ctx, db.GetChannelChatSessionBindingBySessionParams{
 		ChatSessionID: chatSessionID,
 		ChannelType:   channelTypeFeishu,
@@ -294,7 +292,7 @@ func (s *ChannelStore) GetLarkChatSessionBindingBySession(ctx context.Context, c
 	return chatSessionBindingFromRow(row), nil
 }
 
-func (s *ChannelStore) GetChannelTaskDelivery(ctx context.Context, taskID pgtype.UUID) (db.ChannelTaskDelivery, error) {
+func (s *ChannelStore) GetChannelTaskDelivery(ctx context.Context, taskID string) (db.ChannelTaskDelivery, error) {
 	return s.Queries.GetChannelTaskDelivery(ctx, taskID)
 }
 
@@ -347,7 +345,7 @@ func (s *ChannelStore) RecordLarkInboundDrop(ctx context.Context, arg RecordInbo
 		ChannelType:      channelTypeFeishu,
 		EventType:        arg.EventType,
 		DropReason:       arg.DropReason,
-		InstallationID:   arg.InstallationID,
+		InstallationID:   nullString(arg.InstallationID),
 		ChannelChatID:    arg.ChannelChatID,
 		ChannelEventID:   arg.ChannelEventID,
 		ChannelMessageID: arg.ChannelMessageID,
@@ -381,9 +379,9 @@ func (s *ChannelStore) ConsumeLarkBindingToken(ctx context.Context, tokenHash st
 
 // ---- outbound card ----
 
-func (s *ChannelStore) GetLarkOutboundCardByTask(ctx context.Context, taskID pgtype.UUID) (OutboundCardMessage, error) {
+func (s *ChannelStore) GetLarkOutboundCardByTask(ctx context.Context, taskID string) (OutboundCardMessage, error) {
 	row, err := s.Queries.GetChannelOutboundCardByTask(ctx, db.GetChannelOutboundCardByTaskParams{
-		TaskID:      taskID,
+		TaskID:      nullString(taskID),
 		ChannelType: channelTypeFeishu,
 	})
 	if err != nil {
@@ -399,7 +397,7 @@ func (s *ChannelStore) CreateLarkOutboundCardMessage(ctx context.Context, arg Cr
 		ChannelChatID:        arg.ChannelChatID,
 		ChannelCardMessageID: arg.ChannelCardMessageID,
 		Status:               arg.Status,
-		TaskID:               arg.TaskID,
+		TaskID:               nullString(arg.TaskID),
 	})
 	if err != nil {
 		return OutboundCardMessage{}, err

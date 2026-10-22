@@ -5,8 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 
-	"github.com/jackc/pgx/v5/pgtype"
-
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -148,7 +146,7 @@ const taskStatusCompleted = "completed"
 // always performed.
 type resumedRunAnchor struct {
 	// StartedAt dates the comment delta.
-	StartedAt pgtype.Timestamptz
+	StartedAt string
 	// IssueSnapshot is the issue state that run was handed at ITS claim. Empty
 	// for a run that predates the column.
 	IssueSnapshot []byte
@@ -178,8 +176,8 @@ type resumedRunAnchor struct {
 // side of the trade: those paths are the ones already recovering from a
 // problem, and the optimization's main case — an ordinary follow-up after a
 // healthy run — is untouched.
-func newResumedRunAnchor(status string, startedAt pgtype.Timestamptz, snapshot []byte) *resumedRunAnchor {
-	if status != taskStatusCompleted || !startedAt.Valid {
+func newResumedRunAnchor(status string, startedAt string, snapshot []byte) *resumedRunAnchor {
+	if status != taskStatusCompleted || !(startedAt != "") {
 		return nil
 	}
 	return &resumedRunAnchor{StartedAt: startedAt, IssueSnapshot: snapshot}
@@ -189,7 +187,7 @@ func newResumedRunAnchor(status string, startedAt pgtype.Timestamptz, snapshot [
 // delta needs, captured while the trigger comment is loaded and consumed once
 // the resume anchor is known.
 type commentCountScope struct {
-	AnchorID    pgtype.UUID
-	IssueID     pgtype.UUID
-	WorkspaceID pgtype.UUID
+	AnchorID    string
+	IssueID     string
+	WorkspaceID string
 }

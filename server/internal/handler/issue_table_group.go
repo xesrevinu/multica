@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -12,8 +13,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -130,7 +129,7 @@ func statusOrderExpression(categoryExpr string) string {
 // would multiply catalog SELECTs behind one surface load.
 func (h *Handler) resolveStatusCategoryMaps(
 	ctx context.Context,
-	workspaceID pgtype.UUID,
+	workspaceID string,
 	legacy bool,
 ) (customKeys map[string]string, categoryKeys map[string][]string, err error) {
 	customKeys, err = issuestatus.CustomKeyCategories(ctx, h.issueStatusCatalog(), workspaceID)
@@ -196,7 +195,7 @@ func issueTableGroupBaseIdentity(group issueTableGroupSpec) string {
 	return "group:" + group.Kind
 }
 
-func (h *Handler) resolveIssueTableGroup(w http.ResponseWriter, r *http.Request, workspaceID pgtype.UUID, group issueTableGroupSpec, allowNone bool) (resolvedIssueTableGroup, bool) {
+func (h *Handler) resolveIssueTableGroup(w http.ResponseWriter, r *http.Request, workspaceID string, group issueTableGroupSpec, allowNone bool) (resolvedIssueTableGroup, bool) {
 	if group.CategoryFormat != "" && (group.CategoryFormat != "lifecycle" ||
 		(group.Kind != "status_category" && !(group.Kind == "compound" && group.Secondary == "status_category"))) {
 		writeError(w, http.StatusBadRequest, "category_format=lifecycle requires status_category grouping")
@@ -225,7 +224,7 @@ func (h *Handler) resolveIssueTableGroup(w http.ResponseWriter, r *http.Request,
 		}
 		customKeys := make(map[string]string)
 		for _, entry := range entries {
-			if !entry.IsSystem {
+			if entry.IsSystem == 0 {
 				customKeys[entry.Key] = entry.Category
 			}
 		}
@@ -364,7 +363,7 @@ END, ''))`,
 			WorkspaceID: workspaceID,
 		})
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+			if errors.Is(err, sql.ErrNoRows) {
 				writeIssueTableUnsupportedGroup(w, "property_not_found", "The grouped property no longer exists.")
 				return resolvedIssueTableGroup{}, false
 			}
@@ -386,7 +385,7 @@ END, ''))`,
 		}
 		switch property.Type {
 		case "select":
-			config := parsePropertyConfig(property.Config)
+			config := parsePropertyConfig([]byte(property.Config))
 			resolved.activeOptionOrder = make([]string, 0, len(config.Options))
 			for _, option := range config.Options {
 				resolved.activeOptions[option.ID] = struct{}{}
@@ -464,7 +463,7 @@ func issueTableStatusOrder(entries []db.IssueStatus) []string {
 		builtInRank[key] = i
 		if !seen[key] {
 			category, _ := issuestatus.CategoryForBehavior(key)
-			rows = append(rows, db.IssueStatus{Key: key, Category: category, IsSystem: true})
+			rows = append(rows, db.IssueStatus{Key: key, Category: category, IsSystem: 1})
 		}
 	}
 	categoryRank := map[string]int{"unstarted": 0, "started": 1, "done": 2, "closed": 3}
@@ -479,9 +478,9 @@ func issueTableStatusOrder(entries []db.IssueStatus) []string {
 			return a.Position < b.Position
 		}
 		if a.IsSystem != b.IsSystem {
-			return a.IsSystem
+			return int64ToBool(a.IsSystem)
 		}
-		if a.IsSystem && builtInRank[a.Key] != builtInRank[b.Key] {
+		if a.IsSystem != 0 && builtInRank[a.Key] != builtInRank[b.Key] {
 			return builtInRank[a.Key] < builtInRank[b.Key]
 		}
 		return a.Key < b.Key
@@ -909,7 +908,7 @@ func (h *Handler) ListIssueTableGroups(w http.ResponseWriter, r *http.Request) {
 	committed := false
 	defer func() {
 		if !committed {
-			_ = tx.Rollback(context.Background())
+			_ = tx.Rollback()
 		}
 	}()
 	h = snapshot
@@ -1079,7 +1078,7 @@ func (h *Handler) ListIssueTableGroups(w http.ResponseWriter, r *http.Request) {
 	ORDER BY group_order ASC, group_sort ASC, group_value ASC
 	LIMIT %s`, groupedCTE, groupSortExpr, contextExpr, orderExpr, cursorPredicate, limitRef)
 
-	rows, err := h.DB.Query(r.Context(), query, args...)
+	rows, err := h.DB.QueryContext(r.Context(), query, args...)
 	if err != nil {
 		slog.Warn("ListIssueTableGroups query failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeIssueTableQueryFailure(w, r, "failed to list table groups")
@@ -1155,7 +1154,7 @@ func (h *Handler) ListIssueTableGroups(w http.ResponseWriter, r *http.Request) {
 		Groups:           groups,
 		NextCursor:       nextCursor,
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		slog.Warn("ListIssueTableGroups snapshot commit failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeIssueTableQueryFailure(w, r, "failed to finish table query")
 		return

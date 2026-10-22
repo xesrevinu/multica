@@ -7,26 +7,24 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const createPinnedItem = `-- name: CreatePinnedItem :one
 INSERT INTO pinned_item (workspace_id, user_id, item_type, item_id, position)
-VALUES ($1, $2, $3, $4, $5)
+VALUES (?1, ?2, ?3, ?4, ?5)
 RETURNING id, workspace_id, user_id, item_type, item_id, position, created_at
 `
 
 type CreatePinnedItemParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	UserID      pgtype.UUID `json:"user_id"`
-	ItemType    string      `json:"item_type"`
-	ItemID      pgtype.UUID `json:"item_id"`
-	Position    float64     `json:"position"`
+	WorkspaceID string  `json:"workspace_id"`
+	UserID      string  `json:"user_id"`
+	ItemType    string  `json:"item_type"`
+	ItemID      string  `json:"item_id"`
+	Position    float64 `json:"position"`
 }
 
 func (q *Queries) CreatePinnedItem(ctx context.Context, arg CreatePinnedItemParams) (PinnedItem, error) {
-	row := q.db.QueryRow(ctx, createPinnedItem,
+	row := q.db.QueryRowContext(ctx, createPinnedItem,
 		arg.WorkspaceID,
 		arg.UserID,
 		arg.ItemType,
@@ -48,18 +46,18 @@ func (q *Queries) CreatePinnedItem(ctx context.Context, arg CreatePinnedItemPara
 
 const deletePinnedItem = `-- name: DeletePinnedItem :exec
 DELETE FROM pinned_item
-WHERE workspace_id = $1 AND user_id = $2 AND item_type = $3 AND item_id = $4
+WHERE workspace_id = ?1 AND user_id = ?2 AND item_type = ?3 AND item_id = ?4
 `
 
 type DeletePinnedItemParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	UserID      pgtype.UUID `json:"user_id"`
-	ItemType    string      `json:"item_type"`
-	ItemID      pgtype.UUID `json:"item_id"`
+	WorkspaceID string `json:"workspace_id"`
+	UserID      string `json:"user_id"`
+	ItemType    string `json:"item_type"`
+	ItemID      string `json:"item_id"`
 }
 
 func (q *Queries) DeletePinnedItem(ctx context.Context, arg DeletePinnedItemParams) error {
-	_, err := q.db.Exec(ctx, deletePinnedItem,
+	_, err := q.db.ExecContext(ctx, deletePinnedItem,
 		arg.WorkspaceID,
 		arg.UserID,
 		arg.ItemType,
@@ -70,50 +68,50 @@ func (q *Queries) DeletePinnedItem(ctx context.Context, arg DeletePinnedItemPara
 
 const deletePinnedItemsByItem = `-- name: DeletePinnedItemsByItem :exec
 DELETE FROM pinned_item
-WHERE item_type = $1 AND item_id = $2
+WHERE item_type = ?1 AND item_id = ?2
 `
 
 type DeletePinnedItemsByItemParams struct {
-	ItemType string      `json:"item_type"`
-	ItemID   pgtype.UUID `json:"item_id"`
+	ItemType string `json:"item_type"`
+	ItemID   string `json:"item_id"`
 }
 
 func (q *Queries) DeletePinnedItemsByItem(ctx context.Context, arg DeletePinnedItemsByItemParams) error {
-	_, err := q.db.Exec(ctx, deletePinnedItemsByItem, arg.ItemType, arg.ItemID)
+	_, err := q.db.ExecContext(ctx, deletePinnedItemsByItem, arg.ItemType, arg.ItemID)
 	return err
 }
 
 const getMaxPinnedItemPosition = `-- name: GetMaxPinnedItemPosition :one
-SELECT COALESCE(MAX(position), 0)::float8 AS max_position
+SELECT COALESCE(MAX(position), 0) AS max_position
 FROM pinned_item
-WHERE workspace_id = $1 AND user_id = $2
+WHERE workspace_id = ?1 AND user_id = ?2
 `
 
 type GetMaxPinnedItemPositionParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	UserID      pgtype.UUID `json:"user_id"`
+	WorkspaceID string `json:"workspace_id"`
+	UserID      string `json:"user_id"`
 }
 
-func (q *Queries) GetMaxPinnedItemPosition(ctx context.Context, arg GetMaxPinnedItemPositionParams) (float64, error) {
-	row := q.db.QueryRow(ctx, getMaxPinnedItemPosition, arg.WorkspaceID, arg.UserID)
-	var max_position float64
+func (q *Queries) GetMaxPinnedItemPosition(ctx context.Context, arg GetMaxPinnedItemPositionParams) (interface{}, error) {
+	row := q.db.QueryRowContext(ctx, getMaxPinnedItemPosition, arg.WorkspaceID, arg.UserID)
+	var max_position interface{}
 	err := row.Scan(&max_position)
 	return max_position, err
 }
 
 const listPinnedItems = `-- name: ListPinnedItems :many
 SELECT id, workspace_id, user_id, item_type, item_id, position, created_at FROM pinned_item
-WHERE workspace_id = $1 AND user_id = $2
+WHERE workspace_id = ?1 AND user_id = ?2
 ORDER BY position ASC, created_at ASC
 `
 
 type ListPinnedItemsParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	UserID      pgtype.UUID `json:"user_id"`
+	WorkspaceID string `json:"workspace_id"`
+	UserID      string `json:"user_id"`
 }
 
 func (q *Queries) ListPinnedItems(ctx context.Context, arg ListPinnedItemsParams) ([]PinnedItem, error) {
-	rows, err := q.db.Query(ctx, listPinnedItems, arg.WorkspaceID, arg.UserID)
+	rows, err := q.db.QueryContext(ctx, listPinnedItems, arg.WorkspaceID, arg.UserID)
 	if err != nil {
 		return nil, err
 	}
@@ -134,6 +132,9 @@ func (q *Queries) ListPinnedItems(ctx context.Context, arg ListPinnedItemsParams
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -141,19 +142,19 @@ func (q *Queries) ListPinnedItems(ctx context.Context, arg ListPinnedItemsParams
 }
 
 const updatePinnedItemPosition = `-- name: UpdatePinnedItemPosition :exec
-UPDATE pinned_item SET position = $1
-WHERE id = $2 AND workspace_id = $3 AND user_id = $4
+UPDATE pinned_item SET position = ?1
+WHERE id = ?2 AND workspace_id = ?3 AND user_id = ?4
 `
 
 type UpdatePinnedItemPositionParams struct {
-	Position    float64     `json:"position"`
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	UserID      pgtype.UUID `json:"user_id"`
+	Position    float64 `json:"position"`
+	ID          string  `json:"id"`
+	WorkspaceID string  `json:"workspace_id"`
+	UserID      string  `json:"user_id"`
 }
 
 func (q *Queries) UpdatePinnedItemPosition(ctx context.Context, arg UpdatePinnedItemPositionParams) error {
-	_, err := q.db.Exec(ctx, updatePinnedItemPosition,
+	_, err := q.db.ExecContext(ctx, updatePinnedItemPosition,
 		arg.Position,
 		arg.ID,
 		arg.WorkspaceID,

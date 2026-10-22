@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -9,9 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/slack"
@@ -27,8 +25,8 @@ import (
 // messages (`multica chat thread [id]`). Both are scoped server-side to the
 // session's own channel (MUL-3871).
 type ChatChannelHistoryReader interface {
-	ChannelOverview(ctx context.Context, chatSessionID pgtype.UUID, opts channel.HistoryOptions) (channel.HistoryPage, error)
-	Thread(ctx context.Context, chatSessionID pgtype.UUID, threadID string, opts channel.HistoryOptions) (channel.HistoryPage, error)
+	ChannelOverview(ctx context.Context, chatSessionID string, opts channel.HistoryOptions) (channel.HistoryPage, error)
+	Thread(ctx context.Context, chatSessionID string, threadID string, opts channel.HistoryOptions) (channel.HistoryPage, error)
 }
 
 // ChatChannelHistoryResponse is the unified payload for both commands — the SAME
@@ -92,12 +90,12 @@ func (h *Handler) chatMessageHistory(r *http.Request, scope chatHistoryScope) (c
 	if scope.contextRevision.Valid {
 		messages, err = h.Queries.ListChatMessagesPageForChannelContext(r.Context(), db.ListChatMessagesPageForChannelContextParams{
 			ChatSessionID: scope.sessionID, ChannelContextRevision: scope.contextRevision,
-			PageLimit: int32(limit), BeforeCreatedAt: beforeCreatedAt, BeforeID: beforeID,
+			PageLimit: int64(int32(limit)), BeforeCreatedAt: beforeCreatedAt, BeforeID: nullString(beforeID),
 		})
 	} else {
 		messages, err = h.Queries.ListChatMessagesPage(r.Context(), db.ListChatMessagesPageParams{
-			ChatSessionID: scope.sessionID, Limit: int32(limit),
-			BeforeCreatedAt: beforeCreatedAt, BeforeID: beforeID,
+			ChatSessionID: scope.sessionID, Limit: int64(int32(limit)),
+			BeforeCreatedAt: beforeCreatedAt, BeforeID: nullString(beforeID),
 		})
 	}
 	if err != nil {
@@ -117,7 +115,7 @@ func (h *Handler) chatMessageHistory(r *http.Request, scope chatHistoryScope) (c
 			Role:   role,
 			Text:   m.Content,
 			Author: transcriptAuthor(role),
-			TS:     m.CreatedAt.Time.UTC().Format(time.RFC3339Nano),
+			TS:     parseDBTime(m.CreatedAt).UTC().Format(time.RFC3339Nano),
 		})
 	}
 	// Name the platform the transcript came from. HistoryPage.ChannelType is
@@ -134,7 +132,7 @@ func (h *Handler) chatMessageHistory(r *http.Request, scope chatHistoryScope) (c
 	// older messages (mirrors the Slack reader's "more may exist" signal).
 	if len(messages) == limit && len(out) > 0 {
 		oldest := messages[len(messages)-1]
-		page.NextCursor = transcriptCursor(oldest.CreatedAt.Time, oldest.ID)
+		page.NextCursor = transcriptCursor(parseDBTime(oldest.CreatedAt), oldest.ID)
 	}
 	return page, nil
 }
@@ -161,27 +159,27 @@ func clampTranscriptLimit(n int) int {
 // (created_at, id) tuple as the frontend's message list, so the cursor must
 // carry both halves; RFC3339Nano keeps the timestamp lossless and readable to
 // an agent that inspects it.
-func transcriptCursor(createdAt time.Time, id pgtype.UUID) string {
+func transcriptCursor(createdAt time.Time, id string) string {
 	return createdAt.UTC().Format(time.RFC3339Nano) + "|" + uuidToString(id)
 }
 
 // parseTranscriptCursor splits a ?before cursor back into the (created_at, id)
 // tuple ListChatMessagesPage pages by. A missing or malformed cursor returns
 // zero values so the read starts at the most recent messages.
-func parseTranscriptCursor(before string) (pgtype.Timestamptz, pgtype.UUID) {
+func parseTranscriptCursor(before string) (string, string) {
 	ts, id, ok := strings.Cut(before, "|")
 	if !ok {
-		return pgtype.Timestamptz{}, pgtype.UUID{}
+		return "", ""
 	}
 	t, err := time.Parse(time.RFC3339Nano, ts)
 	if err != nil {
-		return pgtype.Timestamptz{}, pgtype.UUID{}
+		return "", ""
 	}
 	uid, err := util.ParseUUID(id)
 	if err != nil {
-		return pgtype.Timestamptz{}, pgtype.UUID{}
+		return "", ""
 	}
-	return pgtype.Timestamptz{Time: t, Valid: true}, uid
+	return t.UTC().Format(time.RFC3339Nano), uid
 }
 
 // transcriptAuthor labels a chat_message row with the channel vocabulary
@@ -224,8 +222,8 @@ func (h *Handler) GetChatThread(w http.ResponseWriter, r *http.Request) {
 // the credential it requires rather than inheriting that guarantee silently
 // from a middleware two layers away.
 type chatHistoryScope struct {
-	sessionID       pgtype.UUID
-	contextRevision pgtype.Int8
+	sessionID       string
+	contextRevision sql.NullInt64
 	historyStart    string
 	historyEnd      string
 	boundaryPending bool
@@ -269,7 +267,7 @@ func (h *Handler) chatHistorySession(w http.ResponseWriter, r *http.Request) (ch
 	// Defense in depth: load the session and confirm it lives in the token's
 	// stamped workspace. The token→task binding already guarantees the agent can
 	// only reach its own task; this makes a future wiring regression fail closed.
-	session, err := h.Queries.GetChatSession(r.Context(), task.ChatSessionID)
+	session, err := h.Queries.GetChatSession(r.Context(), task.ChatSessionID.String)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "chat session not found")
 		return chatHistoryScope{}, false
@@ -278,10 +276,10 @@ func (h *Handler) chatHistorySession(w http.ResponseWriter, r *http.Request) (ch
 		writeError(w, http.StatusForbidden, "chat session does not belong to this workspace")
 		return chatHistoryScope{}, false
 	}
-	scope := chatHistoryScope{sessionID: task.ChatSessionID, contextRevision: task.ChannelContextRevision}
+	scope := chatHistoryScope{sessionID: task.ChatSessionID.String, contextRevision: task.ChannelContextRevision}
 	if task.ChannelContextRevision.Valid {
 		generation, err := h.Queries.GetChannelChatContextGeneration(r.Context(), db.GetChannelChatContextGenerationParams{
-			ChatSessionID: task.ChatSessionID, Revision: task.ChannelContextRevision.Int64,
+			ChatSessionID: task.ChatSessionID.String, Revision: task.ChannelContextRevision.Int64,
 		})
 		if err != nil {
 			writeError(w, http.StatusNotFound, "chat context generation not found")
@@ -289,14 +287,14 @@ func (h *Handler) chatHistorySession(w http.ResponseWriter, r *http.Request) (ch
 		}
 		scope.historyStart = generation.HistoryStartMessageID.String
 		scope.historyEnd = generation.HistoryEndMessageID.String
-		scope.boundaryPending = generation.HistoryBoundaryPending
+		scope.boundaryPending = int64ToBool(generation.HistoryBoundaryPending)
 	}
 	return scope, true
 }
 
 // respondChatHistory writes the shared response: a note (200) when the session
 // is not channel-backed, a 502 on a real read failure, the page otherwise.
-func (h *Handler) respondChatHistory(w http.ResponseWriter, r *http.Request, sessionID pgtype.UUID, page channel.HistoryPage, err error) {
+func (h *Handler) respondChatHistory(w http.ResponseWriter, r *http.Request, sessionID string, page channel.HistoryPage, err error) {
 	if err != nil {
 		if errors.Is(err, slack.ErrNoSlackSession) {
 			// One read of the binding, two derived fields. Reading it twice
@@ -402,15 +400,15 @@ var errChannelBindingRead = errors.New("chat session channel binding read failed
 // removes — a WeCom or Lark session told it is web-only, on a 200, because a
 // connection blipped. The caller reports that rather than guessing, the same
 // way the archive path refuses to guess about the same read.
-func (h *Handler) sessionChannelType(ctx context.Context, sessionID pgtype.UUID) (string, error) {
-	if h.Queries == nil || !sessionID.Valid {
+func (h *Handler) sessionChannelType(ctx context.Context, sessionID string) (string, error) {
+	if h.Queries == nil || !(sessionID != "") {
 		return "", nil
 	}
 	binding, err := h.Queries.GetChannelChatSessionBindingBySessionAny(ctx, sessionID)
 	switch {
 	case err == nil:
 		return binding.ChannelType, nil
-	case errors.Is(err, pgx.ErrNoRows):
+	case errors.Is(err, sql.ErrNoRows):
 		return "", nil
 	default:
 		return "", err

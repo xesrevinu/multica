@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,12 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	"github.com/multica-ai/multica/server/pkg/dbid"
 )
 
 type sourceContextObjectStoreFake struct {
@@ -92,8 +90,8 @@ func TestValidateSourceContextAgentInputCountsPersistedCaptureMetadata(t *testin
 	capturedBy := issueUUID("33333333-3333-4333-8333-333333333333")
 	projected, err := PrepareSourceContextCapture(
 		build,
-		pgtype.UUID{Valid: true},
-		pgtype.UUID{Valid: true},
+		"00000000-0000-4000-8000-000000000001",
+		"00000000-0000-4000-8000-000000000001",
 		capturedBy,
 		time.Date(2000, time.January, 1, 0, 0, 0, 999999999, time.UTC),
 		nil,
@@ -147,8 +145,8 @@ func TestSourceContextDigestIgnoresRevisionMetadataButNotContent(t *testing.T) {
 }
 
 func TestPrepareSourceContextCaptureRewritesOnlySnapshotAttachmentIDs(t *testing.T) {
-	rowID := dbid.NewV7()
-	cloneID := dbid.NewV7()
+	rowID := newV7()
+	cloneID := newV7()
 	snapshot := sourceContextTestSnapshot()
 	sourceURL := "/api/attachments/" + util.UUIDToString(rowID) + "/download"
 	storageURL := "https://cdn.example.test/workspaces/ws/" + util.UUIDToString(rowID) + ".txt"
@@ -158,7 +156,7 @@ func TestPrepareSourceContextCaptureRewritesOnlySnapshotAttachmentIDs(t *testing
 	snapshot.CommentThread[0].Content = "inline image: ![a](https://api.example.test" + sourceURL + "?preview=1)"
 	snapshot.CommentThread[0].Attachments = []SourceContextAttachment{{ID: util.UUIDToString(rowID), Filename: "a.txt"}}
 	build := SourceContextBuild{Snapshot: snapshot, Digest: "digest", Rows: []db.Attachment{{ID: rowID, Url: storageURL}}}
-	capture, err := PrepareSourceContextCapture(build, dbid.NewV7(), dbid.NewV7(), dbid.NewV7(), time.Now(), []SourceContextClone{{ID: cloneID}})
+	capture, err := PrepareSourceContextCapture(build, newV7(), newV7(), newV7(), time.Now(), []SourceContextClone{{ID: cloneID}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +191,7 @@ func TestEnqueueQuickCreateTaskWithSourceContextIsAtomic(t *testing.T) {
 	q := db.New(pool)
 	workspaceID, userID, agentID, sourceIssueID := seedAttributionFixture(t, pool)
 	var sourceCommentID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO comment (issue_id, workspace_id, author_type, author_id, content)
 		VALUES ($1, $2, 'member', $3, 'captured history') RETURNING id
 	`, sourceIssueID, workspaceID, userID).Scan(&sourceCommentID); err != nil {
@@ -207,7 +205,7 @@ func TestEnqueueQuickCreateTaskWithSourceContextIsAtomic(t *testing.T) {
 	newCapture := func() SourceContextCapture {
 		capture, captureErr := PrepareSourceContextCapture(
 			build,
-			dbid.NewV7(),
+			newV7(),
 			util.MustParseUUID(workspaceID),
 			util.MustParseUUID(userID),
 			time.Now().UTC(),
@@ -226,12 +224,12 @@ func TestEnqueueQuickCreateTaskWithSourceContextIsAtomic(t *testing.T) {
 		util.MustParseUUID(workspaceID),
 		util.MustParseUUID(userID),
 		util.MustParseUUID(agentID),
-		pgtype.UUID{},
+		"",
 		"create from context",
 		"medium",
 		"",
-		pgtype.UUID{},
-		pgtype.UUID{},
+		"",
+		"",
 		nil,
 		successCapture,
 	)
@@ -239,8 +237,8 @@ func TestEnqueueQuickCreateTaskWithSourceContextIsAtomic(t *testing.T) {
 		t.Fatalf("enqueue with source context: %v", err)
 	}
 	var state string
-	var originTaskID pgtype.UUID
-	if err := pool.QueryRow(ctx, `
+	var originTaskID string
+	if err := pool.QueryRowContext(ctx, `
 		SELECT state, origin_task_id FROM issue_source_context WHERE id = $1
 	`, successCapture.ID).Scan(&state, &originTaskID); err != nil {
 		t.Fatalf("load persisted pending context: %v", err)
@@ -250,7 +248,7 @@ func TestEnqueueQuickCreateTaskWithSourceContextIsAtomic(t *testing.T) {
 	}
 
 	rollbackCapture := newCapture()
-	if _, err := PersistSourceContext(ctx, q, rollbackCapture, util.MustParseUUID(sourceIssueID), pgtype.UUID{}); err != nil {
+	if _, err := PersistSourceContext(ctx, q, rollbackCapture, util.MustParseUUID(sourceIssueID), ""); err != nil {
 		t.Fatalf("seed duplicate context id: %v", err)
 	}
 	_, err = svc.EnqueueQuickCreateTaskWithSourceContext(
@@ -258,12 +256,12 @@ func TestEnqueueQuickCreateTaskWithSourceContextIsAtomic(t *testing.T) {
 		util.MustParseUUID(workspaceID),
 		util.MustParseUUID(userID),
 		util.MustParseUUID(agentID),
-		pgtype.UUID{},
+		"",
 		"must roll back",
 		"medium",
 		"",
-		pgtype.UUID{},
-		pgtype.UUID{},
+		"",
+		"",
 		nil,
 		rollbackCapture,
 	)
@@ -271,7 +269,7 @@ func TestEnqueueQuickCreateTaskWithSourceContextIsAtomic(t *testing.T) {
 		t.Fatal("duplicate context id enqueue succeeded")
 	}
 	var rolledBackTasks int
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		SELECT count(*) FROM agent_task_queue
 		WHERE context->>'source_context_id' = $1 AND context->>'prompt' = 'must roll back'
 	`, util.UUIDToString(rollbackCapture.ID)).Scan(&rolledBackTasks); err != nil {
@@ -288,12 +286,12 @@ func TestSourceContextRetryTransfersSingleAttachAuthority(t *testing.T) {
 	q := db.New(pool)
 	workspaceID, userID, agentID, sourceIssueID := seedAttributionFixture(t, pool)
 	var runtimeID string
-	if err := pool.QueryRow(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, agentID).Scan(&runtimeID); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, agentID).Scan(&runtimeID); err != nil {
 		t.Fatalf("load fixture runtime: %v", err)
 	}
 
-	contextID := dbid.NewV7()
-	cloneID := dbid.NewV7()
+	contextID := newV7()
+	cloneID := newV7()
 	quickCreateJSON, err := json.Marshal(QuickCreateContext{
 		Type: QuickCreateContextType, Prompt: "new work", RequesterID: userID,
 		WorkspaceID: workspaceID, SourceContextID: util.UUIDToString(contextID),
@@ -301,8 +299,8 @@ func TestSourceContextRetryTransfersSingleAttachAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var parentID pgtype.UUID
-	if err := pool.QueryRow(ctx, `
+	var parentID string
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO agent_task_queue (
 			agent_id, runtime_id, status, priority, attempt, max_attempts,
 			failure_reason, context, originator_user_id, accountable_user_id
@@ -311,7 +309,7 @@ func TestSourceContextRetryTransfersSingleAttachAuthority(t *testing.T) {
 	`, agentID, runtimeID, quickCreateJSON, userID).Scan(&parentID); err != nil {
 		t.Fatalf("insert source quick-create task: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO issue_source_context (
 			id, workspace_id, origin_task_id, source_issue_id, anchor_comment_id,
 			captured_by_user_id, snapshot_version, snapshot, capture_digest, state
@@ -319,7 +317,7 @@ func TestSourceContextRetryTransfersSingleAttachAuthority(t *testing.T) {
 	`, contextID, workspaceID, parentID, sourceIssueID, userID); err != nil {
 		t.Fatalf("insert pending source context: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO attachment (
 			id, workspace_id, source_context_id, uploader_type, uploader_id,
 			filename, url, content_type, size_bytes
@@ -328,12 +326,12 @@ func TestSourceContextRetryTransfersSingleAttachAuthority(t *testing.T) {
 		t.Fatalf("insert source context clone: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM attachment WHERE source_context_id = $1`, contextID)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM issue_source_context WHERE id = $1`, contextID)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE parent_task_id = $1 OR id = $1`, parentID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM attachment WHERE source_context_id = $1`, contextID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM issue_source_context WHERE id = $1`, contextID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM agent_task_queue WHERE parent_task_id = $1 OR id = $1`, parentID)
 	})
 
-	child, err := q.CreateRetryTask(ctx, db.CreateRetryTaskParams{NewTaskID: dbid.NewV7(), ID: parentID})
+	child, err := q.CreateRetryTask(ctx, db.CreateRetryTaskParams{NewTaskID: nullString(newV7()), ID: parentID})
 	if err != nil {
 		t.Fatalf("create retry child: %v", err)
 	}
@@ -350,32 +348,32 @@ func TestSourceContextRetryTransfersSingleAttachAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load transferred context: %v", err)
 	}
-	if transferred.OriginTaskID != child.ID || transferred.State != "pending" {
-		t.Fatalf("transferred context = origin %s state %q, want %s/pending", util.UUIDToString(transferred.OriginTaskID), transferred.State, util.UUIDToString(child.ID))
+	if transferred.OriginTaskID.String != child.ID || transferred.State != "pending" {
+		t.Fatalf("transferred context = origin %s state %q, want %s/pending", util.UUIDToString(transferred.OriginTaskID.String), transferred.State, util.UUIDToString(child.ID))
 	}
 	var cloneCount int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM attachment WHERE source_context_id = $1 AND id = $2`, contextID, cloneID).Scan(&cloneCount); err != nil || cloneCount != 1 {
+	if err := pool.QueryRowContext(ctx, `SELECT count(*) FROM attachment WHERE source_context_id = $1 AND id = $2`, contextID, cloneID).Scan(&cloneCount); err != nil || cloneCount != 1 {
 		t.Fatalf("clone count after retry = %d, err=%v", cloneCount, err)
 	}
 
-	secondChild, err := q.CreateRetryTask(ctx, db.CreateRetryTaskParams{NewTaskID: dbid.NewV7(), ID: parentID})
+	secondChild, err := q.CreateRetryTask(ctx, db.CreateRetryTaskParams{NewTaskID: nullString(newV7()), ID: parentID})
 	if err != nil {
 		t.Fatalf("create competing retry child: %v", err)
 	}
-	if err := transferPendingSourceContextToRetry(ctx, q, parent, secondChild); !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("second transfer error = %v, want pgx.ErrNoRows", err)
+	if err := transferPendingSourceContextToRetry(ctx, q, parent, secondChild); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("second transfer error = %v, want sql.ErrNoRows", err)
 	}
 
 	targetIssueID := util.MustParseUUID(sourceIssueID)
 	if _, err := q.AttachIssueSourceContext(ctx, db.AttachIssueSourceContextParams{
-		IssueID: targetIssueID, WorkspaceID: util.MustParseUUID(workspaceID), ID: contextID, OriginTaskID: child.ID,
+		IssueID: nullString(targetIssueID), WorkspaceID: util.MustParseUUID(workspaceID), ID: contextID, OriginTaskID: nullString(child.ID),
 	}); err != nil {
 		t.Fatalf("attach from current retry owner: %v", err)
 	}
 	if _, err := q.AttachIssueSourceContext(ctx, db.AttachIssueSourceContextParams{
-		IssueID: dbid.NewV7(), WorkspaceID: util.MustParseUUID(workspaceID), ID: contextID, OriginTaskID: secondChild.ID,
-	}); !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("competing attach error = %v, want pgx.ErrNoRows", err)
+		IssueID: nullString(newV7()), WorkspaceID: util.MustParseUUID(workspaceID), ID: contextID, OriginTaskID: nullString(secondChild.ID),
+	}); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("competing attach error = %v, want sql.ErrNoRows", err)
 	}
 }
 
@@ -385,12 +383,12 @@ func TestFailTaskDoesNotRetryAfterSourceContextAttached(t *testing.T) {
 	q := db.New(pool)
 	workspaceID, userID, agentID, sourceIssueID := seedAttributionFixture(t, pool)
 	var runtimeID string
-	if err := pool.QueryRow(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, agentID).Scan(&runtimeID); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, agentID).Scan(&runtimeID); err != nil {
 		t.Fatalf("load fixture runtime: %v", err)
 	}
 
-	contextID := dbid.NewV7()
-	targetIssueID := dbid.NewV7()
+	contextID := newV7()
+	targetIssueID := newV7()
 	quickCreateJSON, err := json.Marshal(QuickCreateContext{
 		Type: QuickCreateContextType, Prompt: "already created", RequesterID: userID,
 		WorkspaceID: workspaceID, SourceContextID: util.UUIDToString(contextID),
@@ -398,8 +396,8 @@ func TestFailTaskDoesNotRetryAfterSourceContextAttached(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var parentID pgtype.UUID
-	if err := pool.QueryRow(ctx, `
+	var parentID string
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO agent_task_queue (
 			agent_id, runtime_id, status, priority, attempt, max_attempts,
 			context, originator_user_id, accountable_user_id
@@ -408,7 +406,7 @@ func TestFailTaskDoesNotRetryAfterSourceContextAttached(t *testing.T) {
 	`, agentID, runtimeID, quickCreateJSON, userID).Scan(&parentID); err != nil {
 		t.Fatalf("insert running source-context task: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO issue (
 			id, workspace_id, number, title, status, priority,
 			creator_type, creator_id, position, origin_type, origin_id
@@ -418,7 +416,7 @@ func TestFailTaskDoesNotRetryAfterSourceContextAttached(t *testing.T) {
 	`, targetIssueID, workspaceID, agentID, parentID); err != nil {
 		t.Fatalf("insert target issue: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO issue_source_context (
 			id, workspace_id, issue_id, origin_task_id, source_issue_id,
 			anchor_comment_id, captured_by_user_id, snapshot_version,
@@ -429,10 +427,10 @@ func TestFailTaskDoesNotRetryAfterSourceContextAttached(t *testing.T) {
 		t.Fatalf("insert attached source context: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM inbox_item WHERE details->>'task_id' = $1`, util.UUIDToString(parentID))
-		_, _ = pool.Exec(context.Background(), `DELETE FROM issue_source_context WHERE id = $1`, contextID)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE parent_task_id = $1 OR id = $1`, parentID)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, targetIssueID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM inbox_item WHERE details->>'task_id' = $1`, util.UUIDToString(parentID))
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM issue_source_context WHERE id = $1`, contextID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM agent_task_queue WHERE parent_task_id = $1 OR id = $1`, parentID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM issue WHERE id = $1`, targetIssueID)
 	})
 
 	svc := NewTaskService(q, pool, nil, events.New())
@@ -444,14 +442,14 @@ func TestFailTaskDoesNotRetryAfterSourceContextAttached(t *testing.T) {
 		t.Fatalf("parent status = %q, want failed", failed.Status)
 	}
 	var childCount int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE parent_task_id = $1`, parentID).Scan(&childCount); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT count(*) FROM agent_task_queue WHERE parent_task_id = $1`, parentID).Scan(&childCount); err != nil {
 		t.Fatalf("count retry children: %v", err)
 	}
 	if childCount != 0 {
 		t.Fatalf("retry children after source context attached = %d, want 0", childCount)
 	}
 	var inboxType string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		SELECT type FROM inbox_item
 		WHERE details->>'task_id' = $1
 		ORDER BY created_at DESC
@@ -470,12 +468,12 @@ func TestManualSourceContextRetryReusesPendingContextExactlyOnce(t *testing.T) {
 	q := db.New(pool)
 	workspaceID, userID, agentID, sourceIssueID := seedAttributionFixture(t, pool)
 	var runtimeID string
-	if err := pool.QueryRow(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, agentID).Scan(&runtimeID); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, agentID).Scan(&runtimeID); err != nil {
 		t.Fatalf("load fixture runtime: %v", err)
 	}
 
-	contextID := dbid.NewV7()
-	cloneID := dbid.NewV7()
+	contextID := newV7()
+	cloneID := newV7()
 	payload, err := json.Marshal(QuickCreateContext{
 		Type: QuickCreateContextType, Prompt: "retry this", RequesterID: userID,
 		WorkspaceID: workspaceID, SourceContextID: util.UUIDToString(contextID),
@@ -483,8 +481,8 @@ func TestManualSourceContextRetryReusesPendingContextExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var parentID pgtype.UUID
-	if err := pool.QueryRow(ctx, `
+	var parentID string
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO agent_task_queue (
 			agent_id, runtime_id, status, priority, context,
 			originator_user_id, accountable_user_id
@@ -493,7 +491,7 @@ func TestManualSourceContextRetryReusesPendingContextExactlyOnce(t *testing.T) {
 	`, agentID, runtimeID, payload, userID).Scan(&parentID); err != nil {
 		t.Fatalf("insert failed source-context task: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO issue_source_context (
 			id, workspace_id, origin_task_id, source_issue_id, anchor_comment_id,
 			captured_by_user_id, snapshot_version, snapshot, capture_digest, state
@@ -501,7 +499,7 @@ func TestManualSourceContextRetryReusesPendingContextExactlyOnce(t *testing.T) {
 	`, contextID, workspaceID, parentID, sourceIssueID, userID); err != nil {
 		t.Fatalf("insert pending context: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO attachment (
 			id, workspace_id, source_context_id, uploader_type, uploader_id,
 			filename, url, content_type, size_bytes
@@ -510,14 +508,14 @@ func TestManualSourceContextRetryReusesPendingContextExactlyOnce(t *testing.T) {
 		t.Fatalf("insert context attachment: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM attachment WHERE source_context_id = $1`, contextID)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM issue_source_context WHERE id = $1`, contextID)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE rerun_of_task_id = $1 OR id = $1`, parentID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM attachment WHERE source_context_id = $1`, contextID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM issue_source_context WHERE id = $1`, contextID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM agent_task_queue WHERE rerun_of_task_id = $1 OR id = $1`, parentID)
 	})
 
 	svc := &TaskService{Queries: q, TxStarter: pool, Bus: events.New()}
 	if _, err := svc.RetrySourceContextQuickCreate(
-		ctx, util.MustParseUUID(workspaceID), dbid.NewV7(), parentID,
+		ctx, util.MustParseUUID(workspaceID), newV7(), parentID,
 		func(db.Agent) bool { return true },
 	); !errors.Is(err, ErrSourceContextRetryUnavailable) {
 		t.Fatalf("different requester retry error = %v, want ErrSourceContextRetryUnavailable", err)
@@ -535,13 +533,13 @@ func TestManualSourceContextRetryReusesPendingContextExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("manual retry: %v", err)
 	}
-	if child.RerunOfTaskID != parentID || child.RetryOfTaskID.Valid {
+	if child.RerunOfTaskID.String != parentID || child.RetryOfTaskID.Valid {
 		t.Fatalf("manual retry lineage rerun=%s retry=%s, want rerun=%s only",
-			util.UUIDToString(child.RerunOfTaskID), util.UUIDToString(child.RetryOfTaskID), util.UUIDToString(parentID))
+			util.UUIDToString(child.RerunOfTaskID.String), util.UUIDToString(child.RetryOfTaskID.String), util.UUIDToString(parentID))
 	}
 	var childPayload QuickCreateContext
 	var wantPayload QuickCreateContext
-	if err := json.Unmarshal(child.Context, &childPayload); err != nil {
+	if err := json.Unmarshal([]byte(child.Context.String), &childPayload); err != nil {
 		t.Fatalf("decode retry context: %v", err)
 	}
 	if err := json.Unmarshal(payload, &wantPayload); err != nil {
@@ -553,11 +551,11 @@ func TestManualSourceContextRetryReusesPendingContextExactlyOnce(t *testing.T) {
 	stored, err := q.GetIssueSourceContextByID(ctx, db.GetIssueSourceContextByIDParams{
 		WorkspaceID: util.MustParseUUID(workspaceID), ID: contextID,
 	})
-	if err != nil || stored.OriginTaskID != child.ID || stored.State != "pending" {
+	if err != nil || stored.OriginTaskID.String != child.ID || stored.State != "pending" {
 		t.Fatalf("transferred context = %+v, err=%v", stored, err)
 	}
 	var cloneCount int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM attachment WHERE source_context_id = $1`, contextID).Scan(&cloneCount); err != nil || cloneCount != 1 {
+	if err := pool.QueryRowContext(ctx, `SELECT count(*) FROM attachment WHERE source_context_id = $1`, contextID).Scan(&cloneCount); err != nil || cloneCount != 1 {
 		t.Fatalf("clone count = %d, err=%v", cloneCount, err)
 	}
 	if _, err := svc.RetrySourceContextQuickCreate(
@@ -567,7 +565,7 @@ func TestManualSourceContextRetryReusesPendingContextExactlyOnce(t *testing.T) {
 		t.Fatalf("second manual retry error = %v, want ErrSourceContextRetryUnavailable", err)
 	}
 	var children int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE rerun_of_task_id = $1`, parentID).Scan(&children); err != nil || children != 1 {
+	if err := pool.QueryRowContext(ctx, `SELECT count(*) FROM agent_task_queue WHERE rerun_of_task_id = $1`, parentID).Scan(&children); err != nil || children != 1 {
 		t.Fatalf("manual retry children = %d, err=%v", children, err)
 	}
 }
@@ -586,16 +584,16 @@ func TestCleanupSourceContextObjectIntentsDeletesOnlyUnreferencedObjects(t *test
 	userUUID := util.MustParseUUID(userID)
 	sourceIssueUUID := util.MustParseUUID(sourceIssueID)
 
-	validContextID := dbid.NewV7()
-	validAttachmentID := dbid.NewV7()
-	orphanContextID := dbid.NewV7()
-	orphanAttachmentID := dbid.NewV7()
+	validContextID := newV7()
+	validAttachmentID := newV7()
+	orphanContextID := newV7()
+	orphanAttachmentID := newV7()
 	validKey := "source-context-test/valid-" + util.UUIDToString(validAttachmentID)
 	orphanKey := "source-context-test/orphan-" + util.UUIDToString(orphanAttachmentID)
 	validURL := "https://objects.example/" + validKey
 	orphanURL := "https://objects.example/" + orphanKey
 
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO issue_source_context (
 			id, workspace_id, issue_id, source_issue_id, anchor_comment_id,
 			captured_by_user_id, snapshot_version, snapshot, capture_digest,
@@ -604,7 +602,7 @@ func TestCleanupSourceContextObjectIntentsDeletesOnlyUnreferencedObjects(t *test
 	`, validContextID, workspaceUUID, sourceIssueUUID, userUUID); err != nil {
 		t.Fatalf("insert referenced context: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO attachment (
 			id, workspace_id, source_context_id, uploader_type, uploader_id,
 			filename, url, content_type, size_bytes
@@ -617,12 +615,12 @@ func TestCleanupSourceContextObjectIntentsDeletesOnlyUnreferencedObjects(t *test
 	// while integration tests execute; without this fence its runtime sweeper
 	// can legitimately claim one test row between the age UPDATE and the method
 	// call, making the exact cleanup oracle nondeterministic.
-	tx, err := pool.Begin(ctx)
+	tx, err := pool.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatalf("begin isolated intent cleanup: %v", err)
 	}
-	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `LOCK TABLE issue_source_context_object_intent IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `LOCK TABLE issue_source_context_object_intent IN SHARE ROW EXCLUSIVE MODE`); err != nil {
 		t.Fatalf("lock object intent table: %v", err)
 	}
 	qtx := q.WithTx(tx)
@@ -634,7 +632,7 @@ func TestCleanupSourceContextObjectIntentsDeletesOnlyUnreferencedObjects(t *test
 			t.Fatalf("record intent: %v", err)
 		}
 	}
-	if _, err := tx.Exec(ctx, `
+	if _, err := tx.ExecContext(ctx, `
 		UPDATE issue_source_context_object_intent
 		SET created_at = now() - interval '2 hours', next_attempt_at = '-infinity'::timestamptz
 		WHERE storage_key = ANY($1::text[])
@@ -642,9 +640,9 @@ func TestCleanupSourceContextObjectIntentsDeletesOnlyUnreferencedObjects(t *test
 		t.Fatalf("age intents: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM issue_source_context_object_intent WHERE storage_key = ANY($1::text[])`, []string{validKey, orphanKey})
-		_, _ = pool.Exec(context.Background(), `DELETE FROM attachment WHERE source_context_id = $1`, validContextID)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM issue_source_context WHERE id = $1`, validContextID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM issue_source_context_object_intent WHERE storage_key = ANY($1::text[])`, []string{validKey, orphanKey})
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM attachment WHERE source_context_id = $1`, validContextID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM issue_source_context WHERE id = $1`, validContextID)
 	})
 
 	store := &sourceContextObjectStoreFake{}
@@ -660,10 +658,10 @@ func TestCleanupSourceContextObjectIntentsDeletesOnlyUnreferencedObjects(t *test
 		t.Fatalf("deleted object keys = %#v, want only %q", store.deleted, orphanKey)
 	}
 	var validAttachmentExists bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM attachment WHERE id = $1 AND source_context_id = $2)`, validAttachmentID, validContextID).Scan(&validAttachmentExists); err != nil || !validAttachmentExists {
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM attachment WHERE id = $1 AND source_context_id = $2)`, validAttachmentID, validContextID).Scan(&validAttachmentExists); err != nil || !validAttachmentExists {
 		t.Fatalf("referenced attachment retained = %v, err=%v", validAttachmentExists, err)
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		t.Fatalf("commit isolated intent cleanup: %v", err)
 	}
 }
@@ -672,8 +670,8 @@ func TestSourceContextCaptureIntentCannotOutliveWorkspaceDelete(t *testing.T) {
 	pool := newResolveOriginatorPool(t)
 	ctx := context.Background()
 	q := db.New(pool)
-	var workspaceID pgtype.UUID
-	if err := pool.QueryRow(ctx, `
+	var workspaceID string
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO workspace (name, slug)
 		VALUES ('source context delete fence', $1)
 		RETURNING id
@@ -681,15 +679,15 @@ func TestSourceContextCaptureIntentCannotOutliveWorkspaceDelete(t *testing.T) {
 		t.Fatalf("insert workspace: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM issue_source_context_object_intent WHERE workspace_id = $1`, workspaceID)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, workspaceID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM issue_source_context_object_intent WHERE workspace_id = $1`, workspaceID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM workspace WHERE id = $1`, workspaceID)
 	})
 
-	tx, err := pool.Begin(ctx)
+	tx, err := pool.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatalf("begin workspace delete: %v", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	qtx := q.WithTx(tx)
 	if _, err := qtx.LockWorkspaceForDelete(ctx, workspaceID); err != nil {
 		t.Fatalf("lock workspace for delete: %v", err)
@@ -699,7 +697,7 @@ func TestSourceContextCaptureIntentCannotOutliveWorkspaceDelete(t *testing.T) {
 	go func() {
 		_, insertErr := q.RecordSourceContextObjectIntent(ctx, db.RecordSourceContextObjectIntentParams{
 			StorageKey: "source-context/delete-fence", WorkspaceID: workspaceID,
-			SourceContextID: dbid.NewV7(), AttachmentID: dbid.NewV7(), ObjectUrl: "local://delete-fence",
+			SourceContextID: newV7(), AttachmentID: newV7(), ObjectUrl: "local://delete-fence",
 		})
 		insertDone <- insertErr
 	}()
@@ -708,17 +706,17 @@ func TestSourceContextCaptureIntentCannotOutliveWorkspaceDelete(t *testing.T) {
 		t.Fatalf("capture intent crossed workspace delete lock: %v", insertErr)
 	case <-time.After(100 * time.Millisecond):
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM workspace WHERE id = $1`, workspaceID); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM workspace WHERE id = $1`, workspaceID); err != nil {
 		t.Fatalf("delete locked workspace: %v", err)
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		t.Fatalf("commit workspace delete: %v", err)
 	}
-	if insertErr := <-insertDone; !errors.Is(insertErr, pgx.ErrNoRows) {
-		t.Fatalf("capture intent after workspace delete = %v, want pgx.ErrNoRows", insertErr)
+	if insertErr := <-insertDone; !errors.Is(insertErr, sql.ErrNoRows) {
+		t.Fatalf("capture intent after workspace delete = %v, want sql.ErrNoRows", insertErr)
 	}
 	var intents int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM issue_source_context_object_intent WHERE workspace_id = $1`, workspaceID).Scan(&intents); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT count(*) FROM issue_source_context_object_intent WHERE workspace_id = $1`, workspaceID).Scan(&intents); err != nil {
 		t.Fatalf("count post-delete intents: %v", err)
 	}
 	if intents != 0 {
@@ -735,8 +733,8 @@ func TestCleanupAbandonedSourceContextsHonorsRetentionAndRetriesObjectDeletion(t
 	userUUID := util.MustParseUUID(userID)
 	agentUUID := util.MustParseUUID(agentID)
 
-	var runtimeID pgtype.UUID
-	if err := pool.QueryRow(ctx, `SELECT runtime_id FROM agent WHERE id = $1`, agentUUID).Scan(&runtimeID); err != nil {
+	var runtimeID string
+	if err := pool.QueryRowContext(ctx, `SELECT runtime_id FROM agent WHERE id = $1`, agentUUID).Scan(&runtimeID); err != nil {
 		t.Fatalf("load source-context cleanup runtime: %v", err)
 	}
 
@@ -744,9 +742,9 @@ func TestCleanupAbandonedSourceContextsHonorsRetentionAndRetriesObjectDeletion(t
 		name         string
 		taskStatus   string
 		capturedAt   time.Time
-		contextID    pgtype.UUID
-		taskID       pgtype.UUID
-		attachmentID pgtype.UUID
+		contextID    string
+		taskID       string
+		attachmentID string
 	}
 	fixtures := []fixture{
 		{name: "expired-terminal", taskStatus: "failed", capturedAt: time.Now().Add(-31 * 24 * time.Hour)},
@@ -754,9 +752,9 @@ func TestCleanupAbandonedSourceContextsHonorsRetentionAndRetriesObjectDeletion(t
 		{name: "expired-active", taskStatus: "queued", capturedAt: time.Now().Add(-31 * 24 * time.Hour)},
 	}
 	for i := range fixtures {
-		fixtures[i].contextID = dbid.NewV7()
-		fixtures[i].taskID = dbid.NewV7()
-		fixtures[i].attachmentID = dbid.NewV7()
+		fixtures[i].contextID = newV7()
+		fixtures[i].taskID = newV7()
+		fixtures[i].attachmentID = newV7()
 		quickCreate, err := json.Marshal(QuickCreateContext{
 			Type: QuickCreateContextType, WorkspaceID: workspaceID,
 			RequesterID: userID, SourceContextID: util.UUIDToString(fixtures[i].contextID),
@@ -764,7 +762,7 @@ func TestCleanupAbandonedSourceContextsHonorsRetentionAndRetriesObjectDeletion(t
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := pool.Exec(ctx, `
+		if _, err := pool.ExecContext(ctx, `
 			INSERT INTO agent_task_queue (
 				id, agent_id, runtime_id, status, priority, context,
 				originator_user_id, accountable_user_id
@@ -772,7 +770,7 @@ func TestCleanupAbandonedSourceContextsHonorsRetentionAndRetriesObjectDeletion(t
 		`, fixtures[i].taskID, agentUUID, runtimeID, fixtures[i].taskStatus, quickCreate, userUUID); err != nil {
 			t.Fatalf("insert %s task: %v", fixtures[i].name, err)
 		}
-		if _, err := pool.Exec(ctx, `
+		if _, err := pool.ExecContext(ctx, `
 			INSERT INTO issue_source_context (
 				id, workspace_id, origin_task_id, source_issue_id, anchor_comment_id,
 				captured_by_user_id, snapshot_version, snapshot, capture_digest,
@@ -782,7 +780,7 @@ func TestCleanupAbandonedSourceContextsHonorsRetentionAndRetriesObjectDeletion(t
 		`, fixtures[i].contextID, workspaceUUID, fixtures[i].taskID, util.MustParseUUID(sourceIssueID), userUUID, fixtures[i].capturedAt); err != nil {
 			t.Fatalf("insert %s context: %v", fixtures[i].name, err)
 		}
-		if _, err := pool.Exec(ctx, `
+		if _, err := pool.ExecContext(ctx, `
 			INSERT INTO attachment (
 				id, workspace_id, source_context_id, uploader_type, uploader_id,
 				filename, url, content_type, size_bytes
@@ -793,15 +791,15 @@ func TestCleanupAbandonedSourceContextsHonorsRetentionAndRetriesObjectDeletion(t
 		}
 	}
 	t.Cleanup(func() {
-		contextIDs := make([]pgtype.UUID, 0, len(fixtures))
-		taskIDs := make([]pgtype.UUID, 0, len(fixtures))
+		contextIDs := make([]string, 0, len(fixtures))
+		taskIDs := make([]string, 0, len(fixtures))
 		for _, item := range fixtures {
 			contextIDs = append(contextIDs, item.contextID)
 			taskIDs = append(taskIDs, item.taskID)
 		}
-		_, _ = pool.Exec(context.Background(), `DELETE FROM attachment WHERE source_context_id = ANY($1::uuid[])`, contextIDs)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM issue_source_context WHERE id = ANY($1::uuid[])`, contextIDs)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = ANY($1::uuid[])`, taskIDs)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM attachment WHERE source_context_id = ANY($1::uuid[])`, contextIDs)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM issue_source_context WHERE id = ANY($1::uuid[])`, contextIDs)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM agent_task_queue WHERE id = ANY($1::uuid[])`, taskIDs)
 	})
 
 	store := &sourceContextObjectStoreFake{fail: true}
@@ -813,10 +811,10 @@ func TestCleanupAbandonedSourceContextsHonorsRetentionAndRetriesObjectDeletion(t
 
 	var expiredState string
 	var expiredCloneExists bool
-	if err := pool.QueryRow(ctx, `SELECT state FROM issue_source_context WHERE id = $1`, fixtures[0].contextID).Scan(&expiredState); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT state FROM issue_source_context WHERE id = $1`, fixtures[0].contextID).Scan(&expiredState); err != nil {
 		t.Fatalf("load expired context state: %v", err)
 	}
-	if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM attachment WHERE id = $1)`, fixtures[0].attachmentID).Scan(&expiredCloneExists); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM attachment WHERE id = $1)`, fixtures[0].attachmentID).Scan(&expiredCloneExists); err != nil {
 		t.Fatalf("check retained clone after failed object delete: %v", err)
 	}
 	if expiredState != "abandoned" || !expiredCloneExists {
@@ -824,7 +822,7 @@ func TestCleanupAbandonedSourceContextsHonorsRetentionAndRetriesObjectDeletion(t
 	}
 	for _, index := range []int{1, 2} {
 		var state string
-		if err := pool.QueryRow(ctx, `SELECT state FROM issue_source_context WHERE id = $1`, fixtures[index].contextID).Scan(&state); err != nil {
+		if err := pool.QueryRowContext(ctx, `SELECT state FROM issue_source_context WHERE id = $1`, fixtures[index].contextID).Scan(&state); err != nil {
 			t.Fatalf("load %s state: %v", fixtures[index].name, err)
 		}
 		if state != "pending" {
@@ -840,14 +838,14 @@ func TestCleanupAbandonedSourceContextsHonorsRetentionAndRetriesObjectDeletion(t
 	if len(store.deleted) != 1 || store.deleted[0] != "source-context/expired-terminal" {
 		t.Fatalf("retried object deletes = %#v", store.deleted)
 	}
-	if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM attachment WHERE id = $1)`, fixtures[0].attachmentID).Scan(&expiredCloneExists); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM attachment WHERE id = $1)`, fixtures[0].attachmentID).Scan(&expiredCloneExists); err != nil {
 		t.Fatalf("check clone after successful retry: %v", err)
 	}
 	if expiredCloneExists {
 		t.Fatal("expired clone row survived successful object cleanup retry")
 	}
 	var expiredContextExists bool
-	if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM issue_source_context WHERE id = $1)`, fixtures[0].contextID).Scan(&expiredContextExists); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM issue_source_context WHERE id = $1)`, fixtures[0].contextID).Scan(&expiredContextExists); err != nil {
 		t.Fatalf("check context after successful cleanup retry: %v", err)
 	}
 	if expiredContextExists {
@@ -860,10 +858,10 @@ func TestCleanupAbandonedSourceContextsRemovesExpiredContextWithoutAttachments(t
 	ctx := context.Background()
 	q := db.New(pool)
 	workspaceID, userID, agentID, sourceIssueID := seedAttributionFixture(t, pool)
-	contextID := dbid.NewV7()
-	taskID := dbid.NewV7()
-	var runtimeID pgtype.UUID
-	if err := pool.QueryRow(ctx, `SELECT runtime_id FROM agent WHERE id = $1`, util.MustParseUUID(agentID)).Scan(&runtimeID); err != nil {
+	contextID := newV7()
+	taskID := newV7()
+	var runtimeID string
+	if err := pool.QueryRowContext(ctx, `SELECT runtime_id FROM agent WHERE id = $1`, util.MustParseUUID(agentID)).Scan(&runtimeID); err != nil {
 		t.Fatalf("load runtime: %v", err)
 	}
 	quickCreate, err := json.Marshal(QuickCreateContext{
@@ -873,7 +871,7 @@ func TestCleanupAbandonedSourceContextsRemovesExpiredContextWithoutAttachments(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO agent_task_queue (
 			id, agent_id, runtime_id, status, priority, context,
 			originator_user_id, accountable_user_id
@@ -881,7 +879,7 @@ func TestCleanupAbandonedSourceContextsRemovesExpiredContextWithoutAttachments(t
 	`, taskID, util.MustParseUUID(agentID), runtimeID, quickCreate, util.MustParseUUID(userID)); err != nil {
 		t.Fatalf("insert terminal task: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO issue_source_context (
 			id, workspace_id, origin_task_id, source_issue_id, anchor_comment_id,
 			captured_by_user_id, snapshot_version, snapshot, capture_digest,
@@ -892,8 +890,8 @@ func TestCleanupAbandonedSourceContextsRemovesExpiredContextWithoutAttachments(t
 		t.Fatalf("insert attachment-free context: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM issue_source_context WHERE id = $1`, contextID)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM issue_source_context WHERE id = $1`, contextID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
 	})
 
 	svc := &TaskService{Queries: q, TxStarter: pool, SourceContextStorage: &sourceContextObjectStoreFake{}}
@@ -902,7 +900,7 @@ func TestCleanupAbandonedSourceContextsRemovesExpiredContextWithoutAttachments(t
 		t.Fatalf("attachment-free cleanup = %d, err=%v, want one removed context", removed, err)
 	}
 	var exists bool
-	if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM issue_source_context WHERE id = $1)`, contextID).Scan(&exists); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM issue_source_context WHERE id = $1)`, contextID).Scan(&exists); err != nil {
 		t.Fatalf("check attachment-free context: %v", err)
 	}
 	if exists {
@@ -915,9 +913,9 @@ func TestCleanupAbandonedSourceContextsConvergesAcrossConcurrentSweepers(t *test
 	ctx := context.Background()
 	q := db.New(pool)
 	workspaceID, userID, _, sourceIssueID := seedAttributionFixture(t, pool)
-	contextID := dbid.NewV7()
-	attachmentID := dbid.NewV7()
-	if _, err := pool.Exec(ctx, `
+	contextID := newV7()
+	attachmentID := newV7()
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO issue_source_context (
 			id, workspace_id, source_issue_id, anchor_comment_id,
 			captured_by_user_id, snapshot_version, snapshot, capture_digest,
@@ -927,7 +925,7 @@ func TestCleanupAbandonedSourceContextsConvergesAcrossConcurrentSweepers(t *test
 	`, contextID, util.MustParseUUID(workspaceID), util.MustParseUUID(sourceIssueID), util.MustParseUUID(userID)); err != nil {
 		t.Fatalf("insert abandoned context: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO attachment (
 			id, workspace_id, source_context_id, uploader_type, uploader_id,
 			filename, url, content_type, size_bytes
@@ -937,8 +935,8 @@ func TestCleanupAbandonedSourceContextsConvergesAcrossConcurrentSweepers(t *test
 		t.Fatalf("insert abandoned clone: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM attachment WHERE source_context_id = $1`, contextID)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM issue_source_context WHERE id = $1`, contextID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM attachment WHERE source_context_id = $1`, contextID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM issue_source_context WHERE id = $1`, contextID)
 	})
 
 	store := &concurrentSourceContextDeleteStore{release: make(chan struct{})}
@@ -962,7 +960,7 @@ func TestCleanupAbandonedSourceContextsConvergesAcrossConcurrentSweepers(t *test
 		t.Fatalf("concurrent cleanup results = %+v / %+v, want one total removal without errors", first, second)
 	}
 	var exists bool
-	if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM issue_source_context WHERE id = $1)`, contextID).Scan(&exists); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM issue_source_context WHERE id = $1)`, contextID).Scan(&exists); err != nil {
 		t.Fatalf("check concurrently cleaned context: %v", err)
 	}
 	if exists {
@@ -980,7 +978,7 @@ func TestBuildSourceContextRejectsCyclesAndEveryLimitWithoutTruncation(t *testin
 	insertComment := func(content string, parent any) string {
 		t.Helper()
 		var id string
-		if err := pool.QueryRow(ctx, `
+		if err := pool.QueryRowContext(ctx, `
 			INSERT INTO comment (issue_id, workspace_id, author_type, author_id, content, parent_id)
 			VALUES ($1, $2, 'member', $3, $4, $5) RETURNING id
 		`, sourceIssueID, workspaceID, userID, content, parent).Scan(&id); err != nil {
@@ -989,19 +987,19 @@ func TestBuildSourceContextRejectsCyclesAndEveryLimitWithoutTruncation(t *testin
 		return id
 	}
 	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM attachment WHERE issue_id = $1`, sourceIssueID)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM comment WHERE issue_id = $1`, sourceIssueID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM attachment WHERE issue_id = $1`, sourceIssueID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM comment WHERE issue_id = $1`, sourceIssueID)
 	})
 
 	cycleRoot := insertComment("cycle root", nil)
 	cycleChild := insertComment("cycle child", cycleRoot)
-	if _, err := pool.Exec(ctx, `UPDATE comment SET parent_id = $1 WHERE id = $2`, cycleChild, cycleRoot); err != nil {
+	if _, err := pool.ExecContext(ctx, `UPDATE comment SET parent_id = $1 WHERE id = $2`, cycleChild, cycleRoot); err != nil {
 		t.Fatalf("create cycle: %v", err)
 	}
 	if _, err := BuildSourceContext(ctx, q, workspaceUUID, util.MustParseUUID(cycleChild)); !errors.Is(err, ErrSourceContextInvalid) {
 		t.Fatalf("cycle error = %v, want ErrSourceContextInvalid", err)
 	}
-	if _, err := pool.Exec(ctx, `UPDATE comment SET parent_id = NULL WHERE id = $1`, cycleRoot); err != nil {
+	if _, err := pool.ExecContext(ctx, `UPDATE comment SET parent_id = NULL WHERE id = $1`, cycleRoot); err != nil {
 		t.Fatalf("break test cycle: %v", err)
 	}
 
@@ -1010,7 +1008,7 @@ func TestBuildSourceContextRejectsCyclesAndEveryLimitWithoutTruncation(t *testin
 	// created_at still increases in insertion order, and the returned id is
 	// the last comment inserted.
 	var deepSelected string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		WITH ids AS (
 			SELECT g, gen_random_uuid() AS id FROM generate_series(1, $4::int) AS g
 		), inserted AS (
@@ -1029,7 +1027,7 @@ func TestBuildSourceContextRejectsCyclesAndEveryLimitWithoutTruncation(t *testin
 
 	// One root (g = 0) and SourceContextMaxComments replies to it.
 	var wideSelected string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		WITH ids AS (
 			SELECT g, gen_random_uuid() AS id FROM generate_series(0, $4::int) AS g
 		), inserted AS (
@@ -1056,7 +1054,7 @@ func TestBuildSourceContextRejectsCyclesAndEveryLimitWithoutTruncation(t *testin
 	}
 
 	attachmentCommentID := insertComment("attachment limits", nil)
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO attachment (workspace_id, issue_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
 		SELECT $1, $2, 'member', $3, format('count-%s.txt', lpad(g::text, 3, '0')), format('local://count-%s', lpad(g::text, 3, '0')), 'text/plain', 1
 		FROM generate_series(0, $4::int - 1) AS g
@@ -1067,10 +1065,10 @@ func TestBuildSourceContextRejectsCyclesAndEveryLimitWithoutTruncation(t *testin
 	if !errors.Is(err, ErrSourceContextTooLarge) || tooManyAttachments.Limits.AttachmentCount != SourceContextMaxAttachments+1 {
 		t.Fatalf("attachment count = limits %+v err %v", tooManyAttachments.Limits, err)
 	}
-	if _, err := pool.Exec(ctx, `DELETE FROM attachment WHERE issue_id = $1`, sourceIssueID); err != nil {
+	if _, err := pool.ExecContext(ctx, `DELETE FROM attachment WHERE issue_id = $1`, sourceIssueID); err != nil {
 		t.Fatalf("clear count attachments: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO attachment (workspace_id, issue_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
 		VALUES ($1, $2, 'member', $3, 'huge.bin', 'local://huge', 'application/octet-stream', $4)
 	`, workspaceID, sourceIssueID, userID, SourceContextMaxAttachmentBytes+1); err != nil {

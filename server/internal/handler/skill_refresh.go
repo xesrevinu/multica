@@ -137,13 +137,13 @@ func (h *Handler) RefreshSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	isAdmin := roleAllowed(member.Role, "owner", "admin")
-	isCreator := skill.CreatedBy.Valid && uuidToString(skill.CreatedBy) == userID
+	isCreator := skill.CreatedBy.Valid && uuidToString(skill.CreatedBy.String) == userID
 	if !isAdmin && !isCreator {
 		writeError(w, http.StatusForbidden, "only the skill creator or a workspace admin can update this skill from its source")
 		return
 	}
 
-	origin, ok := parseSkillOrigin(skill.Config)
+	origin, ok := parseSkillOrigin([]byte(skill.Config))
 	if !ok {
 		writeError(w, http.StatusUnprocessableEntity, errSkillNotRefreshable.Error())
 		return
@@ -176,11 +176,11 @@ func (h *Handler) RefreshSkill(w http.ResponseWriter, r *http.Request) {
 		UserID:        userID,
 		NewName:       newName,
 		AllowOverwrite: func(uid string, s db.Skill) bool {
-			return isAdmin || (s.CreatedBy.Valid && uuidToString(s.CreatedBy) == uid)
+			return isAdmin || (s.CreatedBy.Valid && uuidToString(s.CreatedBy.String) == uid)
 		},
 		Description: imported.description,
 		Content:     imported.content,
-		Config:      mergeSkillConfigOrigin(skill.Config, imported.origin),
+		Config:      mergeSkillConfigOrigin([]byte(skill.Config), imported.origin),
 		Files:       importedSkillFileRequests(imported),
 	})
 	if err != nil {

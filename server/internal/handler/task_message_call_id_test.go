@@ -2,13 +2,13 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/testutil"
@@ -92,9 +92,9 @@ func TestTaskMessageCallIDLiveAndHistory(t *testing.T) {
 	}
 	// The single-row writer is also used outside daemon batch ingestion.
 	row, err := h.Queries.CreateTaskMessage(context.Background(), db.CreateTaskMessageParams{
-		ID:     pgtype.UUID{Bytes: uuid.Must(uuid.NewV7()), Valid: true},
+		ID:     uuid.Must(uuid.NewV7()).String(),
 		TaskID: util.MustParseUUID(taskID), Seq: 6, Type: "tool_result",
-		CallID: pgtype.Text{String: "single-call", Valid: true},
+		CallID: sql.NullString{String: "single-call", Valid: true},
 	})
 	if err != nil {
 		t.Fatal(err)

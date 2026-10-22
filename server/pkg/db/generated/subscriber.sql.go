@@ -7,33 +7,96 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const addDelegatedSubscriber = `-- name: AddDelegatedSubscriber :execrows
-WITH RECURSIVE ancestors(node_id, parent_id, depth) AS (
-    SELECT root.id, root.parent_issue_id, 0 FROM issue root WHERE root.id = $1
-    UNION ALL
-    SELECT i.id, i.parent_issue_id, a.depth + 1
-    FROM issue i JOIN ancestors a ON i.id = a.parent_id
-),
-active_member AS (
-    SELECT m.user_id FROM member m
-    WHERE m.user_id = $2 AND m.workspace_id = $4
-    FOR SHARE
-)
 INSERT INTO issue_subscriber (issue_id, user_type, user_id, reason)
-SELECT $1, 'member', am.user_id, $3
-FROM active_member am
-WHERE NOT EXISTS (
+SELECT ?1 AS issue_id, 'member' AS user_type, m.user_id AS user_id, ?3 AS reason
+FROM member m
+WHERE m.user_id = ?2 AND m.workspace_id = ?4
+  AND NOT EXISTS (
     SELECT 1
     FROM issue_subscriber s
-    JOIN ancestors a ON a.node_id = s.issue_id
-    WHERE s.user_type = 'member' AND s.user_id = $2
+    WHERE s.user_type = 'member' AND s.user_id = ?2
       AND s.unsubscribed_at IS NOT NULL
-      AND (a.depth = 0 OR s.opt_out_scope = 'subtree')
-)
+      AND (
+        s.issue_id = ?1
+        OR (
+          s.opt_out_scope = 'subtree'
+          AND s.issue_id IN (
+              SELECT walk.id FROM (
+              SELECT parent_issue_id AS id FROM issue WHERE id = ?1
+              UNION ALL
+              SELECT i1.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i2.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i3.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i4.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i5.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i6.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i7.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i8.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i9.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id JOIN issue i9 ON i9.id = i8.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i10.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id JOIN issue i9 ON i9.id = i8.parent_issue_id JOIN issue i10 ON i10.id = i9.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i11.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id JOIN issue i9 ON i9.id = i8.parent_issue_id JOIN issue i10 ON i10.id = i9.parent_issue_id JOIN issue i11 ON i11.id = i10.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i12.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id JOIN issue i9 ON i9.id = i8.parent_issue_id JOIN issue i10 ON i10.id = i9.parent_issue_id JOIN issue i11 ON i11.id = i10.parent_issue_id JOIN issue i12 ON i12.id = i11.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i13.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id JOIN issue i9 ON i9.id = i8.parent_issue_id JOIN issue i10 ON i10.id = i9.parent_issue_id JOIN issue i11 ON i11.id = i10.parent_issue_id JOIN issue i12 ON i12.id = i11.parent_issue_id JOIN issue i13 ON i13.id = i12.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i14.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id JOIN issue i9 ON i9.id = i8.parent_issue_id JOIN issue i10 ON i10.id = i9.parent_issue_id JOIN issue i11 ON i11.id = i10.parent_issue_id JOIN issue i12 ON i12.id = i11.parent_issue_id JOIN issue i13 ON i13.id = i12.parent_issue_id JOIN issue i14 ON i14.id = i13.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i15.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id JOIN issue i9 ON i9.id = i8.parent_issue_id JOIN issue i10 ON i10.id = i9.parent_issue_id JOIN issue i11 ON i11.id = i10.parent_issue_id JOIN issue i12 ON i12.id = i11.parent_issue_id JOIN issue i13 ON i13.id = i12.parent_issue_id JOIN issue i14 ON i14.id = i13.parent_issue_id JOIN issue i15 ON i15.id = i14.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i16.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id JOIN issue i9 ON i9.id = i8.parent_issue_id JOIN issue i10 ON i10.id = i9.parent_issue_id JOIN issue i11 ON i11.id = i10.parent_issue_id JOIN issue i12 ON i12.id = i11.parent_issue_id JOIN issue i13 ON i13.id = i12.parent_issue_id JOIN issue i14 ON i14.id = i13.parent_issue_id JOIN issue i15 ON i15.id = i14.parent_issue_id JOIN issue i16 ON i16.id = i15.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i17.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id JOIN issue i9 ON i9.id = i8.parent_issue_id JOIN issue i10 ON i10.id = i9.parent_issue_id JOIN issue i11 ON i11.id = i10.parent_issue_id JOIN issue i12 ON i12.id = i11.parent_issue_id JOIN issue i13 ON i13.id = i12.parent_issue_id JOIN issue i14 ON i14.id = i13.parent_issue_id JOIN issue i15 ON i15.id = i14.parent_issue_id JOIN issue i16 ON i16.id = i15.parent_issue_id JOIN issue i17 ON i17.id = i16.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i18.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id JOIN issue i9 ON i9.id = i8.parent_issue_id JOIN issue i10 ON i10.id = i9.parent_issue_id JOIN issue i11 ON i11.id = i10.parent_issue_id JOIN issue i12 ON i12.id = i11.parent_issue_id JOIN issue i13 ON i13.id = i12.parent_issue_id JOIN issue i14 ON i14.id = i13.parent_issue_id JOIN issue i15 ON i15.id = i14.parent_issue_id JOIN issue i16 ON i16.id = i15.parent_issue_id JOIN issue i17 ON i17.id = i16.parent_issue_id JOIN issue i18 ON i18.id = i17.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i19.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id JOIN issue i9 ON i9.id = i8.parent_issue_id JOIN issue i10 ON i10.id = i9.parent_issue_id JOIN issue i11 ON i11.id = i10.parent_issue_id JOIN issue i12 ON i12.id = i11.parent_issue_id JOIN issue i13 ON i13.id = i12.parent_issue_id JOIN issue i14 ON i14.id = i13.parent_issue_id JOIN issue i15 ON i15.id = i14.parent_issue_id JOIN issue i16 ON i16.id = i15.parent_issue_id JOIN issue i17 ON i17.id = i16.parent_issue_id JOIN issue i18 ON i18.id = i17.parent_issue_id JOIN issue i19 ON i19.id = i18.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i20.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id JOIN issue i9 ON i9.id = i8.parent_issue_id JOIN issue i10 ON i10.id = i9.parent_issue_id JOIN issue i11 ON i11.id = i10.parent_issue_id JOIN issue i12 ON i12.id = i11.parent_issue_id JOIN issue i13 ON i13.id = i12.parent_issue_id JOIN issue i14 ON i14.id = i13.parent_issue_id JOIN issue i15 ON i15.id = i14.parent_issue_id JOIN issue i16 ON i16.id = i15.parent_issue_id JOIN issue i17 ON i17.id = i16.parent_issue_id JOIN issue i18 ON i18.id = i17.parent_issue_id JOIN issue i19 ON i19.id = i18.parent_issue_id JOIN issue i20 ON i20.id = i19.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i21.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id JOIN issue i9 ON i9.id = i8.parent_issue_id JOIN issue i10 ON i10.id = i9.parent_issue_id JOIN issue i11 ON i11.id = i10.parent_issue_id JOIN issue i12 ON i12.id = i11.parent_issue_id JOIN issue i13 ON i13.id = i12.parent_issue_id JOIN issue i14 ON i14.id = i13.parent_issue_id JOIN issue i15 ON i15.id = i14.parent_issue_id JOIN issue i16 ON i16.id = i15.parent_issue_id JOIN issue i17 ON i17.id = i16.parent_issue_id JOIN issue i18 ON i18.id = i17.parent_issue_id JOIN issue i19 ON i19.id = i18.parent_issue_id JOIN issue i20 ON i20.id = i19.parent_issue_id JOIN issue i21 ON i21.id = i20.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i22.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id JOIN issue i9 ON i9.id = i8.parent_issue_id JOIN issue i10 ON i10.id = i9.parent_issue_id JOIN issue i11 ON i11.id = i10.parent_issue_id JOIN issue i12 ON i12.id = i11.parent_issue_id JOIN issue i13 ON i13.id = i12.parent_issue_id JOIN issue i14 ON i14.id = i13.parent_issue_id JOIN issue i15 ON i15.id = i14.parent_issue_id JOIN issue i16 ON i16.id = i15.parent_issue_id JOIN issue i17 ON i17.id = i16.parent_issue_id JOIN issue i18 ON i18.id = i17.parent_issue_id JOIN issue i19 ON i19.id = i18.parent_issue_id JOIN issue i20 ON i20.id = i19.parent_issue_id JOIN issue i21 ON i21.id = i20.parent_issue_id JOIN issue i22 ON i22.id = i21.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i23.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id JOIN issue i9 ON i9.id = i8.parent_issue_id JOIN issue i10 ON i10.id = i9.parent_issue_id JOIN issue i11 ON i11.id = i10.parent_issue_id JOIN issue i12 ON i12.id = i11.parent_issue_id JOIN issue i13 ON i13.id = i12.parent_issue_id JOIN issue i14 ON i14.id = i13.parent_issue_id JOIN issue i15 ON i15.id = i14.parent_issue_id JOIN issue i16 ON i16.id = i15.parent_issue_id JOIN issue i17 ON i17.id = i16.parent_issue_id JOIN issue i18 ON i18.id = i17.parent_issue_id JOIN issue i19 ON i19.id = i18.parent_issue_id JOIN issue i20 ON i20.id = i19.parent_issue_id JOIN issue i21 ON i21.id = i20.parent_issue_id JOIN issue i22 ON i22.id = i21.parent_issue_id JOIN issue i23 ON i23.id = i22.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i24.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id JOIN issue i9 ON i9.id = i8.parent_issue_id JOIN issue i10 ON i10.id = i9.parent_issue_id JOIN issue i11 ON i11.id = i10.parent_issue_id JOIN issue i12 ON i12.id = i11.parent_issue_id JOIN issue i13 ON i13.id = i12.parent_issue_id JOIN issue i14 ON i14.id = i13.parent_issue_id JOIN issue i15 ON i15.id = i14.parent_issue_id JOIN issue i16 ON i16.id = i15.parent_issue_id JOIN issue i17 ON i17.id = i16.parent_issue_id JOIN issue i18 ON i18.id = i17.parent_issue_id JOIN issue i19 ON i19.id = i18.parent_issue_id JOIN issue i20 ON i20.id = i19.parent_issue_id JOIN issue i21 ON i21.id = i20.parent_issue_id JOIN issue i22 ON i22.id = i21.parent_issue_id JOIN issue i23 ON i23.id = i22.parent_issue_id JOIN issue i24 ON i24.id = i23.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i25.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id JOIN issue i9 ON i9.id = i8.parent_issue_id JOIN issue i10 ON i10.id = i9.parent_issue_id JOIN issue i11 ON i11.id = i10.parent_issue_id JOIN issue i12 ON i12.id = i11.parent_issue_id JOIN issue i13 ON i13.id = i12.parent_issue_id JOIN issue i14 ON i14.id = i13.parent_issue_id JOIN issue i15 ON i15.id = i14.parent_issue_id JOIN issue i16 ON i16.id = i15.parent_issue_id JOIN issue i17 ON i17.id = i16.parent_issue_id JOIN issue i18 ON i18.id = i17.parent_issue_id JOIN issue i19 ON i19.id = i18.parent_issue_id JOIN issue i20 ON i20.id = i19.parent_issue_id JOIN issue i21 ON i21.id = i20.parent_issue_id JOIN issue i22 ON i22.id = i21.parent_issue_id JOIN issue i23 ON i23.id = i22.parent_issue_id JOIN issue i24 ON i24.id = i23.parent_issue_id JOIN issue i25 ON i25.id = i24.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i26.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id JOIN issue i9 ON i9.id = i8.parent_issue_id JOIN issue i10 ON i10.id = i9.parent_issue_id JOIN issue i11 ON i11.id = i10.parent_issue_id JOIN issue i12 ON i12.id = i11.parent_issue_id JOIN issue i13 ON i13.id = i12.parent_issue_id JOIN issue i14 ON i14.id = i13.parent_issue_id JOIN issue i15 ON i15.id = i14.parent_issue_id JOIN issue i16 ON i16.id = i15.parent_issue_id JOIN issue i17 ON i17.id = i16.parent_issue_id JOIN issue i18 ON i18.id = i17.parent_issue_id JOIN issue i19 ON i19.id = i18.parent_issue_id JOIN issue i20 ON i20.id = i19.parent_issue_id JOIN issue i21 ON i21.id = i20.parent_issue_id JOIN issue i22 ON i22.id = i21.parent_issue_id JOIN issue i23 ON i23.id = i22.parent_issue_id JOIN issue i24 ON i24.id = i23.parent_issue_id JOIN issue i25 ON i25.id = i24.parent_issue_id JOIN issue i26 ON i26.id = i25.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i27.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id JOIN issue i9 ON i9.id = i8.parent_issue_id JOIN issue i10 ON i10.id = i9.parent_issue_id JOIN issue i11 ON i11.id = i10.parent_issue_id JOIN issue i12 ON i12.id = i11.parent_issue_id JOIN issue i13 ON i13.id = i12.parent_issue_id JOIN issue i14 ON i14.id = i13.parent_issue_id JOIN issue i15 ON i15.id = i14.parent_issue_id JOIN issue i16 ON i16.id = i15.parent_issue_id JOIN issue i17 ON i17.id = i16.parent_issue_id JOIN issue i18 ON i18.id = i17.parent_issue_id JOIN issue i19 ON i19.id = i18.parent_issue_id JOIN issue i20 ON i20.id = i19.parent_issue_id JOIN issue i21 ON i21.id = i20.parent_issue_id JOIN issue i22 ON i22.id = i21.parent_issue_id JOIN issue i23 ON i23.id = i22.parent_issue_id JOIN issue i24 ON i24.id = i23.parent_issue_id JOIN issue i25 ON i25.id = i24.parent_issue_id JOIN issue i26 ON i26.id = i25.parent_issue_id JOIN issue i27 ON i27.id = i26.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i28.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id JOIN issue i9 ON i9.id = i8.parent_issue_id JOIN issue i10 ON i10.id = i9.parent_issue_id JOIN issue i11 ON i11.id = i10.parent_issue_id JOIN issue i12 ON i12.id = i11.parent_issue_id JOIN issue i13 ON i13.id = i12.parent_issue_id JOIN issue i14 ON i14.id = i13.parent_issue_id JOIN issue i15 ON i15.id = i14.parent_issue_id JOIN issue i16 ON i16.id = i15.parent_issue_id JOIN issue i17 ON i17.id = i16.parent_issue_id JOIN issue i18 ON i18.id = i17.parent_issue_id JOIN issue i19 ON i19.id = i18.parent_issue_id JOIN issue i20 ON i20.id = i19.parent_issue_id JOIN issue i21 ON i21.id = i20.parent_issue_id JOIN issue i22 ON i22.id = i21.parent_issue_id JOIN issue i23 ON i23.id = i22.parent_issue_id JOIN issue i24 ON i24.id = i23.parent_issue_id JOIN issue i25 ON i25.id = i24.parent_issue_id JOIN issue i26 ON i26.id = i25.parent_issue_id JOIN issue i27 ON i27.id = i26.parent_issue_id JOIN issue i28 ON i28.id = i27.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i29.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id JOIN issue i9 ON i9.id = i8.parent_issue_id JOIN issue i10 ON i10.id = i9.parent_issue_id JOIN issue i11 ON i11.id = i10.parent_issue_id JOIN issue i12 ON i12.id = i11.parent_issue_id JOIN issue i13 ON i13.id = i12.parent_issue_id JOIN issue i14 ON i14.id = i13.parent_issue_id JOIN issue i15 ON i15.id = i14.parent_issue_id JOIN issue i16 ON i16.id = i15.parent_issue_id JOIN issue i17 ON i17.id = i16.parent_issue_id JOIN issue i18 ON i18.id = i17.parent_issue_id JOIN issue i19 ON i19.id = i18.parent_issue_id JOIN issue i20 ON i20.id = i19.parent_issue_id JOIN issue i21 ON i21.id = i20.parent_issue_id JOIN issue i22 ON i22.id = i21.parent_issue_id JOIN issue i23 ON i23.id = i22.parent_issue_id JOIN issue i24 ON i24.id = i23.parent_issue_id JOIN issue i25 ON i25.id = i24.parent_issue_id JOIN issue i26 ON i26.id = i25.parent_issue_id JOIN issue i27 ON i27.id = i26.parent_issue_id JOIN issue i28 ON i28.id = i27.parent_issue_id JOIN issue i29 ON i29.id = i28.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i30.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id JOIN issue i9 ON i9.id = i8.parent_issue_id JOIN issue i10 ON i10.id = i9.parent_issue_id JOIN issue i11 ON i11.id = i10.parent_issue_id JOIN issue i12 ON i12.id = i11.parent_issue_id JOIN issue i13 ON i13.id = i12.parent_issue_id JOIN issue i14 ON i14.id = i13.parent_issue_id JOIN issue i15 ON i15.id = i14.parent_issue_id JOIN issue i16 ON i16.id = i15.parent_issue_id JOIN issue i17 ON i17.id = i16.parent_issue_id JOIN issue i18 ON i18.id = i17.parent_issue_id JOIN issue i19 ON i19.id = i18.parent_issue_id JOIN issue i20 ON i20.id = i19.parent_issue_id JOIN issue i21 ON i21.id = i20.parent_issue_id JOIN issue i22 ON i22.id = i21.parent_issue_id JOIN issue i23 ON i23.id = i22.parent_issue_id JOIN issue i24 ON i24.id = i23.parent_issue_id JOIN issue i25 ON i25.id = i24.parent_issue_id JOIN issue i26 ON i26.id = i25.parent_issue_id JOIN issue i27 ON i27.id = i26.parent_issue_id JOIN issue i28 ON i28.id = i27.parent_issue_id JOIN issue i29 ON i29.id = i28.parent_issue_id JOIN issue i30 ON i30.id = i29.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i31.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id JOIN issue i9 ON i9.id = i8.parent_issue_id JOIN issue i10 ON i10.id = i9.parent_issue_id JOIN issue i11 ON i11.id = i10.parent_issue_id JOIN issue i12 ON i12.id = i11.parent_issue_id JOIN issue i13 ON i13.id = i12.parent_issue_id JOIN issue i14 ON i14.id = i13.parent_issue_id JOIN issue i15 ON i15.id = i14.parent_issue_id JOIN issue i16 ON i16.id = i15.parent_issue_id JOIN issue i17 ON i17.id = i16.parent_issue_id JOIN issue i18 ON i18.id = i17.parent_issue_id JOIN issue i19 ON i19.id = i18.parent_issue_id JOIN issue i20 ON i20.id = i19.parent_issue_id JOIN issue i21 ON i21.id = i20.parent_issue_id JOIN issue i22 ON i22.id = i21.parent_issue_id JOIN issue i23 ON i23.id = i22.parent_issue_id JOIN issue i24 ON i24.id = i23.parent_issue_id JOIN issue i25 ON i25.id = i24.parent_issue_id JOIN issue i26 ON i26.id = i25.parent_issue_id JOIN issue i27 ON i27.id = i26.parent_issue_id JOIN issue i28 ON i28.id = i27.parent_issue_id JOIN issue i29 ON i29.id = i28.parent_issue_id JOIN issue i30 ON i30.id = i29.parent_issue_id JOIN issue i31 ON i31.id = i30.parent_issue_id WHERE i0.id = ?1
+              UNION ALL
+              SELECT i32.parent_issue_id AS id FROM issue i0 JOIN issue i1 ON i1.id = i0.parent_issue_id JOIN issue i2 ON i2.id = i1.parent_issue_id JOIN issue i3 ON i3.id = i2.parent_issue_id JOIN issue i4 ON i4.id = i3.parent_issue_id JOIN issue i5 ON i5.id = i4.parent_issue_id JOIN issue i6 ON i6.id = i5.parent_issue_id JOIN issue i7 ON i7.id = i6.parent_issue_id JOIN issue i8 ON i8.id = i7.parent_issue_id JOIN issue i9 ON i9.id = i8.parent_issue_id JOIN issue i10 ON i10.id = i9.parent_issue_id JOIN issue i11 ON i11.id = i10.parent_issue_id JOIN issue i12 ON i12.id = i11.parent_issue_id JOIN issue i13 ON i13.id = i12.parent_issue_id JOIN issue i14 ON i14.id = i13.parent_issue_id JOIN issue i15 ON i15.id = i14.parent_issue_id JOIN issue i16 ON i16.id = i15.parent_issue_id JOIN issue i17 ON i17.id = i16.parent_issue_id JOIN issue i18 ON i18.id = i17.parent_issue_id JOIN issue i19 ON i19.id = i18.parent_issue_id JOIN issue i20 ON i20.id = i19.parent_issue_id JOIN issue i21 ON i21.id = i20.parent_issue_id JOIN issue i22 ON i22.id = i21.parent_issue_id JOIN issue i23 ON i23.id = i22.parent_issue_id JOIN issue i24 ON i24.id = i23.parent_issue_id JOIN issue i25 ON i25.id = i24.parent_issue_id JOIN issue i26 ON i26.id = i25.parent_issue_id JOIN issue i27 ON i27.id = i26.parent_issue_id JOIN issue i28 ON i28.id = i27.parent_issue_id JOIN issue i29 ON i29.id = i28.parent_issue_id JOIN issue i30 ON i30.id = i29.parent_issue_id JOIN issue i31 ON i31.id = i30.parent_issue_id JOIN issue i32 ON i32.id = i31.parent_issue_id WHERE i0.id = ?1
+              ) walk
+              WHERE walk.id IS NOT NULL
+          )
+        )
+      )
+  )
 ON CONFLICT (issue_id, user_type, user_id) DO UPDATE
 SET reason = EXCLUDED.reason
 WHERE issue_subscriber.unsubscribed_at IS NULL
@@ -42,10 +105,10 @@ WHERE issue_subscriber.unsubscribed_at IS NULL
 `
 
 type AddDelegatedSubscriberParams struct {
-	IssueID     pgtype.UUID `json:"issue_id"`
-	UserID      pgtype.UUID `json:"user_id"`
-	Reason      string      `json:"reason"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	IssueID     string `json:"issue_id"`
+	UserID      string `json:"user_id"`
+	Reason      string `json:"reason"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // The delegated rule's write (MUL-5483). Eligibility and insert are ONE
@@ -55,23 +118,20 @@ type AddDelegatedSubscriberParams struct {
 // Eligibility is two conditions the previous version checked in separate
 // round trips:
 //
-//  1. active_member — the originator must STILL be a workspace member.
+//  1. active_member - the originator must STILL be a workspace member.
 //     originator_user_id is stamped when the task is queued and never
 //     revisited, so a revoked member's still-running tasks would otherwise
-//     keep filing ghost subscribers. FOR SHARE also blocks a concurrent
-//     DELETE of that member row for the rest of this transaction, so the
-//     check cannot go stale between here and the insert.
+//     keep filing ghost subscribers.
 //
-//  2. NOT EXISTS (...) — the ancestor opt-out walk from HasAncestorOptOut,
-//     inlined for the same reason: a subtree tombstone committed between a
-//     separate check and this insert would silently undo the user's opt-out
-//     on every child the agent files next.
+//  2. NOT EXISTS (...) - the ancestor opt-out walk from HasAncestorOptOut.
+//     SQLite sqlc cannot attach a recursive CTE to INSERT, so the walk is
+//     bounded to 32 ancestors.
 //
 // ON CONFLICT keeps AddIssueSubscriber's two rules: never resurrect a
 // tombstone, and upgrade an active 'delegated' row when the user becomes
 // directly involved.
 func (q *Queries) AddDelegatedSubscriber(ctx context.Context, arg AddDelegatedSubscriberParams) (int64, error) {
-	result, err := q.db.Exec(ctx, addDelegatedSubscriber,
+	result, err := q.db.ExecContext(ctx, addDelegatedSubscriber,
 		arg.IssueID,
 		arg.UserID,
 		arg.Reason,
@@ -80,12 +140,12 @@ func (q *Queries) AddDelegatedSubscriber(ctx context.Context, arg AddDelegatedSu
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const addIssueSubscriber = `-- name: AddIssueSubscriber :execrows
 INSERT INTO issue_subscriber (issue_id, user_type, user_id, reason)
-VALUES ($1, $2, $3, $4)
+VALUES (?1, ?2, ?3, ?4)
 ON CONFLICT (issue_id, user_type, user_id) DO UPDATE
 SET reason = EXCLUDED.reason
 WHERE issue_subscriber.unsubscribed_at IS NULL
@@ -94,10 +154,10 @@ WHERE issue_subscriber.unsubscribed_at IS NULL
 `
 
 type AddIssueSubscriberParams struct {
-	IssueID  pgtype.UUID `json:"issue_id"`
-	UserType string      `json:"user_type"`
-	UserID   pgtype.UUID `json:"user_id"`
-	Reason   string      `json:"reason"`
+	IssueID  string `json:"issue_id"`
+	UserType string `json:"user_type"`
+	UserID   string `json:"user_id"`
+	Reason   string `json:"reason"`
 }
 
 // Auto-subscribe path (creator / assignee / commenter / mentioned / autopilot /
@@ -106,7 +166,7 @@ type AddIssueSubscriberParams struct {
 // Two behaviors are load-bearing here:
 //
 //  1. A tombstoned row is NEVER resurrected. The WHERE on the DO UPDATE fails
-//     for an opted-out row, which degrades to DO NOTHING — so unsubscribe still
+//     for an opted-out row, which degrades to DO NOTHING - so unsubscribe still
 //     sticks on a tree an agent keeps adding to (MUL-5483).
 //
 //  2. An ACTIVE 'delegated' row is upgraded when the user becomes directly
@@ -118,7 +178,7 @@ type AddIssueSubscriberParams struct {
 // active subscription actually changed. Publishing unconditionally made the
 // frontend insert a subscriber the DB had refused to write.
 func (q *Queries) AddIssueSubscriber(ctx context.Context, arg AddIssueSubscriberParams) (int64, error) {
-	result, err := q.db.Exec(ctx, addIssueSubscriber,
+	result, err := q.db.ExecContext(ctx, addIssueSubscriber,
 		arg.IssueID,
 		arg.UserType,
 		arg.UserID,
@@ -127,21 +187,19 @@ func (q *Queries) AddIssueSubscriber(ctx context.Context, arg AddIssueSubscriber
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const deleteSubscriptionsByMember = `-- name: DeleteSubscriptionsByMember :exec
-DELETE FROM issue_subscriber s
-USING issue i
-WHERE s.issue_id = i.id
-  AND i.workspace_id = $1
-  AND s.user_type = 'member'
-  AND s.user_id = $2
+DELETE FROM issue_subscriber
+WHERE user_type = 'member'
+  AND user_id = ?2
+  AND issue_id IN (SELECT i.id FROM issue i WHERE i.workspace_id = ?1)
 `
 
 type DeleteSubscriptionsByMemberParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	UserID      pgtype.UUID `json:"user_id"`
+	WorkspaceID string `json:"workspace_id"`
+	UserID      string `json:"user_id"`
 }
 
 // Drop a departing member's subscriptions across the workspace, in the same tx
@@ -157,7 +215,7 @@ type DeleteSubscriptionsByMemberParams struct {
 // leave this issue" and would suppress re-subscription if they rejoin, which
 // is not what a workspace revoke means.
 func (q *Queries) DeleteSubscriptionsByMember(ctx context.Context, arg DeleteSubscriptionsByMemberParams) error {
-	_, err := q.db.Exec(ctx, deleteSubscriptionsByMember, arg.WorkspaceID, arg.UserID)
+	_, err := q.db.ExecContext(ctx, deleteSubscriptionsByMember, arg.WorkspaceID, arg.UserID)
 	return err
 }
 
@@ -166,7 +224,7 @@ WITH RECURSIVE lineage AS (
     SELECT atq.id, atq.originator_user_id, atq.originator_source, atq.delegated_from_task_id, 0 AS depth
     FROM agent_task_queue atq
     JOIN agent a ON a.id = atq.agent_id
-    WHERE atq.id = $1 AND a.workspace_id = $2
+    WHERE atq.id = ?1 AND a.workspace_id = ?2
 
     UNION ALL
 
@@ -176,7 +234,7 @@ WITH RECURSIVE lineage AS (
     JOIN agent_task_queue parent ON parent.id = child.delegated_from_task_id
     JOIN agent parent_agent ON parent_agent.id = parent.agent_id
     WHERE child.originator_source IN ('delegation', 'comment_source')
-      AND parent_agent.workspace_id = $2
+      AND parent_agent.workspace_id = ?2
       AND child.depth < 32
 ),
 chain_root AS (
@@ -189,13 +247,13 @@ WHERE origin.depth = 0
 `
 
 type GetDelegatedSubscriptionFactsParams struct {
-	OriginTaskID pgtype.UUID `json:"origin_task_id"`
-	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	OriginTaskID string `json:"origin_task_id"`
+	WorkspaceID  string `json:"workspace_id"`
 }
 
 type GetDelegatedSubscriptionFactsRow struct {
-	OriginatorUserID pgtype.UUID `json:"originator_user_id"`
-	RootSource       pgtype.Text `json:"root_source"`
+	OriginatorUserID sql.NullString `json:"originator_user_id"`
+	RootSource       sql.NullString `json:"root_source"`
 }
 
 // Loads the two facts the delegated-subscriber rule needs about the run that
@@ -204,23 +262,23 @@ type GetDelegatedSubscriptionFactsRow struct {
 // round trip and one tenant guard rather than two.
 //
 // WHY the second fact is needed. Attribution COPIES the originator across every
-// agent hop instead of chaining it (MUL-4302 §3.2), so originator_user_id alone
+// agent hop instead of chaining it (MUL-4302  3.2), so originator_user_id alone
 // cannot say why a chain has a human: a member's own comment and an autopilot
 // trigger somebody armed months ago leave an identical value on every
-// descendant run. Until MUL-6951 the difference did not have to be read —
+// descendant run. Until MUL-6951 the difference did not have to be read -
 // direct_human was the only root that left an originator at all, so "has an
 // originator" WAS "a human asked for this". An armed trigger now carries its
 // creator's authorization too, and that equivalence is what silently turned the
 // rule into "subscribe whoever armed the automation" (MUL-7051).
 //
 // Only originator_source separates the two, and every hop relabels itself
-// 'delegation' / 'comment_source' — so it is the chain ROOT's label that has to
+// 'delegation' / 'comment_source' - so it is the chain ROOT's label that has to
 // be read. delegated_from_task_id is the link back to the run a hop copied its
 // human from: follow it while the label is still a hop label and the walk lands
 // on the run that actually resolved the human.
 //
-// Tenancy: every hop re-joins agent and re-checks workspace_id — the same guard
-// GetAgentTaskInWorkspace applies to a single task (MUL-4252) — so a foreign
+// Tenancy: every hop re-joins agent and re-checks workspace_id - the same guard
+// GetAgentTaskInWorkspace applies to a single task (MUL-4252) - so a foreign
 // delegated_from_task_id can never pull a row from another tenant. Both hops
 // carry it: the anchor's predicate is the one an issue pointing straight at a
 // foreign run exercises, the recursive one is what stops a local run from
@@ -229,15 +287,15 @@ type GetDelegatedSubscriptionFactsRow struct {
 // The 32-hop stop is a REAL product limit, not just cycle protection (a run can
 // only reference an older run, so the lineage cannot cycle anyway): a chain
 // deeper than that reports the hop label it stopped on and its human is not
-// subscribed. Accepted deliberately — no observed chain comes close, and this
-// read is on the issue-create path — see DelegatedSubscriber for the contract
+// subscribed. Accepted deliberately - no observed chain comes close, and this
+// read is on the issue-create path - see DelegatedSubscriber for the contract
 // and what removing the limit would take.
 //
 // A lineage truncated by a deleted ancestor, or by that limit, reports the hop
 // label it stopped on, never a root label, so the caller reads it as "not
 // proven" instead of assuming a human asked.
 func (q *Queries) GetDelegatedSubscriptionFacts(ctx context.Context, arg GetDelegatedSubscriptionFactsParams) (GetDelegatedSubscriptionFactsRow, error) {
-	row := q.db.QueryRow(ctx, getDelegatedSubscriptionFacts, arg.OriginTaskID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, getDelegatedSubscriptionFacts, arg.OriginTaskID, arg.WorkspaceID)
 	var i GetDelegatedSubscriptionFactsRow
 	err := row.Scan(&i.OriginatorUserID, &i.RootSource)
 	return i, err
@@ -245,7 +303,7 @@ func (q *Queries) GetDelegatedSubscriptionFacts(ctx context.Context, arg GetDele
 
 const hasAncestorOptOut = `-- name: HasAncestorOptOut :one
 WITH RECURSIVE ancestors(node_id, parent_id, depth) AS (
-    SELECT root.id, root.parent_issue_id, 0 FROM issue root WHERE root.id = $1
+    SELECT root.id, root.parent_issue_id, 0 FROM issue root WHERE root.id = ?1
     UNION ALL
     SELECT i.id, i.parent_issue_id, a.depth + 1 FROM issue i JOIN ancestors a ON i.id = a.parent_id
 )
@@ -253,16 +311,16 @@ SELECT EXISTS(
     SELECT 1
     FROM issue_subscriber s
     JOIN ancestors a ON a.node_id = s.issue_id
-    WHERE s.user_type = $2 AND s.user_id = $3
+    WHERE s.user_type = ?2 AND s.user_id = ?3
       AND s.unsubscribed_at IS NOT NULL
       AND (a.depth = 0 OR s.opt_out_scope = 'subtree')
 ) AS opted_out
 `
 
 type HasAncestorOptOutParams struct {
-	ID       pgtype.UUID `json:"id"`
-	UserType string      `json:"user_type"`
-	UserID   pgtype.UUID `json:"user_id"`
+	ID       string `json:"id"`
+	UserType string `json:"user_type"`
+	UserID   string `json:"user_id"`
 }
 
 // True when the user has opted out in a way that should keep them off THIS
@@ -270,14 +328,14 @@ type HasAncestorOptOutParams struct {
 //
 // Two distinct cases, and the distinction is the whole point of opt_out_scope:
 //
-//   - a tombstone on this issue itself, at any scope — they left this issue;
-//   - a 'subtree'-scoped tombstone on a STRICT ancestor — they left a tree this
+//   - a tombstone on this issue itself, at any scope - they left this issue;
+//   - a 'subtree'-scoped tombstone on a STRICT ancestor - they left a tree this
 //     issue belongs to, so a child created an hour later is still covered.
 //
 // An 'issue'-scoped tombstone on an ancestor deliberately does NOT match: the
 // user declined that one issue, not everything the agent files beneath it.
 func (q *Queries) HasAncestorOptOut(ctx context.Context, arg HasAncestorOptOutParams) (bool, error) {
-	row := q.db.QueryRow(ctx, hasAncestorOptOut, arg.ID, arg.UserType, arg.UserID)
+	row := q.db.QueryRowContext(ctx, hasAncestorOptOut, arg.ID, arg.UserType, arg.UserID)
 	var opted_out bool
 	err := row.Scan(&opted_out)
 	return opted_out, err
@@ -286,19 +344,19 @@ func (q *Queries) HasAncestorOptOut(ctx context.Context, arg HasAncestorOptOutPa
 const isIssueSubscriber = `-- name: IsIssueSubscriber :one
 SELECT EXISTS(
     SELECT 1 FROM issue_subscriber
-    WHERE issue_id = $1 AND user_type = $2 AND user_id = $3
+    WHERE issue_id = ?1 AND user_type = ?2 AND user_id = ?3
       AND unsubscribed_at IS NULL
 ) AS subscribed
 `
 
 type IsIssueSubscriberParams struct {
-	IssueID  pgtype.UUID `json:"issue_id"`
-	UserType string      `json:"user_type"`
-	UserID   pgtype.UUID `json:"user_id"`
+	IssueID  string `json:"issue_id"`
+	UserType string `json:"user_type"`
+	UserID   string `json:"user_id"`
 }
 
 func (q *Queries) IsIssueSubscriber(ctx context.Context, arg IsIssueSubscriberParams) (bool, error) {
-	row := q.db.QueryRow(ctx, isIssueSubscriber, arg.IssueID, arg.UserType, arg.UserID)
+	row := q.db.QueryRowContext(ctx, isIssueSubscriber, arg.IssueID, arg.UserType, arg.UserID)
 	var subscribed bool
 	err := row.Scan(&subscribed)
 	return subscribed, err
@@ -306,12 +364,12 @@ func (q *Queries) IsIssueSubscriber(ctx context.Context, arg IsIssueSubscriberPa
 
 const listIssueSubscribers = `-- name: ListIssueSubscribers :many
 SELECT issue_id, user_type, user_id, reason, created_at, unsubscribed_at, opt_out_scope FROM issue_subscriber
-WHERE issue_id = $1 AND unsubscribed_at IS NULL
+WHERE issue_id = ?1 AND unsubscribed_at IS NULL
 ORDER BY created_at
 `
 
-func (q *Queries) ListIssueSubscribers(ctx context.Context, issueID pgtype.UUID) ([]IssueSubscriber, error) {
-	rows, err := q.db.Query(ctx, listIssueSubscribers, issueID)
+func (q *Queries) ListIssueSubscribers(ctx context.Context, issueID string) ([]IssueSubscriber, error) {
+	rows, err := q.db.QueryContext(ctx, listIssueSubscribers, issueID)
 	if err != nil {
 		return nil, err
 	}
@@ -332,6 +390,9 @@ func (q *Queries) ListIssueSubscribers(ctx context.Context, issueID pgtype.UUID)
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -340,13 +401,12 @@ func (q *Queries) ListIssueSubscribers(ctx context.Context, issueID pgtype.UUID)
 
 const lockActiveMember = `-- name: LockActiveMember :one
 SELECT id FROM member
-WHERE user_id = $1 AND workspace_id = $2
-FOR SHARE
+WHERE user_id = ?1 AND workspace_id = ?2
 `
 
 type LockActiveMemberParams struct {
-	UserID      pgtype.UUID `json:"user_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      string `json:"user_id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // Re-assert workspace membership INSIDE a serialized transaction, holding the
@@ -357,32 +417,24 @@ type LockActiveMemberParams struct {
 // snapshot before it opens a transaction, which is only a statement about the
 // past. A revoke that commits in between clears the user's subscriptions and
 // deletes the member row, and the handler would then write a fresh tombstone
-// behind it — leaving an opt-out that outlives the membership and is inherited
+// behind it - leaving an opt-out that outlives the membership and is inherited
 // if the person is ever re-invited.
-func (q *Queries) LockActiveMember(ctx context.Context, arg LockActiveMemberParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, lockActiveMember, arg.UserID, arg.WorkspaceID)
-	var id pgtype.UUID
+func (q *Queries) LockActiveMember(ctx context.Context, arg LockActiveMemberParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, lockActiveMember, arg.UserID, arg.WorkspaceID)
+	var id string
 	err := row.Scan(&id)
 	return id, err
 }
 
 const lockSubscriberWrites = `-- name: LockSubscriberWrites :exec
-SELECT pg_advisory_xact_lock(
-    hashtext(($1::uuid)::text),
-    hashtext(($2::uuid)::text)
-)
+SELECT 1
 `
-
-type LockSubscriberWritesParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	UserID      pgtype.UUID `json:"user_id"`
-}
 
 // Transaction-scoped serialization boundary for (workspace, user) subscriber
 // state (MUL-5483 review round 7).
 //
-// Three paths race over the same question — "should this user be an active
-// watcher?" — and each one is a check in one statement followed by a write in
+// Three paths race over the same question - "should this user be an active
+// watcher?" - and each one is a check in one statement followed by a write in
 // another:
 //
 //   - the delegated rule: is the user a member / not opted out, then insert;
@@ -392,7 +444,7 @@ type LockSubscriberWritesParams struct {
 //
 // Row locks cannot close this. The interleaving that breaks the escape hatch
 // inserts a subscriber for an issue that did not exist when the opt-out was
-// written, so there is no row to lock — a phantom, which under READ COMMITTED
+// written, so there is no row to lock - a phantom, which under READ COMMITTED
 // needs an explicit lock object. Every path above takes THIS lock first, so
 // their lock ordering is identical and they cannot deadlock against each other.
 //
@@ -400,28 +452,28 @@ type LockSubscriberWritesParams struct {
 // person and a tree, and the tree's membership is exactly what is changing.
 //
 // The key is derived from the UUID VALUE, not from however the caller happened
-// to spell it. ::uuid parses the input and the outer ::text renders PostgreSQL's
-// canonical lowercase form, so 'AB…' and 'ab…' — the same UUID everywhere else
-// in this file, and to every membership query — also produce the same lock.
+// to spell it.  parses the input and the outer  renders PostgreSQL's
+// canonical lowercase form, so 'AB...' and 'ab...' - the same UUID everywhere else
+// in this file, and to every membership query - also produce the same lock.
 // Hashing the raw string instead let an uppercase request take a DIFFERENT lock
 // from the canonical holder, which silently reopened the very race this lock
 // exists to close. Casting at the DB boundary keeps that guarantee even if a
 // future caller forgets to canonicalize.
-func (q *Queries) LockSubscriberWrites(ctx context.Context, arg LockSubscriberWritesParams) error {
-	_, err := q.db.Exec(ctx, lockSubscriberWrites, arg.WorkspaceID, arg.UserID)
+func (q *Queries) LockSubscriberWrites(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, lockSubscriberWrites)
 	return err
 }
 
 const removeIssueSubscriber = `-- name: RemoveIssueSubscriber :exec
 UPDATE issue_subscriber
 SET unsubscribed_at = now(), opt_out_scope = 'issue'
-WHERE issue_id = $1 AND user_type = $2 AND user_id = $3 AND unsubscribed_at IS NULL
+WHERE issue_id = ?1 AND user_type = ?2 AND user_id = ?3 AND unsubscribed_at IS NULL
 `
 
 type RemoveIssueSubscriberParams struct {
-	IssueID  pgtype.UUID `json:"issue_id"`
-	UserType string      `json:"user_type"`
-	UserID   pgtype.UUID `json:"user_id"`
+	IssueID  string `json:"issue_id"`
+	UserType string `json:"user_type"`
+	UserID   string `json:"user_id"`
 }
 
 // Leave THIS issue only. Tombstone rather than delete, so auto-subscribe rules
@@ -429,22 +481,22 @@ type RemoveIssueSubscriberParams struct {
 // unsubscribed_at). scope='issue' keeps the opt-out from reaching descendants:
 // future children of this issue are still allowed to subscribe the user.
 func (q *Queries) RemoveIssueSubscriber(ctx context.Context, arg RemoveIssueSubscriberParams) error {
-	_, err := q.db.Exec(ctx, removeIssueSubscriber, arg.IssueID, arg.UserType, arg.UserID)
+	_, err := q.db.ExecContext(ctx, removeIssueSubscriber, arg.IssueID, arg.UserType, arg.UserID)
 	return err
 }
 
 const subscribeToIssueExplicitly = `-- name: SubscribeToIssueExplicitly :exec
 INSERT INTO issue_subscriber (issue_id, user_type, user_id, reason)
-VALUES ($1, $2, $3, $4)
+VALUES (?1, ?2, ?3, ?4)
 ON CONFLICT (issue_id, user_type, user_id)
 DO UPDATE SET unsubscribed_at = NULL, opt_out_scope = NULL, reason = EXCLUDED.reason
 `
 
 type SubscribeToIssueExplicitlyParams struct {
-	IssueID  pgtype.UUID `json:"issue_id"`
-	UserType string      `json:"user_type"`
-	UserID   pgtype.UUID `json:"user_id"`
-	Reason   string      `json:"reason"`
+	IssueID  string `json:"issue_id"`
+	UserType string `json:"user_type"`
+	UserID   string `json:"user_id"`
+	Reason   string `json:"reason"`
 }
 
 // Explicit user action (the Subscribe button). Unlike the rule-driven path this
@@ -452,7 +504,7 @@ type SubscribeToIssueExplicitlyParams struct {
 // their own earlier unsubscribe, which is the one thing that should bring them
 // back.
 func (q *Queries) SubscribeToIssueExplicitly(ctx context.Context, arg SubscribeToIssueExplicitlyParams) error {
-	_, err := q.db.Exec(ctx, subscribeToIssueExplicitly,
+	_, err := q.db.ExecContext(ctx, subscribeToIssueExplicitly,
 		arg.IssueID,
 		arg.UserType,
 		arg.UserID,
@@ -462,35 +514,23 @@ func (q *Queries) SubscribeToIssueExplicitly(ctx context.Context, arg SubscribeT
 }
 
 const unsubscribeFromIssueSubtree = `-- name: UnsubscribeFromIssueSubtree :many
-WITH RECURSIVE subtree(node_id) AS (
-    SELECT root.id FROM issue root WHERE root.id = $1
+WITH RECURSIVE subtree AS (
+    SELECT root.id AS node_id FROM issue root WHERE root.id = ?1
     UNION ALL
-    SELECT i.id FROM issue i JOIN subtree s ON i.parent_issue_id = s.node_id
-),
-retire_descendants AS (
-    UPDATE issue_subscriber sub
-    SET unsubscribed_at = now(), opt_out_scope = 'subtree'
-    WHERE sub.issue_id IN (SELECT node_id FROM subtree WHERE node_id <> $1)
-      AND sub.user_type = $2 AND sub.user_id = $3
-      AND sub.unsubscribed_at IS NULL
-    RETURNING sub.issue_id
-),
-retire_root AS (
-    INSERT INTO issue_subscriber (issue_id, user_type, user_id, reason, unsubscribed_at, opt_out_scope)
-    VALUES ($1, $2, $3, 'manual', now(), 'subtree')
-    ON CONFLICT (issue_id, user_type, user_id)
-    DO UPDATE SET unsubscribed_at = now(), opt_out_scope = 'subtree'
-    RETURNING issue_id
+    SELECT i.id AS node_id FROM issue i JOIN subtree s ON i.parent_issue_id = s.node_id
 )
-SELECT issue_id FROM retire_descendants
-UNION ALL
-SELECT issue_id FROM retire_root
+UPDATE issue_subscriber AS sub
+SET unsubscribed_at = now(), opt_out_scope = 'subtree'
+WHERE sub.issue_id IN (SELECT node_id FROM subtree)
+  AND sub.user_type = ?2 AND sub.user_id = ?3
+  AND (sub.unsubscribed_at IS NULL OR sub.issue_id = ?1)
+RETURNING sub.issue_id
 `
 
 type UnsubscribeFromIssueSubtreeParams struct {
-	ID       pgtype.UUID `json:"id"`
-	UserType string      `json:"user_type"`
-	UserID   pgtype.UUID `json:"user_id"`
+	IssueID  string `json:"issue_id"`
+	UserType string `json:"user_type"`
+	UserID   string `json:"user_id"`
 }
 
 // Leave an issue AND every descendant in one action. An agent-built tree is
@@ -499,7 +539,7 @@ type UnsubscribeFromIssueSubtreeParams struct {
 //
 // The root gets an UPSERTED tombstone rather than a conditional UPDATE, because
 // "I don't want this tree" has to persist even when the user holds no
-// subscription on the root itself — otherwise the opt-out records nothing and
+// subscription on the root itself - otherwise the opt-out records nothing and
 // the next child the agent files re-subscribes them. That root tombstone is
 // also what covers FUTURE descendants: HasAncestorOptOut walks up to it and
 // honors it because its scope is 'subtree'.
@@ -507,22 +547,49 @@ type UnsubscribeFromIssueSubtreeParams struct {
 // Returns every issue id it actually tombstoned so the caller can broadcast one
 // subscriber:removed per issue; publishing only the root left other open tabs
 // showing a stale subscription on the children.
-func (q *Queries) UnsubscribeFromIssueSubtree(ctx context.Context, arg UnsubscribeFromIssueSubtreeParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, unsubscribeFromIssueSubtree, arg.ID, arg.UserType, arg.UserID)
+// Order: UnsubscribeFromIssueSubtree_Step2, then UnsubscribeFromIssueSubtree.
+// Step2 upserts the root tombstone. This statement tombstones every subscriber
+// row in the subtree (including that root) and returns the issue ids.
+func (q *Queries) UnsubscribeFromIssueSubtree(ctx context.Context, arg UnsubscribeFromIssueSubtreeParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, unsubscribeFromIssueSubtree, arg.IssueID, arg.UserType, arg.UserID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []string{}
 	for rows.Next() {
-		var issue_id pgtype.UUID
+		var issue_id string
 		if err := rows.Scan(&issue_id); err != nil {
 			return nil, err
 		}
 		items = append(items, issue_id)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil
+}
+
+const unsubscribeFromIssueSubtree_Step2 = `-- name: UnsubscribeFromIssueSubtree_Step2 :one
+INSERT INTO issue_subscriber (issue_id, user_type, user_id, reason, unsubscribed_at, opt_out_scope)
+VALUES (?1, ?2, ?3, 'manual', now(), 'subtree')
+ON CONFLICT (issue_id, user_type, user_id)
+DO UPDATE SET unsubscribed_at = now(), opt_out_scope = 'subtree'
+RETURNING issue_id
+`
+
+type UnsubscribeFromIssueSubtree_Step2Params struct {
+	IssueID  string `json:"issue_id"`
+	UserType string `json:"user_type"`
+	UserID   string `json:"user_id"`
+}
+
+func (q *Queries) UnsubscribeFromIssueSubtree_Step2(ctx context.Context, arg UnsubscribeFromIssueSubtree_Step2Params) (string, error) {
+	row := q.db.QueryRowContext(ctx, unsubscribeFromIssueSubtree_Step2, arg.IssueID, arg.UserType, arg.UserID)
+	var issue_id string
+	err := row.Scan(&issue_id)
+	return issue_id, err
 }

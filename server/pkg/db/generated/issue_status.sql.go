@@ -7,34 +7,33 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const archiveIssueStatusEntry = `-- name: ArchiveIssueStatusEntry :one
 UPDATE issue_status SET
     archived_at = now(),
     updated_at = now()
-WHERE id = $1::uuid
-  AND workspace_id = $2::uuid
+WHERE id = ?1
+  AND workspace_id = ?2
   AND is_system = FALSE
   AND archived_at IS NULL
-RETURNING id, workspace_id, key, name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon
+RETURNING id, workspace_id, "key", name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon
 `
 
 type ArchiveIssueStatusEntryParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // Built-ins are excluded by is_system: archiving one would delete its
 // category's behavior definition.
 //
 // Archiving retires a status from future use only. Issues already on it keep
-// it — Effective ignores archived_at, so their behavior is unchanged — while
+// it - Effective ignores archived_at, so their behavior is unchanged - while
 // Resolve rejects it, so nothing new can be assigned to it.
 func (q *Queries) ArchiveIssueStatusEntry(ctx context.Context, arg ArchiveIssueStatusEntryParams) (IssueStatus, error) {
-	row := q.db.QueryRow(ctx, archiveIssueStatusEntry, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, archiveIssueStatusEntry, arg.ID, arg.WorkspaceID)
 	var i IssueStatus
 	err := row.Scan(
 		&i.ID,
@@ -55,59 +54,59 @@ func (q *Queries) ArchiveIssueStatusEntry(ctx context.Context, arg ArchiveIssueS
 }
 
 const countIssuesUsingStatusKey = `-- name: CountIssuesUsingStatusKey :one
-SELECT COUNT(*)::bigint FROM issue
-WHERE workspace_id = $1::uuid
-  AND status = $2::text
+SELECT COUNT(*) FROM issue
+WHERE workspace_id = ?1
+  AND status = ?2
 `
 
 type CountIssuesUsingStatusKeyParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Key         string      `json:"key"`
+	WorkspaceID string `json:"workspace_id"`
+	Key         string `json:"key"`
 }
 
 // Archive precondition, including terminal issues. Call under the catalog lock
 // so a concurrent status assignment cannot invalidate the empty check.
 func (q *Queries) CountIssuesUsingStatusKey(ctx context.Context, arg CountIssuesUsingStatusKeyParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countIssuesUsingStatusKey, arg.WorkspaceID, arg.Key)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
+	row := q.db.QueryRowContext(ctx, countIssuesUsingStatusKey, arg.WorkspaceID, arg.Key)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const createIssueStatusEntry = `-- name: CreateIssueStatusEntry :one
 INSERT INTO issue_status (workspace_id, key, name, description, category, color, icon, position)
 VALUES (
-    $1::uuid,
-    $2::text,
-    $3::text,
-    $4::text,
-    $5::text,
-    $6::text,
-    $7::text,
+    ?1,
+    ?2,
+    ?3,
+    ?4,
+    ?5,
+    ?6,
+    ?7,
     COALESCE(
         (SELECT MAX(position) + 1 FROM issue_status
-         WHERE workspace_id = $1::uuid
-		   AND category = $5::text),
+         WHERE workspace_id = ?1
+		   AND category = ?5),
         0
     )
 )
-RETURNING id, workspace_id, key, name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon
+RETURNING id, workspace_id, "key", name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon
 `
 
 type CreateIssueStatusEntryParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Key         string      `json:"key"`
-	Name        string      `json:"name"`
-	Description string      `json:"description"`
-	Category    string      `json:"category"`
-	Color       string      `json:"color"`
-	Icon        string      `json:"icon"`
+	WorkspaceID string `json:"workspace_id"`
+	Key         string `json:"key"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Category    string `json:"category"`
+	Color       string `json:"color"`
+	Icon        string `json:"icon"`
 }
 
 // Custom statuses only: is_system is never set here, so the canonical-key and
 // non-archivable CHECK constraints can only ever apply to seeded rows.
 func (q *Queries) CreateIssueStatusEntry(ctx context.Context, arg CreateIssueStatusEntryParams) (IssueStatus, error) {
-	row := q.db.QueryRow(ctx, createIssueStatusEntry,
+	row := q.db.QueryRowContext(ctx, createIssueStatusEntry,
 		arg.WorkspaceID,
 		arg.Key,
 		arg.Name,
@@ -136,28 +135,28 @@ func (q *Queries) CreateIssueStatusEntry(ctx context.Context, arg CreateIssueSta
 }
 
 const deleteIssueStatusEntriesForWorkspace = `-- name: DeleteIssueStatusEntriesForWorkspace :exec
-DELETE FROM issue_status WHERE workspace_id = $1::uuid
+DELETE FROM issue_status WHERE workspace_id = ?1
 `
 
 // No foreign keys by project rule, so workspace teardown cleans up here.
-func (q *Queries) DeleteIssueStatusEntriesForWorkspace(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteIssueStatusEntriesForWorkspace, workspaceID)
+func (q *Queries) DeleteIssueStatusEntriesForWorkspace(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteIssueStatusEntriesForWorkspace, workspaceID)
 	return err
 }
 
 const getIssueStatusEntryByID = `-- name: GetIssueStatusEntryByID :one
-SELECT id, workspace_id, key, name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon FROM issue_status
-WHERE id = $1::uuid
-  AND workspace_id = $2::uuid
+SELECT id, workspace_id, "key", name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon FROM issue_status
+WHERE id = ?1
+  AND workspace_id = ?2
 `
 
 type GetIssueStatusEntryByIDParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 func (q *Queries) GetIssueStatusEntryByID(ctx context.Context, arg GetIssueStatusEntryByIDParams) (IssueStatus, error) {
-	row := q.db.QueryRow(ctx, getIssueStatusEntryByID, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, getIssueStatusEntryByID, arg.ID, arg.WorkspaceID)
 	var i IssueStatus
 	err := row.Scan(
 		&i.ID,
@@ -178,18 +177,18 @@ func (q *Queries) GetIssueStatusEntryByID(ctx context.Context, arg GetIssueStatu
 }
 
 const getIssueStatusEntryByKey = `-- name: GetIssueStatusEntryByKey :one
-SELECT id, workspace_id, key, name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon FROM issue_status
-WHERE workspace_id = $1::uuid
-  AND key = $2::text
+SELECT id, workspace_id, "key", name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon FROM issue_status
+WHERE workspace_id = ?1
+  AND key = ?2
 `
 
 type GetIssueStatusEntryByKeyParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Key         string      `json:"key"`
+	WorkspaceID string `json:"workspace_id"`
+	Key         string `json:"key"`
 }
 
 func (q *Queries) GetIssueStatusEntryByKey(ctx context.Context, arg GetIssueStatusEntryByKeyParams) (IssueStatus, error) {
-	row := q.db.QueryRow(ctx, getIssueStatusEntryByKey, arg.WorkspaceID, arg.Key)
+	row := q.db.QueryRowContext(ctx, getIssueStatusEntryByKey, arg.WorkspaceID, arg.Key)
 	var i IssueStatus
 	err := row.Scan(
 		&i.ID,
@@ -210,24 +209,24 @@ func (q *Queries) GetIssueStatusEntryByKey(ctx context.Context, arg GetIssueStat
 }
 
 const listActiveCustomIssueStatusEntries = `-- name: ListActiveCustomIssueStatusEntries :many
-SELECT id, workspace_id, key, name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon FROM issue_status
-WHERE workspace_id = $1::uuid
-  AND category = $2::text
+SELECT id, workspace_id, "key", name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon FROM issue_status
+WHERE workspace_id = ?1
+  AND category = ?2
   AND is_system = FALSE
   AND archived_at IS NULL
 ORDER BY position, key
 `
 
 type ListActiveCustomIssueStatusEntriesParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Category    string      `json:"category"`
+	WorkspaceID string `json:"workspace_id"`
+	Category    string `json:"category"`
 }
 
-// One category's ACTIVE custom statuses — the exact set a reorder must cover.
+// One category's ACTIVE custom statuses - the exact set a reorder must cover.
 // Read inside the reorder transaction, under the catalog lock, so a status
 // archived concurrently cannot slip in or out between validation and write.
 func (q *Queries) ListActiveCustomIssueStatusEntries(ctx context.Context, arg ListActiveCustomIssueStatusEntriesParams) ([]IssueStatus, error) {
-	rows, err := q.db.Query(ctx, listActiveCustomIssueStatusEntries, arg.WorkspaceID, arg.Category)
+	rows, err := q.db.QueryContext(ctx, listActiveCustomIssueStatusEntries, arg.WorkspaceID, arg.Category)
 	if err != nil {
 		return nil, err
 	}
@@ -254,6 +253,9 @@ func (q *Queries) ListActiveCustomIssueStatusEntries(ctx context.Context, arg Li
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -261,9 +263,9 @@ func (q *Queries) ListActiveCustomIssueStatusEntries(ctx context.Context, arg Li
 }
 
 const listIssueStatusEntries = `-- name: ListIssueStatusEntries :many
-SELECT id, workspace_id, key, name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon FROM issue_status
-WHERE workspace_id = $1::uuid
-  AND ($2::bool OR archived_at IS NULL)
+SELECT id, workspace_id, "key", name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon FROM issue_status
+WHERE workspace_id = ?1
+  AND (?2 OR archived_at IS NULL)
 ORDER BY
     CASE category WHEN 'unstarted' THEN 0 WHEN 'started' THEN 1 WHEN 'done' THEN 2 WHEN 'closed' THEN 3 ELSE 4 END,
     position,
@@ -282,14 +284,14 @@ ORDER BY
 `
 
 type ListIssueStatusEntriesParams struct {
-	WorkspaceID     pgtype.UUID `json:"workspace_id"`
-	IncludeArchived bool        `json:"include_archived"`
+	WorkspaceID     string      `json:"workspace_id"`
+	IncludeArchived interface{} `json:"include_archived"`
 }
 
 // Position orders both built-in and custom rows inside each lifecycle group.
 // Built-in order is only a tiebreak for the original seeded positions.
 func (q *Queries) ListIssueStatusEntries(ctx context.Context, arg ListIssueStatusEntriesParams) ([]IssueStatus, error) {
-	rows, err := q.db.Query(ctx, listIssueStatusEntries, arg.WorkspaceID, arg.IncludeArchived)
+	rows, err := q.db.QueryContext(ctx, listIssueStatusEntries, arg.WorkspaceID, arg.IncludeArchived)
 	if err != nil {
 		return nil, err
 	}
@@ -316,6 +318,9 @@ func (q *Queries) ListIssueStatusEntries(ctx context.Context, arg ListIssueStatu
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -324,17 +329,17 @@ func (q *Queries) ListIssueStatusEntries(ctx context.Context, arg ListIssueStatu
 
 const listIssueStatusKeysByCategories = `-- name: ListIssueStatusKeysByCategories :many
 SELECT key FROM issue_status
-WHERE workspace_id = $1::uuid
-  AND category = ANY($2::text[])
+WHERE workspace_id = ?1
+  AND category IN (SELECT value FROM json_each(?2))
 `
 
 type ListIssueStatusKeysByCategoriesParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Categories  []string    `json:"categories"`
+	WorkspaceID string      `json:"workspace_id"`
+	Categories  interface{} `json:"categories"`
 }
 
 // Expands a set of categories to the status keys that belong to them, so a
-// category filter can be applied as an INDEXED `status = ANY(...)` predicate
+// category filter can be applied as an INDEXED `status IN (SELECT value FROM json_each(...))` predicate
 // instead of wrapping the column in issue_effective_status(), which makes
 // (workspace_id, status) unusable and forces a full workspace scan.
 //
@@ -342,7 +347,7 @@ type ListIssueStatusKeysByCategoriesParams struct {
 // future assignment but leaves existing issues on it, and those issues must
 // still appear in their category's column.
 func (q *Queries) ListIssueStatusKeysByCategories(ctx context.Context, arg ListIssueStatusKeysByCategoriesParams) ([]string, error) {
-	rows, err := q.db.Query(ctx, listIssueStatusKeysByCategories, arg.WorkspaceID, arg.Categories)
+	rows, err := q.db.QueryContext(ctx, listIssueStatusKeysByCategories, arg.WorkspaceID, arg.Categories)
 	if err != nil {
 		return nil, err
 	}
@@ -355,6 +360,9 @@ func (q *Queries) ListIssueStatusKeysByCategories(ctx context.Context, arg ListI
 		}
 		items = append(items, key)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -362,20 +370,18 @@ func (q *Queries) ListIssueStatusKeysByCategories(ctx context.Context, arg ListI
 }
 
 const lockIssueStatusCatalog = `-- name: LockIssueStatusCatalog :exec
-SELECT pg_advisory_xact_lock(hashtextextended($1::uuid::text || ':issue_status', 0))
+SELECT 1
 `
 
 // EXCLUSIVE transaction lock over a workspace's status catalog, held by archive
 // so no issue can be written onto a status between the in-use census and the
-// archive itself. pg_advisory_xact_lock (not pg_try_) so a concurrent archive
-// queues instead of failing.
-func (q *Queries) LockIssueStatusCatalog(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, lockIssueStatusCatalog, workspaceID)
+func (q *Queries) LockIssueStatusCatalog(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, lockIssueStatusCatalog)
 	return err
 }
 
 const lockIssueStatusCatalogShared = `-- name: LockIssueStatusCatalogShared :exec
-SELECT pg_advisory_xact_lock_shared(hashtextextended($1::uuid::text || ':issue_status', 0))
+SELECT 1
 `
 
 // SHARED counterpart, taken by a write that puts an issue ON a custom status.
@@ -385,27 +391,31 @@ SELECT pg_advisory_xact_lock_shared(hashtextextended($1::uuid::text || ':issue_s
 // Built-in statuses deliberately do NOT take this lock: a built-in can never be
 // archived (enforced by issue_status_system_not_archivable), so there is nothing
 // to race with, and the overwhelmingly common write path stays lock-free.
-func (q *Queries) LockIssueStatusCatalogShared(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, lockIssueStatusCatalogShared, workspaceID)
+func (q *Queries) LockIssueStatusCatalogShared(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, lockIssueStatusCatalogShared)
 	return err
 }
 
 const reorderIssueStatusEntries = `-- name: ReorderIssueStatusEntries :execrows
-UPDATE issue_status s
-SET position = ($1::float8[])[v.ordinality],
+UPDATE issue_status
+SET position = (
+        SELECT p.value
+        FROM json_each(?1) AS p
+        JOIN json_each(?2) AS v ON v.key = p.key
+        WHERE v.value = issue_status.id
+    ),
     updated_at = now()
-FROM unnest($4::uuid[]) WITH ORDINALITY AS v(id, ordinality)
-WHERE s.id = v.id
-  AND s.workspace_id = $2::uuid
-  AND ($3::bool OR s.is_system = FALSE)
-  AND s.archived_at IS NULL
+WHERE issue_status.workspace_id = ?3
+  AND issue_status.id IN (SELECT value FROM json_each(?2))
+  AND (?4 OR issue_status.is_system = FALSE)
+  AND issue_status.archived_at IS NULL
 `
 
 type ReorderIssueStatusEntriesParams struct {
-	Positions     []float64     `json:"positions"`
-	WorkspaceID   pgtype.UUID   `json:"workspace_id"`
-	IncludeSystem bool          `json:"include_system"`
-	Ids           []pgtype.UUID `json:"ids"`
+	Positions     interface{} `json:"positions"`
+	Ids           interface{} `json:"ids"`
+	WorkspaceID   string      `json:"workspace_id"`
+	IncludeSystem interface{} `json:"include_system"`
 }
 
 // Atomic intra-category reorder. One statement, so a failure leaves the whole
@@ -415,31 +425,33 @@ type ReorderIssueStatusEntriesParams struct {
 // Full-catalog callers may reorder built-ins, without changing their semantics.
 // Legacy custom-only callers preserve the positions occupied by custom rows.
 // Archived rows remain frozen.
+// JSON shape: ids and positions are JSON arrays aligned by index.
+// ids: ["status-id", ...], positions: [1, 2, ...].
 func (q *Queries) ReorderIssueStatusEntries(ctx context.Context, arg ReorderIssueStatusEntriesParams) (int64, error) {
-	result, err := q.db.Exec(ctx, reorderIssueStatusEntries,
+	result, err := q.db.ExecContext(ctx, reorderIssueStatusEntries,
 		arg.Positions,
+		arg.Ids,
 		arg.WorkspaceID,
 		arg.IncludeSystem,
-		arg.Ids,
 	)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const seedIssueStatusEntries = `-- name: SeedIssueStatusEntries :exec
 
-INSERT INTO issue_status (workspace_id, key, name, description, category, color, is_system, position)
+INSERT INTO issue_status (id, workspace_id, key, name, description, category, color, is_system, position)
 VALUES
-    ($1::uuid, 'backlog', 'Backlog', 'Parked. Assigning an issue here never starts an agent run.', 'unstarted', '#6b7280', TRUE, 0),
-    ($1::uuid, 'todo', 'Todo', 'Queued for work. Moving an issue here starts the assigned agent.', 'unstarted', '#6b7280', TRUE, 0),
-    ($1::uuid, 'in_progress', 'In Progress', 'Actively being worked on.', 'started', '#f59e0b', TRUE, 0),
-    ($1::uuid, 'in_review', 'In Review', 'Work delivered, waiting on human review. Finalizes the autopilot run.', 'started', '#22c55e', TRUE, 0),
-    ($1::uuid, 'done', 'Done', 'Completed.', 'done', '#3b82f6', TRUE, 0),
-    ($1::uuid, 'blocked', 'Blocked', 'Stalled on an external dependency.', 'started', '#ef4444', TRUE, 0),
-    ($1::uuid, 'cancelled', 'Cancelled', 'Decided not to do.', 'closed', '#6b7280', TRUE, 0)
-ON CONFLICT DO NOTHING
+    (gen_random_uuid(), ?1, 'backlog', 'Backlog', 'Parked. Assigning an issue here never starts an agent run.', 'unstarted', '#6b7280', 1, 0),
+    (gen_random_uuid(), ?1, 'todo', 'Todo', 'Queued for work. Moving an issue here starts the assigned agent.', 'unstarted', '#6b7280', 1, 0),
+    (gen_random_uuid(), ?1, 'in_progress', 'In Progress', 'Actively being worked on.', 'started', '#f59e0b', 1, 0),
+    (gen_random_uuid(), ?1, 'in_review', 'In Review', 'Work delivered, waiting on human review. Finalizes the autopilot run.', 'started', '#22c55e', 1, 0),
+    (gen_random_uuid(), ?1, 'done', 'Done', 'Completed.', 'done', '#3b82f6', 1, 0),
+    (gen_random_uuid(), ?1, 'blocked', 'Blocked', 'Stalled on an external dependency.', 'started', '#ef4444', 1, 0),
+    (gen_random_uuid(), ?1, 'cancelled', 'Cancelled', 'Decided not to do.', 'closed', '#6b7280', 1, 0)
+ON CONFLICT (workspace_id, key) DO NOTHING
 `
 
 // Issue status catalog (MUL-6243). Each workspace holds the 7 built-in
@@ -448,41 +460,41 @@ ON CONFLICT DO NOTHING
 // pods during a rolling deploy: the unique (workspace_id, key) index makes a
 // losing racer a no-op rather than an error. Initial positions are 0; the list's
 // built-in tiebreak preserves the seed order until an admin reorders the group.
-func (q *Queries) SeedIssueStatusEntries(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, seedIssueStatusEntries, workspaceID)
+func (q *Queries) SeedIssueStatusEntries(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, seedIssueStatusEntries, workspaceID)
 	return err
 }
 
 const updateIssueStatusEntry = `-- name: UpdateIssueStatusEntry :one
 UPDATE issue_status SET
-    name = COALESCE($1, name),
-    description = COALESCE($2, description),
-    color = COALESCE($3, color),
-    icon = COALESCE($4, icon),
-    position = COALESCE($5, position),
+    name = COALESCE(?1, name),
+    description = COALESCE(?2, description),
+    color = COALESCE(?3, color),
+    icon = COALESCE(?4, icon),
+    position = COALESCE(?5, position),
     updated_at = now()
-WHERE id = $6::uuid
-  AND workspace_id = $7::uuid
+WHERE id = ?6
+  AND workspace_id = ?7
   AND is_system = FALSE
   AND archived_at IS NULL
-RETURNING id, workspace_id, key, name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon
+RETURNING id, workspace_id, "key", name, description, category, color, is_system, position, archived_at, created_at, updated_at, icon
 `
 
 type UpdateIssueStatusEntryParams struct {
-	Name        pgtype.Text   `json:"name"`
-	Description pgtype.Text   `json:"description"`
-	Color       pgtype.Text   `json:"color"`
-	Icon        pgtype.Text   `json:"icon"`
-	Position    pgtype.Float8 `json:"position"`
-	ID          pgtype.UUID   `json:"id"`
-	WorkspaceID pgtype.UUID   `json:"workspace_id"`
+	Name        sql.NullString  `json:"name"`
+	Description sql.NullString  `json:"description"`
+	Color       sql.NullString  `json:"color"`
+	Icon        sql.NullString  `json:"icon"`
+	Position    sql.NullFloat64 `json:"position"`
+	ID          string          `json:"id"`
+	WorkspaceID string          `json:"workspace_id"`
 }
 
 // key and category are absent on purpose: both are immutable after create.
 // The is_system guard is what enforces "built-in name and color are locked" at
 // the storage layer, so a handler bug cannot rename a built-in.
 func (q *Queries) UpdateIssueStatusEntry(ctx context.Context, arg UpdateIssueStatusEntryParams) (IssueStatus, error) {
-	row := q.db.QueryRow(ctx, updateIssueStatusEntry,
+	row := q.db.QueryRowContext(ctx, updateIssueStatusEntry,
 		arg.Name,
 		arg.Description,
 		arg.Color,

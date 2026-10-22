@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"database/sql"
 	"net/http"
 	"strings"
 	"testing"
@@ -8,7 +9,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/testutil"
 )
@@ -205,8 +205,8 @@ func TestArchiveCompletedInboxExpandsCustomTerminalStatuses(t *testing.T) {
 }
 
 func TestInboxListBodyPreview(t *testing.T) {
-	issue := pgtype.UUID{Bytes: uuid.New(), Valid: true}
-	text := func(s string) pgtype.Text { return pgtype.Text{String: s, Valid: true} }
+	issue := uuid.NewString()
+	text := func(s string) sql.NullString { return sql.NullString{String: s, Valid: true} }
 	long := strings.Repeat("a", 5000)
 	// Every CJK character is three bytes in UTF-8: a byte-based cut would land
 	// mid-character and produce invalid UTF-8.
@@ -215,11 +215,11 @@ func TestInboxListBodyPreview(t *testing.T) {
 	cases := []struct {
 		name      string
 		notifType string
-		issueID   pgtype.UUID
-		body      pgtype.Text
+		issueID   string
+		body      sql.NullString
 		want      *string
 	}{
-		{"null body stays null", "new_comment", issue, pgtype.Text{}, nil},
+		{"null body stays null", "new_comment", issue, sql.NullString{}, nil},
 		{"short comment is untouched", "new_comment", issue, text("looks good"), ptr("looks good")},
 		{"exactly at the limit is untouched", "new_comment", issue,
 			text(strings.Repeat("a", inboxListBodyPreviewLimit)),
@@ -231,7 +231,7 @@ func TestInboxListBodyPreview(t *testing.T) {
 			ptr(strings.Repeat("a", inboxListBodyPreviewLimit-1) + "…")},
 		// Issue-less notifications render their body in the detail pane from
 		// the list cache, so shortening them would lose content.
-		{"comment without an issue keeps its full body", "new_comment", pgtype.UUID{}, text(long), ptr(long)},
+		{"comment without an issue keeps its full body", "new_comment", "", text(long), ptr(long)},
 		// Other types are out of scope even when issue-backed: their body is
 		// not merely a preview of something the issue page shows.
 		{"other types keep their full body", "task_failed", issue, text(long), ptr(long)},

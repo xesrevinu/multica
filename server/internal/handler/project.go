@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,7 +13,6 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/logger"
@@ -68,23 +68,23 @@ func projectToResponse(p db.Project) ProjectResponse {
 	}
 }
 
-func (h *Handler) loadProjectIssueStats(ctx context.Context, workspaceID, projectID pgtype.UUID) (int64, int64) {
+func (h *Handler) loadProjectIssueStats(ctx context.Context, workspaceID, projectID string) (int64, int64) {
 	terminalStatusKeys := h.projectTerminalIssueStatusKeys(ctx, workspaceID)
 	stats, err := h.Queries.GetProjectIssueStats(ctx, db.GetProjectIssueStatsParams{
 		WorkspaceID:        workspaceID,
-		ProjectIds:         []pgtype.UUID{projectID},
+		ProjectIds:         []string{projectID},
 		TerminalStatusKeys: terminalStatusKeys,
 	})
 	if err != nil || len(stats) == 0 {
 		return 0, 0
 	}
-	return stats[0].TotalCount, stats[0].DoneCount
+	return stats[0].TotalCount, int64(stats[0].DoneCount.Float64)
 }
 
 // projectTerminalIssueStatusKeys keeps project responses useful if the custom
 // status catalog cannot be read. Canonical terminal keys are less complete
 // than the workspace catalog, but they avoid rendering every project as 0/0.
-func (h *Handler) projectTerminalIssueStatusKeys(ctx context.Context, workspaceID pgtype.UUID) []string {
+func (h *Handler) projectTerminalIssueStatusKeys(ctx context.Context, workspaceID string) []string {
 	keys, err := h.terminalIssueStatusKeys(ctx, workspaceID)
 	if err == nil {
 		return keys
@@ -94,8 +94,8 @@ func (h *Handler) projectTerminalIssueStatusKeys(ctx context.Context, workspaceI
 	return []string{issuestatus.Done, issuestatus.Cancelled}
 }
 
-func (h *Handler) loadProjectResourceCount(ctx context.Context, projectID pgtype.UUID) int64 {
-	rows, err := h.Queries.GetProjectResourceCounts(ctx, []pgtype.UUID{projectID})
+func (h *Handler) loadProjectResourceCount(ctx context.Context, projectID string) int64 {
+	rows, err := h.Queries.GetProjectResourceCounts(ctx, []string{projectID})
 	if err != nil || len(rows) == 0 {
 		return 0
 	}
@@ -147,13 +147,13 @@ func (h *Handler) ListProjects(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var statusFilter pgtype.Text
+	var statusFilter sql.NullString
 	if s := r.URL.Query().Get("status"); s != "" {
-		statusFilter = pgtype.Text{String: s, Valid: true}
+		statusFilter = sql.NullString{String: s, Valid: true}
 	}
-	var priorityFilter pgtype.Text
+	var priorityFilter sql.NullString
 	if p := r.URL.Query().Get("priority"); p != "" {
-		priorityFilter = pgtype.Text{String: p, Valid: true}
+		priorityFilter = sql.NullString{String: p, Valid: true}
 	}
 	projects, err := h.Queries.ListProjects(r.Context(), db.ListProjectsParams{
 		WorkspaceID: wsUUID,
@@ -169,7 +169,7 @@ func (h *Handler) ListProjects(w http.ResponseWriter, r *http.Request) {
 	statsMap := make(map[string]db.GetProjectIssueStatsRow)
 	resourceCountMap := make(map[string]int64)
 	if len(projects) > 0 {
-		projectIDs := make([]pgtype.UUID, len(projects))
+		projectIDs := make([]string, len(projects))
 		for i, p := range projects {
 			projectIDs[i] = p.ID
 		}
@@ -181,7 +181,7 @@ func (h *Handler) ListProjects(w http.ResponseWriter, r *http.Request) {
 		})
 		if statsErr == nil {
 			for _, s := range stats {
-				statsMap[uuidToString(s.ProjectID)] = s
+				statsMap[uuidToString(s.ProjectID.String)] = s
 			}
 		}
 		counts, err := h.Queries.GetProjectResourceCounts(r.Context(), projectIDs)
@@ -197,7 +197,7 @@ func (h *Handler) ListProjects(w http.ResponseWriter, r *http.Request) {
 		resp[i] = projectToResponse(p)
 		if s, ok := statsMap[resp[i].ID]; ok {
 			resp[i].IssueCount = s.TotalCount
-			resp[i].DoneCount = s.DoneCount
+			resp[i].DoneCount = int64(s.DoneCount.Float64)
 		}
 		resp[i].ResourceCount = resourceCountMap[resp[i].ID]
 	}
@@ -292,10 +292,10 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 	if !validateProjectEnum(w, "priority", priority, validProjectPriorities) {
 		return
 	}
-	var leadType pgtype.Text
-	var leadID pgtype.UUID
+	var leadType sql.NullString
+	var leadID string
 	if req.LeadType != nil {
-		leadType = pgtype.Text{String: *req.LeadType, Valid: true}
+		leadType = sql.NullString{String: *req.LeadType, Valid: true}
 	}
 	if req.LeadID != nil {
 		id, ok := parseUUIDOrBadRequest(w, *req.LeadID, "lead_id")
@@ -308,7 +308,7 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var workflowID pgtype.UUID
+	var workflowID string
 	if req.WorkflowID != nil && *req.WorkflowID != "" {
 		if !h.requireProjectWorkflowsV1(w, r) {
 			return
@@ -322,7 +322,7 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "workflow not found in this workspace")
 			return
 		}
-		if !row.IsDefault {
+		if row.IsDefault == 0 {
 			workflowID = id
 		}
 	}
@@ -400,11 +400,11 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 		Icon:        ptrToText(req.Icon),
 		Status:      status,
 		LeadType:    leadType,
-		LeadID:      leadID,
+		LeadID:      nullString(leadID),
 		Priority:    priority,
-		StartDate:   startDate,
-		DueDate:     dueDate,
-		WorkflowID:  workflowID,
+		StartDate:   formatDate(startDate.Time, startDate.Valid),
+		DueDate:     formatDate(dueDate.Time, dueDate.Valid),
+		WorkflowID:  nullString(workflowID),
 	}
 
 	// Without resources, keep the simple non-tx path.
@@ -421,12 +421,12 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Transactional path: project + all resources are atomic.
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start transaction")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	project, err := qtx.CreateProject(r.Context(), createParams)
@@ -438,9 +438,9 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 	creator, _ := h.parseUserUUIDOrZero(userID)
 	resourceRows := make([]db.ProjectResource, 0, len(req.Resources))
 	for i, res := range req.Resources {
-		var label pgtype.Text
+		var label sql.NullString
 		if res.Label != nil && strings.TrimSpace(*res.Label) != "" {
-			label = pgtype.Text{String: strings.TrimSpace(*res.Label), Valid: true}
+			label = sql.NullString{String: strings.TrimSpace(*res.Label), Valid: true}
 		}
 		var position int32 = int32(i)
 		if res.Position != nil {
@@ -450,10 +450,10 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 			ProjectID:    project.ID,
 			WorkspaceID:  project.WorkspaceID,
 			ResourceType: res.ResourceType,
-			ResourceRef:  normalizedRefs[i],
+			ResourceRef:  string(normalizedRefs[i]),
 			Label:        label,
-			Position:     position,
-			CreatedBy:    creator,
+			Position:     int64(position),
+			CreatedBy:    nullString(creator),
 		})
 		if err != nil {
 			if isUniqueViolation(err) {
@@ -465,7 +465,7 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 		}
 		resourceRows = append(resourceRows, row)
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit project create")
 		return
 	}
@@ -531,46 +531,52 @@ func (h *Handler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 	json.Unmarshal(bodyBytes, &rawFields)
 
 	params := db.UpdateProjectParams{ID: prevProject.ID}
-	_, params.DescriptionSet = rawFields["description"]
-	_, params.IconSet = rawFields["icon"]
-	_, params.LeadTypeSet = rawFields["lead_type"]
-	_, params.LeadIDSet = rawFields["lead_id"]
-	_, params.StartDateSet = rawFields["start_date"]
-	_, params.DueDateSet = rawFields["due_date"]
+	_, hasDescription := rawFields["description"]
+	_, hasIcon := rawFields["icon"]
+	_, hasLeadType := rawFields["lead_type"]
+	_, hasLeadID := rawFields["lead_id"]
+	_, hasStartDate := rawFields["start_date"]
+	_, hasDueDate := rawFields["due_date"]
+	params.DescriptionSet = flagSet(hasDescription)
+	params.IconSet = flagSet(hasIcon)
+	params.LeadTypeSet = flagSet(hasLeadType)
+	params.LeadIDSet = flagSet(hasLeadID)
+	params.StartDateSet = flagSet(hasStartDate)
+	params.DueDateSet = flagSet(hasDueDate)
 	if req.Title != nil {
-		params.Title = pgtype.Text{String: *req.Title, Valid: true}
+		params.Title = sql.NullString{String: *req.Title, Valid: true}
 	}
 	if req.Status != nil {
 		if !validateProjectEnum(w, "status", *req.Status, validProjectStatuses) {
 			return
 		}
-		params.Status = pgtype.Text{String: *req.Status, Valid: true}
+		params.Status = sql.NullString{String: *req.Status, Valid: true}
 	}
 	if req.Priority != nil {
 		if !validateProjectEnum(w, "priority", *req.Priority, validProjectPriorities) {
 			return
 		}
-		params.Priority = pgtype.Text{String: *req.Priority, Valid: true}
+		params.Priority = sql.NullString{String: *req.Priority, Valid: true}
 	}
 	if _, ok := rawFields["description"]; ok {
 		if req.Description != nil {
-			params.Description = pgtype.Text{String: *req.Description, Valid: true}
+			params.Description = sql.NullString{String: *req.Description, Valid: true}
 		} else {
-			params.Description = pgtype.Text{Valid: false}
+			params.Description = sql.NullString{Valid: false}
 		}
 	}
 	if _, ok := rawFields["icon"]; ok {
 		if req.Icon != nil {
-			params.Icon = pgtype.Text{String: *req.Icon, Valid: true}
+			params.Icon = sql.NullString{String: *req.Icon, Valid: true}
 		} else {
-			params.Icon = pgtype.Text{Valid: false}
+			params.Icon = sql.NullString{Valid: false}
 		}
 	}
 	if _, ok := rawFields["lead_type"]; ok {
 		if req.LeadType != nil {
-			params.LeadType = pgtype.Text{String: *req.LeadType, Valid: true}
+			params.LeadType = sql.NullString{String: *req.LeadType, Valid: true}
 		} else {
-			params.LeadType = pgtype.Text{Valid: false}
+			params.LeadType = sql.NullString{Valid: false}
 		}
 	}
 	if _, ok := rawFields["lead_id"]; ok {
@@ -579,13 +585,16 @@ func (h *Handler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			params.LeadID = leadUUID
+			params.LeadID = nullString(leadUUID)
 		} else {
-			params.LeadID = pgtype.UUID{Valid: false}
+			params.LeadID = sql.NullString{
+
+				// Dates follow the issue contract: a present key with an empty/null value
+				// clears the date; an absent key leaves the prior value untouched.
+			}
 		}
 	}
-	// Dates follow the issue contract: a present key with an empty/null value
-	// clears the date; an absent key leaves the prior value untouched.
+
 	if _, ok := rawFields["start_date"]; ok {
 		if req.StartDate != nil && *req.StartDate != "" {
 			d, err := util.ParseCalendarDate(*req.StartDate)
@@ -593,9 +602,9 @@ func (h *Handler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusBadRequest, "invalid start_date format, expected YYYY-MM-DD")
 				return
 			}
-			params.StartDate = d
+			params.StartDate = formatDate(d.Time, d.Valid)
 		} else {
-			params.StartDate = pgtype.Date{Valid: false} // explicit null = clear date
+			params.StartDate = sql.NullString{} // explicit null = clear date
 		}
 	}
 	if _, ok := rawFields["due_date"]; ok {
@@ -605,9 +614,9 @@ func (h *Handler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusBadRequest, "invalid due_date format, expected YYYY-MM-DD")
 				return
 			}
-			params.DueDate = d
+			params.DueDate = formatDate(d.Time, d.Valid)
 		} else {
-			params.DueDate = pgtype.Date{Valid: false} // explicit null = clear date
+			params.DueDate = sql.NullString{} // explicit null = clear date
 		}
 	}
 	project, err := h.Queries.UpdateProject(r.Context(), params)
@@ -645,19 +654,19 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID := uuidToString(requester.UserID)
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start transaction")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	if _, err := qtx.LockProjectForDelete(r.Context(), db.LockProjectForDeleteParams{
 		ID:          project.ID,
 		WorkspaceID: project.WorkspaceID,
 	}); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "project not found")
 			return
 		}
@@ -665,7 +674,7 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := qtx.ClearChatSessionProjectByProject(r.Context(), db.ClearChatSessionProjectByProjectParams{
-		ProjectID:   project.ID,
+		ProjectID:   nullString(project.ID),
 		WorkspaceID: project.WorkspaceID,
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to clear project chat context")
@@ -675,7 +684,7 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 	// is gone they are unreachable, so they go in the same transaction.
 	if err := qtx.DeleteIssueViewsByProjectScope(r.Context(), db.DeleteIssueViewsByProjectScopeParams{
 		WorkspaceID: project.WorkspaceID,
-		ScopeID:     project.ID,
+		ScopeID:     nullString(project.ID),
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete project views")
 		return
@@ -687,7 +696,7 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete project")
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit project delete")
 		return
 	}
@@ -888,7 +897,7 @@ func (h *Handler) SearchProjects(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var results []projectSearchRow
-	err := runSearchQuery(ctx, h.TxStarter, sqlQuery, args, func(rows pgx.Rows) error {
+	err := runSearchQuery(ctx, h.TxStarter, sqlQuery, args, func(rows *sql.Rows) error {
 		for rows.Next() {
 			var row projectSearchRow
 			if err := rows.Scan(
@@ -939,7 +948,7 @@ func (h *Handler) SearchProjects(w http.ResponseWriter, r *http.Request) {
 	statsMap := make(map[string]db.GetProjectIssueStatsRow)
 	resourceCountMap := make(map[string]int64)
 	if len(results) > 0 {
-		projectIDs := make([]pgtype.UUID, len(results))
+		projectIDs := make([]string, len(results))
 		for i, r := range results {
 			projectIDs[i] = r.project.ID
 		}
@@ -951,7 +960,7 @@ func (h *Handler) SearchProjects(w http.ResponseWriter, r *http.Request) {
 		})
 		if statsErr == nil {
 			for _, s := range stats {
-				statsMap[uuidToString(s.ProjectID)] = s
+				statsMap[uuidToString(s.ProjectID.String)] = s
 			}
 		}
 		counts, err := h.Queries.GetProjectResourceCounts(ctx, projectIDs)
@@ -967,7 +976,7 @@ func (h *Handler) SearchProjects(w http.ResponseWriter, r *http.Request) {
 		pr := projectToResponse(row.project)
 		if s, ok := statsMap[pr.ID]; ok {
 			pr.IssueCount = s.TotalCount
-			pr.DoneCount = s.DoneCount
+			pr.DoneCount = int64(s.DoneCount.Float64)
 		}
 		pr.ResourceCount = resourceCountMap[pr.ID]
 		spr := SearchProjectResponse{

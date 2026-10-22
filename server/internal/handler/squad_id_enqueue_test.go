@@ -121,8 +121,8 @@ func TestCreateRetryTask_InheritsSquadID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRetryTask: %v", err)
 	}
-	if !child.SquadID.Valid || util.UUIDToString(child.SquadID) != fx.SquadID {
-		t.Fatalf("child.SquadID = %v (valid=%v), want %s", util.UUIDToString(child.SquadID), child.SquadID.Valid, fx.SquadID)
+	if !child.SquadID.Valid || util.UUIDToString(child.SquadID.String) != fx.SquadID {
+		t.Fatalf("child.SquadID = %v (valid=%v), want %s", util.UUIDToString(child.SquadID.String), child.SquadID.Valid, fx.SquadID)
 	}
 	if !child.IsLeaderTask {
 		t.Fatalf("child.IsLeaderTask = false, want true (provenance must survive retry)")

@@ -8,8 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
 )
 
 // Team is one orchestrated project.
@@ -23,10 +22,10 @@ type Team struct {
 	UpdatedAt              time.Time
 }
 
-type store struct{ pool *pgxpool.Pool }
+type store struct{ pool *sql.DB }
 
 func (s *store) teams(ctx context.Context) ([]*Team, error) {
-	rows, err := s.pool.Query(ctx, `SELECT project_id::text, workspace_id::text, spec, spec_yaml, paused, paused_reason, COALESCE(human_user_id::text,''), updated_at FROM orchestrator_team`)
+	rows, err := s.pool.QueryContext(ctx, `SELECT project_id::text, workspace_id::text, spec, spec_yaml, paused, paused_reason, COALESCE(human_user_id::text,''), updated_at FROM orchestrator_team`)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +81,7 @@ type issueRow struct {
 	ProjectID, Workspace string
 }
 
-func scanIssues(rows pgx.Rows) ([]issueRow, error) {
+func scanIssues(rows *sql.Rows) ([]issueRow, error) {
 	defer rows.Close()
 	var out []issueRow
 	for rows.Next() {
@@ -98,7 +97,7 @@ func scanIssues(rows pgx.Rows) ([]issueRow, error) {
 }
 
 func (s *store) projectIssues(ctx context.Context, projectID string) ([]issueRow, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+issueCols+issueFrom+`WHERE i.project_id=$1 ORDER BY i.number`, projectID)
+	rows, err := s.pool.QueryContext(ctx, `SELECT `+issueCols+issueFrom+`WHERE i.project_id=$1 ORDER BY i.number`, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +105,7 @@ func (s *store) projectIssues(ctx context.Context, projectID string) ([]issueRow
 }
 
 func (s *store) issue(ctx context.Context, id string) (*issueRow, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+issueCols+issueFrom+`WHERE i.id=$1`, id)
+	rows, err := s.pool.QueryContext(ctx, `SELECT `+issueCols+issueFrom+`WHERE i.id=$1`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +119,7 @@ func (s *store) issue(ctx context.Context, id string) (*issueRow, error) {
 // issueByKey resolves "ATT-12" or a UUID inside a workspace.
 func (s *store) issueByKey(ctx context.Context, workspaceID, key string) (*issueRow, error) {
 	q := `SELECT ` + issueCols + issueFrom + `WHERE i.workspace_id=$1 AND (i.id::text=$2 OR upper(w.issue_prefix || '-' || i.number)=upper($2))`
-	rows, err := s.pool.Query(ctx, q, workspaceID, key)
+	rows, err := s.pool.QueryContext(ctx, q, workspaceID, key)
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +137,7 @@ func (s *store) issueByKey(ctx context.Context, workspaceID, key string) (*issue
 // in the workspace. The query is every assigned agent; Assign only consults
 // names that are owners or experts, so other agents in the set are ignored.
 func (s *store) busyOwners(ctx context.Context, workspaceID string) (map[string]bool, error) {
-	rows, err := s.pool.Query(ctx, `SELECT DISTINCT a.name FROM issue i JOIN agent a ON a.id=i.assignee_id WHERE i.workspace_id=$1 AND i.assignee_type='agent' AND i.status IN ('todo','in_progress')`, workspaceID)
+	rows, err := s.pool.QueryContext(ctx, `SELECT DISTINCT a.name FROM issue i JOIN agent a ON a.id=i.assignee_id WHERE i.workspace_id=$1 AND i.assignee_type='agent' AND i.status IN ('todo','in_progress')`, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +156,7 @@ func (s *store) busyOwners(ctx context.Context, workspaceID string) (map[string]
 var terminalTask = []string{"completed", "failed", "cancelled"}
 
 func (s *store) runs(ctx context.Context, issueID string) (active, last *Run, err error) {
-	rows, err := s.pool.Query(ctx, `SELECT q.id::text, q.status, q.started_at, (SELECT max(m.created_at) FROM task_message m WHERE m.task_id=q.id), COALESCE(q.failure_reason, ''), q.created_at, q.completed_at, COALESCE((SELECT lower(rt.provider) FROM agent_runtime rt WHERE rt.id=q.runtime_id), ''), COALESCE(q.error, '') FROM agent_task_queue q WHERE q.issue_id=$1 ORDER BY q.created_at DESC LIMIT 20`, issueID)
+	rows, err := s.pool.QueryContext(ctx, `SELECT q.id::text, q.status, q.started_at, (SELECT max(m.created_at) FROM task_message m WHERE m.task_id=q.id), COALESCE(q.failure_reason, ''), q.created_at, q.completed_at, COALESCE((SELECT lower(rt.provider) FROM agent_runtime rt WHERE rt.id=q.runtime_id), ''), COALESCE(q.error, '') FROM agent_task_queue q WHERE q.issue_id=$1 ORDER BY q.created_at DESC LIMIT 20`, issueID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -180,8 +179,8 @@ func (s *store) runs(ctx context.Context, issueID string) (active, last *Run, er
 
 func (s *store) agentID(ctx context.Context, workspaceID, name string) (string, error) {
 	var id string
-	err := s.pool.QueryRow(ctx, `SELECT id::text FROM agent WHERE workspace_id=$1 AND name=$2 AND archived_at IS NULL LIMIT 1`, workspaceID, name).Scan(&id)
-	if err == pgx.ErrNoRows {
+	err := s.pool.QueryRowContext(ctx, `SELECT id::text FROM agent WHERE workspace_id=$1 AND name=$2 AND archived_at IS NULL LIMIT 1`, workspaceID, name).Scan(&id)
+	if err == sql.ErrNoRows {
 		return "", fmt.Errorf("agent %q not found in workspace", name)
 	}
 	return id, err
@@ -194,14 +193,14 @@ func (s *store) agentID(ctx context.Context, workspaceID, name string) (string, 
 // completed (skip).
 func (s *store) begin(ctx context.Context, t *Team, row *issueRow, d *Decision, source string) (logID int64, fresh bool, err error) {
 	idem := fmt.Sprintf("%s|%s|%d", row.ID, d.Tid, row.Revision)
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.pool.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, false, err
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	dj, _ := json.Marshal(d)
 	var state string
-	err = tx.QueryRow(ctx, `INSERT INTO orchestrator_transition (workspace_id, project_id, issue_id, tid, idem_key, decision, state, source)
+	err = tx.QueryRowContext(ctx, `INSERT INTO orchestrator_transition (workspace_id, project_id, issue_id, tid, idem_key, decision, state, source)
 		VALUES ($1,$2,$3,$4,$5,$6,'started',$7)
 		ON CONFLICT (idem_key) DO UPDATE SET idem_key=EXCLUDED.idem_key RETURNING id, state`,
 		t.WorkspaceID, t.ProjectID, row.ID, d.Tid, idem, dj, source).Scan(&logID, &state)
@@ -223,11 +222,11 @@ func (s *store) begin(ctx context.Context, t *Team, row *issueRow, d *Decision, 
 			}
 		}
 		sj, _ := json.Marshal(set)
-		if _, err := tx.Exec(ctx, `UPDATE issue SET metadata = (metadata || $2::jsonb) - $3::text[], revision = revision + 1, updated_at = now() WHERE id=$1`, row.ID, sj, del); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE issue SET metadata = (metadata || $2::jsonb) - $3::text[], revision = revision + 1, updated_at = now() WHERE id=$1`, row.ID, sj, del); err != nil {
 			return 0, false, err
 		}
 	}
-	return logID, true, tx.Commit(ctx)
+	return logID, true, tx.Commit()
 }
 
 func (s *store) finish(ctx context.Context, id int64, err error) {
@@ -235,56 +234,56 @@ func (s *store) finish(ctx context.Context, id int64, err error) {
 	if err != nil {
 		state, msg = "failed", err.Error()
 	}
-	_, _ = s.pool.Exec(ctx, `UPDATE orchestrator_transition SET state=$2, error=$3, finished_at=now() WHERE id=$1`, id, state, msg)
+	_, _ = s.pool.ExecContext(ctx, `UPDATE orchestrator_transition SET state=$2, error=$3, finished_at=now() WHERE id=$1`, id, state, msg)
 }
 
 // --- failures / backoff -----------------------------------------------------
 
 func (s *store) backoffOK(ctx context.Context, issueID string, now time.Time) bool {
 	var next *time.Time
-	_ = s.pool.QueryRow(ctx, `SELECT next_at FROM orchestrator_issue_state WHERE issue_id=$1`, issueID).Scan(&next)
+	_ = s.pool.QueryRowContext(ctx, `SELECT next_at FROM orchestrator_issue_state WHERE issue_id=$1`, issueID).Scan(&next)
 	return next == nil || !next.After(now)
 }
 
 func (s *store) recordFailure(ctx context.Context, issueID string, err error, base, capS time.Duration) (int, time.Duration) {
 	var n int
-	_ = s.pool.QueryRow(ctx, `INSERT INTO orchestrator_issue_state (issue_id, failures, last_error) VALUES ($1,1,$2)
+	_ = s.pool.QueryRowContext(ctx, `INSERT INTO orchestrator_issue_state (issue_id, failures, last_error) VALUES ($1,1,$2)
 		ON CONFLICT (issue_id) DO UPDATE SET failures = orchestrator_issue_state.failures+1, last_error=$2, updated_at=now() RETURNING failures`, issueID, short(err.Error(), 500)).Scan(&n)
 	wait := base << (n - 1)
 	if wait > capS || wait <= 0 {
 		wait = capS
 	}
-	_, _ = s.pool.Exec(ctx, `UPDATE orchestrator_issue_state SET next_at = now() + $2::interval WHERE issue_id=$1`, issueID, fmt.Sprintf("%d milliseconds", wait.Milliseconds()))
+	_, _ = s.pool.ExecContext(ctx, `UPDATE orchestrator_issue_state SET next_at = now() + $2::interval WHERE issue_id=$1`, issueID, fmt.Sprintf("%d milliseconds", wait.Milliseconds()))
 	return n, wait
 }
 
 func (s *store) clearFailure(ctx context.Context, issueID string) {
-	_, _ = s.pool.Exec(ctx, `UPDATE orchestrator_issue_state SET failures=0, next_at=NULL, last_error='', last_wait='' WHERE issue_id=$1 AND (failures>0 OR last_wait<>'')`, issueID)
+	_, _ = s.pool.ExecContext(ctx, `UPDATE orchestrator_issue_state SET failures=0, next_at=NULL, last_error='', last_wait='' WHERE issue_id=$1 AND (failures>0 OR last_wait<>'')`, issueID)
 }
 
 func (s *store) setWait(ctx context.Context, issueID, wait string) bool {
-	tag, _ := s.pool.Exec(ctx, `INSERT INTO orchestrator_issue_state (issue_id, last_wait) VALUES ($1,$2)
+	tag, _ := s.pool.ExecContext(ctx, `INSERT INTO orchestrator_issue_state (issue_id, last_wait) VALUES ($1,$2)
 		ON CONFLICT (issue_id) DO UPDATE SET last_wait=$2 WHERE orchestrator_issue_state.last_wait IS DISTINCT FROM $2`, issueID, wait)
-	return tag.RowsAffected() > 0
+	return rowsAffected(tag) > 0
 }
 
 func (s *store) remindDue(ctx context.Context, issueID string, every time.Duration) bool {
-	tag, _ := s.pool.Exec(ctx, `INSERT INTO orchestrator_issue_state (issue_id, reminded_at) VALUES ($1, now())
+	tag, _ := s.pool.ExecContext(ctx, `INSERT INTO orchestrator_issue_state (issue_id, reminded_at) VALUES ($1, now())
 		ON CONFLICT (issue_id) DO UPDATE SET reminded_at=now()
 		WHERE orchestrator_issue_state.reminded_at IS NULL OR orchestrator_issue_state.reminded_at < now() - $2::interval`, issueID, fmt.Sprintf("%d seconds", int(every.Seconds())))
-	return tag.RowsAffected() > 0
+	return rowsAffected(tag) > 0
 }
 
 // --- event queue ------------------------------------------------------------
 
 func (s *store) enqueue(ctx context.Context, issueID, kind string) error {
-	_, err := s.pool.Exec(ctx, `INSERT INTO orchestrator_event (issue_id, kind) SELECT $1, $2 WHERE EXISTS (SELECT 1 FROM issue i JOIN orchestrator_team t ON t.project_id=i.project_id WHERE i.id=$1)`, issueID, kind)
+	_, err := s.pool.ExecContext(ctx, `INSERT INTO orchestrator_event (issue_id, kind) SELECT $1, $2 WHERE EXISTS (SELECT 1 FROM issue i JOIN orchestrator_team t ON t.project_id=i.project_id WHERE i.id=$1)`, issueID, kind)
 	return err
 }
 
 // claim marks all pending events processed and returns their distinct issues.
 func (s *store) claim(ctx context.Context) ([]string, error) {
-	rows, err := s.pool.Query(ctx, `UPDATE orchestrator_event SET processed_at=now() WHERE processed_at IS NULL RETURNING issue_id::text`)
+	rows, err := s.pool.QueryContext(ctx, `UPDATE orchestrator_event SET processed_at=now() WHERE processed_at IS NULL RETURNING issue_id::text`)
 	if err != nil {
 		return nil, err
 	}
@@ -301,7 +300,7 @@ func (s *store) claim(ctx context.Context) ([]string, error) {
 			out = append(out, id)
 		}
 	}
-	_, _ = s.pool.Exec(ctx, `DELETE FROM orchestrator_event WHERE processed_at < now() - interval '1 day'`)
+	_, _ = s.pool.ExecContext(ctx, `DELETE FROM orchestrator_event WHERE processed_at < now() - interval '1 day'`)
 	return out, rows.Err()
 }
 
@@ -309,8 +308,16 @@ func (s *store) claim(ctx context.Context) ([]string, error) {
 // (issue, transition, revision). It reports whether the row is new.
 func (s *store) shadow(ctx context.Context, t *Team, row *issueRow, d *Decision, source string) bool {
 	dj, _ := json.Marshal(d)
-	tag, err := s.pool.Exec(ctx, `INSERT INTO orchestrator_transition (workspace_id, project_id, issue_id, tid, idem_key, decision, state, source, finished_at)
+	tag, err := s.pool.ExecContext(ctx, `INSERT INTO orchestrator_transition (workspace_id, project_id, issue_id, tid, idem_key, decision, state, source, finished_at)
 		VALUES ($1,$2,$3,$4,$5,$6,'shadow',$7,now()) ON CONFLICT (idem_key) DO NOTHING`,
 		t.WorkspaceID, t.ProjectID, row.ID, d.Tid, fmt.Sprintf("shadow|%s|%s|%d", row.ID, d.Tid, row.Revision), dj, source)
-	return err == nil && tag.RowsAffected() > 0
+	return err == nil && rowsAffected(tag) > 0
+}
+
+func rowsAffected(tag sql.Result) int64 {
+	if tag == nil {
+		return 0
+	}
+	n, _ := tag.RowsAffected()
+	return n
 }

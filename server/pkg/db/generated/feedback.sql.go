@@ -7,17 +7,16 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const countRecentFeedbackByUser = `-- name: CountRecentFeedbackByUser :one
 SELECT count(*) FROM feedback
-WHERE user_id = $1 AND created_at > now() - interval '1 hour'
+WHERE user_id = ?1 AND created_at > datetime('now', '-1 hours')
 `
 
-func (q *Queries) CountRecentFeedbackByUser(ctx context.Context, userID pgtype.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countRecentFeedbackByUser, userID)
+func (q *Queries) CountRecentFeedbackByUser(ctx context.Context, userID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countRecentFeedbackByUser, userID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -25,19 +24,19 @@ func (q *Queries) CountRecentFeedbackByUser(ctx context.Context, userID pgtype.U
 
 const createFeedback = `-- name: CreateFeedback :one
 INSERT INTO feedback (user_id, workspace_id, message, metadata)
-VALUES ($1, $4, $2, $3)
+VALUES (?1, ?4, ?2, ?3)
 RETURNING id, user_id, workspace_id, message, metadata, created_at
 `
 
 type CreateFeedbackParams struct {
-	UserID      pgtype.UUID `json:"user_id"`
-	Message     string      `json:"message"`
-	Metadata    []byte      `json:"metadata"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      string         `json:"user_id"`
+	Message     string         `json:"message"`
+	Metadata    string         `json:"metadata"`
+	WorkspaceID sql.NullString `json:"workspace_id"`
 }
 
 func (q *Queries) CreateFeedback(ctx context.Context, arg CreateFeedbackParams) (Feedback, error) {
-	row := q.db.QueryRow(ctx, createFeedback,
+	row := q.db.QueryRowContext(ctx, createFeedback,
 		arg.UserID,
 		arg.Message,
 		arg.Metadata,

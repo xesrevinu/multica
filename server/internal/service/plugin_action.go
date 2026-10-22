@@ -2,11 +2,10 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/plugincontract"
 )
@@ -20,8 +19,8 @@ import (
 // as anyone but the person using it.
 type PluginActionCaller struct {
 	Installation db.PluginInstallation
-	WorkspaceID  pgtype.UUID
-	UserID       pgtype.UUID
+	WorkspaceID  string
+	UserID       string
 	// Scopes is the consented set, read from the installation row rather than
 	// from the manifest the source URL serves today.
 	Scopes []string
@@ -33,7 +32,7 @@ type PluginActionCaller struct {
 	// whole five minutes it lives. Zero means unrestricted — a session caller,
 	// or an invocation that had no issue — and the ordinary workspace and
 	// membership checks still apply on top.
-	IssueScope pgtype.UUID
+	IssueScope string
 }
 
 // AuthorizePluginAction performs the two checks that belong to the plugin: the
@@ -43,7 +42,7 @@ type PluginActionCaller struct {
 // That is the third check, and it stays with the normal resource loaders so a
 // plugin inherits exactly the permissions of the user behind it — no more, and
 // no separate copy of the permission rules to drift.
-func (s *PluginService) AuthorizePluginAction(ctx context.Context, installationID string, userID pgtype.UUID, scope string) (PluginActionCaller, error) {
+func (s *PluginService) AuthorizePluginAction(ctx context.Context, installationID string, userID string, scope string) (PluginActionCaller, error) {
 	if installationID == "" {
 		return PluginActionCaller{}, pluginErrf(PluginErrorInvalid, "plugin installation is required")
 	}
@@ -52,7 +51,7 @@ func (s *PluginService) AuthorizePluginAction(ctx context.Context, installationI
 		return PluginActionCaller{}, err
 	}
 	installation, err := s.Queries.GetPluginInstallation(ctx, parsed)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return PluginActionCaller{}, pluginErrf(PluginErrorNotFound, "plugin installation not found")
 	}
 	if err != nil {
@@ -60,11 +59,11 @@ func (s *PluginService) AuthorizePluginAction(ctx context.Context, installationI
 	}
 	// A disabled plugin is off, not merely hidden: an iframe left open in a
 	// stale tab must not keep working after an admin disables it.
-	if !installation.Enabled {
+	if installation.Enabled == 0 {
 		return PluginActionCaller{}, pluginErrf(PluginErrorForbidden, "this Plugin is disabled")
 	}
 
-	scopes := decodeScopes(installation.GrantedScopes)
+	scopes := decodeScopes([]byte(installation.GrantedScopes))
 	if scope != "" && !hasScope(scopes, scope) {
 		return PluginActionCaller{}, &PluginError{
 			Kind:    PluginErrorForbidden,
@@ -89,10 +88,10 @@ func hasScope(scopes []string, want string) bool {
 	return false
 }
 
-func parseInstallationID(value string) (pgtype.UUID, error) {
+func parseInstallationID(value string) (string, error) {
 	parsed, err := parseUUIDValue(value)
 	if err != nil {
-		return pgtype.UUID{}, pluginErrf(PluginErrorNotFound, "plugin installation not found")
+		return "", pluginErrf(PluginErrorNotFound, "plugin installation not found")
 	}
 	return parsed, nil
 }
@@ -140,7 +139,7 @@ type PluginContextIssue struct {
 func (s *PluginService) BuildPluginContext(caller PluginActionCaller, workspace db.Workspace, user *db.User, issue *db.Issue) PluginContext {
 	config := map[string]any{}
 	if len(caller.Installation.Config) > 0 {
-		_ = json.Unmarshal(caller.Installation.Config, &config)
+		_ = json.Unmarshal([]byte(caller.Installation.Config), &config)
 	}
 
 	payload := PluginContext{
@@ -163,7 +162,7 @@ func (s *PluginService) BuildPluginContext(caller PluginActionCaller, workspace 
 	if issue != nil {
 		payload.Issue = &PluginContextIssue{
 			ID:         uuidString(issue.ID),
-			Identifier: IssueIdentifier(workspace.IssuePrefix, issue.Number),
+			Identifier: IssueIdentifier(workspace.IssuePrefix, int32(issue.Number)),
 			Title:      issue.Title,
 		}
 	}

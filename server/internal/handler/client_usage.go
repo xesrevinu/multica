@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -9,8 +10,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -36,11 +35,11 @@ type clientUsageRuntimeProbe struct {
 }
 
 type validatedRuntimeProbe struct {
-	Result          pgtype.Text
-	RuntimeCount    pgtype.Int4
+	Result          sql.NullString
+	RuntimeCount    sql.NullInt64
 	ProviderSummary []byte
-	OnlineCount     pgtype.Int4
-	OfflineCount    pgtype.Int4
+	OnlineCount     sql.NullInt64
+	OfflineCount    sql.NullInt64
 }
 
 // UpsertClientUsage records at most one row per user, client installation, and
@@ -102,28 +101,28 @@ func (h *Handler) UpsertClientUsage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	workspaceUUID := pgtype.UUID{}
+	workspaceUUID := ""
 	queries := h.Queries
-	var tx pgx.Tx
+	var tx *sql.Tx
 	if workspaceID := h.resolveWorkspaceID(r); workspaceID != "" {
 		workspaceUUID, ok = parseUUIDOrBadRequest(w, workspaceID, "workspace id")
 		if !ok {
 			return
 		}
 		var err error
-		tx, err = h.TxStarter.Begin(r.Context())
+		tx, err = h.TxStarter.BeginTx(r.Context(), nil)
 		if err != nil {
 			slog.Error("failed to begin client usage transaction", "error", err)
 			writeError(w, http.StatusInternalServerError, "failed to record client usage")
 			return
 		}
-		defer tx.Rollback(r.Context())
+		defer tx.Rollback()
 		queries = h.Queries.WithTx(tx)
 		// Share the explicit workspace delete/create lock protocol: if deletion
 		// wins, the row is gone and this report fails; if reporting wins, deletion
 		// waits and clears the context after the upsert commits.
 		if _, err := queries.LockWorkspaceForChatSessionCreate(r.Context(), workspaceUUID); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+			if errors.Is(err, sql.ErrNoRows) {
 				writeError(w, http.StatusForbidden, "workspace not found")
 				return
 			}
@@ -134,7 +133,7 @@ func (h *Handler) UpsertClientUsage(w http.ResponseWriter, r *http.Request) {
 		if _, err := queries.GetMemberByUserAndWorkspace(r.Context(), db.GetMemberByUserAndWorkspaceParams{
 			UserID: userUUID, WorkspaceID: workspaceUUID,
 		}); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+			if errors.Is(err, sql.ErrNoRows) {
 				writeError(w, http.StatusForbidden, "workspace not found")
 				return
 			}
@@ -148,13 +147,13 @@ func (h *Handler) UpsertClientUsage(w http.ResponseWriter, r *http.Request) {
 		UserID:          userUUID,
 		ClientType:      clientType,
 		InstallID:       installID,
-		WorkspaceID:     workspaceUUID,
+		WorkspaceID:     nullString(workspaceUUID),
 		ClientVersion:   clientVersion,
 		Os:              clientOS,
 		HasRuntimeProbe: req.Runtime != nil,
 		ProbeResult:     runtime.Result,
 		RuntimeCount:    runtime.RuntimeCount,
-		ProviderSummary: runtime.ProviderSummary,
+		ProviderSummary: nullString(string(runtime.ProviderSummary)),
 		OnlineCount:     runtime.OnlineCount,
 		OfflineCount:    runtime.OfflineCount,
 	}); err != nil {
@@ -163,7 +162,7 @@ func (h *Handler) UpsertClientUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if tx != nil {
-		if err := tx.Commit(r.Context()); err != nil {
+		if err := tx.Commit(); err != nil {
 			slog.Error("failed to commit client usage", "error", err, "client_type", clientType)
 			writeError(w, http.StatusInternalServerError, "failed to record client usage")
 			return
@@ -188,7 +187,7 @@ func validateClientUsageRuntime(probe clientUsageRuntimeProbe) (validatedRuntime
 	if result != "success" && result != "error" {
 		return validatedRuntimeProbe{}, errors.New("runtime probe_result must be success or error")
 	}
-	validated := validatedRuntimeProbe{Result: pgtype.Text{String: result, Valid: true}}
+	validated := validatedRuntimeProbe{Result: sql.NullString{String: result, Valid: true}}
 	if result == "error" {
 		if probe.RuntimeCount != nil || probe.ProviderSummary != nil || probe.OnlineCount != nil || probe.OfflineCount != nil {
 			return validatedRuntimeProbe{}, errors.New("failed runtime probes must not include counts")
@@ -219,9 +218,9 @@ func validateClientUsageRuntime(probe clientUsageRuntimeProbe) (validatedRuntime
 	if err != nil {
 		return validatedRuntimeProbe{}, errors.New("invalid runtime provider summary")
 	}
-	validated.RuntimeCount = pgtype.Int4{Int32: *probe.RuntimeCount, Valid: true}
+	validated.RuntimeCount = sql.NullInt64{Int64: int64(*probe.RuntimeCount), Valid: true}
 	validated.ProviderSummary = summary
-	validated.OnlineCount = pgtype.Int4{Int32: *probe.OnlineCount, Valid: true}
-	validated.OfflineCount = pgtype.Int4{Int32: *probe.OfflineCount, Valid: true}
+	validated.OnlineCount = sql.NullInt64{Int64: int64(*probe.OnlineCount), Valid: true}
+	validated.OfflineCount = sql.NullInt64{Int64: int64(*probe.OfflineCount), Valid: true}
 	return validated, nil
 }

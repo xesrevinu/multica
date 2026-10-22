@@ -4,7 +4,8 @@ import (
 	"context"
 	"errors"
 
-	"github.com/jackc/pgx/v5"
+	"database/sql"
+
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -22,7 +23,7 @@ import (
 //     without a DB handle, which only happens in tests that exercise
 //     the verifier wiring without a real database.
 //   - GetUser hits   → (true, nil): owner_id is a known user.
-//   - pgx.ErrNoRows  → (false, nil): owner_id is unknown.
+//   - sql.ErrNoRows  → (false, nil): owner_id is unknown.
 //     The verifier maps this to ErrCloudPATInvalid (reason
 //     "owner_unknown") without caching.
 //   - any other error → (_, err): treated as infrastructure failure;
@@ -49,7 +50,7 @@ func ownerLookupFor(queries *db.Queries) auth.OwnerLookupFunc {
 		}
 		_, err = queries.GetUser(ctx, uuid)
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+			if errors.Is(err, sql.ErrNoRows) {
 				return false, nil
 			}
 			return false, err

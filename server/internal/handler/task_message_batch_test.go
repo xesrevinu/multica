@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/testutil"
@@ -102,11 +101,11 @@ func TestReportTaskMessagesPersistsWholeBatch(t *testing.T) {
 	if stored[0].Type != "thinking" || stored[0].Content.String != "planning" {
 		t.Fatalf("thinking row = %+v, want type=thinking content=planning", stored[0])
 	}
-	if !stored[0].CreatedAt.Time.Equal(observedAt) {
-		t.Fatalf("daemon-observed created_at = %s, want %s", stored[0].CreatedAt.Time, observedAt)
+	if !parseDBTime(stored[0].CreatedAt).Equal(observedAt) {
+		t.Fatalf("daemon-observed created_at = %s, want %s", parseDBTime(stored[0].CreatedAt), observedAt)
 	}
-	if want := observedAt.Add(10 * time.Millisecond); !stored[1].CreatedAt.Time.Equal(want) {
-		t.Fatalf("second daemon-observed created_at = %s, want %s", stored[1].CreatedAt.Time, want)
+	if want := observedAt.Add(10 * time.Millisecond); !parseDBTime(stored[1].CreatedAt).Equal(want) {
+		t.Fatalf("second daemon-observed created_at = %s, want %s", parseDBTime(stored[1].CreatedAt), want)
 	}
 	// Fields the daemon did not send must be NULL, not "".
 	if stored[0].Tool.Valid || stored[0].Output.Valid || stored[0].Input != nil {
@@ -172,7 +171,7 @@ func TestReportTaskMessagesFallsBackWholeBatchForClockSkew(t *testing.T) {
 		t.Fatalf("persisted %d task messages, want 2", len(stored))
 	}
 	for _, row := range stored {
-		if got := row.CreatedAt.Time; got.Before(fallbackBefore) || got.After(fallbackAfter) {
+		if got := parseDBTime(row.CreatedAt); got.Before(fallbackBefore) || got.After(fallbackAfter) {
 			t.Fatalf("seq %d created_at = %s, want database fallback between %s and %s", row.Seq, got, fallbackBefore, fallbackAfter)
 		}
 	}
@@ -265,7 +264,7 @@ func TestCreateTaskMessagesBatchIsAtomic(t *testing.T) {
 
 	_, err := testHandler.Queries.CreateTaskMessages(ctx, db.CreateTaskMessagesParams{
 		TaskID:            util.MustParseUUID(taskID),
-		Ids:               []pgtype.UUID{util.MustParseUUID("018f0000-0000-7000-8000-000000000002"), util.MustParseUUID(dupID)},
+		Ids:               []string{util.MustParseUUID("018f0000-0000-7000-8000-000000000002"), util.MustParseUUID(dupID)},
 		Seqs:              []int32{2, 3},
 		Types:             []string{"text", "text"},
 		Tools:             []string{"", ""},

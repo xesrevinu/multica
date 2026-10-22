@@ -147,7 +147,7 @@ func (h *Handler) RemoveIssueReaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if removed.Changed {
+	if removed.Changed != 0 {
 		h.publish(protocol.EventIssueReactionRemoved, workspaceID, actorType, actorID, map[string]any{
 			"issue_id":       uuidToString(issue.ID),
 			"emoji":          req.Emoji,

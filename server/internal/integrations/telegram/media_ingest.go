@@ -23,8 +23,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
-
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -72,7 +70,7 @@ func (r *mediaResolver) HasMedia(msg channel.InboundMessage) bool {
 	return err == nil && len(raw.Media) > 0
 }
 
-func (r *mediaResolver) ResolveMedia(ctx context.Context, inst engine.ResolvedInstallation, _ engine.ResolvedIdentity, _ pgtype.UUID, chatMessageID pgtype.UUID, msg channel.InboundMessage) channel.InboundMessage {
+func (r *mediaResolver) ResolveMedia(ctx context.Context, inst engine.ResolvedInstallation, _ engine.ResolvedIdentity, _, chatMessageID string, msg channel.InboundMessage) channel.InboundMessage {
 	raw, err := decodeTelegramRaw(msg)
 	if err != nil || len(raw.Media) == 0 {
 		return msg
@@ -135,7 +133,7 @@ func (r *mediaResolver) notifyUnavailable(ctx context.Context, api *botAPI, msg 
 // ingest carries one file from Telegram to object storage. The intent row goes
 // first: from that point on every failure leaves a row the reconciler settles,
 // and nothing here deletes anything.
-func (r *mediaResolver) ingest(ctx context.Context, inst engine.ResolvedInstallation, chatMessageID pgtype.UUID, index int, m inboundMedia, api *botAPI) (channel.MediaRef, error) {
+func (r *mediaResolver) ingest(ctx context.Context, inst engine.ResolvedInstallation, chatMessageID string, index int, m inboundMedia, api *botAPI) (channel.MediaRef, error) {
 	if m.FileSize > maxBotDownloadBytes {
 		return channel.MediaRef{}, fmt.Errorf("file size %d exceeds the %d MiB bot download limit", m.FileSize, maxBotDownloadBytes>>20)
 	}
@@ -190,7 +188,7 @@ func (r *mediaResolver) ingest(ctx context.Context, inst engine.ResolvedInstalla
 // can ingest one platform message twice, and a reply can quote the very file
 // it sends, so a shared key would run the second ingest into the first one's
 // (possibly tombstoned) ledger row.
-func mediaObjectKey(inst engine.ResolvedInstallation, chatMessageID pgtype.UUID, index int, m inboundMedia) string {
+func mediaObjectKey(inst engine.ResolvedInstallation, chatMessageID string, index int, m inboundMedia) string {
 	sum := sha256.Sum256([]byte(util.UUIDToString(chatMessageID) + "\x00" + strconv.Itoa(index) + "\x00" + firstNonEmpty(m.FileUniqueID, m.FileID)))
 	return path.Join("workspaces", util.UUIDToString(inst.WorkspaceID), "telegram", util.UUIDToString(inst.ID), hex.EncodeToString(sum[:]))
 }

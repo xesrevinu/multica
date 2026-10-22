@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,8 +11,6 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -45,7 +44,7 @@ type IssueStatusResponse struct {
 // terminalIssueStatusKeys resolves the concrete status keys whose categories
 // carry terminal behavior. Callers pass the result into indexed status
 // predicates instead of resolving the category once per issue row.
-func (h *Handler) terminalIssueStatusKeys(ctx context.Context, workspaceID pgtype.UUID) ([]string, error) {
+func (h *Handler) terminalIssueStatusKeys(ctx context.Context, workspaceID string) ([]string, error) {
 	return issuestatus.ExpandCategories(ctx, h.Queries, workspaceID, []string{
 		issuestatus.CategoryDone,
 		issuestatus.CategoryClosed,
@@ -63,7 +62,7 @@ func issueStatusToResponse(s db.IssueStatus) IssueStatusResponse {
 		Category:    category,
 		Color:       s.Color,
 		Icon:        s.Icon,
-		IsSystem:    s.IsSystem,
+		IsSystem:    int64ToBool(s.IsSystem),
 		Position:    s.Position,
 		ArchivedAt:  timestampToPtr(s.ArchivedAt),
 		CreatedAt:   timestampToString(s.CreatedAt),
@@ -236,22 +235,22 @@ func (h *Handler) CreateIssueStatus(w http.ResponseWriter, r *http.Request) {
 //
 // A non-empty second return is a caller error the handler reports as 400,
 // distinct from a nil-error success and from an infrastructure failure.
-func (h *Handler) createIssueStatusEntry(ctx context.Context, workspaceID pgtype.UUID, publicCategory string, arg db.CreateIssueStatusEntryParams) (db.IssueStatus, string, error) {
-	tx, err := h.TxStarter.Begin(ctx)
+func (h *Handler) createIssueStatusEntry(ctx context.Context, workspaceID string, publicCategory string, arg db.CreateIssueStatusEntryParams) (db.IssueStatus, string, error) {
+	tx, err := h.TxStarter.BeginTx(ctx, nil)
 	if err != nil {
 		return db.IssueStatus{}, "", err
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
-	if err := qtx.LockIssueStatusCatalog(ctx, workspaceID); err != nil {
+	if err := qtx.LockIssueStatusCatalog(ctx); err != nil {
 		return db.IssueStatus{}, "", err
 	}
 	entry, badRequest, err := createIssueStatusEntryLocked(ctx, qtx, workspaceID, publicCategory, arg)
 	if badRequest != "" || err != nil {
 		return db.IssueStatus{}, badRequest, err
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return db.IssueStatus{}, "", err
 	}
 	return entry, "", nil
@@ -259,7 +258,7 @@ func (h *Handler) createIssueStatusEntry(ctx context.Context, workspaceID pgtype
 
 // createIssueStatusEntryLocked is createIssueStatusEntry inside a transaction
 // that already holds the exclusive catalog lock.
-func createIssueStatusEntryLocked(ctx context.Context, qtx *db.Queries, workspaceID pgtype.UUID, publicCategory string, arg db.CreateIssueStatusEntryParams) (db.IssueStatus, string, error) {
+func createIssueStatusEntryLocked(ctx context.Context, qtx *db.Queries, workspaceID string, publicCategory string, arg db.CreateIssueStatusEntryParams) (db.IssueStatus, string, error) {
 	if arg.Key == "" {
 		// IncludeArchived, because idx_issue_status_workspace_key is NOT a
 		// partial index: a retired status still owns its key, so reusing it
@@ -304,7 +303,7 @@ func (h *Handler) UpdateIssueStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if entry.IsSystem {
+	if entry.IsSystem != 0 {
 		writeError(w, http.StatusForbidden, "built-in statuses cannot be modified")
 		return
 	}
@@ -313,43 +312,43 @@ func (h *Handler) UpdateIssueStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var name pgtype.Text
+	var name sql.NullString
 	if req.Name != nil {
 		trimmed := strings.TrimSpace(*req.Name)
 		if trimmed == "" || len([]rune(trimmed)) > 64 {
 			writeError(w, http.StatusBadRequest, "name must be 1-64 characters")
 			return
 		}
-		name = pgtype.Text{String: trimmed, Valid: true}
+		name = sql.NullString{String: trimmed, Valid: true}
 	}
-	var description pgtype.Text
+	var description sql.NullString
 	if req.Description != nil {
 		if len([]rune(*req.Description)) > 256 {
 			writeError(w, http.StatusBadRequest, "description must be at most 256 characters")
 			return
 		}
-		description = pgtype.Text{String: *req.Description, Valid: true}
+		description = sql.NullString{String: *req.Description, Valid: true}
 	}
-	var color pgtype.Text
+	var color sql.NullString
 	if req.Color != nil {
 		normalized, err := normalizeColor(*req.Color)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		color = pgtype.Text{String: strings.ToLower(normalized), Valid: true}
+		color = sql.NullString{String: strings.ToLower(normalized), Valid: true}
 	}
-	var icon pgtype.Text
+	var icon sql.NullString
 	if req.Icon != nil {
 		if !validIssueStatusIcon(*req.Icon) {
 			writeError(w, http.StatusBadRequest, "invalid status icon")
 			return
 		}
-		icon = pgtype.Text{String: *req.Icon, Valid: true}
+		icon = sql.NullString{String: *req.Icon, Valid: true}
 	}
-	var position pgtype.Float8
+	var position sql.NullFloat64
 	if req.Position != nil {
-		position = pgtype.Float8{Float64: *req.Position, Valid: true}
+		position = sql.NullFloat64{Float64: *req.Position, Valid: true}
 	}
 
 	updated, err := h.Queries.UpdateIssueStatusEntry(r.Context(), db.UpdateIssueStatusEntryParams{
@@ -362,7 +361,7 @@ func (h *Handler) UpdateIssueStatus(w http.ResponseWriter, r *http.Request) {
 		Position:    position,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			// The row moved out from under us (archived concurrently, or the
 			// is_system guard in the statement rejected it).
 			writeError(w, http.StatusConflict, "status is no longer editable")
@@ -398,7 +397,7 @@ func (h *Handler) ArchiveIssueStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if entry.IsSystem {
+	if entry.IsSystem != 0 {
 		writeError(w, http.StatusForbidden, "built-in statuses cannot be archived")
 		return
 	}
@@ -410,16 +409,16 @@ func (h *Handler) ArchiveIssueStatus(w http.ResponseWriter, r *http.Request) {
 	// Count and archive under the EXCLUSIVE catalog lock. Custom-status writers
 	// re-resolve under its SHARED side, so no assignment can enter between the
 	// empty check and the archive commit. Migration is a separate user action.
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		slog.Warn("ArchiveIssueStatus begin failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "failed to archive issue status")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
-	if err := qtx.LockIssueStatusCatalog(r.Context(), wsUUID); err != nil {
+	if err := qtx.LockIssueStatusCatalog(r.Context()); err != nil {
 		slog.Warn("ArchiveIssueStatus lock failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "failed to archive issue status")
 		return
@@ -468,7 +467,7 @@ func (h *Handler) ArchiveIssueStatus(w http.ResponseWriter, r *http.Request) {
 		WorkspaceID: wsUUID,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusConflict, "status is no longer archivable")
 			return
 		}
@@ -484,7 +483,7 @@ func (h *Handler) ArchiveIssueStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to archive issue status")
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		slog.Warn("ArchiveIssueStatus commit failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "failed to archive issue status")
 		return
@@ -500,32 +499,32 @@ func (h *Handler) ArchiveIssueStatus(w http.ResponseWriter, r *http.Request) {
 // loadIssueStatusForAdmin resolves the {id} path param inside the caller's
 // workspace and enforces the owner/admin gate. The member it resolved is
 // returned so the write can name its actor on the realtime event.
-func (h *Handler) loadIssueStatusForAdmin(w http.ResponseWriter, r *http.Request) (db.IssueStatus, pgtype.UUID, db.Member, bool) {
+func (h *Handler) loadIssueStatusForAdmin(w http.ResponseWriter, r *http.Request) (db.IssueStatus, string, db.Member, bool) {
 	workspaceID := h.resolveWorkspaceID(r)
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
 	if !ok {
-		return db.IssueStatus{}, pgtype.UUID{}, db.Member{}, false
+		return db.IssueStatus{}, "", db.Member{}, false
 	}
 	member, ok := h.requireWorkspaceRole(w, r, workspaceID, "workspace not found", "owner", "admin")
 	if !ok {
-		return db.IssueStatus{}, pgtype.UUID{}, db.Member{}, false
+		return db.IssueStatus{}, "", db.Member{}, false
 	}
 	idUUID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "issue status id")
 	if !ok {
-		return db.IssueStatus{}, pgtype.UUID{}, db.Member{}, false
+		return db.IssueStatus{}, "", db.Member{}, false
 	}
 	entry, err := h.Queries.GetIssueStatusEntryByID(r.Context(), db.GetIssueStatusEntryByIDParams{
 		ID:          idUUID,
 		WorkspaceID: wsUUID,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "issue status not found")
-			return db.IssueStatus{}, pgtype.UUID{}, db.Member{}, false
+			return db.IssueStatus{}, "", db.Member{}, false
 		}
 		slog.Warn("load issue status failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "failed to load issue status")
-		return db.IssueStatus{}, pgtype.UUID{}, db.Member{}, false
+		return db.IssueStatus{}, "", db.Member{}, false
 	}
 	return entry, wsUUID, member, true
 }
@@ -590,7 +589,7 @@ func (h *Handler) ReorderIssueStatuses(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "ids must not be empty")
 		return
 	}
-	ids := make([]pgtype.UUID, 0, len(req.IDs))
+	ids := make([]string, 0, len(req.IDs))
 	seen := make(map[string]struct{}, len(req.IDs))
 	for _, raw := range req.IDs {
 		if _, duplicate := seen[raw]; duplicate {
@@ -606,18 +605,18 @@ func (h *Handler) ReorderIssueStatuses(w http.ResponseWriter, r *http.Request) {
 		ids = append(ids, idUUID)
 	}
 
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		slog.Warn("ReorderIssueStatuses begin failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "failed to reorder issue statuses")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	// Serialize reorders as well as create/archive, including legacy requests
 	// that reuse custom rows' existing slots among movable built-ins.
-	if err := qtx.LockIssueStatusCatalog(r.Context(), wsUUID); err != nil {
+	if err := qtx.LockIssueStatusCatalog(r.Context()); err != nil {
 		slog.Warn("ReorderIssueStatuses lock failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "failed to reorder issue statuses")
 		return
@@ -636,7 +635,7 @@ func (h *Handler) ReorderIssueStatuses(w http.ResponseWriter, r *http.Request) {
 	}
 	active := make([]db.IssueStatus, 0, len(catalog))
 	for _, entry := range catalog {
-		if entry.Category == category && (req.IncludeSystem || !entry.IsSystem) {
+		if entry.Category == category && (req.IncludeSystem || entry.IsSystem == 0) {
 			active = append(active, entry)
 		}
 	}
@@ -657,12 +656,12 @@ func (h *Handler) ReorderIssueStatuses(w http.ResponseWriter, r *http.Request) {
 			WorkspaceID: wsUUID,
 		})
 		switch {
-		case errors.Is(err, pgx.ErrNoRows):
+		case errors.Is(err, sql.ErrNoRows):
 			writeError(w, http.StatusNotFound, "issue status not found")
 		case err != nil:
 			slog.Warn("load issue status for reorder failed", append(logger.RequestAttrs(r), "error", err)...)
 			writeError(w, http.StatusInternalServerError, "failed to reorder issue statuses")
-		case entry.IsSystem && !req.IncludeSystem:
+		case entry.IsSystem != 0 && !req.IncludeSystem:
 			writeError(w, http.StatusForbidden, "include_system is required to reorder built-in statuses")
 		case entry.ArchivedAt.Valid:
 			writeError(w, http.StatusConflict, "archived statuses cannot be reordered")
@@ -720,7 +719,7 @@ func (h *Handler) ReorderIssueStatuses(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list issue statuses")
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		slog.Warn("ReorderIssueStatuses commit failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "failed to reorder issue statuses")
 		return

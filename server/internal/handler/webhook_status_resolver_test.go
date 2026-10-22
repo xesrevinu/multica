@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/integrations/vcs"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/testutil"
@@ -16,7 +15,7 @@ import (
 
 type webhookStatusCatalog struct {
 	issuestatus.Querier
-	reads      map[pgtype.UUID]int
+	reads      map[string]int
 	pointReads int
 	fail       bool
 }
@@ -57,7 +56,7 @@ func TestWebhookStatusResolver(t *testing.T) {
 				{"unavailable", []string{"review", "review"}, []string{"done", "done"}, true, 1},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
-					catalog := &webhookStatusCatalog{Querier: testHandler.Queries, reads: map[pgtype.UUID]int{}, fail: tc.fail}
+					catalog := &webhookStatusCatalog{Querier: testHandler.Queries, reads: map[string]int{}, fail: tc.fail}
 					h := *testHandler
 					h.IssueStatusCatalog = catalog
 					// The same key is terminal in one workspace and nonterminal in
@@ -65,7 +64,7 @@ func TestWebhookStatusResolver(t *testing.T) {
 					for workspace := 0; workspace < 2; workspace++ {
 						ws := dbfx.Workspace(t, "Webhook status resolver", fmt.Sprintf("resolver-%s-%s-%d", provider, tc.name, workspace), testutil.Cols{"issue_prefix": "RSL"})
 						wsID := parseUUID(ws)
-						fixture := testutil.New(testPool, ws, testUserID)
+						fixture := testutil.New(testSQLite, ws, testUserID)
 						for key, category := range map[string]string{"approved": "done", "dropped": "closed", "review": "started"} {
 							if workspace == 1 && key == "approved" {
 								category = "started"

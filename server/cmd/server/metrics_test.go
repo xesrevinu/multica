@@ -11,7 +11,7 @@ import (
 )
 
 func TestMainRouterDoesNotExposeDiagnostics(t *testing.T) {
-	router := NewRouter(nil, realtime.NewHub(), events.New(), analytics.NoopClient{}, nil)
+	router := NewRouter(nil, realtime.NewHub(), events.New(), analytics.NoopClient{})
 
 	for _, path := range []string{"/metrics", "/debug/pprof/", "/debug/pprof/heap"} {
 		t.Run(path, func(t *testing.T) {

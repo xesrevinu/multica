@@ -7,15 +7,13 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/handler"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/service"
-	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/multica-ai/multica/server/pkg/redact"
@@ -107,7 +105,7 @@ const (
 )
 
 type runtimeGCTxStarter interface {
-	Begin(context.Context) (pgx.Tx, error)
+	BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
 }
 
 type runtimeGCEventPublisher interface {
@@ -224,7 +222,7 @@ func sweepStaleRuntimes(ctx context.Context, queries *db.Queries, liveness handl
 		observeRuntimeSweepStage(taskServiceMetrics(taskSvc), obsmetrics.RuntimeSweepStageLiveness, startedAt, stats)
 	}()
 
-	candidates, err := queries.SelectStaleOnlineRuntimes(ctx, staleThresholdSeconds)
+	candidates, err := queries.SelectStaleOnlineRuntimes(ctx, nullSeconds(staleThresholdSeconds))
 	if err != nil {
 		slog.Warn("runtime sweeper: failed to list stale online runtimes", "error", err)
 		return
@@ -240,8 +238,8 @@ func sweepStaleRuntimes(ctx context.Context, queries *db.Queries, liveness handl
 	}
 
 	staleRows, err := queries.MarkRuntimesOfflineByIDs(ctx, db.MarkRuntimesOfflineByIDsParams{
-		Ids:          toOffline,
-		StaleSeconds: staleThresholdSeconds,
+		Ids:          jsonStringArray(toOffline),
+		StaleSeconds: nullSeconds(staleThresholdSeconds),
 	})
 	if err != nil {
 		slog.Warn("runtime sweeper: failed to mark stale runtimes offline", "error", err)
@@ -256,9 +254,9 @@ func sweepStaleRuntimes(ctx context.Context, queries *db.Queries, liveness handl
 	if taskSvc != nil && taskSvc.Analytics != nil {
 		for _, row := range staleRows {
 			obsmetrics.RecordEvent(taskSvc.Analytics, taskSvc.Metrics, analytics.RuntimeOffline(
-				util.UUIDToString(row.OwnerID),
-				util.UUIDToString(row.WorkspaceID),
-				util.UUIDToString(row.ID),
+				nullUUIDString(row.OwnerID),
+				row.WorkspaceID,
+				row.ID,
 				row.DaemonID.String,
 				row.Provider,
 			))
@@ -268,7 +266,7 @@ func sweepStaleRuntimes(ctx context.Context, queries *db.Queries, liveness handl
 	// Collect unique workspace IDs to notify.
 	workspaces := make(map[string]bool)
 	for _, row := range staleRows {
-		wsID := util.UUIDToString(row.WorkspaceID)
+		wsID := row.WorkspaceID
 		workspaces[wsID] = true
 	}
 
@@ -277,7 +275,7 @@ func sweepStaleRuntimes(ctx context.Context, queries *db.Queries, liveness handl
 	// reap these eventually, but explicit cleanup is cheap and clearer.
 	if liveness.Available() {
 		for _, row := range staleRows {
-			liveness.Forget(ctx, util.UUIDToString(row.ID))
+			liveness.Forget(ctx, row.ID)
 		}
 	}
 
@@ -308,7 +306,7 @@ func sweepOfflineRuntimeTasks(ctx context.Context, queries *db.Queries, taskSvc 
 	}()
 
 	failedTasks, err := taskSvc.FailTasksForOfflineRuntimes(ctx, db.FailTasksForOfflineRuntimesParams{
-		ReconnectGraceSecs: reconnectGrace.Seconds(),
+		ReconnectGraceSecs: nullSeconds(reconnectGrace.Seconds()),
 		MaxPerTick:         offlineTaskFailBatchSize,
 	})
 	if err != nil {
@@ -336,8 +334,8 @@ func sweepExpiredRuntimeReconnectRetries(ctx context.Context, queries *db.Querie
 	}()
 
 	failedTasks, err := taskSvc.FailExpiredRuntimeReconnectRetries(ctx, db.FailExpiredRuntimeReconnectRetriesParams{
-		ReconnectGraceSecs: reconnectGrace.Seconds(),
-		RuntimeStaleSecs:   staleThresholdSeconds,
+		ReconnectGraceSecs: nullSeconds(reconnectGrace.Seconds()),
+		RuntimeStaleSecs:   nullSeconds(staleThresholdSeconds),
 		MaxPerTick:         reconnectRetryExpireBatchSize,
 	})
 	if err != nil {
@@ -360,8 +358,8 @@ func sweepExpiredRuntimeReconnectRetries(ctx context.Context, queries *db.Querie
 // and reports a candidate as alive, we skip it (DB is just lagging). When the
 // store is unavailable or errors, we trust the DB stale window — i.e. every
 // candidate flips, matching the legacy MarkStaleRuntimesOffline behavior.
-func filterStaleRuntimesByLiveness(ctx context.Context, candidates []db.SelectStaleOnlineRuntimesRow, liveness handler.LivenessStore) []pgtype.UUID {
-	ids := make([]pgtype.UUID, 0, len(candidates))
+func filterStaleRuntimesByLiveness(ctx context.Context, candidates []db.SelectStaleOnlineRuntimesRow, liveness handler.LivenessStore) []string {
+	ids := make([]string, 0, len(candidates))
 	if !liveness.Available() {
 		for _, c := range candidates {
 			ids = append(ids, c.ID)
@@ -370,7 +368,7 @@ func filterStaleRuntimesByLiveness(ctx context.Context, candidates []db.SelectSt
 	}
 	idStrs := make([]string, len(candidates))
 	for i, c := range candidates {
-		idStrs[i] = util.UUIDToString(c.ID)
+		idStrs[i] = c.ID
 	}
 	alive, ok := liveness.IsAliveBatch(ctx, idStrs)
 	if !ok {
@@ -407,7 +405,7 @@ func gcRuntimesWithBudget(ctx context.Context, txStarter runtimeGCTxStarter, que
 
 	listCtx, cancelList := context.WithTimeout(gcCtx, runtimeGCOperationTimeout)
 	candidates, err := queries.ListStaleOfflineRuntimeGCCandidates(listCtx, db.ListStaleOfflineRuntimeGCCandidatesParams{
-		StaleSeconds: offlineRuntimeTTLSeconds,
+		StaleSeconds: nullSeconds(offlineRuntimeTTLSeconds),
 		MaxPerTick:   runtimeGCBatchSize,
 	})
 	cancelList()
@@ -439,14 +437,14 @@ func gcRuntimesWithBudget(ctx context.Context, txStarter runtimeGCTxStarter, que
 				break
 			}
 			slog.Warn("runtime GC: failed to delete stale offline runtime",
-				"runtime_id", util.UUIDToString(runtimeID), "error", err)
+				"runtime_id", runtimeID, "error", err)
 			metrics.RecordRuntimeGCFailed()
 			continue
 		}
 		if result.skipReason != "" {
 			metrics.RecordRuntimeGCSkipped(result.skipReason)
 			slog.Warn("runtime GC: candidate no longer safe to delete; skipping",
-				"runtime_id", util.UUIDToString(runtimeID), "reason", result.skipReason)
+				"runtime_id", runtimeID, "reason", result.skipReason)
 			continue
 		}
 		if !result.deleted {
@@ -457,7 +455,7 @@ func gcRuntimesWithBudget(ctx context.Context, txStarter runtimeGCTxStarter, que
 		metrics.RecordRuntimeGCDeleted()
 		gcWorkspaces[result.workspaceID] = true
 		if publisher != nil {
-			publisher.NotifyRuntimeGone(util.UUIDToString(runtimeID))
+			publisher.NotifyRuntimeGone(runtimeID)
 			publisher.PublishRuntimeTeardown(gcCtx, result.teardown, result.workspaceID, "system", "", "runtime_gc", false)
 		}
 	}
@@ -487,39 +485,36 @@ type runtimeGCResult struct {
 // lock_task_owner_rows, so a concurrent enqueue either commits before the
 // checks below and blocks deletion, or waits until deletion commits and then
 // observes that its runtime no longer exists.
-func gcRuntime(ctx context.Context, txStarter runtimeGCTxStarter, queries *db.Queries, runtimeID pgtype.UUID) (runtimeGCResult, error) {
+func gcRuntime(ctx context.Context, txStarter runtimeGCTxStarter, queries *db.Queries, runtimeID string) (runtimeGCResult, error) {
 	var result runtimeGCResult
-	tx, err := txStarter.Begin(ctx)
+	tx, err := txStarter.BeginTx(ctx, nil)
 	if err != nil {
 		return result, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer func() {
-		// The operation context may already be cancelled on a timeout. Give
-		// rollback its own short window so the pool does not retain an open
-		// transaction/connection after a failed GC attempt.
-		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runtimeGCOperationTimeout)
-		defer cancel()
-		_ = tx.Rollback(rollbackCtx)
+		// database/sql rollback does not take a context. The operation
+		// timeout above already bounds the statements that held the tx.
+		_ = tx.Rollback()
 	}()
 	qtx := queries.WithTx(tx)
 
 	runtime, err := qtx.LockAgentRuntime(ctx, runtimeID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return result, nil
 	}
 	if err != nil {
 		return result, fmt.Errorf("lock runtime: %w", err)
 	}
-	result.workspaceID = util.UUIDToString(runtime.WorkspaceID)
+	result.workspaceID = runtime.WorkspaceID
 
-	lockedAgents, err := qtx.ListUserAgentsByRuntimeForUpdate(ctx, runtimeID)
+	lockedAgents, err := qtx.ListUserAgentsByRuntimeForUpdate(ctx, sql.NullString{String: runtimeID, Valid: runtimeID != ""})
 	if err != nil {
 		return result, fmt.Errorf("lock runtime agents: %w", err)
 	}
 
 	eligible, err := qtx.IsAgentRuntimeEligibleForGC(ctx, db.IsAgentRuntimeEligibleForGCParams{
 		ID:           runtimeID,
-		StaleSeconds: offlineRuntimeTTLSeconds,
+		StaleSeconds: nullSeconds(offlineRuntimeTTLSeconds),
 	})
 	if err != nil {
 		return result, fmt.Errorf("re-check eligibility: %w", err)
@@ -536,14 +531,14 @@ func gcRuntime(ctx context.Context, txStarter runtimeGCTxStarter, queries *db.Qu
 		return result, fmt.Errorf("validate runtime agent workspaces: %w", err)
 	}
 
-	lockedAgentIDs := make([]pgtype.UUID, len(lockedAgents))
+	lockedAgentIDs := make([]string, len(lockedAgents))
 	for i, agent := range lockedAgents {
 		lockedAgentIDs[i] = agent.ID
 	}
 
 	undrained, err := qtx.CountUndrainedTasksByRuntimeOrAgent(ctx, db.CountUndrainedTasksByRuntimeOrAgentParams{
-		RuntimeIds: []pgtype.UUID{runtimeID},
-		AgentIds:   lockedAgentIDs,
+		RuntimeIds: jsonStringArray([]string{runtimeID}),
+		AgentIds:   jsonStringArray(lockedAgentIDs),
 	})
 	if err != nil {
 		return result, fmt.Errorf("count non-terminal tasks: %w", err)
@@ -568,7 +563,7 @@ func gcRuntime(ctx context.Context, txStarter runtimeGCTxStarter, queries *db.Qu
 	if err := qtx.DeleteAgentRuntime(ctx, runtimeID); err != nil {
 		return result, fmt.Errorf("delete runtime: %w", err)
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return result, fmt.Errorf("commit transaction: %w", err)
 	}
 
@@ -597,12 +592,12 @@ func sweepStaleTasks(ctx context.Context, queries *db.Queries, taskSvc *service.
 	}()
 
 	failedTasks, err := taskSvc.FailStaleTasks(ctx, db.FailStaleTasksParams{
-		DispatchTimeoutSecs: dispatchTimeoutSeconds,
-		RunningTimeoutSecs:  runningTimeoutSeconds,
+		DispatchTimeoutSecs: nullSeconds(dispatchTimeoutSeconds),
+		RunningTimeoutSecs:  nullSeconds(runningTimeoutSeconds),
 		// Reuse the runtime stale window so the running-task backstop
 		// exactly matches what sweepStaleRuntimes considers "not alive".
-		RuntimeStaleSecs:          staleThresholdSeconds,
-		RuntimeReconnectGraceSecs: reconnectGrace.Seconds(),
+		RuntimeStaleSecs:          nullSeconds(staleThresholdSeconds),
+		RuntimeReconnectGraceSecs: nullSeconds(reconnectGrace.Seconds()),
 	})
 	if err != nil {
 		slog.Warn("task sweeper: failed to clean up stale tasks", "error", err)
@@ -634,7 +629,7 @@ func sweepExpiredQueuedTasks(ctx context.Context, queries *db.Queries, taskSvc *
 	}()
 
 	failedTasks, err := taskSvc.ExpireStaleQueuedTasks(ctx, db.ExpireStaleQueuedTasksParams{
-		ReconnectGraceSecs: reconnectGrace.Seconds(),
+		ReconnectGraceSecs: nullSeconds(reconnectGrace.Seconds()),
 		MaxPerTick:         queuedExpireBatchSize,
 	})
 	if err != nil {
@@ -665,7 +660,7 @@ func sweepDeferredChatFinalizations(ctx context.Context, queries *db.Queries, ta
 	}()
 
 	rows, err := queries.ListChatFinalizeDeferredExpired(ctx, db.ListChatFinalizeDeferredExpiredParams{
-		GraceSecs:  chatFinalizeGraceSeconds,
+		GraceSecs:  nullSeconds(chatFinalizeGraceSeconds),
 		MaxPerTick: chatFinalizeBatchSize,
 	})
 	if err != nil {
@@ -697,7 +692,7 @@ func broadcastFailedTasks(ctx context.Context, queries *db.Queries, taskSvc *ser
 	// Fallback path used by tests that don't construct a TaskService:
 	// publish task:failed events with workspace IDs and reset stuck issues.
 	processedIssues := make(map[string]bool)
-	affectedAgents := make(map[string]pgtype.UUID)
+	affectedAgents := make(map[string]string)
 	for _, t := range tasks {
 		failureReason := "agent_error"
 		if t.FailureReason.Valid && t.FailureReason.String != "" {
@@ -705,9 +700,9 @@ func broadcastFailedTasks(ctx context.Context, queries *db.Queries, taskSvc *ser
 		}
 		workspaceID := ""
 		if t.IssueID.Valid {
-			if issue, err := queries.GetIssue(ctx, t.IssueID); err == nil {
-				workspaceID = util.UUIDToString(issue.WorkspaceID)
-				issueKey := util.UUIDToString(t.IssueID)
+			if issue, err := queries.GetIssue(ctx, t.IssueID.String); err == nil {
+				workspaceID = issue.WorkspaceID
+				issueKey := t.IssueID.String
 				// Only issues whose status means "an agent is actively working"
 				// get reset, which since MUL-7240 is the fixed in_progress key
 				// alone. in_review and blocked are deliberately excluded — they
@@ -722,15 +717,15 @@ func broadcastFailedTasks(ctx context.Context, queries *db.Queries, taskSvc *ser
 				if effectiveStatus == "in_progress" && !processedIssues[issueKey] {
 					processedIssues[issueKey] = true
 					if hasActive, herr := queries.HasActiveTaskForIssue(ctx, t.IssueID); herr == nil && !hasActive {
-						queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{ID: t.IssueID, Status: "todo", WorkspaceID: issue.WorkspaceID})
+						queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{ID: t.IssueID.String, Status: "todo", WorkspaceID: issue.WorkspaceID})
 					}
 				}
 			}
 		}
 		payload := map[string]any{
-			"task_id":        util.UUIDToString(t.ID),
-			"agent_id":       util.UUIDToString(t.AgentID),
-			"issue_id":       util.UUIDToString(t.IssueID),
+			"task_id":        t.ID,
+			"agent_id":       t.AgentID,
+			"issue_id":       nullUUIDString(t.IssueID),
 			"status":         "failed",
 			"failure_reason": failureReason,
 			"retry_pending":  false,
@@ -742,15 +737,15 @@ func broadcastFailedTasks(ctx context.Context, queries *db.Queries, taskSvc *ser
 			Type:        protocol.EventTaskFailed,
 			WorkspaceID: workspaceID,
 			ActorType:   "system",
-			TaskID:      util.UUIDToString(t.ID),
+			TaskID:      t.ID,
 			Payload:     payload,
 		}
 		if t.ChatSessionID.Valid {
-			e.ChatSessionID = util.UUIDToString(t.ChatSessionID)
+			e.ChatSessionID = t.ChatSessionID.String
 			payload["chat_session_id"] = e.ChatSessionID
 		}
 		bus.Publish(e)
-		affectedAgents[util.UUIDToString(t.AgentID)] = t.AgentID
+		affectedAgents[t.AgentID] = t.AgentID
 	}
 	for _, agentID := range affectedAgents {
 		reconcileAgentStatus(ctx, queries, bus, agentID)
@@ -760,15 +755,15 @@ func broadcastFailedTasks(ctx context.Context, queries *db.Queries, taskSvc *ser
 // reconcileAgentStatus refreshes agent status from the current working task
 // set. A no-op returns no row, so the fallback emits no redundant status event.
 // Used only by the test-fallback path of broadcastFailedTasks above.
-func reconcileAgentStatus(ctx context.Context, queries *db.Queries, bus *events.Bus, agentID pgtype.UUID) {
+func reconcileAgentStatus(ctx context.Context, queries *db.Queries, bus *events.Bus, agentID string) {
 	agent, err := queries.RefreshAgentStatusFromTasks(ctx, agentID)
 	if err != nil {
 		return
 	}
 	bus.Publish(events.Event{
 		Type:        protocol.EventAgentStatus,
-		WorkspaceID: util.UUIDToString(agent.WorkspaceID),
+		WorkspaceID: agent.WorkspaceID,
 		ActorType:   "system",
-		Payload:     map[string]any{"agent_id": util.UUIDToString(agent.ID), "status": agent.Status},
+		Payload:     map[string]any{"agent_id": agent.ID, "status": agent.Status},
 	})
 }

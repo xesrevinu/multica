@@ -11,14 +11,13 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
+
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/inbox"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	"github.com/multica-ai/multica/server/pkg/dbid"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -119,9 +118,9 @@ func tickAutopilotFailureMonitor(ctx context.Context, queries *db.Queries, bus *
 	candidates, err := queries.SelectAutopilotsExceedingFailureThreshold(
 		ctx,
 		db.SelectAutopilotsExceedingFailureThresholdParams{
-			MinRuns:            cfg.MinRuns,
-			FailRatioThreshold: cfg.FailRatio,
-			Since:              pgtype.Timestamptz{Time: since, Valid: true},
+			MinRuns:            strconv.FormatInt(cfg.MinRuns, 10),
+			FailRatioThreshold: strconv.FormatFloat(cfg.FailRatio, 'f', -1, 64),
+			Since:              since.UTC().Format(time.RFC3339Nano),
 		},
 	)
 	if err != nil {
@@ -156,14 +155,18 @@ func tickAutopilotFailureMonitor(ctx context.Context, queries *db.Queries, bus *
 		// does not dispatch (so this version is never the active version at a real
 		// run — a later member resume would supersede it), and a failed write must
 		// not abort the sweep.
-		if verr := service.RecordAutopilotRuleVersion(ctx, queries, paused, "system", pgtype.UUID{}); verr != nil {
+		if verr := service.RecordAutopilotRuleVersion(ctx, queries, paused, "system", ""); verr != nil {
 			slog.Warn("autopilot failure monitor: record rule version failed",
 				"autopilot_id", util.UUIDToString(paused.ID), "error", verr)
 		}
 
+		failedRuns := 0.0
+		if c.FailedRuns.Valid {
+			failedRuns = c.FailedRuns.Float64
+		}
 		failPct := 100.0
 		if c.TotalRuns > 0 {
-			failPct = math.Round(float64(c.FailedRuns)/float64(c.TotalRuns)*1000) / 10 // one decimal place
+			failPct = math.Round(failedRuns/float64(c.TotalRuns)*1000) / 10 // one decimal place
 		}
 
 		slog.Info(
@@ -171,7 +174,7 @@ func tickAutopilotFailureMonitor(ctx context.Context, queries *db.Queries, bus *
 			"autopilot_id", util.UUIDToString(c.ID),
 			"workspace_id", util.UUIDToString(c.WorkspaceID),
 			"title", c.Title,
-			"failed_runs", c.FailedRuns,
+			"failed_runs", failedRuns,
 			"total_runs", c.TotalRuns,
 			"fail_pct", failPct,
 		)
@@ -219,14 +222,18 @@ func emitAutopilotPausedNotifications(
 	}
 
 	title := fmt.Sprintf("Autopilot paused: %s", autopilot.Title)
+	failedRuns := 0.0
+	if candidate.FailedRuns.Valid {
+		failedRuns = candidate.FailedRuns.Float64
+	}
 	body := fmt.Sprintf(
-		"Auto-paused after %d of %d runs failed (%.1f%%) in the last %s. Investigate the failures, fix the root cause, then re-enable from the autopilot page.",
-		candidate.FailedRuns, candidate.TotalRuns, failPct, formatLookback(cfg.Lookback),
+		"Auto-paused after %.0f of %d runs failed (%.1f%%) in the last %s. Investigate the failures, fix the root cause, then re-enable from the autopilot page.",
+		failedRuns, candidate.TotalRuns, failPct, formatLookback(cfg.Lookback),
 	)
 	details, _ := json.Marshal(map[string]any{
 		"autopilot_id":         util.UUIDToString(autopilot.ID),
 		"autopilot_title":      autopilot.Title,
-		"failed_runs":          candidate.FailedRuns,
+		"failed_runs":          failedRuns,
 		"total_runs":           candidate.TotalRuns,
 		"fail_pct":             failPct,
 		"lookback_seconds":     int64(cfg.Lookback.Seconds()),
@@ -247,18 +254,18 @@ func emitAutopilotPausedNotifications(
 		emitted[key] = true
 
 		item, inserted, err := inbox.CreateIfEligible(ctx, queries, db.CreateInboxItemParams{
-			ID:            dbid.NewV7(),
+			ID:            newNullID(),
 			WorkspaceID:   autopilot.WorkspaceID,
 			RecipientType: r.Type,
 			RecipientID:   r.ID,
 			Type:          "autopilot_paused",
 			Severity:      "attention",
-			IssueID:       pgtype.UUID{},
+			IssueID:       sql.NullString{},
 			Title:         title,
-			Body:          util.StrToText(body),
-			ActorType:     util.StrToText("system"),
-			ActorID:       pgtype.UUID{},
-			Details:       details,
+			Body:          nullText(body),
+			ActorType:     nullText("system"),
+			ActorID:       sql.NullString{},
+			Details:       nullJSON(details),
 		})
 		if err != nil {
 			slog.Warn("autopilot failure monitor: inbox write failed",
@@ -323,16 +330,16 @@ func autopilotEventPayload(a db.Autopilot) map[string]any {
 		"id":                   util.UUIDToString(a.ID),
 		"workspace_id":         util.UUIDToString(a.WorkspaceID),
 		"title":                a.Title,
-		"description":          util.TextToPtr(a.Description),
+		"description":          nullStringPtr(a.Description),
 		"assignee_id":          util.UUIDToString(a.AssigneeID),
 		"status":               a.Status,
 		"execution_mode":       a.ExecutionMode,
-		"issue_title_template": util.TextToPtr(a.IssueTitleTemplate),
+		"issue_title_template": nullStringPtr(a.IssueTitleTemplate),
 		"created_by_type":      a.CreatedByType,
 		"created_by_id":        util.UUIDToString(a.CreatedByID),
-		"last_run_at":          util.TimestampToPtr(a.LastRunAt),
-		"created_at":           util.TimestampToString(a.CreatedAt),
-		"updated_at":           util.TimestampToString(a.UpdatedAt),
+		"last_run_at":          nullStringPtr(a.LastRunAt),
+		"created_at":           a.CreatedAt,
+		"updated_at":           a.UpdatedAt,
 	}
 }
 
@@ -341,7 +348,7 @@ func autopilotEventPayload(a db.Autopilot) map[string]any {
 // paused/archived, which we want to treat as a benign no-op rather than an
 // error to log.
 func isNoRows(err error) bool {
-	return errors.Is(err, pgx.ErrNoRows)
+	return errors.Is(err, sql.ErrNoRows)
 }
 
 func formatLookback(d time.Duration) string {

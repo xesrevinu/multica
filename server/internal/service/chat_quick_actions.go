@@ -2,12 +2,11 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
-
-	"github.com/jackc/pgx/v5"
 
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -256,14 +255,14 @@ func (s *TaskService) SupplementChatQuickActions(ctx context.Context, task db.Ag
 			return fmt.Errorf("marshal chat quick actions: %w", marshalErr)
 		}
 		msg, err = s.Queries.SetChatMessageQuickActionsByTask(ctx, db.SetChatMessageQuickActionsByTaskParams{
-			TaskID:       task.ID,
-			QuickActions: encoded,
+			TaskID:       nullString(task.ID),
+			QuickActions: string(encoded),
 		})
 	} else {
-		msg, err = s.Queries.GetChatMessageByTaskAssistant(ctx, task.ID)
+		msg, err = s.Queries.GetChatMessageByTaskAssistant(ctx, nullString(task.ID))
 	}
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
 		return fmt.Errorf("attach chat quick actions: %w", err)
@@ -274,19 +273,19 @@ func (s *TaskService) SupplementChatQuickActions(ctx context.Context, task db.Ag
 		return nil
 	}
 	payload := protocol.ChatQuickActionsPayload{
-		ChatSessionID: util.UUIDToString(task.ChatSessionID),
+		ChatSessionID: util.UUIDToString(task.ChatSessionID.String),
 		TaskID:        util.UUIDToString(task.ID),
 		MessageID:     util.UUIDToString(msg.ID),
 		QuickActions:  []protocol.ChatQuickAction{},
 		Failed:        failed,
 	}
-	_ = json.Unmarshal(msg.QuickActions, &payload.QuickActions)
+	_ = json.Unmarshal([]byte(msg.QuickActions), &payload.QuickActions)
 	s.Bus.Publish(events.Event{
 		Type:          protocol.EventChatQuickActions,
 		WorkspaceID:   workspaceID,
 		ActorType:     "system",
 		ActorID:       "",
-		ChatSessionID: util.UUIDToString(task.ChatSessionID),
+		ChatSessionID: util.UUIDToString(task.ChatSessionID.String),
 		Payload:       payload,
 	})
 	return nil

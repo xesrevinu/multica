@@ -1,28 +1,27 @@
 package handler
 
 import (
+	"database/sql"
 	"testing"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func TestDeriveSquadMemberStatus(t *testing.T) {
 	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
-	online := pgtype.Text{String: "online", Valid: true}
-	offline := pgtype.Text{String: "offline", Valid: true}
-	missing := pgtype.Text{}
+	online := sql.NullString{String: "online", Valid: true}
+	offline := sql.NullString{String: "offline", Valid: true}
+	missing := sql.NullString{}
 
-	tsAgo := func(d time.Duration) pgtype.Timestamptz {
-		return pgtype.Timestamptz{Time: now.Add(-d), Valid: true}
+	tsAgo := func(d time.Duration) string {
+		return now.Add(-d).UTC().Format(time.RFC3339Nano)
 	}
-	tsNone := pgtype.Timestamptz{}
+	tsNone := ""
 
 	cases := []struct {
 		name           string
 		archived       bool
-		runtimeStatus  pgtype.Text
-		lastSeen       pgtype.Timestamptz
+		runtimeStatus  sql.NullString
+		lastSeen       string
 		hasWorkingTask bool
 		want           string
 	}{

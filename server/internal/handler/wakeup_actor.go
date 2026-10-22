@@ -2,9 +2,9 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 
-	"github.com/jackc/pgx/v5"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -32,27 +32,27 @@ func (h *Handler) withWakeupActor(r *http.Request) *http.Request {
 	kind, id := h.resolveActor(r, requestUserID(r), h.resolveWorkspaceID(r))
 	source := h.wakeupSourceTaskID(r)
 	var task string
-	if source.Valid {
+	if source != "" {
 		task = uuidToString(source)
 	}
 	return r.WithContext(context.WithValue(r.Context(), wakeupActorKey{}, wakeupActor{kind, id, task}))
 }
 
-func (h *Handler) beginWakeupWrite(ctx context.Context) (pgx.Tx, error) {
-	tx, err := h.TxStarter.Begin(ctx)
+func (h *Handler) beginWakeupWrite(ctx context.Context) (*sql.Tx, error) {
+	tx, err := h.TxStarter.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	if actor, ok := ctx.Value(wakeupActorKey{}).(wakeupActor); ok {
-		_, err = tx.Exec(ctx, `SELECT set_config('multica.actor_type',$1,true),set_config('multica.actor_id',$2,true),set_config('multica.source_task_id',$3,true)`, actor.kind, actor.id, actor.task)
+		_, err = tx.ExecContext(ctx, `SELECT set_config('multica.actor_type',$1,true),set_config('multica.actor_id',$2,true),set_config('multica.source_task_id',$3,true)`, actor.kind, actor.id, actor.task)
 		if err != nil {
-			_ = tx.Rollback(ctx)
+			_ = tx.Rollback()
 			return nil, err
 		}
 	}
 	if agent, ok := ctx.Value(wakeupHandedToKey{}).(string); ok {
-		if _, err = tx.Exec(ctx, `SELECT set_config('multica.handed_to_agent',$1,true)`, agent); err != nil {
-			_ = tx.Rollback(ctx)
+		if _, err = tx.ExecContext(ctx, `SELECT set_config('multica.handed_to_agent',$1,true)`, agent); err != nil {
+			_ = tx.Rollback()
 			return nil, err
 		}
 	}
@@ -68,12 +68,12 @@ func wakeupWrite[T any](h *Handler, r *http.Request, write func(*db.Queries) (T,
 	if err != nil {
 		return zero, err
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	result, err := write(h.Queries.WithTx(tx))
 	if err != nil {
 		return zero, err
 	}
-	if err = tx.Commit(r.Context()); err != nil {
+	if err = tx.Commit(); err != nil {
 		return zero, err
 	}
 	return result, nil

@@ -312,7 +312,7 @@ func TestDeleteWorkspace_RollsBackResourceLabelCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin member blocker: %v", err)
 	}
-	t.Cleanup(func() { _ = blocker.Rollback(context.Background()) })
+	t.Cleanup(func() { _ = blocker.Rollback(ctx) })
 	if _, err := blocker.Exec(ctx, `
 		SELECT id FROM member WHERE workspace_id = $1 FOR UPDATE
 	`, wsID); err != nil {

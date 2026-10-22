@@ -7,48 +7,57 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const countActiveIssueProperties = `-- name: CountActiveIssueProperties :one
 SELECT COUNT(*) FROM issue_property
-WHERE workspace_id = $1 AND archived_at IS NULL
+WHERE workspace_id = ?1 AND archived_at IS NULL
 `
 
-func (q *Queries) CountActiveIssueProperties(ctx context.Context, workspaceID pgtype.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countActiveIssueProperties, workspaceID)
+func (q *Queries) CountActiveIssueProperties(ctx context.Context, workspaceID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countActiveIssueProperties, workspaceID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
 }
 
 const countIssuesUsingPropertyOptions = `-- name: CountIssuesUsingPropertyOptions :many
-SELECT opt::text AS option_id, COUNT(i.id) AS usage_count
-FROM unnest($1::text[]) AS opt
+SELECT json_extract(opt.value, '$') AS option_id, COUNT(i.id) AS usage_count
+FROM json_each(?1) AS opt
 LEFT JOIN issue i
-  ON i.workspace_id = $2::uuid
- AND (i.properties -> $3::text) ? opt
-GROUP BY opt
+  ON i.workspace_id = ?2
+ AND (
+      json_extract(i.properties, '$.' || ?3) = json_extract(opt.value, '$')
+      OR EXISTS (
+          SELECT 1
+          FROM json_each(
+              CASE WHEN json_type(i.properties, '$.' || sqlc.arg('property_key')) IN ('array', 'object')
+                   THEN json_extract(i.properties, '$.' || ?3)
+                   ELSE '[]' END
+          ) AS el
+          WHERE json_extract(el.value, '$') = json_extract(opt.value, '$')
+             OR el.key = json_extract(opt.value, '$')
+      )
+ )
+GROUP BY json_extract(opt.value, '$')
 HAVING COUNT(i.id) > 0
 `
 
 type CountIssuesUsingPropertyOptionsParams struct {
-	OptionIds   []string    `json:"option_ids"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	PropertyKey string      `json:"property_key"`
+	OptionIds   interface{}    `json:"option_ids"`
+	WorkspaceID string         `json:"workspace_id"`
+	PropertyKey sql.NullString `json:"property_key"`
 }
 
 type CountIssuesUsingPropertyOptionsRow struct {
-	OptionID   string `json:"option_id"`
-	UsageCount int64  `json:"usage_count"`
+	OptionID   interface{} `json:"option_id"`
+	UsageCount int64       `json:"usage_count"`
 }
 
-// Usage census for specific option ids of one property. jsonb `?` matches
-// both value shapes: array element for multi_select, string equality for
-// select. Only options with at least one referencing issue come back.
+// option_ids is a JSON array of option id strings.
 func (q *Queries) CountIssuesUsingPropertyOptions(ctx context.Context, arg CountIssuesUsingPropertyOptionsParams) ([]CountIssuesUsingPropertyOptionsRow, error) {
-	rows, err := q.db.Query(ctx, countIssuesUsingPropertyOptions, arg.OptionIds, arg.WorkspaceID, arg.PropertyKey)
+	rows, err := q.db.QueryContext(ctx, countIssuesUsingPropertyOptions, arg.OptionIds, arg.WorkspaceID, arg.PropertyKey)
 	if err != nil {
 		return nil, err
 	}
@@ -61,6 +70,9 @@ func (q *Queries) CountIssuesUsingPropertyOptions(ctx context.Context, arg Count
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -69,28 +81,28 @@ func (q *Queries) CountIssuesUsingPropertyOptions(ctx context.Context, arg Count
 
 const createIssueProperty = `-- name: CreateIssueProperty :one
 INSERT INTO issue_property (workspace_id, name, type, description, icon, config, position)
-SELECT $1::uuid,
-       $2::text,
-       $3::text,
-       $4::text,
-       $5::text,
-       $6::jsonb,
-       COALESCE((SELECT MAX(position) FROM issue_property WHERE workspace_id = $1::uuid), 0) + 1
+SELECT ?1 AS workspace_id,
+       ?2 AS name,
+       ?3 AS type,
+       ?4 AS description,
+       ?5 AS icon,
+       ?6 AS config,
+       (COALESCE((SELECT MAX(position) FROM issue_property WHERE workspace_id = ?1), 0) + 1) AS position
 RETURNING id, workspace_id, name, type, description, config, position, archived_at, created_at, updated_at, icon
 `
 
 type CreateIssuePropertyParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Name        string      `json:"name"`
-	Type        string      `json:"type"`
-	Description string      `json:"description"`
-	Icon        string      `json:"icon"`
-	Config      []byte      `json:"config"`
+	WorkspaceID string `json:"workspace_id"`
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Description string `json:"description"`
+	Icon        string `json:"icon"`
+	Config      string `json:"config"`
 }
 
 // New definitions append to the end of the catalog: position = max + 1.
 func (q *Queries) CreateIssueProperty(ctx context.Context, arg CreateIssuePropertyParams) (IssueProperty, error) {
-	row := q.db.QueryRow(ctx, createIssueProperty,
+	row := q.db.QueryRowContext(ctx, createIssueProperty,
 		arg.WorkspaceID,
 		arg.Name,
 		arg.Type,
@@ -117,26 +129,26 @@ func (q *Queries) CreateIssueProperty(ctx context.Context, arg CreateIssueProper
 
 const deleteIssuePropertyValue = `-- name: DeleteIssuePropertyValue :one
 UPDATE issue
-SET properties = properties - $1::text,
-    revision = revision + CASE WHEN properties ? $1::text THEN 1 ELSE 0 END,
+SET properties = json_remove(properties, '$.' || ?1),
+    revision = revision + CASE WHEN json_type(properties, '$.' || ?1) IS NOT NULL THEN 1 ELSE 0 END,
     last_activity_at = CASE
-        WHEN properties ? $1::text
+        WHEN json_type(properties, '$.' || ?1) IS NOT NULL
         THEN GREATEST(COALESCE(last_activity_at, updated_at), now())
         ELSE last_activity_at
     END,
-    updated_at = CASE WHEN properties ? $1::text THEN now() ELSE updated_at END
-WHERE id = $2::uuid AND workspace_id = $3::uuid
+    updated_at = CASE WHEN json_type(properties, '$.' || ?1) IS NOT NULL THEN now() ELSE updated_at END
+WHERE id = ?2 AND workspace_id = ?3
 RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id
 `
 
 type DeleteIssuePropertyValueParams struct {
-	Key         string      `json:"key"`
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Key         sql.NullString `json:"key"`
+	ID          string         `json:"id"`
+	WorkspaceID string         `json:"workspace_id"`
 }
 
 func (q *Queries) DeleteIssuePropertyValue(ctx context.Context, arg DeleteIssuePropertyValueParams) (Issue, error) {
-	row := q.db.QueryRow(ctx, deleteIssuePropertyValue, arg.Key, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, deleteIssuePropertyValue, arg.Key, arg.ID, arg.WorkspaceID)
 	var i Issue
 	err := row.Scan(
 		&i.ID,
@@ -175,16 +187,16 @@ func (q *Queries) DeleteIssuePropertyValue(ctx context.Context, arg DeleteIssueP
 
 const getIssueProperty = `-- name: GetIssueProperty :one
 SELECT id, workspace_id, name, type, description, config, position, archived_at, created_at, updated_at, icon FROM issue_property
-WHERE id = $1 AND workspace_id = $2
+WHERE id = ?1 AND workspace_id = ?2
 `
 
 type GetIssuePropertyParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 func (q *Queries) GetIssueProperty(ctx context.Context, arg GetIssuePropertyParams) (IssueProperty, error) {
-	row := q.db.QueryRow(ctx, getIssueProperty, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, getIssueProperty, arg.ID, arg.WorkspaceID)
 	var i IssueProperty
 	err := row.Scan(
 		&i.ID,
@@ -207,39 +219,39 @@ SELECT p.id, p.workspace_id, p.name, p.type, p.description, p.config, p.position
     (
         SELECT COUNT(*) FROM issue i
         WHERE i.workspace_id = p.workspace_id
-          AND i.properties ? p.id::text
-    )::bigint AS usage_count
+          AND json_type(i.properties, '$.' || p.id) IS NOT NULL
+    ) AS usage_count
 FROM issue_property p
-WHERE p.workspace_id = $1::uuid
-  AND ($2::bool OR p.archived_at IS NULL)
+WHERE p.workspace_id = ?1
+  AND (?2 OR p.archived_at IS NULL)
 ORDER BY p.position ASC, LOWER(p.name) ASC
 `
 
 type ListIssuePropertiesParams struct {
-	WorkspaceID     pgtype.UUID `json:"workspace_id"`
-	IncludeArchived bool        `json:"include_archived"`
+	WorkspaceID     string      `json:"workspace_id"`
+	IncludeArchived interface{} `json:"include_archived"`
 }
 
 type ListIssuePropertiesRow struct {
-	ID          pgtype.UUID        `json:"id"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	Name        string             `json:"name"`
-	Type        string             `json:"type"`
-	Description string             `json:"description"`
-	Config      []byte             `json:"config"`
-	Position    float64            `json:"position"`
-	ArchivedAt  pgtype.Timestamptz `json:"archived_at"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
-	Icon        string             `json:"icon"`
-	UsageCount  int64              `json:"usage_count"`
+	ID          string         `json:"id"`
+	WorkspaceID string         `json:"workspace_id"`
+	Name        string         `json:"name"`
+	Type        string         `json:"type"`
+	Description string         `json:"description"`
+	Config      string         `json:"config"`
+	Position    float64        `json:"position"`
+	ArchivedAt  sql.NullString `json:"archived_at"`
+	CreatedAt   string         `json:"created_at"`
+	UpdatedAt   string         `json:"updated_at"`
+	Icon        string         `json:"icon"`
+	UsageCount  int64          `json:"usage_count"`
 }
 
 // usage_count = number of issues in the workspace that currently carry a
 // value for this property. `properties ? id` is a seq scan today; fine at
 // the 20-definition / small-workspace scale this feature targets.
 func (q *Queries) ListIssueProperties(ctx context.Context, arg ListIssuePropertiesParams) ([]ListIssuePropertiesRow, error) {
-	rows, err := q.db.Query(ctx, listIssueProperties, arg.WorkspaceID, arg.IncludeArchived)
+	rows, err := q.db.QueryContext(ctx, listIssueProperties, arg.WorkspaceID, arg.IncludeArchived)
 	if err != nil {
 		return nil, err
 	}
@@ -265,6 +277,9 @@ func (q *Queries) ListIssueProperties(ctx context.Context, arg ListIssueProperti
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -273,30 +288,30 @@ func (q *Queries) ListIssueProperties(ctx context.Context, arg ListIssueProperti
 
 const setIssuePropertyValue = `-- name: SetIssuePropertyValue :one
 UPDATE issue
-SET properties = jsonb_set(properties, ARRAY[$1::text], $2::jsonb, true),
-    revision = revision + CASE WHEN properties -> $1::text IS DISTINCT FROM $2::jsonb THEN 1 ELSE 0 END,
+SET properties = json_set(COALESCE(properties, '{}'), '$.' || ?1, json(?2)),
+    revision = revision + CASE WHEN json_extract(properties, '$.' || ?1) IS NOT json_extract(?2, '$') THEN 1 ELSE 0 END,
     last_activity_at = CASE
-        WHEN properties -> $1::text IS DISTINCT FROM $2::jsonb
+        WHEN json_extract(properties, '$.' || ?1) IS NOT json_extract(?2, '$')
         THEN GREATEST(COALESCE(last_activity_at, updated_at), now())
         ELSE last_activity_at
     END,
-    updated_at = CASE WHEN properties -> $1::text IS DISTINCT FROM $2::jsonb THEN now() ELSE updated_at END
-WHERE id = $3::uuid AND workspace_id = $4::uuid
+    updated_at = CASE WHEN json_extract(properties, '$.' || ?1) IS NOT json_extract(?2, '$') THEN now() ELSE updated_at END
+WHERE id = ?3 AND workspace_id = ?4
 RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id
 `
 
 type SetIssuePropertyValueParams struct {
-	Key         string      `json:"key"`
-	Value       []byte      `json:"value"`
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Key         sql.NullString `json:"key"`
+	Value       interface{}    `json:"value"`
+	ID          string         `json:"id"`
+	WorkspaceID string         `json:"workspace_id"`
 }
 
 // Single-key atomic write: concurrent writers on different property keys
 // never clobber each other. Unlike SetIssueMetadataKey, a no-op still updates
 // and returns the issue row.
 func (q *Queries) SetIssuePropertyValue(ctx context.Context, arg SetIssuePropertyValueParams) (Issue, error) {
-	row := q.db.QueryRow(ctx, setIssuePropertyValue,
+	row := q.db.QueryRowContext(ctx, setIssuePropertyValue,
 		arg.Key,
 		arg.Value,
 		arg.ID,
@@ -340,32 +355,32 @@ func (q *Queries) SetIssuePropertyValue(ctx context.Context, arg SetIssuePropert
 
 const updateIssueProperty = `-- name: UpdateIssueProperty :one
 UPDATE issue_property SET
-    name = COALESCE($3, name),
-    description = COALESCE($4, description),
-    icon = COALESCE($5, icon),
-    config = COALESCE($6, config),
-    archived_at = CASE WHEN $7::bool THEN $8 ELSE archived_at END,
+    name = COALESCE(?3, name),
+    description = COALESCE(?4, description),
+    icon = COALESCE(?5, icon),
+    config = COALESCE(?6, config),
+    archived_at = CASE WHEN ?7 THEN ?8 ELSE archived_at END,
     updated_at = now()
-WHERE id = $1 AND workspace_id = $2
+WHERE id = ?1 AND workspace_id = ?2
 RETURNING id, workspace_id, name, type, description, config, position, archived_at, created_at, updated_at, icon
 `
 
 type UpdateIssuePropertyParams struct {
-	ID          pgtype.UUID        `json:"id"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	Name        pgtype.Text        `json:"name"`
-	Description pgtype.Text        `json:"description"`
-	Icon        pgtype.Text        `json:"icon"`
-	Config      []byte             `json:"config"`
-	ArchivedSet bool               `json:"archived_set"`
-	ArchivedAt  pgtype.Timestamptz `json:"archived_at"`
+	ID          string         `json:"id"`
+	WorkspaceID string         `json:"workspace_id"`
+	Name        sql.NullString `json:"name"`
+	Description sql.NullString `json:"description"`
+	Icon        sql.NullString `json:"icon"`
+	Config      sql.NullString `json:"config"`
+	ArchivedSet sql.NullString `json:"archived_set"`
+	ArchivedAt  sql.NullString `json:"archived_at"`
 }
 
-// `type` is deliberately immutable — changing it would silently invalidate
+// `type` is deliberately immutable - changing it would silently invalidate
 // existing values. archived_set/archived_at implement tri-state semantics:
 // archived_set=false leaves archived_at untouched.
 func (q *Queries) UpdateIssueProperty(ctx context.Context, arg UpdateIssuePropertyParams) (IssueProperty, error) {
-	row := q.db.QueryRow(ctx, updateIssueProperty,
+	row := q.db.QueryRowContext(ctx, updateIssueProperty,
 		arg.ID,
 		arg.WorkspaceID,
 		arg.Name,

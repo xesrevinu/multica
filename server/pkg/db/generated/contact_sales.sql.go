@@ -7,16 +7,16 @@ package db
 
 import (
 	"context"
-	"net/netip"
+	"database/sql"
 )
 
 const countRecentContactSalesByEmail = `-- name: CountRecentContactSalesByEmail :one
 SELECT count(*) FROM contact_sales_inquiry
-WHERE business_email = $1 AND created_at > now() - interval '1 hour'
+WHERE business_email = ?1 AND created_at > datetime('now', '-1 hours')
 `
 
 func (q *Queries) CountRecentContactSalesByEmail(ctx context.Context, businessEmail string) (int64, error) {
-	row := q.db.QueryRow(ctx, countRecentContactSalesByEmail, businessEmail)
+	row := q.db.QueryRowContext(ctx, countRecentContactSalesByEmail, businessEmail)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -38,30 +38,30 @@ INSERT INTO contact_sales_inquiry (
     user_agent
 )
 VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-    $12::inet,
-    $11
+    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+    ?12,
+    ?11
 )
 RETURNING id, first_name, last_name, business_email, company_name, company_size, country_region, use_case, goals, consent_outreach, consent_updates, submitter_ip, user_agent, created_at
 `
 
 type CreateContactSalesInquiryParams struct {
-	FirstName       string      `json:"first_name"`
-	LastName        string      `json:"last_name"`
-	BusinessEmail   string      `json:"business_email"`
-	CompanyName     string      `json:"company_name"`
-	CompanySize     string      `json:"company_size"`
-	CountryRegion   string      `json:"country_region"`
-	UseCase         string      `json:"use_case"`
-	Goals           string      `json:"goals"`
-	ConsentOutreach bool        `json:"consent_outreach"`
-	ConsentUpdates  bool        `json:"consent_updates"`
-	UserAgent       string      `json:"user_agent"`
-	SubmitterIp     *netip.Addr `json:"submitter_ip"`
+	FirstName       string         `json:"first_name"`
+	LastName        string         `json:"last_name"`
+	BusinessEmail   string         `json:"business_email"`
+	CompanyName     string         `json:"company_name"`
+	CompanySize     string         `json:"company_size"`
+	CountryRegion   string         `json:"country_region"`
+	UseCase         string         `json:"use_case"`
+	Goals           string         `json:"goals"`
+	ConsentOutreach int64          `json:"consent_outreach"`
+	ConsentUpdates  int64          `json:"consent_updates"`
+	UserAgent       string         `json:"user_agent"`
+	SubmitterIp     sql.NullString `json:"submitter_ip"`
 }
 
 func (q *Queries) CreateContactSalesInquiry(ctx context.Context, arg CreateContactSalesInquiryParams) (ContactSalesInquiry, error) {
-	row := q.db.QueryRow(ctx, createContactSalesInquiry,
+	row := q.db.QueryRowContext(ctx, createContactSalesInquiry,
 		arg.FirstName,
 		arg.LastName,
 		arg.BusinessEmail,

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -9,8 +10,6 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -70,8 +69,8 @@ func slimDeliveryToResponse(d db.ListWebhookDeliveriesByAutopilotRow) WebhookDel
 		DedupeSource:         textToPtr(d.DedupeSource),
 		SignatureStatus:      d.SignatureStatus,
 		Status:               d.Status,
-		AttemptCount:         d.AttemptCount,
-		DispatchAttempts:     d.DispatchAttempts,
+		AttemptCount:         int32(d.AttemptCount),
+		DispatchAttempts:     int32(d.DispatchAttempts),
 		AvailableAt:          timestampToString(d.AvailableAt),
 		ContentType:          textToPtr(d.ContentType),
 		ReceivedAt:           timestampToString(d.ReceivedAt),
@@ -81,15 +80,15 @@ func slimDeliveryToResponse(d db.ListWebhookDeliveriesByAutopilotRow) WebhookDel
 		ReplayIdempotencyKey: textToPtr(d.ReplayIdempotencyKey),
 	}
 	if d.ResponseStatus.Valid {
-		v := d.ResponseStatus.Int32
+		v := int32(d.ResponseStatus.Int64)
 		resp.ResponseStatus = &v
 	}
 	if d.AutopilotRunID.Valid {
-		v := uuidToString(d.AutopilotRunID)
+		v := uuidToString(d.AutopilotRunID.String)
 		resp.AutopilotRunID = &v
 	}
 	if d.ReplayedFromDeliveryID.Valid {
-		v := uuidToString(d.ReplayedFromDeliveryID)
+		v := uuidToString(d.ReplayedFromDeliveryID.String)
 		resp.ReplayedFromDeliveryID = &v
 	}
 	if d.Error.Valid {
@@ -111,8 +110,8 @@ func deliveryToResponse(d db.WebhookDelivery, detail bool) WebhookDeliveryRespon
 		DedupeSource:         textToPtr(d.DedupeSource),
 		SignatureStatus:      d.SignatureStatus,
 		Status:               d.Status,
-		AttemptCount:         d.AttemptCount,
-		DispatchAttempts:     d.DispatchAttempts,
+		AttemptCount:         int32(d.AttemptCount),
+		DispatchAttempts:     int32(d.DispatchAttempts),
 		AvailableAt:          timestampToString(d.AvailableAt),
 		ContentType:          textToPtr(d.ContentType),
 		ReceivedAt:           timestampToString(d.ReceivedAt),
@@ -122,15 +121,15 @@ func deliveryToResponse(d db.WebhookDelivery, detail bool) WebhookDeliveryRespon
 		ReplayIdempotencyKey: textToPtr(d.ReplayIdempotencyKey),
 	}
 	if d.ResponseStatus.Valid {
-		v := d.ResponseStatus.Int32
+		v := int32(d.ResponseStatus.Int64)
 		resp.ResponseStatus = &v
 	}
 	if d.AutopilotRunID.Valid {
-		v := uuidToString(d.AutopilotRunID)
+		v := uuidToString(d.AutopilotRunID.String)
 		resp.AutopilotRunID = &v
 	}
 	if d.ReplayedFromDeliveryID.Valid {
-		v := uuidToString(d.ReplayedFromDeliveryID)
+		v := uuidToString(d.ReplayedFromDeliveryID.String)
 		resp.ReplayedFromDeliveryID = &v
 	}
 	if d.Error.Valid {
@@ -186,8 +185,8 @@ func (h *Handler) ListAutopilotDeliveries(w http.ResponseWriter, r *http.Request
 	rows, err := h.Queries.ListWebhookDeliveriesByAutopilot(r.Context(), db.ListWebhookDeliveriesByAutopilotParams{
 		AutopilotID: autopilot.ID,
 		WorkspaceID: autopilot.WorkspaceID,
-		Limit:       limit,
-		Offset:      offset,
+		Limit:       int64(limit),
+		Offset:      int64(offset),
 	})
 	if err != nil {
 		slog.Error("list deliveries failed", "error", err, "autopilot_id", autopilotID)
@@ -269,7 +268,7 @@ func (h *Handler) ReplayAutopilotDelivery(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusNotFound, "trigger not found")
 		return
 	}
-	if !trigRow.Enabled {
+	if trigRow.Enabled == 0 {
 		writeError(w, http.StatusBadRequest, "trigger is disabled")
 		return
 	}
@@ -277,7 +276,7 @@ func (h *Handler) ReplayAutopilotDelivery(w http.ResponseWriter, r *http.Request
 	// Build the envelope from the stored raw body using the original headers
 	// subset for event inference. SelectedHeaders is small + JSON-shaped, so
 	// we decode it back into a header map to reuse the same normalize path.
-	headers := headersFromSelected(original.SelectedHeaders)
+	headers := headersFromSelected([]byte(original.SelectedHeaders))
 	envelope, err := normalizeWebhookPayload(original.RawBody, headers)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "stored body no longer parses: "+err.Error())
@@ -293,13 +292,13 @@ func (h *Handler) ReplayAutopilotDelivery(w http.ResponseWriter, r *http.Request
 	if idempotencyKey == "" {
 		idempotencyKey = service.NewRequestIdempotencyKey()
 	}
-	keyText := pgtype.Text{String: idempotencyKey, Valid: true}
+	keyText := sql.NullString{String: idempotencyKey, Valid: true}
 	if existing, lookupErr := h.Queries.GetWebhookReplayByIdempotencyKey(r.Context(), db.GetWebhookReplayByIdempotencyKeyParams{
-		ReplayedFromDeliveryID: original.ID, ReplayIdempotencyKey: keyText,
+		ReplayedFromDeliveryID: nullString(original.ID), ReplayIdempotencyKey: keyText,
 	}); lookupErr == nil {
 		writeJSON(w, http.StatusAccepted, deliveryToResponse(existing, true))
 		return
-	} else if !errors.Is(lookupErr, pgx.ErrNoRows) {
+	} else if !errors.Is(lookupErr, sql.ErrNoRows) {
 		writeError(w, http.StatusInternalServerError, "failed to inspect replay request")
 		return
 	}
@@ -318,15 +317,15 @@ func (h *Handler) ReplayAutopilotDelivery(w http.ResponseWriter, r *http.Request
 		SignatureStatus:        sigStatusNotRequired,
 		Status:                 deliveryStatusQueued,
 		SelectedHeaders:        original.SelectedHeaders,
-		ContentType:            pgtype.Text{String: contentType, Valid: contentType != ""},
+		ContentType:            sql.NullString{String: contentType, Valid: contentType != ""},
 		RawBody:                original.RawBody,
-		ReplayedFromDeliveryID: original.ID,
+		ReplayedFromDeliveryID: nullString(original.ID),
 		ReplayIdempotencyKey:   keyText,
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
 			existing, lookupErr := h.Queries.GetWebhookReplayByIdempotencyKey(r.Context(), db.GetWebhookReplayByIdempotencyKeyParams{
-				ReplayedFromDeliveryID: original.ID, ReplayIdempotencyKey: keyText,
+				ReplayedFromDeliveryID: nullString(original.ID), ReplayIdempotencyKey: keyText,
 			})
 			if lookupErr == nil {
 				writeJSON(w, http.StatusAccepted, deliveryToResponse(existing, true))
@@ -361,7 +360,7 @@ func (h *Handler) loadDeliveryForAutopilot(w http.ResponseWriter, r *http.Reques
 		WorkspaceID: autopilot.WorkspaceID,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "delivery not found")
 			return db.WebhookDelivery{}, false
 		}

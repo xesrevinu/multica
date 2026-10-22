@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,8 +13,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/entitlement/entitlementtest"
 	"github.com/multica-ai/multica/server/internal/events"
@@ -22,16 +21,16 @@ import (
 )
 
 type autopilotQuotaFixture struct {
-	pool          *pgxpool.Pool
+	pool          *sql.DB
 	queries       *db.Queries
 	service       *AutopilotService
 	stub          *entitlementtest.Stub
 	workspace     uuid.UUID
-	workspaceID   pgtype.UUID
-	autopilotID   pgtype.UUID
-	agentID       pgtype.UUID
-	publisherID   pgtype.UUID
-	issueID       pgtype.UUID
+	workspaceID   string
+	autopilotID   string
+	agentID       string
+	publisherID   string
+	issueID       string
 	periodStart   time.Time
 	periodEnd     time.Time
 	resetAt       time.Time
@@ -66,7 +65,7 @@ func newAutopilotQuotaFixture(t *testing.T, action entitlement.Action, limit int
 	workspaceIDString, publisherID, agentID, issueIDString := seedAttributionFixture(t, pool)
 	autopilotIDString, _ := seedRunOnlyAutopilot(t, pool, workspaceIDString, agentID, publisherID)
 	workspaceID := util.MustParseUUID(workspaceIDString)
-	workspace := uuid.UUID(workspaceID.Bytes)
+	workspace := uuid.MustParse(workspaceID)
 	periodStart := time.Now().UTC().Truncate(time.Second)
 	periodEnd := periodStart.Add(37 * time.Hour)
 	stub := entitlementtest.New()
@@ -86,8 +85,8 @@ func newAutopilotQuotaFixture(t *testing.T, action entitlement.Action, limit int
 	}
 	fixture.setPolicy(action, periodStart, periodEnd, limit)
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM autopilot_quota_reservation WHERE workspace_id = $1`, workspaceID)
-		pool.Exec(context.Background(), `DELETE FROM autopilot_quota_period WHERE workspace_id = $1`, workspaceID)
+		pool.ExecContext(context.Background(), `DELETE FROM autopilot_quota_reservation WHERE workspace_id = $1`, workspaceID)
+		pool.ExecContext(context.Background(), `DELETE FROM autopilot_quota_period WHERE workspace_id = $1`, workspaceID)
 	})
 	return fixture
 }
@@ -115,20 +114,20 @@ func (f *autopilotQuotaFixture) setNotificationPolicy(limit int) {
 	})
 }
 
-func addAutopilotQuotaMember(t *testing.T, f *autopilotQuotaFixture, role string) pgtype.UUID {
+func addAutopilotQuotaMember(t *testing.T, f *autopilotQuotaFixture, role string) string {
 	t.Helper()
 	ctx := context.Background()
-	var userID pgtype.UUID
+	var userID string
 	email := fmt.Sprintf("quota-notice-%s-%d@multica.test", role, time.Now().UnixNano())
-	if err := f.pool.QueryRow(ctx, `INSERT INTO "user" (name, email) VALUES ('Quota Notice Member', $1) RETURNING id`, email).Scan(&userID); err != nil {
+	if err := f.pool.QueryRowContext(ctx, `INSERT INTO "user" (name, email) VALUES ('Quota Notice Member', $1) RETURNING id`, email).Scan(&userID); err != nil {
 		t.Fatalf("insert quota notice user: %v", err)
 	}
-	if _, err := f.pool.Exec(ctx, `INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, $3)`, f.workspaceID, userID, role); err != nil {
+	if _, err := f.pool.ExecContext(ctx, `INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, $3)`, f.workspaceID, userID, role); err != nil {
 		t.Fatalf("insert quota notice member: %v", err)
 	}
 	t.Cleanup(func() {
-		f.pool.Exec(context.Background(), `DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`, f.workspaceID, userID)
-		f.pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, userID)
+		f.pool.ExecContext(context.Background(), `DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`, f.workspaceID, userID)
+		f.pool.ExecContext(context.Background(), `DELETE FROM "user" WHERE id = $1`, userID)
 	})
 	return userID
 }
@@ -136,7 +135,7 @@ func addAutopilotQuotaMember(t *testing.T, f *autopilotQuotaFixture, role string
 func TestAutopilotQuotaDisabledDoesNotReadQuotaTables(t *testing.T) {
 	ctx := context.Background()
 	workspace := uuid.New()
-	workspaceID := pgtype.UUID{Bytes: workspace, Valid: true}
+	workspaceID := uuid.UUID(workspace).String()
 
 	t.Run("off", func(t *testing.T) {
 		stub := entitlementtest.New()
@@ -183,8 +182,8 @@ func TestAutopilotQuotaEnforcesBoundaryAndFinalizesIdempotently(t *testing.T) {
 	workspaceID := util.MustParseUUID(workspaceIDString)
 	autopilotID := util.MustParseUUID(autopilotIDString)
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM autopilot_quota_reservation WHERE workspace_id = $1`, workspaceID)
-		pool.Exec(context.Background(), `DELETE FROM autopilot_quota_period WHERE workspace_id = $1`, workspaceID)
+		pool.ExecContext(context.Background(), `DELETE FROM autopilot_quota_reservation WHERE workspace_id = $1`, workspaceID)
+		pool.ExecContext(context.Background(), `DELETE FROM autopilot_quota_period WHERE workspace_id = $1`, workspaceID)
 	})
 
 	periodStart := time.Now().UTC().Truncate(time.Second)
@@ -192,7 +191,7 @@ func TestAutopilotQuotaEnforcesBoundaryAndFinalizesIdempotently(t *testing.T) {
 	resetAt := periodEnd
 	limit := 2
 	stub := entitlementtest.New()
-	stub.Set(uuid.UUID(workspaceID.Bytes), entitlement.GateAutopilotRuns, entitlement.Decision{
+	stub.Set(uuid.MustParse(workspaceID), entitlement.GateAutopilotRuns, entitlement.Decision{
 		Gate: entitlement.Gate{
 			Action: entitlement.ActionEnforce, Limit: &limit,
 			PeriodStart: &periodStart, PeriodEnd: &periodEnd, ResetAt: &resetAt,
@@ -213,7 +212,7 @@ func TestAutopilotQuotaEnforcesBoundaryAndFinalizesIdempotently(t *testing.T) {
 		runs = append(runs, run)
 	}
 	reused, wasReused, err := svc.createAutopilotRunWithQuota(ctx, workspaceID, "api", "boundary-1", params)
-	if err != nil || !wasReused || reused.ID.Bytes != runs[0].ID.Bytes {
+	if err != nil || !wasReused || reused.ID != runs[0].ID {
 		t.Fatalf("idempotent reuse = %s, %v; want %s", util.UUIDToString(reused.ID), err, util.UUIDToString(runs[0].ID))
 	}
 	_, _, err = svc.createAutopilotRunWithQuota(ctx, workspaceID, "api", "boundary-3", params)
@@ -229,18 +228,18 @@ func TestAutopilotQuotaEnforcesBoundaryAndFinalizesIdempotently(t *testing.T) {
 	if got := usage.BlockedCounts["api"]; got != 1 {
 		t.Fatalf("blocked API count = %d, want 1", got)
 	}
-	if _, err := settleAutopilotQuota(ctx, q, runs[0].QuotaReservationID, true); err != nil {
+	if _, err := settleAutopilotQuota(ctx, q, runs[0].QuotaReservationID.String, true); err != nil {
 		t.Fatalf("consume: %v", err)
 	}
-	if _, err := settleAutopilotQuota(ctx, q, runs[0].QuotaReservationID, true); err != nil {
+	if _, err := settleAutopilotQuota(ctx, q, runs[0].QuotaReservationID.String, true); err != nil {
 		t.Fatalf("duplicate consume: %v", err)
 	}
-	if _, err := settleAutopilotQuota(ctx, q, runs[1].QuotaReservationID, false); err != nil {
+	if _, err := settleAutopilotQuota(ctx, q, runs[1].QuotaReservationID.String, false); err != nil {
 		t.Fatalf("release: %v", err)
 	}
 	// Consumed usage is monotonic: later issue cancellation/deletion cannot
 	// turn a successfully created issue back into quota.
-	if _, err := settleAutopilotQuota(ctx, q, runs[0].QuotaReservationID, false); err != nil {
+	if _, err := settleAutopilotQuota(ctx, q, runs[0].QuotaReservationID.String, false); err != nil {
 		t.Fatalf("release consumed reservation: %v", err)
 	}
 	usage, err = svc.AutopilotQuotaUsage(ctx, workspaceID)
@@ -311,7 +310,7 @@ func TestAutopilotQuotaFirstRejectionNotifiesBillingManagersOncePerWorkspacePeri
 		t.Fatalf("second autopilot rejection = %v, want quota error", err)
 	}
 
-	rows, err := fixture.pool.Query(ctx, `
+	rows, err := fixture.pool.QueryContext(ctx, `
 		SELECT recipient_id FROM inbox_item
 		WHERE workspace_id = $1 AND type = 'autopilot_quota_exceeded'`, fixture.workspaceID)
 	if err != nil {
@@ -320,7 +319,7 @@ func TestAutopilotQuotaFirstRejectionNotifiesBillingManagersOncePerWorkspacePeri
 	defer rows.Close()
 	recipients := make(map[string]int)
 	for rows.Next() {
-		var recipientID pgtype.UUID
+		var recipientID string
 		if err := rows.Scan(&recipientID); err != nil {
 			t.Fatalf("scan quota rejection recipient: %v", err)
 		}
@@ -329,7 +328,7 @@ func TestAutopilotQuotaFirstRejectionNotifiesBillingManagersOncePerWorkspacePeri
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate quota rejection recipients: %v", err)
 	}
-	wantRecipients := []pgtype.UUID{fixture.publisherID, adminID}
+	wantRecipients := []string{fixture.publisherID, adminID}
 	if len(recipients) != len(wantRecipients) {
 		t.Fatalf("quota rejection recipients = %v, want owner and admin", recipients)
 	}
@@ -344,8 +343,8 @@ func TestAutopilotQuotaFirstRejectionNotifiesBillingManagersOncePerWorkspacePeri
 
 	period, err := fixture.queries.GetAutopilotQuotaPeriod(ctx, db.GetAutopilotQuotaPeriodParams{
 		WorkspaceID: fixture.workspaceID,
-		PeriodStart: pgtype.Timestamptz{Time: fixture.periodStart, Valid: true},
-		PeriodEnd:   pgtype.Timestamptz{Time: fixture.periodEnd, Valid: true},
+		PeriodStart: nullTime(fixture.periodStart, true).String,
+		PeriodEnd:   nullTime(fixture.periodEnd, true).String,
 	})
 	if err != nil {
 		t.Fatalf("load quota period: %v", err)
@@ -356,7 +355,7 @@ func TestAutopilotQuotaFirstRejectionNotifiesBillingManagersOncePerWorkspacePeri
 
 	var title, noticeKey, severity, body string
 	var hasThresholdPercent bool
-	if err := fixture.pool.QueryRow(ctx, `
+	if err := fixture.pool.QueryRowContext(ctx, `
 		SELECT details->>'autopilot_title', details->>'notice_key',
 		       details ? 'threshold_percent', severity, body
 		FROM inbox_item
@@ -402,7 +401,7 @@ func TestAutopilotQuotaInboxFailurePreservesQuotaRejection(t *testing.T) {
 	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")
 	functionName := pgx.Identifier{"test_fail_quota_notice_" + suffix}.Sanitize()
 	triggerName := pgx.Identifier{"test_fail_quota_notice_trigger_" + suffix}.Sanitize()
-	if _, err := fixture.pool.Exec(ctx, fmt.Sprintf(`
+	if _, err := fixture.pool.ExecContext(ctx, fmt.Sprintf(`
 		CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS $$
 		BEGIN
 			IF NEW.workspace_id = '%s'::uuid
@@ -419,8 +418,8 @@ func TestAutopilotQuotaInboxFailurePreservesQuotaRejection(t *testing.T) {
 		t.Fatalf("install inbox failure trigger: %v", err)
 	}
 	t.Cleanup(func() {
-		fixture.pool.Exec(context.Background(), fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON inbox_item", triggerName))
-		fixture.pool.Exec(context.Background(), fmt.Sprintf("DROP FUNCTION IF EXISTS %s()", functionName))
+		fixture.pool.ExecContext(context.Background(), fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON inbox_item", triggerName))
+		fixture.pool.ExecContext(context.Background(), fmt.Sprintf("DROP FUNCTION IF EXISTS %s()", functionName))
 	})
 
 	params := fixture.createRunArgs
@@ -441,8 +440,8 @@ func TestAutopilotQuotaInboxFailurePreservesQuotaRejection(t *testing.T) {
 	}
 	period, err := fixture.queries.GetAutopilotQuotaPeriod(ctx, db.GetAutopilotQuotaPeriodParams{
 		WorkspaceID: fixture.workspaceID,
-		PeriodStart: pgtype.Timestamptz{Time: fixture.periodStart, Valid: true},
-		PeriodEnd:   pgtype.Timestamptz{Time: fixture.periodEnd, Valid: true},
+		PeriodStart: nullTime(fixture.periodStart, true).String,
+		PeriodEnd:   nullTime(fixture.periodEnd, true).String,
 	})
 	if err != nil {
 		t.Fatalf("load quota period after notice failure: %v", err)
@@ -451,7 +450,7 @@ func TestAutopilotQuotaInboxFailurePreservesQuotaRejection(t *testing.T) {
 		t.Fatal("failed Inbox transaction must not persist the notification marker")
 	}
 	var failedTransactionNotices int
-	if err := fixture.pool.QueryRow(ctx, `
+	if err := fixture.pool.QueryRowContext(ctx, `
 		SELECT count(*) FROM inbox_item
 		WHERE workspace_id = $1 AND type = 'autopilot_quota_exceeded'`,
 		fixture.workspaceID,
@@ -462,7 +461,7 @@ func TestAutopilotQuotaInboxFailurePreservesQuotaRejection(t *testing.T) {
 		t.Fatalf("failed multi-recipient transaction persisted %d notices, want zero", failedTransactionNotices)
 	}
 
-	if _, err := fixture.pool.Exec(ctx, fmt.Sprintf("DROP TRIGGER %s ON inbox_item", triggerName)); err != nil {
+	if _, err := fixture.pool.ExecContext(ctx, fmt.Sprintf("DROP TRIGGER %s ON inbox_item", triggerName)); err != nil {
 		t.Fatalf("remove inbox failure trigger: %v", err)
 	}
 	_, _, err = fixture.service.createAutopilotRunWithQuota(
@@ -472,7 +471,7 @@ func TestAutopilotQuotaInboxFailurePreservesQuotaRejection(t *testing.T) {
 		t.Fatalf("retry rejection error = %v, want quota exceeded", err)
 	}
 	var notices int
-	if err := fixture.pool.QueryRow(ctx, `
+	if err := fixture.pool.QueryRowContext(ctx, `
 		SELECT count(*) FROM inbox_item
 		WHERE workspace_id = $1 AND type = 'autopilot_quota_exceeded'`,
 		fixture.workspaceID,
@@ -487,7 +486,7 @@ func TestAutopilotQuotaInboxFailurePreservesQuotaRejection(t *testing.T) {
 func TestAutopilotQuotaNoticeSurvivesDeletedAutopilot(t *testing.T) {
 	fixture := newAutopilotQuotaFixture(t, entitlement.ActionEnforce, 1)
 	ctx := context.Background()
-	if _, err := fixture.pool.Exec(ctx, `DELETE FROM autopilot WHERE id = $1`, fixture.autopilotID); err != nil {
+	if _, err := fixture.pool.ExecContext(ctx, `DELETE FROM autopilot WHERE id = $1`, fixture.autopilotID); err != nil {
 		t.Fatalf("delete autopilot before quota notice: %v", err)
 	}
 
@@ -522,10 +521,10 @@ func TestAutopilotQuotaNoticeDoesNotDependOnCreatorAgentOwner(t *testing.T) {
 	fixture := newAutopilotQuotaFixture(t, entitlement.ActionEnforce, 0)
 	fixture.setNotificationPolicy(0)
 	ctx := context.Background()
-	if _, err := fixture.pool.Exec(ctx, `UPDATE agent SET owner_id = NULL WHERE id = $1`, fixture.agentID); err != nil {
+	if _, err := fixture.pool.ExecContext(ctx, `UPDATE agent SET owner_id = NULL WHERE id = $1`, fixture.agentID); err != nil {
 		t.Fatalf("remove autopilot creator agent owner: %v", err)
 	}
-	if _, err := fixture.pool.Exec(ctx, `
+	if _, err := fixture.pool.ExecContext(ctx, `
 		UPDATE autopilot SET created_by_type = 'agent', created_by_id = $2 WHERE id = $1`,
 		fixture.autopilotID, fixture.agentID,
 	); err != nil {
@@ -539,15 +538,15 @@ func TestAutopilotQuotaNoticeDoesNotDependOnCreatorAgentOwner(t *testing.T) {
 	if !errors.As(err, &quotaErr) {
 		t.Fatalf("ownerless-agent rejection = %v, want quota error", err)
 	}
-	var recipientID pgtype.UUID
-	if err := fixture.pool.QueryRow(ctx, `
+	var recipientID string
+	if err := fixture.pool.QueryRowContext(ctx, `
 		SELECT recipient_id FROM inbox_item
 		WHERE workspace_id = $1 AND type = 'autopilot_quota_exceeded'`,
 		fixture.workspaceID,
 	).Scan(&recipientID); err != nil {
 		t.Fatalf("load ownerless-agent quota notice: %v", err)
 	}
-	if recipientID.Bytes != fixture.publisherID.Bytes {
+	if recipientID != fixture.publisherID {
 		t.Fatalf("ownerless-agent notice recipient = %s, want workspace owner %s",
 			util.UUIDToString(recipientID), util.UUIDToString(fixture.publisherID))
 	}
@@ -557,7 +556,7 @@ func TestAutopilotQuotaNoticeRetriesAfterWorkspaceManagerIsRestored(t *testing.T
 	fixture := newAutopilotQuotaFixture(t, entitlement.ActionEnforce, 0)
 	fixture.setNotificationPolicy(0)
 	ctx := context.Background()
-	if _, err := fixture.pool.Exec(ctx, `
+	if _, err := fixture.pool.ExecContext(ctx, `
 		UPDATE member SET role = 'member' WHERE workspace_id = $1 AND user_id = $2`,
 		fixture.workspaceID, fixture.publisherID,
 	); err != nil {
@@ -578,8 +577,8 @@ func TestAutopilotQuotaNoticeRetriesAfterWorkspaceManagerIsRestored(t *testing.T
 		t.Helper()
 		period, err := fixture.queries.GetAutopilotQuotaPeriod(ctx, db.GetAutopilotQuotaPeriodParams{
 			WorkspaceID: fixture.workspaceID,
-			PeriodStart: pgtype.Timestamptz{Time: fixture.periodStart, Valid: true},
-			PeriodEnd:   pgtype.Timestamptz{Time: fixture.periodEnd, Valid: true},
+			PeriodStart: nullTime(fixture.periodStart, true).String,
+			PeriodEnd:   nullTime(fixture.periodEnd, true).String,
 		})
 		if err != nil {
 			t.Fatalf("load quota period: %v", err)
@@ -589,7 +588,7 @@ func TestAutopilotQuotaNoticeRetriesAfterWorkspaceManagerIsRestored(t *testing.T
 	countNotices := func() int {
 		t.Helper()
 		var count int
-		if err := fixture.pool.QueryRow(ctx, `
+		if err := fixture.pool.QueryRowContext(ctx, `
 			SELECT count(*) FROM inbox_item
 			WHERE workspace_id = $1 AND type = 'autopilot_quota_exceeded'`,
 			fixture.workspaceID,
@@ -607,7 +606,7 @@ func TestAutopilotQuotaNoticeRetriesAfterWorkspaceManagerIsRestored(t *testing.T
 		t.Fatalf("quota notices without a workspace manager = %d, want zero", got)
 	}
 
-	if _, err := fixture.pool.Exec(ctx, `
+	if _, err := fixture.pool.ExecContext(ctx, `
 		UPDATE member SET role = 'owner' WHERE workspace_id = $1 AND user_id = $2`,
 		fixture.workspaceID, fixture.publisherID,
 	); err != nil {
@@ -708,7 +707,7 @@ func TestAutopilotQuotaObserveToEnforceAndOffFinalization(t *testing.T) {
 	fixture.setPolicy(entitlement.ActionOff, fixture.periodStart, fixture.periodEnd, 1)
 	for _, run := range runs {
 		if _, err := fixture.service.failAutopilotRun(ctx, db.UpdateAutopilotRunFailedParams{
-			ID: run.ID, FailureReason: pgtype.Text{String: "test cleanup", Valid: true},
+			ID: run.ID, FailureReason: sql.NullString{String: "test cleanup", Valid: true},
 		}); err != nil {
 			t.Fatalf("finalize while policy off: %v", err)
 		}
@@ -735,11 +734,11 @@ func TestAutopilotQuotaConsumedCreateIssueCannotBeRefunded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("admit cancelled run: %v", err)
 	}
-	if _, err := settleAutopilotQuota(ctx, fixture.queries, cancelled.QuotaReservationID, true); err != nil {
+	if _, err := settleAutopilotQuota(ctx, fixture.queries, cancelled.QuotaReservationID.String, true); err != nil {
 		t.Fatalf("consume cancelled run: %v", err)
 	}
 	if _, err := fixture.service.failAutopilotRun(ctx, db.UpdateAutopilotRunFailedParams{
-		ID: cancelled.ID, FailureReason: pgtype.Text{String: "issue cancelled", Valid: true},
+		ID: cancelled.ID, FailureReason: sql.NullString{String: "issue cancelled", Valid: true},
 	}); err != nil {
 		t.Fatalf("fail consumed run: %v", err)
 	}
@@ -751,12 +750,12 @@ func TestAutopilotQuotaConsumedCreateIssueCannotBeRefunded(t *testing.T) {
 		t.Fatalf("admit deleted run: %v", err)
 	}
 	deleted, err = fixture.queries.UpdateAutopilotRunIssueCreated(ctx, db.UpdateAutopilotRunIssueCreatedParams{
-		ID: deleted.ID, IssueID: fixture.issueID,
+		ID: deleted.ID, IssueID: nullString(fixture.issueID),
 	})
 	if err != nil {
 		t.Fatalf("link issue-created run: %v", err)
 	}
-	if _, err := settleAutopilotQuota(ctx, fixture.queries, deleted.QuotaReservationID, true); err != nil {
+	if _, err := settleAutopilotQuota(ctx, fixture.queries, deleted.QuotaReservationID.String, true); err != nil {
 		t.Fatalf("consume deleted run: %v", err)
 	}
 	if err := fixture.service.FailAutopilotRunsByIssue(ctx, fixture.issueID); err != nil {
@@ -804,8 +803,8 @@ func TestAutopilotQuotaSettlementStaysInOriginalPeriod(t *testing.T) {
 
 	first, err := fixture.queries.GetAutopilotQuotaPeriod(ctx, db.GetAutopilotQuotaPeriodParams{
 		WorkspaceID: fixture.workspaceID,
-		PeriodStart: pgtype.Timestamptz{Time: fixture.periodStart, Valid: true},
-		PeriodEnd:   pgtype.Timestamptz{Time: fixture.periodEnd, Valid: true},
+		PeriodStart: nullTime(fixture.periodStart, true).String,
+		PeriodEnd:   nullTime(fixture.periodEnd, true).String,
 	})
 	if err != nil || first.UsedCount != 1 || first.ReservedCount != 0 {
 		t.Fatalf("first period = %+v, %v; want one consumed", first, err)
@@ -926,22 +925,22 @@ func TestAutopilotQuotaReconcilerReleasesOnlyAbandonedManualOrAPIRuns(t *testing
 	if _, err := fixture.queries.CreateAutopilotTask(ctx, db.CreateAutopilotTaskParams{
 		AgentID:              fixture.agentID,
 		RuntimeID:            agent.RuntimeID,
-		AutopilotRunID:       taskBackedAPI.ID,
-		OriginatorUserID:     fixture.publisherID,
-		AccountableUserID:    fixture.publisherID,
-		OriginatorSource:     pgtype.Text{String: "direct_human", Valid: true},
-		TriggerEvidenceKind:  pgtype.Text{String: "autopilot_run", Valid: true},
-		TriggerEvidenceRefID: taskBackedAPI.ID,
+		AutopilotRunID:       nullString(taskBackedAPI.ID),
+		OriginatorUserID:     nullString(fixture.publisherID),
+		AccountableUserID:    nullString(fixture.publisherID),
+		OriginatorSource:     sql.NullString{String: "direct_human", Valid: true},
+		TriggerEvidenceKind:  sql.NullString{String: "autopilot_run", Valid: true},
+		TriggerEvidenceRefID: nullString(taskBackedAPI.ID),
 	}); err != nil {
 		t.Fatalf("create unlinked task evidence: %v", err)
 	}
-	if _, err := fixture.pool.Exec(ctx, `
+	if _, err := fixture.pool.ExecContext(ctx, `
 		UPDATE autopilot_quota_reservation
 		SET created_at = now() - interval '24 hours'
 		WHERE id = ANY($1::uuid[])`, []uuid.UUID{
-		uuid.UUID(staleManual.QuotaReservationID.Bytes),
-		uuid.UUID(taskBackedAPI.QuotaReservationID.Bytes),
-		uuid.UUID(staleWebhook.QuotaReservationID.Bytes),
+		uuid.MustParse(staleManual.QuotaReservationID.String),
+		uuid.MustParse(taskBackedAPI.QuotaReservationID.String),
+		uuid.MustParse(staleWebhook.QuotaReservationID.String),
 	}); err != nil {
 		t.Fatalf("age partial reservations: %v", err)
 	}
@@ -983,13 +982,13 @@ func TestAutopilotQuotaIdempotencyRecoversOrphanedReservation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first admission: %v", err)
 	}
-	if _, err := fixture.pool.Exec(ctx, `DELETE FROM autopilot_run WHERE id = $1`, first.ID); err != nil {
+	if _, err := fixture.pool.ExecContext(ctx, `DELETE FROM autopilot_run WHERE id = $1`, first.ID); err != nil {
 		t.Fatalf("remove quota-linked run: %v", err)
 	}
 	recovered, reused, err := fixture.service.createAutopilotRunWithQuota(
 		ctx, fixture.workspaceID, "api", "orphaned-key", fixture.createRunArgs,
 	)
-	if err != nil || reused || recovered.ID.Bytes == first.ID.Bytes {
+	if err != nil || reused || recovered.ID == first.ID {
 		t.Fatalf("orphan recovery = run %s reused=%v err=%v", util.UUIDToString(recovered.ID), reused, err)
 	}
 	usage, err := fixture.service.AutopilotQuotaUsage(ctx, fixture.workspaceID)
@@ -1006,15 +1005,15 @@ func TestAutopilotQuotaSchedulePersistsSkippedRun(t *testing.T) {
 	autopilotIDString, _ := seedRunOnlyAutopilot(t, pool, workspaceIDString, agentID, publisherID)
 	workspaceID := util.MustParseUUID(workspaceIDString)
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM autopilot_quota_reservation WHERE workspace_id = $1`, workspaceID)
-		pool.Exec(context.Background(), `DELETE FROM autopilot_quota_period WHERE workspace_id = $1`, workspaceID)
+		pool.ExecContext(context.Background(), `DELETE FROM autopilot_quota_reservation WHERE workspace_id = $1`, workspaceID)
+		pool.ExecContext(context.Background(), `DELETE FROM autopilot_quota_period WHERE workspace_id = $1`, workspaceID)
 	})
 
 	start := time.Now().UTC().Truncate(time.Second)
 	end := start.Add(13 * time.Hour)
 	limit := 0
 	stub := entitlementtest.New()
-	stub.Set(uuid.UUID(workspaceID.Bytes), entitlement.GateAutopilotRuns, entitlement.Decision{
+	stub.Set(uuid.MustParse(workspaceID), entitlement.GateAutopilotRuns, entitlement.Decision{
 		Gate: entitlement.Gate{
 			Action: entitlement.ActionEnforce, Limit: &limit,
 			PeriodStart: &start, PeriodEnd: &end, ResetAt: &end,
@@ -1024,8 +1023,8 @@ func TestAutopilotQuotaSchedulePersistsSkippedRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load autopilot: %v", err)
 	}
-	var triggerID pgtype.UUID
-	if err := pool.QueryRow(ctx, `
+	var triggerID string
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO autopilot_trigger (autopilot_id, kind, enabled, cron_expression, timezone, created_by_type, created_by_id)
 		VALUES ($1, 'schedule', true, '0 * * * *', 'UTC', 'member', $2) RETURNING id`, autopilot.ID, publisherID).Scan(&triggerID); err != nil {
 		t.Fatalf("create schedule trigger: %v", err)

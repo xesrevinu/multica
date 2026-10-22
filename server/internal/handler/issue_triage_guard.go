@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -49,12 +48,12 @@ func writeIssueInTriage(w http.ResponseWriter, field string) {
 // validateBatchTriageLocks rejects a batch that would set a Triage-locked field
 // on any issue in Triage, before anything is written. A silent per-issue skip
 // would report a short `{"updated": N}` with no reason attached.
-func (h *Handler) validateBatchTriageLocks(w http.ResponseWriter, r *http.Request, workspaceID pgtype.UUID, issueIDs []string, rawUpdates map[string]json.RawMessage) bool {
+func (h *Handler) validateBatchTriageLocks(w http.ResponseWriter, r *http.Request, workspaceID string, issueIDs []string, rawUpdates map[string]json.RawMessage) bool {
 	field := triageLockedField(rawUpdates)
 	if field == "" {
 		return true
 	}
-	ids := make([]pgtype.UUID, 0, len(issueIDs))
+	ids := make([]string, 0, len(issueIDs))
 	for _, id := range issueIDs {
 		// Unparseable ids are skipped by the batch loop as well.
 		if parsed, err := util.ParseUUID(id); err == nil {

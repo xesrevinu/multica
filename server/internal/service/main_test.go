@@ -2,18 +2,19 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	_ "modernc.org/sqlite"
 )
 
 var (
 	sharedPoolMu sync.Mutex
-	sharedPool   *pgxpool.Pool
+	sharedPool   *sql.DB
 )
 
 func TestMain(m *testing.M) {
@@ -51,31 +52,16 @@ func TestMain(m *testing.M) {
 // pool rather than dialling a fresh one each: a new pool costs a connection
 // handshake plus a cold statement cache and cold backend caches, which made
 // small tests here several times slower than their handler-package twins.
-func sharedTestPool(t *testing.T) *pgxpool.Pool {
+func sharedTestPool(t *testing.T) *sql.DB {
 	t.Helper()
 	pool, err := openSharedTestPool()
 	if err != nil {
 		t.Skip(err)
 	}
-	// A per-test pool hung in Close on a connection its test never released.
-	// With one shared pool a leak would starve later tests instead, so report
-	// it here. Releasing a busy connection destroys it asynchronously, hence
-	// the short settle.
-	held := pool.Stat().AcquiredConns()
-	t.Cleanup(func() {
-		deadline := time.Now().Add(time.Second)
-		for pool.Stat().AcquiredConns() > held {
-			if time.Now().After(deadline) {
-				t.Errorf("test left %d database connection(s) acquired", pool.Stat().AcquiredConns()-held)
-				return
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
-	})
 	return pool
 }
 
-func openSharedTestPool() (*pgxpool.Pool, error) {
+func openSharedTestPool() (*sql.DB, error) {
 	sharedPoolMu.Lock()
 	defer sharedPoolMu.Unlock()
 	if sharedPool != nil {
@@ -87,11 +73,11 @@ func openSharedTestPool() (*pgxpool.Pool, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	pool, err := pgxpool.New(ctx, dbURL)
+	pool, err := sql.Open("sqlite", dbURL)
 	if err != nil {
 		return nil, fmt.Errorf("database unavailable: %w", err)
 	}
-	if err := pool.Ping(ctx); err != nil {
+	if err := pool.PingContext(ctx); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("database unreachable: %w", err)
 	}

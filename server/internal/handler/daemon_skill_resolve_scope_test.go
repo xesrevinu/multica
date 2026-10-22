@@ -10,7 +10,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/testutil"
@@ -90,7 +89,7 @@ func uuidArgLen(args []any, i int) int {
 	if i >= len(args) {
 		return -1
 	}
-	ids, ok := args[i].([]pgtype.UUID)
+	ids, ok := args[i].([]string)
 	if !ok {
 		return -1
 	}
@@ -99,7 +98,7 @@ func uuidArgLen(args []any, i int) int {
 
 func newSpyHandler(t *testing.T, spy *skillQuerySpy) *Handler {
 	t.Helper()
-	return New(db.New(spy), testPool, testHandler.Hub, testHandler.Bus, testHandler.EmailService,
+	return New(db.New(spy), sqlDBBeginner{DB: testSQLite}, testHandler.Hub, testHandler.Bus, testHandler.EmailService,
 		nil, nil, analytics.NoopClient{}, Config{})
 }
 
@@ -165,7 +164,7 @@ func TestResolveTaskSkillBundles_LoadsOnlyTheRequestedSkill(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	spy := &skillQuerySpy{inner: testPool}
+	spy := &skillQuerySpy{inner: testSQLite}
 	runtimeID, taskID, skillIDs := resolveScopeFixture(t, ctx, "resolvescope",
 		"resolvescope-alpha", "resolvescope-beta", "resolvescope-gamma")
 
@@ -206,7 +205,7 @@ func TestResolveTaskSkillBundles_BuiltinRefTouchesNoWorkspaceQuery(t *testing.T)
 	}
 
 	ctx := context.Background()
-	spy := &skillQuerySpy{inner: testPool}
+	spy := &skillQuerySpy{inner: testSQLite}
 	runtimeID, taskID, _ := resolveScopeFixture(t, ctx, "resolvebuiltin", "resolvebuiltin-alpha")
 
 	// The unscoped set: resolution deliberately serves any built-in by id.
@@ -244,7 +243,7 @@ func TestResolveTaskSkillBundles_KeepsRequestOrderAndDeduplicates(t *testing.T) 
 	}
 
 	ctx := context.Background()
-	spy := &skillQuerySpy{inner: testPool}
+	spy := &skillQuerySpy{inner: testSQLite}
 	// Named so the query's name ASC order is the reverse of the request order.
 	runtimeID, taskID, skillIDs := resolveScopeFixture(t, ctx, "resolveorder",
 		"resolveorder-zulu", "resolveorder-alpha")
@@ -348,14 +347,14 @@ func TestResolveTaskSkillBundles_RefusesSkillsTheAgentCannotSee(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			spy := &skillQuerySpy{inner: testPool}
+			spy := &skillQuerySpy{inner: testSQLite}
 			resolveBundles(t, newSpyHandler(t, spy), runtimeID, taskID, tc.ref).Want(http.StatusNotFound)
 		})
 	}
 
 	// The agent's own skill still resolves, so the cases above are denials and
 	// not a fixture that could never resolve anything.
-	spy := &skillQuerySpy{inner: testPool}
+	spy := &skillQuerySpy{inner: testSQLite}
 	resolveBundles(t, newSpyHandler(t, spy), runtimeID, taskID, workspaceRef(skillIDs[0])).Want(http.StatusOK)
 }
 
@@ -371,7 +370,7 @@ func TestResolveTaskSkillBundles_ScopedReadFailureReturns500(t *testing.T) {
 	ctx := context.Background()
 	runtimeID, taskID, skillIDs := resolveScopeFixture(t, ctx, "resolvereadfail", "resolvereadfail-alpha")
 
-	spy := &skillQuerySpy{inner: testPool, failQuery: queryScopedAgentSkills}
+	spy := &skillQuerySpy{inner: testSQLite, failQuery: queryScopedAgentSkills}
 	resolveBundles(t, newSpyHandler(t, spy), runtimeID, taskID, workspaceRef(skillIDs[0])).
 		Want(http.StatusInternalServerError)
 }

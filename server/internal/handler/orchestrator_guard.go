@@ -1,10 +1,9 @@
 package handler
 
 import (
+	"database/sql"
 	"fmt"
 	"net/http"
-
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/orchestrator"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -12,7 +11,7 @@ import (
 
 // orchestratorGuard returns a refusal message when an orchestrated project's
 // status/assignee write is not the orchestrator's own.
-func (h *Handler) orchestratorGuard(r *http.Request, callerType, userID string, prev db.Issue, statusSet bool, status pgtype.Text, assigneeChange bool) string {
+func (h *Handler) orchestratorGuard(r *http.Request, callerType, userID string, prev db.Issue, statusSet bool, status sql.NullString, assigneeChange bool) string {
 	if h.Orchestrator == nil {
 		return ""
 	}
@@ -21,7 +20,7 @@ func (h *Handler) orchestratorGuard(r *http.Request, callerType, userID string, 
 		to = status.String
 	}
 	return h.Orchestrator.CheckWrite(orchestrator.GuardInput{
-		ProjectID: uuidToString(prev.ProjectID), CallerType: callerType, UserID: userID,
+		ProjectID: uuidToString(prev.ProjectID.String), CallerType: callerType, UserID: userID,
 		FromStatus: prev.Status, ToStatus: to, AssigneeChange: assigneeChange,
 		Override: r.Header.Get("X-Orchestrator-Override") == "1",
 	})
@@ -38,11 +37,11 @@ func (h *Handler) orchestratorMetaGuard(r *http.Request, userID string, issue db
 		return ""
 	}
 	cur := map[string]string{}
-	for k, v := range parseIssueMetadata(issue.Metadata) {
+	for k, v := range parseIssueMetadata([]byte(issue.Metadata)) {
 		cur[k] = fmt.Sprint(v)
 	}
 	return h.Orchestrator.CheckAgentMetaWrite(orchestrator.MetaWrite{
-		ProjectID: uuidToString(issue.ProjectID), Status: issue.Status, Key: key, Value: string(value), Current: cur, Delete: del,
+		ProjectID: uuidToString(issue.ProjectID.String), Status: issue.Status, Key: key, Value: string(value), Current: cur, Delete: del,
 	})
 }
 
@@ -56,7 +55,7 @@ func (h *Handler) refuseOrchestratorLabel(w http.ResponseWriter, r *http.Request
 	}
 	callerType, _ := h.resolveActor(r, userID, uuidToString(issue.WorkspaceID))
 	if msg := h.Orchestrator.CheckLabel(orchestrator.LabelWrite{
-		ProjectID: uuidToString(issue.ProjectID), CallerType: callerType, UserID: userID, Label: label, Attach: attach,
+		ProjectID: uuidToString(issue.ProjectID.String), CallerType: callerType, UserID: userID, Label: label, Attach: attach,
 	}); msg != "" {
 		writeErrorCode(w, http.StatusForbidden, orchestrator.ErrCodeOwned, msg)
 		return true
@@ -66,8 +65,8 @@ func (h *Handler) refuseOrchestratorLabel(w http.ResponseWriter, r *http.Request
 
 // orchestratorCreateLabelsGuard returns a refusal message when labels supplied
 // at issue creation would be refused if attached afterwards (CheckLabel).
-func (h *Handler) orchestratorCreateLabelsGuard(r *http.Request, callerType, userID string, workspaceID, projectID pgtype.UUID, labelIDs []pgtype.UUID) string {
-	if h.Orchestrator == nil || !projectID.Valid || len(labelIDs) == 0 || h.Orchestrator.Team(uuidToString(projectID)) == nil {
+func (h *Handler) orchestratorCreateLabelsGuard(r *http.Request, callerType, userID string, workspaceID, projectID string, labelIDs []string) string {
+	if h.Orchestrator == nil || !(projectID != "") || len(labelIDs) == 0 || h.Orchestrator.Team(uuidToString(projectID)) == nil {
 		return ""
 	}
 	for _, id := range labelIDs {

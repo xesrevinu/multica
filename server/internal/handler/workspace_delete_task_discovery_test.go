@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -187,11 +186,11 @@ func TestDeleteWorkspaceTasks_IsSelfSufficientWithoutCascades(t *testing.T) {
 	ctx := context.Background()
 	f := newWorkspaceDeletePathFixture(t, "selfsufficient")
 
-	tx, err := testHandler.TxStarter.Begin(ctx)
+	tx, err := testHandler.TxStarter.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	qtx := testHandler.Queries.WithTx(tx)
 
 	if err := qtx.SetWorkspaceTeardownMode(ctx); err != nil {
@@ -317,11 +316,11 @@ SELECT $1, $2, $3, 'completed', now() FROM generate_series(1, $4::int)
 		t.Fatalf("seed %d tasks: %v", extraTasks, err)
 	}
 
-	tx, err := testHandler.TxStarter.Begin(ctx)
+	tx, err := testHandler.TxStarter.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	qtx := testHandler.Queries.WithTx(tx)
 
 	if err := qtx.SetWorkspaceTeardownMode(ctx); err != nil {
@@ -374,7 +373,7 @@ SELECT $1, $2, $3, 'completed', now() FROM generate_series(1, $4::int)
 	}
 
 	var remaining int
-	if err := tx.QueryRow(ctx, `
+	if err := tx.QueryRowContext(ctx, `
 SELECT count(*) FROM agent_task_queue
 WHERE agent_id = $1 OR issue_id = $2 OR runtime_id = $3
 `, f.victimAgent, f.victimIssue, f.victimRuntime).Scan(&remaining); err != nil {
@@ -413,11 +412,11 @@ SELECT id, $5, $2, 'completed', now() FROM new_agents
 		t.Fatalf("seed %d agents: %v", extraAgents, err)
 	}
 
-	tx, err := testHandler.TxStarter.Begin(ctx)
+	tx, err := testHandler.TxStarter.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	qtx := testHandler.Queries.WithTx(tx)
 
 	if err := qtx.SetWorkspaceTeardownMode(ctx); err != nil {
@@ -429,7 +428,7 @@ SELECT id, $5, $2, 'completed', now() FROM new_agents
 
 	// The owner page is bounded and advances the same way the task page does.
 	firstOwners, err := qtx.ListWorkspaceAgentIDFirstPage(ctx, db.ListWorkspaceAgentIDFirstPageParams{
-		WorkspaceID: parseUUID(f.victimID), Limit: workspaceDeleteOwnerPageSize,
+		WorkspaceID: parseUUID(f.victimID), Limit: int64(workspaceDeleteOwnerPageSize),
 	})
 	if err != nil {
 		t.Fatalf("first owner page: %v", err)
@@ -438,7 +437,7 @@ SELECT id, $5, $2, 'completed', now() FROM new_agents
 		t.Fatalf("first owner page returned %d ids, want %d", len(firstOwners), workspaceDeleteOwnerPageSize)
 	}
 	nextOwners, err := qtx.ListWorkspaceAgentIDPage(ctx, db.ListWorkspaceAgentIDPageParams{
-		WorkspaceID: parseUUID(f.victimID), ID: firstOwners[len(firstOwners)-1], Limit: workspaceDeleteOwnerPageSize,
+		WorkspaceID: parseUUID(f.victimID), ID: firstOwners[len(firstOwners)-1], Limit: int64(workspaceDeleteOwnerPageSize),
 	})
 	if err != nil {
 		t.Fatalf("second owner page: %v", err)
@@ -452,7 +451,7 @@ SELECT id, $5, $2, 'completed', now() FROM new_agents
 	}
 
 	var remaining int
-	if err := tx.QueryRow(ctx, `
+	if err := tx.QueryRowContext(ctx, `
 SELECT count(*) FROM agent_task_queue q
 JOIN agent a ON a.id = q.agent_id
 WHERE a.workspace_id = $1
@@ -481,17 +480,17 @@ func TestSweepTasksForOwner_FailsClosedWhenTasksKeepArriving(t *testing.T) {
 	// and finds another one. Honours the page query's `id > cursor` contract, so
 	// the only thing that can stop this is the pass cap.
 	pages := 0
-	firstPage := func(_ context.Context, _ pgtype.UUID, _ int32) ([]pgtype.UUID, error) {
+	firstPage := func(_ context.Context, _ string, _ int32) ([]string, error) {
 		pages++
 		if pages > 100 {
 			t.Fatal("sweep did not stop; the pass cap is not working")
 		}
-		return []pgtype.UUID{stubTask}, nil
+		return []string{stubTask}, nil
 	}
-	nextPage := func(context.Context, pgtype.UUID, pgtype.UUID, int32) ([]pgtype.UUID, error) {
+	nextPage := func(context.Context, string, string, int32) ([]string, error) {
 		return nil, nil
 	}
-	noop := func(context.Context, []pgtype.UUID) error { return nil }
+	noop := func(context.Context, []string) error { return nil }
 
 	err := sweepTasksForOwner(ctx, "agent", owner, firstPage, nextPage, noop, noop)
 	if err == nil {
@@ -562,11 +561,11 @@ func TestDeleteWorkspaceTasks_FencesConcurrentEnqueueAndReassignment(t *testing.
 	ctx := context.Background()
 	f := newWorkspaceDeletePathFixture(t, "fence")
 
-	tearDownTx, err := testHandler.TxStarter.Begin(ctx)
+	tearDownTx, err := testHandler.TxStarter.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatalf("begin teardown tx: %v", err)
 	}
-	defer tearDownTx.Rollback(ctx)
+	defer tearDownTx.Rollback()
 	qtx := testHandler.Queries.WithTx(tearDownTx)
 	if err := lockWorkspaceTaskOwners(ctx, qtx, parseUUID(f.victimID)); err != nil {
 		t.Fatalf("lock task owners: %v", err)

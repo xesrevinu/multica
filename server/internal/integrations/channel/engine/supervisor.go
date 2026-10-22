@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
@@ -27,7 +28,7 @@ import (
 type Installation struct {
 	// ID is the channel_installation primary key. It is the lease key and
 	// the supervisors-map key (one supervisor goroutine per ID).
-	ID pgtype.UUID
+	ID string
 
 	// ChannelType selects the registry Factory that builds this row's
 	// Channel ("feishu", "slack", …).
@@ -53,7 +54,7 @@ type Installation struct {
 // already held by Token (renewal); otherwise report it held elsewhere via
 // ErrLeaseNotAcquired.
 type AcquireLeaseParams struct {
-	ID        pgtype.UUID
+	ID        string
 	Token     string
 	ExpiresAt time.Time
 	TTL       time.Duration
@@ -63,7 +64,7 @@ type AcquireLeaseParams struct {
 // holds. The store must fence on Token so a stale release from a rotation
 // predecessor cannot clobber a successor's freshly acquired lease.
 type ReleaseLeaseParams struct {
-	ID    pgtype.UUID
+	ID    string
 	Token string
 }
 
@@ -88,7 +89,7 @@ type InstallationStore interface {
 type LeaseStore interface {
 	// ListHeldWSLeases returns the IDs that currently have any live owner.
 	// It is a sweep optimization only; TryAcquireWSLease remains the authority.
-	ListHeldWSLeases(ctx context.Context, ids []pgtype.UUID) (map[string]struct{}, error)
+	ListHeldWSLeases(ctx context.Context, ids []string) (map[string]struct{}, error)
 
 	// TryAcquireWSLease grants when the lease is absent or already carries the
 	// same token (safe retry after an uncertain response); otherwise it returns
@@ -459,7 +460,7 @@ func (s *Supervisor) sweep(ctx context.Context) {
 	}
 	active := make(map[string]struct{}, len(rows))
 	candidates := make([]leaseCandidate, 0, len(rows))
-	candidateIDs := make([]pgtype.UUID, 0, len(rows))
+	candidateIDs := make([]string, 0, len(rows))
 	rotationWaits := make([]rotationWait, 0)
 	for _, row := range rows {
 		// Skip channel types with no registered per-installation Factory. Such
@@ -689,7 +690,7 @@ func (s *Supervisor) supervise(ctx context.Context, inst Installation, id string
 		// run it under a child context, and renew the lease in parallel.
 		ch, err := s.registry.Build(channel.Config{
 			Type:    inst.ChannelType,
-			ID:      inst.ID,
+			ID:      pgUUID(inst.ID),
 			Raw:     inst.Config,
 			Handler: s.handler,
 		})
@@ -749,7 +750,7 @@ func (s *Supervisor) supervise(ctx context.Context, inst Installation, id string
 // when owned after the call; (false, nil) when held elsewhere; (false, err)
 // for transport / DB failures. token is the per-supervisor token (see
 // leaseToken), NOT the process-wide nodeID.
-func (s *Supervisor) acquireLease(ctx context.Context, instID pgtype.UUID, token string) (bool, time.Time, error) {
+func (s *Supervisor) acquireLease(ctx context.Context, instID string, token string) (bool, time.Time, error) {
 	started := s.cfg.Now()
 	expires := started.Add(s.cfg.LeaseTTL)
 	err := s.leaseStore.TryAcquireWSLease(ctx, AcquireLeaseParams{
@@ -775,7 +776,7 @@ func (s *Supervisor) acquireLease(ctx context.Context, instID pgtype.UUID, token
 // the same installation" failure mode. cancelRun forces the channel's ctx
 // done immediately, so Connect returns in bounded time even on a silent
 // socket. token MUST be the same per-supervisor token used to acquire.
-func (s *Supervisor) renewLeaseUntil(ctx context.Context, cancelRun context.CancelFunc, instID pgtype.UUID, token string, confirmedUntil time.Time) {
+func (s *Supervisor) renewLeaseUntil(ctx context.Context, cancelRun context.CancelFunc, instID string, token string, confirmedUntil time.Time) {
 	nextDelay := renewalJitter(s.cfg.LeaseRenewInterval)
 	for {
 		remaining := confirmedUntil.Sub(s.cfg.Now())
@@ -827,7 +828,7 @@ func (s *Supervisor) renewLeaseUntil(ctx context.Context, cancelRun context.Canc
 	}
 }
 
-func (s *Supervisor) leaseLost(instID pgtype.UUID, cancelRun context.CancelFunc, reason string) {
+func (s *Supervisor) leaseLost(instID string, cancelRun context.CancelFunc, reason string) {
 	s.setRenewalError(uuidString(instID), false)
 	s.recordLeaseOperation("renew", "lost")
 	s.cfg.Logger.Warn("channel engine: lease lost; tearing down connection",
@@ -841,7 +842,7 @@ func (s *Supervisor) leaseLost(instID pgtype.UUID, cancelRun context.CancelFunc,
 // already cancelled by shutdown time). token MUST be the same per-supervisor
 // token used to acquire — a rotation successor's lease carries a different
 // token, so a stale release no-ops instead of clobbering it.
-func (s *Supervisor) releaseLease(instID pgtype.UUID, token string) {
+func (s *Supervisor) releaseLease(instID string, token string) {
 	s.setRenewalError(uuidString(instID), false)
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.LeaseReleaseTimeout)
 	defer cancel()
@@ -993,4 +994,14 @@ func sleep(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-func uuidString(u pgtype.UUID) string { return util.UUIDToString(u) }
+func uuidString(u string) string { return util.UUIDToString(u) }
+
+// pgUUID adapts a string installation id to channel.Config, which still
+// carries the pre-SQLite pgtype.UUID.
+func pgUUID(id string) pgtype.UUID {
+	parsed, err := uuid.Parse(id)
+	if err != nil {
+		return pgtype.UUID{}
+	}
+	return pgtype.UUID{Bytes: parsed, Valid: true}
+}

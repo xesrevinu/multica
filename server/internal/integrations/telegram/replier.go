@@ -10,8 +10,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jackc/pgx/v5/pgtype"
-
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -38,7 +36,7 @@ const (
 // bindingMinter is the binding-token surface the replier needs.
 // *BindingTokenService satisfies it.
 type bindingMinter interface {
-	Mint(ctx context.Context, workspaceID, installationID pgtype.UUID, telegramUserID string) (BindingToken, error)
+	Mint(ctx context.Context, workspaceID, installationID string, telegramUserID string) (BindingToken, error)
 }
 
 // OutboundReplier implements engine.OutboundReplier for Telegram.
@@ -128,7 +126,7 @@ func (r *OutboundReplier) Reply(ctx context.Context, inst engine.ResolvedInstall
 				"installation_id", util.UUIDToString(inst.ID), "error", err)
 		}
 	case engine.OutcomeIngested:
-		if res.IssueID.Valid {
+		if res.IssueID != "" {
 			text := issueCreatedText(res)
 			if res.IssueDuplicate {
 				text = issueDuplicateText(res)

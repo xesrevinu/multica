@@ -2,12 +2,12 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -23,7 +23,7 @@ func TestTaskCommentChangeCancellation(t *testing.T) {
 		{"not cancelled", id, "running", `{"comment_change_cancelled_task_id":"` + id + `"}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := taskToResponse(db.AgentTaskQueue{ID: parseUUID(tc.taskID), Status: tc.status, Context: []byte(tc.context)}, "")
+			got := taskToResponse(db.AgentTaskQueue{ID: parseUUID(tc.taskID), Status: tc.status, Context: nullString(string([]byte(tc.context)))}, "")
 			if got.CancelledByCommentChange != tc.want {
 				t.Fatalf("cancelled_by_comment_change = %v, want %v", got.CancelledByCommentChange, tc.want)
 			}
@@ -34,14 +34,14 @@ func TestTaskCommentChangeCancellation(t *testing.T) {
 func TestComputeTaskKindPreservesLinkedQuickCreateOrigin(t *testing.T) {
 	issueID := parseUUID("11111111-1111-1111-1111-111111111111")
 	if got := computeTaskKind(db.AgentTaskQueue{
-		IssueID: issueID,
-		Context: []byte(`{"type":"quick_create","prompt":"Create an issue"}`),
+		IssueID: nullString(issueID),
+		Context: nullString(string([]byte(`{"type":"quick_create","prompt":"Create an issue"}`))),
 	}); got != "quick_create" {
 		t.Fatalf("linked quick-create kind = %q, want quick_create", got)
 	}
 	if got := computeTaskKind(db.AgentTaskQueue{
-		IssueID: issueID,
-		Context: []byte(`{"head_sha":"abc123"}`),
+		IssueID: nullString(issueID),
+		Context: nullString(string([]byte(`{"head_sha":"abc123"}`))),
 	}); got != "direct" {
 		t.Fatalf("ordinary linked task kind = %q, want direct", got)
 	}
@@ -57,11 +57,11 @@ func TestTaskAttributionBase(t *testing.T) {
 
 	t.Run("direct_human sets both refs + evidence", func(t *testing.T) {
 		got := taskAttributionBase(db.AgentTaskQueue{
-			OriginatorSource:     pgtype.Text{String: "direct_human", Valid: true},
-			OriginatorUserID:     member,
-			AccountableUserID:    member,
-			TriggerEvidenceKind:  pgtype.Text{String: "comment", Valid: true},
-			TriggerEvidenceRefID: comment,
+			OriginatorSource:     sql.NullString{String: "direct_human", Valid: true},
+			OriginatorUserID:     nullString(member),
+			AccountableUserID:    nullString(member),
+			TriggerEvidenceKind:  sql.NullString{String: "comment", Valid: true},
+			TriggerEvidenceRefID: nullString(comment),
 		})
 		if got.Source != "direct_human" || !got.Precise {
 			t.Fatalf("source/precise = %q/%v, want direct_human/true", got.Source, got.Precise)
@@ -82,9 +82,9 @@ func TestTaskAttributionBase(t *testing.T) {
 
 	t.Run("rule_owner: accountable set, originator NULL, rule_version present", func(t *testing.T) {
 		got := taskAttributionBase(db.AgentTaskQueue{
-			OriginatorSource:  pgtype.Text{String: "rule_owner", Valid: true},
-			AccountableUserID: member, // originator left invalid (autopilot)
-			RuleVersionID:     ruleVer,
+			OriginatorSource:  sql.NullString{String: "rule_owner", Valid: true},
+			AccountableUserID: nullString(member), // originator left invalid (autopilot)
+			RuleVersionID:     nullString(ruleVer),
 		})
 		if got.Source != "rule_owner" || !got.Precise {
 			t.Fatalf("source/precise = %q/%v, want rule_owner/true", got.Source, got.Precise)
@@ -102,8 +102,8 @@ func TestTaskAttributionBase(t *testing.T) {
 
 	t.Run("owner_fallback is degraded (not precise)", func(t *testing.T) {
 		got := taskAttributionBase(db.AgentTaskQueue{
-			OriginatorSource:  pgtype.Text{String: "owner_fallback", Valid: true},
-			AccountableUserID: member,
+			OriginatorSource:  sql.NullString{String: "owner_fallback", Valid: true},
+			AccountableUserID: nullString(member),
 		})
 		if got.Source != "owner_fallback" || got.Precise {
 			t.Errorf("source/precise = %q/%v, want owner_fallback/false", got.Source, got.Precise)

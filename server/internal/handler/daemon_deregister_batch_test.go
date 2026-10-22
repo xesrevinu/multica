@@ -50,9 +50,7 @@ func (f runtimeBatchFailDBTX) QueryRow(ctx context.Context, sql string, args ...
 func newRuntimeBatchReadFailureHandler(t *testing.T) *Handler {
 	t.Helper()
 	return New(
-		db.New(runtimeBatchFailDBTX{inner: testPool}),
-		testPool,
-		testHandler.Hub,
+		db.New(runtimeBatchFailDBTX{inner: testSQLite}), sqlDBBeginner{DB: testSQLite}, testHandler.Hub,
 		testHandler.Bus,
 		testHandler.EmailService,
 		nil,

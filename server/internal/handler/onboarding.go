@@ -1,13 +1,12 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/mail"
 	"strings"
-
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/logger"
@@ -113,7 +112,7 @@ func (h *Handler) CompleteOnboarding(w http.ResponseWriter, r *http.Request) {
 		}
 		onboardedAt := ""
 		if user.OnboardedAt.Valid {
-			onboardedAt = user.OnboardedAt.Time.UTC().Format("2006-01-02T15:04:05Z07:00")
+			onboardedAt = parseDBTime(user.OnboardedAt.String).UTC().Format("2006-01-02T15:04:05Z07:00")
 		}
 		obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.OnboardingCompleted(
 			userID,
@@ -245,7 +244,7 @@ func (h *Handler) PatchOnboarding(w http.ResponseWriter, r *http.Request) {
 	var before questionnaireAnswers
 	beforeRaw := []byte("{}")
 	if beforeUser, err := h.Queries.GetUser(r.Context(), parseUUID(userID)); err == nil {
-		beforeRaw = beforeUser.OnboardingQuestionnaire
+		beforeRaw = []byte(beforeUser.OnboardingQuestionnaire)
 		_ = json.Unmarshal(beforeRaw, &before)
 	}
 	// firstTouch is true when the user has never written any
@@ -255,7 +254,7 @@ func (h *Handler) PatchOnboarding(w http.ResponseWriter, r *http.Request) {
 
 	params := db.PatchUserOnboardingParams{ID: parseUUID(userID)}
 	if req.Questionnaire != nil {
-		params.Questionnaire = []byte(*req.Questionnaire)
+		params.Questionnaire = nullString(string([]byte(*req.Questionnaire)))
 	}
 	user, err := h.Queries.PatchUserOnboarding(r.Context(), params)
 	if err != nil {
@@ -274,7 +273,7 @@ func (h *Handler) PatchOnboarding(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var after questionnaireAnswers
-	_ = json.Unmarshal(user.OnboardingQuestionnaire, &after)
+	_ = json.Unmarshal([]byte(user.OnboardingQuestionnaire), &after)
 	if after.complete() && !before.complete() {
 		obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.OnboardingQuestionnaireSubmitted(
 			userID,
@@ -351,14 +350,14 @@ func (h *Handler) JoinCloudWaitlist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reasonParam := pgtype.Text{}
+	reasonParam := sql.NullString{}
 	if reason != "" {
-		reasonParam = pgtype.Text{String: reason, Valid: true}
+		reasonParam = sql.NullString{String: reason, Valid: true}
 	}
 
 	user, err := h.Queries.JoinCloudWaitlist(r.Context(), db.JoinCloudWaitlistParams{
 		ID:                  parseUUID(userID),
-		CloudWaitlistEmail:  pgtype.Text{String: email, Valid: true},
+		CloudWaitlistEmail:  sql.NullString{String: email, Valid: true},
 		CloudWaitlistReason: reasonParam,
 	})
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -19,8 +20,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
@@ -368,9 +367,9 @@ func (h *Handler) HandleAutopilotWebhook(w http.ResponseWriter, r *http.Request)
 	//    to 404 means a transient DB blip silently drops real deliveries
 	//    (providers like GitHub don't retry on 404). For no-row we still
 	//    return a generic message so we don't leak which tokens existed.
-	trigRow, err := h.Queries.GetWebhookTriggerByToken(r.Context(), pgtype.Text{String: token, Valid: true})
+	trigRow, err := h.Queries.GetWebhookTriggerByToken(r.Context(), sql.NullString{String: token, Valid: true})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			if ip != "" && h.WebhookIPRateLimiter != nil {
 				h.WebhookIPRateLimiter.Allow(r.Context(), ip)
 			}
@@ -405,7 +404,7 @@ func (h *Handler) HandleAutopilotWebhook(w http.ResponseWriter, r *http.Request)
 	//    read. Same ErrNoRows-vs-DB-error split as token lookup.
 	autopilot, err := h.Queries.GetAutopilot(r.Context(), trigRow.AutopilotID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "webhook not found")
 			return
 		}
@@ -480,11 +479,11 @@ func (h *Handler) HandleAutopilotWebhook(w http.ResponseWriter, r *http.Request)
 		}
 		runID := delivery.AutopilotRunID
 		if !runID.Valid {
-			run, runErr := h.Queries.GetAutopilotRunByWebhookDelivery(r.Context(), delivery.ID)
+			run, runErr := h.Queries.GetAutopilotRunByWebhookDelivery(r.Context(), nullString(delivery.ID))
 			switch {
 			case runErr == nil:
-				runID = run.ID
-			case !errors.Is(runErr, pgx.ErrNoRows):
+				runID = nullString(run.ID)
+			case !errors.Is(runErr, sql.ErrNoRows):
 				slog.Error("webhook: resolve duplicate run failed",
 					"delivery_id", uuidToString(delivery.ID),
 					"error", runErr,
@@ -494,7 +493,7 @@ func (h *Handler) HandleAutopilotWebhook(w http.ResponseWriter, r *http.Request)
 			}
 		}
 		if runID.Valid {
-			resp["run_id"] = uuidToString(runID)
+			resp["run_id"] = uuidToString(runID.String)
 		}
 		if delivery.Status == deliveryStatusQueued && h.WebhookDeliveryWorker != nil {
 			h.WebhookDeliveryWorker.Notify()
@@ -527,7 +526,7 @@ func (h *Handler) HandleAutopilotWebhook(w http.ResponseWriter, r *http.Request)
 	//     200 so the sender's webhook-retry machinery doesn't keep hammering
 	//     us; the "ignored" status + delivery row makes the no-op visible if
 	//     the operator inspects the delivery log.
-	if !trigRow.Enabled {
+	if trigRow.Enabled == 0 {
 		respBody := map[string]any{"status": "ignored", "delivery_id": uuidToString(delivery.ID), "reason": "trigger_disabled"}
 		h.finaliseDeliveryTerminal(r, delivery.ID, deliveryStatusIgnored, http.StatusOK, respBody, "trigger_disabled")
 		writeJSON(w, http.StatusOK, respBody)
@@ -549,7 +548,7 @@ func (h *Handler) HandleAutopilotWebhook(w http.ResponseWriter, r *http.Request)
 	// 10. Event filter scope → ignored. If the trigger declares a concrete
 	//     event_filters list and the incoming event is outside that scope,
 	//     record an ignored delivery without creating an expensive run/task.
-	if !webhookEventAllowedByTriggerScope(trigRow.EventFilters, envelope) {
+	if !webhookEventAllowedByTriggerScope([]byte(trigRow.EventFilters.String), envelope) {
 		respBody := map[string]any{
 			"status":      "ignored",
 			"delivery_id": uuidToString(delivery.ID),
@@ -567,10 +566,7 @@ func (h *Handler) HandleAutopilotWebhook(w http.ResponseWriter, r *http.Request)
 	//     and can recover it after a process crash.
 	run, err := h.AutopilotService.AdmitAutopilotWebhookDelivery(
 		r.Context(),
-		autopilot,
-		trigRow.ID,
-		envelopeBytes,
-		delivery.ID,
+		autopilot, trigRow.ID, envelopeBytes, delivery.ID,
 	)
 	if err != nil {
 		var quotaErr *service.AutopilotQuotaExceededError
@@ -616,8 +612,8 @@ func (h *Handler) HandleAutopilotWebhook(w http.ResponseWriter, r *http.Request)
 	bodyJSON, _ := json.Marshal(respBody)
 	if _, err := h.Queries.AcknowledgeWebhookDelivery(r.Context(), db.AcknowledgeWebhookDeliveryParams{
 		ID:             delivery.ID,
-		ResponseStatus: pgtype.Int4{Int32: http.StatusOK, Valid: true},
-		ResponseBody:   pgtype.Text{String: string(bodyJSON), Valid: true},
+		ResponseStatus: sql.NullInt64{Int64: int64(http.StatusOK), Valid: true},
+		ResponseBody:   sql.NullString{String: string(bodyJSON), Valid: true},
 	}); err != nil {
 		slog.Warn("webhook: persist acknowledgement metadata failed",
 			"delivery_id", uuidToString(delivery.ID),
@@ -781,9 +777,9 @@ func webhookActionCandidates(eventAction string, payload json.RawMessage) []stri
 // ── Persistence helpers ─────────────────────────────────────────────────────
 
 type persistDeliveryInput struct {
-	WorkspaceID     pgtype.UUID
-	AutopilotID     pgtype.UUID
-	TriggerID       pgtype.UUID
+	WorkspaceID     string
+	AutopilotID     string
+	TriggerID       string
 	Provider        string
 	Event           string
 	DedupeKey       string
@@ -808,15 +804,15 @@ func (h *Handler) persistInboundDelivery(r *http.Request, in persistDeliveryInpu
 		Event:           in.Event,
 		SignatureStatus: in.SignatureStatus,
 		Status:          deliveryStatusQueued,
-		SelectedHeaders: in.SelectedHeaders,
+		SelectedHeaders: string(in.SelectedHeaders),
 		RawBody:         in.RawBody,
 	}
 	if in.DedupeKey != "" {
-		params.DedupeKey = pgtype.Text{String: in.DedupeKey, Valid: true}
-		params.DedupeSource = pgtype.Text{String: in.DedupeSource, Valid: true}
+		params.DedupeKey = sql.NullString{String: in.DedupeKey, Valid: true}
+		params.DedupeSource = sql.NullString{String: in.DedupeSource, Valid: true}
 	}
 	if in.ContentType != "" {
-		params.ContentType = pgtype.Text{String: in.ContentType, Valid: true}
+		params.ContentType = sql.NullString{String: in.ContentType, Valid: true}
 	}
 
 	delivery, err := h.Queries.CreateWebhookDelivery(r.Context(), params)
@@ -829,7 +825,7 @@ func (h *Handler) persistInboundDelivery(r *http.Request, in persistDeliveryInpu
 	// Dedupe collision: fetch the original row, bump attempt count.
 	existing, lookupErr := h.Queries.GetWebhookDeliveryByTriggerAndDedupe(r.Context(), db.GetWebhookDeliveryByTriggerAndDedupeParams{
 		TriggerID: in.TriggerID,
-		DedupeKey: pgtype.Text{String: in.DedupeKey, Valid: true},
+		DedupeKey: sql.NullString{String: in.DedupeKey, Valid: true},
 	})
 	if lookupErr != nil {
 		return db.WebhookDelivery{}, false, fmt.Errorf("lookup duplicate delivery: %w", lookupErr)
@@ -852,7 +848,7 @@ func (h *Handler) persistInboundDelivery(r *http.Request, in persistDeliveryInpu
 // future Deliveries UI can show exactly what we returned.
 func (h *Handler) finaliseDeliveryTerminal(
 	r *http.Request,
-	id pgtype.UUID,
+	id string,
 	status string,
 	httpStatus int,
 	responseBody any,
@@ -863,14 +859,14 @@ func (h *Handler) finaliseDeliveryTerminal(
 	params := db.UpdateWebhookDeliveryTerminalParams{
 		ID:             id,
 		Status:         status,
-		ResponseStatus: pgtype.Int4{Int32: int32(httpStatus), Valid: true},
-		ResponseBody:   pgtype.Text{String: string(bodyJSON), Valid: true},
+		ResponseStatus: sql.NullInt64{Int64: int64(int32(httpStatus)), Valid: true},
+		ResponseBody:   sql.NullString{String: string(bodyJSON), Valid: true},
 	}
 	if errMsg != "" {
-		params.Error = pgtype.Text{String: errMsg, Valid: true}
+		params.Error = sql.NullString{String: errMsg, Valid: true}
 	}
 	if len(reasonCode) > 0 && reasonCode[0] != "" {
-		params.ReasonCode = pgtype.Text{String: reasonCode[0], Valid: true}
+		params.ReasonCode = sql.NullString{String: reasonCode[0], Valid: true}
 	}
 	if _, err := h.Queries.UpdateWebhookDeliveryTerminal(r.Context(), params); err != nil {
 		slog.Warn("webhook: finalise terminal failed",
@@ -886,9 +882,9 @@ func (h *Handler) finaliseDeliveryTerminal(
 // skipped to) an autopilot_run. Same response-capture as the terminal path.
 func (h *Handler) finaliseDeliveryWithRun(
 	r *http.Request,
-	id pgtype.UUID,
+	id string,
 	status string,
-	runID pgtype.UUID,
+	runID string,
 	httpStatus int,
 	responseBody any,
 ) {
@@ -896,9 +892,9 @@ func (h *Handler) finaliseDeliveryWithRun(
 	params := db.UpdateWebhookDeliveryDispatchedParams{
 		ID:             id,
 		Status:         status,
-		AutopilotRunID: runID,
-		ResponseStatus: pgtype.Int4{Int32: int32(httpStatus), Valid: true},
-		ResponseBody:   pgtype.Text{String: string(bodyJSON), Valid: true},
+		AutopilotRunID: nullString(runID),
+		ResponseStatus: sql.NullInt64{Int64: int64(int32(httpStatus)), Valid: true},
+		ResponseBody:   sql.NullString{String: string(bodyJSON), Valid: true},
 	}
 	if _, err := h.Queries.UpdateWebhookDeliveryDispatched(r.Context(), params); err != nil {
 		slog.Warn("webhook: finalise with run failed",
@@ -915,7 +911,7 @@ func (h *Handler) finaliseDeliveryWithRun(
 // fall back to "generic" — the metric must always be incremented exactly
 // once per finalise call so the dashboard counts line up with autopilot_run
 // volume.
-func (h *Handler) deliveryProvider(ctx context.Context, id pgtype.UUID) string {
+func (h *Handler) deliveryProvider(ctx context.Context, id string) string {
 	if h.Queries == nil {
 		return "generic"
 	}

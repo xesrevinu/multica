@@ -160,7 +160,7 @@ func concurrentWriteAfterPointerCleared(t *testing.T, deleteOriginal bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback(context.Background())
+	defer tx.Rollback(ctx)
 	q := testHandler.Queries.WithTx(tx)
 
 	body := map[string]any{"priority": "high"}
@@ -171,7 +171,7 @@ func concurrentWriteAfterPointerCleared(t *testing.T, deleteOriginal bool) {
 			t.Fatal(err)
 		}
 		if _, err := q.ClearIssueDuplicatesOf(ctx, db.ClearIssueDuplicatesOfParams{
-			WorkspaceID: parseUUID(testWorkspaceID), IssueID: parseUUID(original),
+			WorkspaceID: parseUUID(testWorkspaceID), IssueID: nullString(parseUUID(original)),
 		}); err != nil {
 			t.Fatal(err)
 		}

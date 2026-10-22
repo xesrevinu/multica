@@ -144,7 +144,7 @@ func AgentReadiness(ctx context.Context, lookup RuntimeLookup, agent db.Agent) (
 			Detail:       "agent has no runtime bound",
 		}, nil
 	}
-	rt, err := lookup.Get(ctx, agent.RuntimeID)
+	rt, err := lookup.Get(ctx, agent.RuntimeID.String)
 	if err != nil {
 		return AgentVerdict{}, err
 	}
@@ -166,7 +166,7 @@ func runtimeVerdict(rt db.AgentRuntime, agent db.Agent) AgentVerdict {
 	}
 	// Offline with a reason the daemon says a human must repair: refuse rather
 	// than queue, and carry the repair so the caller can show it.
-	if reason, ok := parseRuntimeOfflineReason(rt.Metadata); ok {
+	if reason, ok := parseRuntimeOfflineReason([]byte(rt.Metadata)); ok {
 		switch {
 		case reason.Code == runtimeOfflineCodeNotExecutable:
 			return AgentVerdict{
@@ -224,10 +224,10 @@ const runtimeInstallClaimWindow = 5 * time.Minute
 // asks for, and the cost of honouring a stale claim is work that queues until it
 // expires.
 func installClaimHolds(reason runtimeOfflineReason, rt db.AgentRuntime) bool {
-	if !reason.Installing || !rt.UpdatedAt.Valid {
+	if !reason.Installing || (rt.UpdatedAt == "") {
 		return false
 	}
-	return time.Since(rt.UpdatedAt.Time) < runtimeInstallClaimWindow
+	return time.Since(asTime(rt.UpdatedAt)) < runtimeInstallClaimWindow
 }
 
 // parseRuntimeOfflineReason reads the daemon's explanation off a runtime row.

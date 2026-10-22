@@ -2,52 +2,49 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	"github.com/multica-ai/multica/server/pkg/dbid"
 )
 
 // Exercise evaluation and diagnostic persistence even without local PostgreSQL.
 // The DB-backed test covers the full registration/dispatch and parent-link path.
 type prConditionTx struct {
-	pgx.Tx
-	issue     pgtype.UUID
+	*sql.Tx
+	issue     string
 	prs       [][]any
 	queryErr  error
-	lastError pgtype.Text
-	next      pgtype.Timestamptz
+	lastError sql.NullString
+	next      sql.NullString
 	writes    int
 }
 
-func (tx *prConditionTx) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
-	if strings.Contains(sql, "UPDATE issue_wakeup_receipt") {
-		return &sliceRows{}, nil
+func (tx *prConditionTx) QueryContext(_ context.Context, query string, args ...any) (*sql.Rows, error) {
+	if strings.Contains(query, "UPDATE issue_wakeup_receipt") {
+		return nil, fmt.Errorf("sqlite rows unsupported in test double")
 	}
-	if !strings.Contains(sql, "WHERE ipr.issue_id=$1") || len(args) != 1 || args[0] != tx.issue {
-		return nil, fmt.Errorf("unexpected PR scope: %s %v", sql, args)
+	if !strings.Contains(query, "WHERE ipr.issue_id=$1") || len(args) != 1 || args[0] != tx.issue {
+		return nil, fmt.Errorf("unexpected PR scope: %s %v", query, args)
 	}
-	return &sliceRows{rows: tx.prs}, tx.queryErr
+	return nil, fmt.Errorf("sqlite rows unsupported in test double")
 }
 
-func (tx *prConditionTx) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+func (tx *prConditionTx) ExecContext(_ context.Context, query string, args ...any) (sql.Result, error) {
 	switch {
-	case strings.Contains(sql, "NoteWakeupFailure"):
-		tx.lastError = args[0].(pgtype.Text)
+	case strings.Contains(query, "NoteWakeupFailure"):
+		tx.lastError = args[0].(sql.NullString)
 		tx.writes++
-	case strings.Contains(sql, "SetWakeupConditionState"):
-		tx.next = args[1].(pgtype.Timestamptz)
+	case strings.Contains(query, "SetWakeupConditionState"):
+		tx.next = args[1].(sql.NullString)
 	default:
-		return pgconn.CommandTag{}, fmt.Errorf("unexpected write: %s", sql)
+		return stubResult{}, fmt.Errorf("unexpected write: %s", query)
 	}
-	return pgconn.NewCommandTag("UPDATE 1"), nil
+	return stubResult{}, nil
 }
 
 func TestWakeupConditionPREvaluation(t *testing.T) {
@@ -74,9 +71,9 @@ func TestWakeupConditionPREvaluation(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &IssueWakeupService{Tasks: &TaskService{PRSnapshotsEnabled: tc.available}}
-			w := db.IssueWakeup{IssueID: dbid.NewV7(), Condition: condition(t, map[string]any{"type": "pull_request", "event": tc.event})}
+			w := db.IssueWakeup{IssueID: newV7(), Condition: nullString(string(condition(t, map[string]any{"type": "pull_request", "event": tc.event})))}
 			tx := &prConditionTx{issue: w.IssueID, prs: tc.prs}
-			met, fingerprint, observed, err := s.evaluateCondition(context.Background(), tx, db.New(tx), w)
+			met, fingerprint, observed, err := s.evaluateCondition(context.Background(), tx.Tx, db.New(tx), w)
 			if met != tc.wantMet || !errors.Is(err, tc.wantErr) {
 				t.Fatalf("met=%t err=%v; want met=%t err=%v", met, err, tc.wantMet, tc.wantErr)
 			}
@@ -90,16 +87,16 @@ func TestWakeupConditionPREvaluation(t *testing.T) {
 func TestWakeupConditionPRDiagnosticPolling(t *testing.T) {
 	ctx := context.Background()
 	s := &IssueWakeupService{Tasks: &TaskService{}}
-	w := db.IssueWakeup{ID: dbid.NewV7(), IssueID: dbid.NewV7(), Condition: condition(t, map[string]any{"type": "pull_request", "event": "checks_finished"})}
+	w := db.IssueWakeup{ID: newV7(), IssueID: newV7(), Condition: nullString(string(condition(t, map[string]any{"type": "pull_request", "event": "checks_finished"})))}
 	tx := &prConditionTx{issue: w.IssueID}
 	q := db.New(tx)
 	now := time.Now()
 	wantUnavailable := conditionDiagnosticPrefix + errPRSnapshotsUnavailable.Error()
-	if err := s.baselineCondition(ctx, tx, q, w, now); err != nil || tx.lastError.String != wantUnavailable {
+	if err := s.baselineCondition(ctx, tx.Tx, q, w, now); err != nil || tx.lastError.String != wantUnavailable {
 		t.Fatalf("registration must retain diagnostic without rejecting: %v, %+v", err, tx.lastError)
 	}
 	w.LastError = tx.lastError
-	if err := s.baselineCondition(ctx, tx, q, w, now); err != nil || tx.writes != 1 {
+	if err := s.baselineCondition(ctx, tx.Tx, q, w, now); err != nil || tx.writes != 1 {
 		t.Fatalf("unchanged diagnostic must not be rewritten: err=%v writes=%d", err, tx.writes)
 	}
 	s.Tasks.PRSnapshotsEnabled = true
@@ -113,8 +110,8 @@ func TestWakeupConditionPRDiagnosticPolling(t *testing.T) {
 	} {
 		tx.prs = step.prs
 		w.LastError = tx.lastError
-		next, err := s.pollCondition(ctx, tx, q, w, now)
-		if err != nil || !next.Valid || !next.Time.Equal(now.Add(conditionPollInterval)) {
+		next, err := s.pollCondition(ctx, tx.Tx, q, w, now)
+		if err != nil || !next.Valid || !asTime(next).Equal(now.Add(conditionPollInterval)) {
 			t.Fatalf("poll must remain scheduled: next=%+v err=%v", next, err)
 		}
 		if step.want == nil {
@@ -127,7 +124,7 @@ func TestWakeupConditionPRDiagnosticPolling(t *testing.T) {
 	}
 	// Real query failures still propagate; they are never treated as unmet facts.
 	tx.queryErr = errors.New("database offline")
-	if _, err := s.pollCondition(ctx, tx, q, w, now); !errors.Is(err, tx.queryErr) {
+	if _, err := s.pollCondition(ctx, tx.Tx, q, w, now); !errors.Is(err, tx.queryErr) {
 		t.Fatalf("database error swallowed: %v", err)
 	}
 }
@@ -136,8 +133,8 @@ func TestSaveConditionDiagnosticPreservesDispatchErrors(t *testing.T) {
 	ctx := context.Background()
 	tx := &prConditionTx{}
 	q := db.New(tx)
-	realFailure := pgtype.Text{String: "dispatch failed", Valid: true}
-	w := db.IssueWakeup{ID: dbid.NewV7(), LastError: realFailure}
+	realFailure := sql.NullString{String: "dispatch failed", Valid: true}
+	w := db.IssueWakeup{ID: newV7(), LastError: realFailure}
 
 	if err := saveConditionDiagnostic(ctx, q, w, errPRNotLinked); err != nil {
 		t.Fatal(err)
@@ -149,7 +146,7 @@ func TestSaveConditionDiagnosticPreservesDispatchErrors(t *testing.T) {
 		t.Fatalf("condition evaluation changed an unrelated error: writes=%d error=%+v", tx.writes, tx.lastError)
 	}
 
-	w.LastError = pgtype.Text{String: conditionDiagnosticPrefix + errPRNotLinked.Error(), Valid: true}
+	w.LastError = sql.NullString{String: conditionDiagnosticPrefix + errPRNotLinked.Error(), Valid: true}
 	if err := saveConditionDiagnostic(ctx, q, w, errPRSnapshotPending); err != nil {
 		t.Fatal(err)
 	}

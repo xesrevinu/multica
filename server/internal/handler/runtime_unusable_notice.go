@@ -2,9 +2,9 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"log/slog"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
@@ -28,14 +28,14 @@ func (h *Handler) noteRuntimeUnusable(ctx context.Context, issue db.Issue, agent
 	// author_type='system', author_id=zero UUID — same shape as the sub-issue
 	// completion notice; clients branch on author_type, not the UUID value.
 	created, err := h.Queries.CreateComment(ctx, db.CreateCommentParams{
-		ID:          dbid.NewV7(),
+		ID:          nullString(dbid.NewV7()),
 		IssueID:     issue.ID,
 		WorkspaceID: issue.WorkspaceID,
 		AuthorType:  "system",
-		AuthorID:    pgtype.UUID{Valid: true},
+		AuthorID:    "",
 		Content:     content,
 		Type:        "system",
-		ParentID:    pgtype.UUID{Valid: false},
+		ParentID:    sql.NullString{},
 	})
 	if err != nil {
 		slog.Warn("runtime unusable notice: create system comment failed",
@@ -51,6 +51,6 @@ func (h *Handler) noteRuntimeUnusable(ctx context.Context, issue db.Issue, agent
 		"issue_assignee_type": textToPtr(issue.AssigneeType),
 		"issue_assignee_id":   uuidToPtr(issue.AssigneeID),
 		"issue_status":        issue.Status,
-		"issue_revision":      created.IssueRevision,
+		"issue_revision":      created.Revision_2,
 	})
 }

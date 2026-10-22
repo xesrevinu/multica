@@ -48,8 +48,8 @@ func TestTaskEventCarriesPayloadAndScopeHints(t *testing.T) {
 	task := db.AgentTaskQueue{
 		ID:            testUUID(41),
 		AgentID:       testUUID(42),
-		IssueID:       testUUID(43),
-		ChatSessionID: testUUID(44),
+		IssueID:       nullString(testUUID(43)),
+		ChatSessionID: nullString(testUUID(44)),
 		Status:        "failed",
 	}
 	e := taskEvent(protocol.EventTaskFailed, "workspace-1", task, map[string]any{
@@ -60,8 +60,8 @@ func TestTaskEventCarriesPayloadAndScopeHints(t *testing.T) {
 	if e.TaskID != util.UUIDToString(task.ID) {
 		t.Fatalf("event TaskID = %q, want %q", e.TaskID, util.UUIDToString(task.ID))
 	}
-	if e.ChatSessionID != util.UUIDToString(task.ChatSessionID) {
-		t.Fatalf("event ChatSessionID = %q, want %q", e.ChatSessionID, util.UUIDToString(task.ChatSessionID))
+	if e.ChatSessionID != util.UUIDToString(task.ChatSessionID.String) {
+		t.Fatalf("event ChatSessionID = %q, want %q", e.ChatSessionID, util.UUIDToString(task.ChatSessionID.String))
 	}
 	payload, ok := e.Payload.(map[string]any)
 	if !ok {
@@ -70,8 +70,8 @@ func TestTaskEventCarriesPayloadAndScopeHints(t *testing.T) {
 	for key, want := range map[string]any{
 		"task_id":         util.UUIDToString(task.ID),
 		"agent_id":        util.UUIDToString(task.AgentID),
-		"issue_id":        util.UUIDToString(task.IssueID),
-		"chat_session_id": util.UUIDToString(task.ChatSessionID),
+		"issue_id":        util.UUIDToString(task.IssueID.String),
+		"chat_session_id": util.UUIDToString(task.ChatSessionID.String),
 		"status":          "failed",
 		"failure_reason":  "timeout",
 		"retry_pending":   false,
@@ -93,17 +93,17 @@ func TestFailTaskPublishesDeliverableChannelFailure(t *testing.T) {
 	workspaceID, userID, agentID, _ := seedAttributionFixture(t, pool)
 
 	var runtimeID string
-	if err := pool.QueryRow(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, agentID).Scan(&runtimeID); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, agentID).Scan(&runtimeID); err != nil {
 		t.Fatalf("load agent runtime: %v", err)
 	}
 	var chatSessionID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO chat_session (workspace_id, agent_id, creator_id)
 		VALUES ($1, $2, $3) RETURNING id`, workspaceID, agentID, userID).Scan(&chatSessionID); err != nil {
 		t.Fatalf("seed chat session: %v", err)
 	}
 	var taskID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO agent_task_queue
 			(agent_id, runtime_id, chat_session_id, status, priority, attempt, max_attempts)
 		VALUES ($1, $2, $3, 'running', 0, 1, 1)
@@ -111,9 +111,9 @@ func TestFailTaskPublishesDeliverableChannelFailure(t *testing.T) {
 		t.Fatalf("seed running chat task: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM chat_message WHERE chat_session_id = $1`, chatSessionID)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM chat_session WHERE id = $1`, chatSessionID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM chat_message WHERE chat_session_id = $1`, chatSessionID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM chat_session WHERE id = $1`, chatSessionID)
 	})
 
 	bus := events.New()

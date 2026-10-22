@@ -2,25 +2,25 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func newCancelFinalizePool(t *testing.T) *pgxpool.Pool {
+func newCancelFinalizePool(t *testing.T) *sql.DB {
 	t.Helper()
 	return sharedTestPool(t)
 }
 
 type cancelFinalizeFixture struct {
-	pool          *pgxpool.Pool
+	pool          *sql.DB
 	workspaceID   string
 	agentID       string
 	chatSessionID string
@@ -31,7 +31,7 @@ type cancelFinalizeFixture struct {
 // createCancelFinalizeFixture seeds a chat task in the given status with one
 // triggering user chat_message bound to it. started marks the task as picked
 // up by a daemon (started_at set).
-func createCancelFinalizeFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool, status string, started bool) cancelFinalizeFixture {
+func createCancelFinalizeFixture(t *testing.T, ctx context.Context, pool *sql.DB, status string, started bool) cancelFinalizeFixture {
 	t.Helper()
 
 	suffix := time.Now().UnixNano()
@@ -39,7 +39,7 @@ func createCancelFinalizeFixture(t *testing.T, ctx context.Context, pool *pgxpoo
 	slug := fmt.Sprintf("cancel-finalize-%d", suffix)
 
 	var userID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO "user" (name, email)
 		VALUES ($1, $2)
 		RETURNING id
@@ -48,14 +48,14 @@ func createCancelFinalizeFixture(t *testing.T, ctx context.Context, pool *pgxpoo
 	}
 
 	var workspaceID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO workspace (name, slug, description, issue_prefix)
 		VALUES ($1, $2, $3, $4)
 		RETURNING id
 	`, "Cancel Finalize Test", slug, "temporary cancel finalize test workspace", "CFT").Scan(&workspaceID); err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO member (workspace_id, user_id, role)
 		VALUES ($1, $2, 'owner')
 	`, workspaceID, userID); err != nil {
@@ -63,7 +63,7 @@ func createCancelFinalizeFixture(t *testing.T, ctx context.Context, pool *pgxpoo
 	}
 
 	var runtimeID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO agent_runtime (
 			workspace_id, daemon_id, name, runtime_mode, provider,
 			status, device_info, metadata, last_seen_at, visibility, owner_id
@@ -75,7 +75,7 @@ func createCancelFinalizeFixture(t *testing.T, ctx context.Context, pool *pgxpoo
 	}
 
 	var agentID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config,
 			runtime_id, visibility, max_concurrent_tasks, owner_id
@@ -87,7 +87,7 @@ func createCancelFinalizeFixture(t *testing.T, ctx context.Context, pool *pgxpoo
 	}
 
 	var chatSessionID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO chat_session (workspace_id, agent_id, creator_id, title)
 		VALUES ($1, $2, $3, 'cancel finalize test')
 		RETURNING id
@@ -100,7 +100,7 @@ func createCancelFinalizeFixture(t *testing.T, ctx context.Context, pool *pgxpoo
 		startedAt = "now()"
 	}
 	var taskID string
-	if err := pool.QueryRow(ctx, fmt.Sprintf(`
+	if err := pool.QueryRowContext(ctx, fmt.Sprintf(`
 		INSERT INTO agent_task_queue (agent_id, chat_session_id, status, priority, context, runtime_id, started_at)
 		VALUES ($1, $2, $3, 0, '{}'::jsonb, $4, %s)
 		RETURNING id
@@ -109,7 +109,7 @@ func createCancelFinalizeFixture(t *testing.T, ctx context.Context, pool *pgxpoo
 	}
 
 	var userMessageID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO chat_message (chat_session_id, role, content, task_id)
 		VALUES ($1, 'user', 'run the thing', $2)
 		RETURNING id
@@ -119,15 +119,15 @@ func createCancelFinalizeFixture(t *testing.T, ctx context.Context, pool *pgxpoo
 
 	t.Cleanup(func() {
 		cleanupCtx := context.Background()
-		pool.Exec(cleanupCtx, `DELETE FROM task_message WHERE task_id = $1`, taskID)
-		pool.Exec(cleanupCtx, `DELETE FROM agent_task_queue WHERE agent_id = $1`, agentID)
-		pool.Exec(cleanupCtx, `DELETE FROM chat_message WHERE chat_session_id = $1`, chatSessionID)
-		pool.Exec(cleanupCtx, `DELETE FROM chat_session WHERE id = $1`, chatSessionID)
-		pool.Exec(cleanupCtx, `DELETE FROM agent WHERE id = $1`, agentID)
-		pool.Exec(cleanupCtx, `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
-		pool.Exec(cleanupCtx, `DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`, workspaceID, userID)
-		pool.Exec(cleanupCtx, `DELETE FROM workspace WHERE id = $1`, workspaceID)
-		pool.Exec(cleanupCtx, `DELETE FROM "user" WHERE id = $1`, userID)
+		pool.ExecContext(cleanupCtx, `DELETE FROM task_message WHERE task_id = $1`, taskID)
+		pool.ExecContext(cleanupCtx, `DELETE FROM agent_task_queue WHERE agent_id = $1`, agentID)
+		pool.ExecContext(cleanupCtx, `DELETE FROM chat_message WHERE chat_session_id = $1`, chatSessionID)
+		pool.ExecContext(cleanupCtx, `DELETE FROM chat_session WHERE id = $1`, chatSessionID)
+		pool.ExecContext(cleanupCtx, `DELETE FROM agent WHERE id = $1`, agentID)
+		pool.ExecContext(cleanupCtx, `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+		pool.ExecContext(cleanupCtx, `DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`, workspaceID, userID)
+		pool.ExecContext(cleanupCtx, `DELETE FROM workspace WHERE id = $1`, workspaceID)
+		pool.ExecContext(cleanupCtx, `DELETE FROM "user" WHERE id = $1`, userID)
 	})
 
 	return cancelFinalizeFixture{
@@ -142,7 +142,7 @@ func createCancelFinalizeFixture(t *testing.T, ctx context.Context, pool *pgxpoo
 
 func (f cancelFinalizeFixture) insertTranscriptRow(t *testing.T, ctx context.Context) {
 	t.Helper()
-	if _, err := f.pool.Exec(ctx, `
+	if _, err := f.pool.ExecContext(ctx, `
 		INSERT INTO task_message (task_id, seq, type, content)
 		VALUES ($1, 1, 'text', 'partial output')
 	`, f.taskID); err != nil {
@@ -153,7 +153,7 @@ func (f cancelFinalizeFixture) insertTranscriptRow(t *testing.T, ctx context.Con
 func (f cancelFinalizeFixture) chatFinalizeDeferredAt(t *testing.T, ctx context.Context) *time.Time {
 	t.Helper()
 	var deferredAt *time.Time
-	if err := f.pool.QueryRow(ctx, `
+	if err := f.pool.QueryRowContext(ctx, `
 		SELECT chat_finalize_deferred_at FROM agent_task_queue WHERE id = $1
 	`, f.taskID).Scan(&deferredAt); err != nil {
 		t.Fatalf("read chat_finalize_deferred_at: %v", err)
@@ -164,7 +164,7 @@ func (f cancelFinalizeFixture) chatFinalizeDeferredAt(t *testing.T, ctx context.
 func (f cancelFinalizeFixture) userMessageExists(t *testing.T, ctx context.Context) bool {
 	t.Helper()
 	var count int
-	if err := f.pool.QueryRow(ctx, `
+	if err := f.pool.QueryRowContext(ctx, `
 		SELECT count(*) FROM chat_message WHERE id = $1
 	`, f.userMessageID).Scan(&count); err != nil {
 		t.Fatalf("count user message: %v", err)
@@ -177,7 +177,7 @@ func (f cancelFinalizeFixture) userMessageExists(t *testing.T, ctx context.Conte
 func (f cancelFinalizeFixture) attachUserMessageAttachment(t *testing.T, ctx context.Context) string {
 	t.Helper()
 	var attachmentID string
-	if err := f.pool.QueryRow(ctx, `
+	if err := f.pool.QueryRowContext(ctx, `
 		INSERT INTO attachment (
 			workspace_id, chat_session_id, chat_message_id,
 			uploader_type, uploader_id, filename, url, content_type, size_bytes
@@ -202,7 +202,7 @@ func (f cancelFinalizeFixture) draftRestores(t *testing.T, ctx context.Context) 
 
 func (f cancelFinalizeFixture) assistantMessages(t *testing.T, ctx context.Context) []string {
 	t.Helper()
-	rows, err := f.pool.Query(ctx, `
+	rows, err := f.pool.QueryContext(ctx, `
 		SELECT content FROM chat_message WHERE task_id = $1 AND role = 'assistant' ORDER BY created_at
 	`, f.taskID)
 	if err != nil {
@@ -418,7 +418,7 @@ func TestFinalizeDeferredCancelledChat_BroadcastLost_RestoreIsRecoverable(t *tes
 	// The attachment row itself must have survived the message delete
 	// (detached, so the restored draft can re-bind it on re-send).
 	var chatMessageID *string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		SELECT chat_message_id FROM attachment WHERE id = $1
 	`, attachmentID).Scan(&chatMessageID); err != nil {
 		t.Fatalf("attachment row should survive: %v", err)
@@ -531,7 +531,7 @@ func TestListChatFinalizeDeferredExpired_HonorsGrace(t *testing.T) {
 	}
 
 	fresh, err := queries.ListChatFinalizeDeferredExpired(ctx, db.ListChatFinalizeDeferredExpiredParams{
-		GraceSecs:  60,
+		GraceSecs:  nullString(fmt.Sprint(60)),
 		MaxPerTick: 100,
 	})
 	if err != nil {
@@ -543,14 +543,14 @@ func TestListChatFinalizeDeferredExpired_HonorsGrace(t *testing.T) {
 		}
 	}
 
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		UPDATE agent_task_queue SET chat_finalize_deferred_at = now() - interval '2 minutes' WHERE id = $1
 	`, f.taskID); err != nil {
 		t.Fatalf("backdate marker: %v", err)
 	}
 
 	expired, err := queries.ListChatFinalizeDeferredExpired(ctx, db.ListChatFinalizeDeferredExpiredParams{
-		GraceSecs:  60,
+		GraceSecs:  nullString(fmt.Sprint(60)),
 		MaxPerTick: 100,
 	})
 	if err != nil {
@@ -571,12 +571,12 @@ func TestListChatFinalizeDeferredExpired_HonorsGrace(t *testing.T) {
 // the immutable channel_ingested stamp and the session has a routing binding.
 func (f cancelFinalizeFixture) seedChannelIngest(t *testing.T, ctx context.Context) {
 	t.Helper()
-	if _, err := f.pool.Exec(ctx, `
+	if _, err := f.pool.ExecContext(ctx, `
 		UPDATE chat_message SET channel_ingested = TRUE WHERE id = $1
 	`, f.userMessageID); err != nil {
 		t.Fatalf("stamp channel_ingested: %v", err)
 	}
-	if _, err := f.pool.Exec(ctx, `
+	if _, err := f.pool.ExecContext(ctx, `
 		INSERT INTO channel_chat_session_binding (
 			chat_session_id, installation_id, channel_type, channel_chat_id, chat_type, config
 		)
@@ -585,7 +585,7 @@ func (f cancelFinalizeFixture) seedChannelIngest(t *testing.T, ctx context.Conte
 		t.Fatalf("create channel binding: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = f.pool.Exec(context.Background(), `DELETE FROM channel_chat_session_binding WHERE chat_session_id = $1`, f.chatSessionID)
+		_, _ = f.pool.ExecContext(context.Background(), `DELETE FROM channel_chat_session_binding WHERE chat_session_id = $1`, f.chatSessionID)
 	})
 }
 
@@ -593,7 +593,7 @@ func (f cancelFinalizeFixture) seedChannelIngest(t *testing.T, ctx context.Conte
 // or rebinding an installation does — the provenance gate must survive it.
 func (f cancelFinalizeFixture) unbindChannelSession(t *testing.T, ctx context.Context) {
 	t.Helper()
-	if _, err := f.pool.Exec(ctx, `
+	if _, err := f.pool.ExecContext(ctx, `
 		DELETE FROM channel_chat_session_binding WHERE chat_session_id = $1
 	`, f.chatSessionID); err != nil {
 		t.Fatalf("delete channel binding: %v", err)
@@ -653,7 +653,7 @@ func TestFinalizeDeferredCancelledChat_ChannelIngested_ArchivedSessionKeepsSeale
 		t.Errorf("channel task must settle synchronously, deferred at %v", got)
 	}
 
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		UPDATE agent_task_queue SET chat_finalize_deferred_at = now() WHERE id = $1
 	`, f.taskID); err != nil {
 		t.Fatalf("mark deferred: %v", err)

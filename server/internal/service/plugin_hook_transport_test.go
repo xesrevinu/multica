@@ -106,9 +106,9 @@ func hookTestInstallation(t *testing.T, endpoint, netScope string, triggers []st
 	return db.PluginInstallation{
 		ID:            testInstallationID(t),
 		WorkspaceID:   testInstallationID(t),
-		Enabled:       true,
-		Manifest:      []byte(manifest),
-		GrantedScopes: scopes,
+		Enabled:       1,
+		Manifest:      string([]byte(manifest)),
+		GrantedScopes: string(scopes),
 	}
 }
 
@@ -194,7 +194,7 @@ func TestHookRefusesWhenNoNetScopeGranted(t *testing.T) {
 	harness := newHookTestServer(t)
 	service := hookTestService(t, harness)
 	installation := hookTestInstallation(t, harness.server.URL+"/hooks/summarize", "example.com", []string{plugincontract.TriggerManual})
-	installation.GrantedScopes = []byte(`["issues:read"]`)
+	installation.GrantedScopes = string([]byte(`["issues:read"]`))
 
 	hook, err := FindHook(installation, "summarize")
 	if err != nil {
@@ -354,7 +354,7 @@ func TestInvokeHookRefusesDisabledInstallation(t *testing.T) {
 	service := hookTestService(t, harness)
 	host := hookTestHost(harness)
 	installation := hookTestInstallation(t, harness.server.URL+"/hooks/summarize", host, []string{plugincontract.TriggerManual})
-	installation.Enabled = false
+	installation.Enabled = 0
 
 	hook, err := FindHook(installation, "summarize")
 	if err != nil {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"github.com/multica-ai/multica/server/internal/orchestrator"
@@ -15,10 +16,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/redis/go-redis/v9"
 
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
@@ -201,14 +198,15 @@ func normalizeServerVersion(v string) string {
 }
 
 // NewRouter creates the fully-configured Chi router with all middleware and routes.
-// rdb is optional: when non-nil the runtime local-skill request stores are
-// swapped for Redis-backed implementations so multiple API nodes share the
-// same pending queue (required for multi-node prod). This should be a request
-// path Redis client, not the realtime relay's blocking read client. A nil rdb
-// keeps the default in-memory stores which are fine for single-node dev and
-// tests.
-func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus, analyticsClient analytics.Client, rdb redis.UniversalClient) chi.Router {
-	r, _ := NewRouterWithOptions(pool, hub, bus, analyticsClient, rdb, RouterOptions{})
+// Runtime request stores stay in-process. That is the single-node path.
+type sqlTxStarter struct{ db *sql.DB }
+
+func (s sqlTxStarter) Begin(ctx context.Context) (*sql.Tx, error) {
+	return s.db.BeginTx(ctx, nil)
+}
+
+func NewRouter(pool *sql.DB, hub *realtime.Hub, bus *events.Bus, analyticsClient analytics.Client) chi.Router {
+	r, _ := NewRouterWithOptions(pool, hub, bus, analyticsClient, RouterOptions{})
 	return r
 }
 
@@ -216,12 +214,9 @@ type RouterOptions struct {
 	HTTPMetrics         *obsmetrics.HTTPMetrics
 	BusinessMetrics     *obsmetrics.BusinessMetrics
 	ChannelLeaseMetrics *obsmetrics.ChannelLeaseMetrics
-	// ChannelLeaseRedis is a dedicated non-blocking Redis client/pool. It is
-	// required only when CHANNEL_WS_LEASE_BACKEND=redis.
-	ChannelLeaseRedis redis.UniversalClient
-	DaemonHub         *daemonws.Hub
-	DaemonWakeup      service.TaskWakeupNotifier
-	FeatureFlags      *featureflag.Service
+	DaemonHub           *daemonws.Hub
+	DaemonWakeup        service.TaskWakeupNotifier
+	FeatureFlags        *featureflag.Service
 	// HeartbeatScheduler, when non-nil, replaces the default synchronous
 	// passthrough scheduler on the constructed Handler. main.go injects a
 	// BatchedHeartbeatScheduler here so the caller can also drive Run/Stop;
@@ -254,40 +249,10 @@ func buildChannelSupervisor(
 		return nil
 	}
 
-	backend := strings.ToLower(strings.TrimSpace(os.Getenv("CHANNEL_WS_LEASE_BACKEND")))
-	if backend == "" {
-		backend = "postgres"
-	}
-	var leases engine.LeaseStore
-	switch backend {
-	case "postgres":
-		leases = postgresLeases
-	case "redis":
-		if opts.ChannelLeaseRedis == nil {
-			slog.Error("channel engine: Redis lease backend selected but REDIS_URL is missing or invalid; supervisor disabled")
-			return nil
-		}
-		namespace := strings.TrimSpace(os.Getenv("CHANNEL_WS_LEASE_NAMESPACE"))
-		redisLeases, err := engine.NewRedisLeaseStore(opts.ChannelLeaseRedis, namespace)
-		if err != nil {
-			slog.Error("channel engine: Redis lease configuration invalid; supervisor disabled", "error", err)
-			return nil
-		}
-		readyCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		err = redisLeases.Ready(readyCtx)
-		cancel()
-		if err != nil {
-			slog.Error("channel engine: Redis lease backend unavailable; supervisor disabled", "error", err)
-			return nil
-		}
-		leases = redisLeases
-	default:
-		slog.Error("channel engine: unsupported CHANNEL_WS_LEASE_BACKEND; supervisor disabled", "backend", backend)
-		return nil
-	}
+	leases := postgresLeases
 
 	slog.Info("channel engine: lease backend configured",
-		"backend", backend,
+		"backend", "postgres",
 		"ttl", cfg.LeaseTTL.String(),
 		"renew_interval", cfg.LeaseRenewInterval.String(),
 		"poll_interval", cfg.PollInterval.String(),
@@ -363,8 +328,9 @@ func strictPositiveDurationEnv(name string, fallback time.Duration) (time.Durati
 // context, calling Wait on shutdown) use the returned handler;
 // callers that only need the HTTP handler (tests, the simple
 // NewRouter shim) discard the second value.
-func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus, analyticsClient analytics.Client, rdb redis.UniversalClient, opts RouterOptions) (chi.Router, *handler.Handler) {
+func NewRouterWithOptions(pool *sql.DB, hub *realtime.Hub, bus *events.Bus, analyticsClient analytics.Client, opts RouterOptions) (chi.Router, *handler.Handler) {
 	queries := db.New(pool)
+	txStarter := sqlTxStarter{db: pool}
 	emailSvc := service.NewEmailService()
 	daemonHub := opts.DaemonHub
 	if daemonHub == nil {
@@ -437,19 +403,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			h.DaemonRuntimeGone = notifier
 		}
 	}
-	if rdb != nil {
-		h.UpdateStore = handler.NewRedisUpdateStore(rdb)
-		h.ModelListStore = handler.NewRedisModelListStore(rdb)
-		h.ModelCatalogCache = handler.NewRedisModelCatalogCache(rdb)
-		h.LocalSkillListStore = handler.NewRedisLocalSkillListStore(rdb)
-		h.LocalSkillImportStore = handler.NewRedisLocalSkillImportStore(rdb)
-		h.LivenessStore = handler.NewRedisLivenessStore(rdb)
-		h.WebhookRateLimiter = handler.NewRedisWebhookRateLimiter(rdb, handler.DefaultWebhookRateLimit())
-		h.WebhookIPRateLimiter = handler.NewRedisWebhookIPRateLimiter(rdb, handler.DefaultWebhookIPRateLimit())
-		h.WebhookAbsoluteIPRateLimiter = handler.NewRedisWebhookAbsoluteIPRateLimiter(rdb, handler.DefaultWebhookAbsoluteIPRateLimit())
-		h.InvitationRateLimiters = handler.NewRedisInvitationRateLimiters(rdb, invitationRateLimits)
-	}
-
 	// Channel engine (MUL-3620): the platform-agnostic inbound runtime.
 	// Built UNCONDITIONALLY — it drives any channel.Channel, not just
 	// Feishu, so it must not depend on the Lark master key (a future
@@ -511,7 +464,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				slog.Error("lark: InstallationService init failed; lark integration disabled", "error", err)
 			} else {
 				h.LarkInstallations = installSvc
-				h.LarkBindingTokens = lark.NewBindingTokenService(queries, pool)
+				h.LarkBindingTokens = lark.NewBindingTokenService(queries, txStarter)
 				slog.Info("lark integration enabled")
 
 				// APIClient: wire the real Lark Open Platform HTTP client
@@ -563,7 +516,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				// engine.ChatSession (channel_type-keyed); the Lark session
 				// titles preserve the pre-cutover wording.
 				auditLogger := lark.NewAuditLogger(queries)
-				feishuSession := engine.NewChatSession(queries, pool, channel.TypeFeishu, engine.SessionTitles{
+				feishuSession := engine.NewChatSession(queries, txStarter, channel.TypeFeishu, engine.SessionTitles{
 					Group:    "Lark group chat",
 					Direct:   "Lark direct message",
 					Fallback: "Lark chat",
@@ -656,7 +609,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					regClient,
 					larkClient,
 					queries,
-					pool,
+					txStarter,
 					installSvc,
 					h.LarkBindingTokens,
 				)
@@ -674,16 +627,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// elsewhere 404'd and the dialog reported "session
 					// lost" ~5s after the QR rendered (MUL-7340).
 					//
-					// Without Redis the service keeps its in-process
-					// store. That is correct for local development and a
-					// single replica, and wrong for a multi-replica deploy
-					// — which is why this says so out loud instead of
-					// failing quietly at the first status poll.
-					if rdb != nil {
-						regSvc.SetInstallSessionStore(lark.NewRedisInstallSessionStore(rdb))
-					} else {
-						slog.Warn("lark device-flow install: no Redis; bind sessions are per-process and will not survive a multi-replica deployment")
-					}
+					// Bind sessions stay in this process. That matches a
+					// single-replica server; a second process would not see them.
+					slog.Warn("lark device-flow install: bind sessions are per-process")
 					h.LarkRegistration = regSvc
 					slog.Info("lark device-flow install enabled")
 				}
@@ -725,7 +671,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// token service mints the single-use token embedded in the prompt's
 			// redeem link; the redeem endpoint (registered below, public) binds
 			// the Slack user to their Multica account.
-			slackBindingSvc := slack.NewBindingTokenService(queries, pool)
+			slackBindingSvc := slack.NewBindingTokenService(queries, txStarter)
 			h.SlackBindingTokens = slackBindingSvc
 			slackReplier := slack.NewOutboundReplier(slack.OutboundReplierConfig{
 				Binding: slackBindingSvc,
@@ -758,7 +704,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					slog.Default(),
 				)
 			}
-			channelRouter.Register(slack.TypeSlack, slack.NewSlackResolverSet(queries, pool, slackReplier, slackTyping, slackMedia))
+			channelRouter.Register(slack.TypeSlack, slack.NewSlackResolverSet(queries, txStarter, slackReplier, slackTyping, slackMedia))
 			slack.NewOutbound(queries, box.Open, slog.Default()).Register(bus)
 
 			// On-demand history reader behind the unified `multica chat history`
@@ -773,7 +719,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			slackSlash := slack.NewSlashCommandProcessor(slack.SlashCommandConfig{
 				Queries: queries,
 				Tasks:   h.TaskService,
-				Control: slack.NewSlackDMControlStarter(queries, pool, h.TaskService, h),
+				Control: slack.NewSlackDMControlStarter(queries, txStarter, h.TaskService, h),
 				Binding: slackBindingSvc,
 				AppURL:  appURLFromEnv(),
 				Logger:  slog.Default(),
@@ -788,7 +734,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// BYO self-serve install (paste bot token + app-level token). The
 			// InstallService needs only the at-rest encryption key — there is no
 			// hosted OAuth client credential.
-			installSvc, ierr := slack.NewInstallService(queries, pool, box, slog.Default())
+			installSvc, ierr := slack.NewInstallService(queries, txStarter, box, slog.Default())
 			if ierr != nil {
 				slog.Error("slack: InstallService init failed; install disabled", "error", ierr)
 			} else {
@@ -812,7 +758,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		if err != nil {
 			slog.Error("telegram: secretbox.New failed; telegram integration disabled", "error", err)
 		} else {
-			telegramBindingSvc := telegram.NewBindingTokenService(queries, pool)
+			telegramBindingSvc := telegram.NewBindingTokenService(queries, txStarter)
 			h.TelegramBindingTokens = telegramBindingSvc
 			telegramReplier := telegram.NewOutboundReplier(telegram.OutboundReplierConfig{
 				Binding: telegramBindingSvc,
@@ -836,7 +782,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				telegramOutbound.EnableFileDelivery(store)
 				h.DeclareChannelFileDelivery(string(telegram.TypeTelegram))
 			}
-			channelRouter.Register(telegram.TypeTelegram, telegram.NewTelegramResolverSet(queries, pool, telegramReplier, telegramTyping, telegramMedia))
+			channelRouter.Register(telegram.TypeTelegram, telegram.NewTelegramResolverSet(queries, txStarter, telegramReplier, telegramTyping, telegramMedia))
 			telegramOutbound.Register(bus)
 			h.TelegramOutbound = telegramOutbound
 
@@ -849,7 +795,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				AcceptsMedia:      store != nil,
 			})
 
-			installSvc, ierr := telegram.NewInstallService(queries, pool, box, slog.Default())
+			installSvc, ierr := telegram.NewInstallService(queries, txStarter, box, slog.Default())
 			if ierr != nil {
 				slog.Error("telegram: InstallService init failed; install disabled", "error", ierr)
 			} else {
@@ -928,16 +874,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	if opts.HeartbeatScheduler != nil {
 		h.HeartbeatScheduler = opts.HeartbeatScheduler
 	}
-	// Auth caches: PAT cache is shared between the regular Auth middleware,
-	// the DaemonAuth fallback (mul_) path, and the revoke handler
-	// (invalidate). DaemonTokenCache backs the DaemonAuth mdt_ path. Both
-	// constructors return nil when rdb is nil — every consumer handles that
-	// as "no cache, always hit DB".
-	patCache := auth.NewPATCache(rdb)
-	daemonTokenCache := auth.NewDaemonTokenCache(rdb)
+	// Auth lookups always hit Postgres. The cache handles stay nil.
+	patCache := auth.NewPATCache()
+	daemonTokenCache := auth.NewDaemonTokenCache()
 	h.PATCache = patCache
 	h.DaemonTokenCache = daemonTokenCache
-	h.MembershipCache = auth.NewMembershipCache(rdb)
+	h.MembershipCache = auth.NewMembershipCache()
 
 	// Cloud PAT verifier: validates mcn_ tokens against Multica Cloud
 	// Fleet. Returns nil when no Cloud URL is configured — the Auth /
@@ -947,18 +889,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// deployment has one authoritative multica-cloud connection.
 	cloudPATVerifier := auth.NewCloudPATVerifier(auth.CloudPATVerifierConfig{
 		FleetBaseURL: signupConfig.CloudURL,
-		Redis:        rdb,
 	})
 
-	// Empty-claim cache: lets the daemon poll path skip a Postgres
-	// scan when a recent check confirmed the runtime had no queued
-	// task. Returns nil when rdb is nil — TaskService treats that
-	// as "no cache, always hit DB" (existing behavior).
-	h.TaskService.EmptyClaim = service.NewEmptyClaimCache(rdb)
-	// Stale-dispatch reclaim has a separate schedule because an empty queued
-	// verdict cannot represent a claim response lost after commit. Missing or
-	// failed Redis state keeps the historical PostgreSQL fallback.
-	h.TaskService.ReclaimCheck = service.NewReclaimCheckCache(rdb)
+	// Empty-claim and reclaim schedules are not cached. TaskService
+	// treats a nil cache as "always hit Postgres".
+	h.TaskService.EmptyClaim = service.NewEmptyClaimCache()
+	h.TaskService.ReclaimCheck = service.NewReclaimCheckCache()
 
 	// Wire WS heartbeat after stores are finalized so the WS path uses the
 	// same (possibly Redis-backed) stores as the HTTP path.
@@ -1066,13 +1002,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// version, surface and one bridge challenge.
 	r.Get("/plugin-surfaces/{token}", h.ServePluginSurface)
 
-	// Auth (public) — per-IP rate limiting.
-	if rdb == nil {
-		slog.Warn("auth rate limiting disabled: REDIS_URL not configured")
-	}
+	// Auth (public). The shared limiter is a no-op in the single-process server.
+	slog.Warn("auth rate limiting disabled")
 	trustedProxies := middleware.ParseTrustedProxies(os.Getenv("RATE_LIMIT_TRUSTED_PROXIES"))
-	authRL := middleware.RateLimit(rdb, envPositiveInt("RATE_LIMIT_AUTH", 5), time.Minute, trustedProxies)
-	authVerifyRL := middleware.RateLimit(rdb, envPositiveInt("RATE_LIMIT_AUTH_VERIFY", 20), time.Minute, trustedProxies)
+	authRL := middleware.RateLimit(envPositiveInt("RATE_LIMIT_AUTH", 5), time.Minute, trustedProxies)
+	authVerifyRL := middleware.RateLimit(envPositiveInt("RATE_LIMIT_AUTH_VERIFY", 20), time.Minute, trustedProxies)
 	r.With(authRL).Post("/auth/send-code", h.SendCode)
 	r.With(authVerifyRL).Post("/auth/verify-code", h.VerifyCode)
 	r.With(authRL).Post("/auth/google", h.GoogleLogin)
@@ -1166,7 +1100,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// boundary even when both hostnames route to the same Go service.
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.PluginBearerOnly)
-		r.Use(middleware.PluginRateLimit(rdb, envPositiveInt("RATE_LIMIT_PLUGIN_API", 120), time.Minute))
+		r.Use(middleware.PluginRateLimit(envPositiveInt("RATE_LIMIT_PLUGIN_API", 120), time.Minute))
 		r.Route(publicapiv1.BasePath, func(r chi.Router) {
 			registerPluginActionRoutes(r, h)
 			r.NotFound(publicapiv1.NotFound)
@@ -1990,14 +1924,15 @@ func (mc *membershipChecker) IsMember(ctx context.Context, userID, workspaceID s
 		UserID:      parseUUID(userID),
 		WorkspaceID: parseUUID(workspaceID),
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	return err == nil, err
 }
 
 func (mc *membershipChecker) Members(ctx context.Context, identities []realtime.MembershipIdentity) (map[realtime.MembershipIdentity]bool, error) {
-	params := db.GetRealtimeMembershipsParams{}
+	userIDs := make([]string, 0, len(identities))
+	workspaceIDs := make([]string, 0, len(identities))
 	for _, identity := range identities {
 		userID, err := util.ParseUUID(identity.UserID)
 		if err != nil {
@@ -2007,23 +1942,26 @@ func (mc *membershipChecker) Members(ctx context.Context, identities []realtime.
 		if err != nil {
 			return nil, err
 		}
-		params.UserIds = append(params.UserIds, userID)
-		params.WorkspaceIds = append(params.WorkspaceIds, workspaceID)
+		userIDs = append(userIDs, userID)
+		workspaceIDs = append(workspaceIDs, workspaceID)
 	}
-	rows, err := mc.queries.GetRealtimeMemberships(ctx, params)
+	rows, err := mc.queries.GetRealtimeMemberships(ctx, db.GetRealtimeMembershipsParams{
+		UserIds:      jsonStringArray(userIDs),
+		WorkspaceIds: jsonStringArray(workspaceIDs),
+	})
 	if err != nil {
 		return nil, err
 	}
-	type pair struct{ workspaceID, userID pgtype.UUID }
+	type pair struct{ workspaceID, userID string }
 	current := make(map[pair]bool, len(rows))
 	for _, row := range rows {
 		current[pair{row.WorkspaceID, row.UserID}] = true
 	}
 	// Return the exact request keys, including valid UUID spellings that are
-	// different from the database's canonical lowercase rendering.
-	members := make(map[realtime.MembershipIdentity]bool, len(rows))
+	// different from a canonical lowercase rendering.
+	members := make(map[realtime.MembershipIdentity]bool, len(identities))
 	for i, identity := range identities {
-		if current[pair{params.WorkspaceIds[i], params.UserIds[i]}] {
+		if current[pair{workspaceIDs[i], userIDs[i]}] {
 			members[identity] = true
 		}
 	}
@@ -2053,10 +1991,7 @@ func (pr *patResolver) ResolveToken(ctx context.Context, token string) (string, 
 
 	userID := util.UUIDToString(pat.UserID)
 
-	var expiresAt time.Time
-	if pat.ExpiresAt.Valid {
-		expiresAt = pat.ExpiresAt.Time
-	}
+	expiresAt := nullDBTime(pat.ExpiresAt)
 	pr.cache.Set(ctx, hash, userID, auth.TTLForExpiry(time.Now(), expiresAt))
 
 	// Cache miss = first WS auth in this TTL window. Refresh last_used_at;
@@ -2069,20 +2004,20 @@ func (pr *patResolver) ResolveToken(ctx context.Context, token string) (string, 
 // parseUUID is a thin alias for util.MustParseUUID. Call sites here are all
 // internal round-trips of DB-sourced UUIDs (e.g. issue.ID, e.ActorID), so an
 // invalid value indicates a programming error and should panic loudly.
-func parseUUID(s string) pgtype.UUID {
+func parseUUID(s string) string {
 	return util.MustParseUUID(s)
 }
 
-// optionalUUID returns a NULL pgtype.UUID for an empty string and otherwise
+// optionalUUID returns a NULL text UUID for an empty string and otherwise
 // behaves like parseUUID. Use this for actor IDs on events where the producer
 // may legitimately be a "system" actor with no member/agent attribution
 // (e.g. GitHub webhook auto-status sync) — the activity_log and inbox_item
 // tables both allow actor_id to be NULL.
-func optionalUUID(s string) pgtype.UUID {
+func optionalUUID(s string) sql.NullString {
 	if s == "" {
-		return pgtype.UUID{}
+		return sql.NullString{}
 	}
-	return util.MustParseUUID(s)
+	return sql.NullString{String: util.MustParseUUID(s), Valid: true}
 }
 
 func splitAndTrim(s string) []string {

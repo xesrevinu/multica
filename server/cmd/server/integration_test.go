@@ -74,7 +74,7 @@ func TestMain(m *testing.M) {
 	registerListeners(bus, hub)
 	// Same wiring as main.go: HTTP writes through the test server log activity.
 	registerActivityListeners(bus, db.New(pool))
-	router := NewRouter(pool, hub, bus, analytics.NoopClient{}, nil)
+	router := NewRouter(pool, hub, bus, analytics.NoopClient{})
 	testServer = httptest.NewServer(router)
 
 	// Generate a JWT token directly for the test user

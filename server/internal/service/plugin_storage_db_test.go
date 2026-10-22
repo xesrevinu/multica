@@ -2,14 +2,13 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -21,7 +20,7 @@ import (
 // are invisible to a unit test and both silently inflate the effective budget
 // when wrong.
 
-func newPluginStoragePool(t *testing.T) *pgxpool.Pool {
+func newPluginStoragePool(t *testing.T) *sql.DB {
 	t.Helper()
 	return sharedTestPool(t)
 }
@@ -29,17 +28,17 @@ func newPluginStoragePool(t *testing.T) *pgxpool.Pool {
 // seedPluginInstallation creates the one row the storage tables hang off. There
 // are no foreign keys, but the service always operates through an installation
 // id, so the test does too.
-func seedPluginInstallation(t *testing.T, pool *pgxpool.Pool) pgtype.UUID {
+func seedPluginInstallation(t *testing.T, pool *sql.DB) string {
 	t.Helper()
 	ctx := context.Background()
 	suffix := time.Now().UnixNano()
 
 	var workspaceID string
-	if err := pool.QueryRow(ctx, `INSERT INTO workspace (name, slug) VALUES ('plugin ws', $1) RETURNING id`,
+	if err := pool.QueryRowContext(ctx, `INSERT INTO workspace (name, slug) VALUES ('plugin ws', $1) RETURNING id`,
 		fmt.Sprintf("plugin-storage-%d", suffix)).Scan(&workspaceID); err != nil {
 		t.Fatalf("seed workspace: %v", err)
 	}
-	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, workspaceID) })
+	t.Cleanup(func() { pool.ExecContext(context.Background(), `DELETE FROM workspace WHERE id = $1`, workspaceID) })
 
 	manifest, _ := json.Marshal(map[string]any{"manifest_version": 1})
 	// An installation names the published version it runs. This suite is about
@@ -47,7 +46,7 @@ func seedPluginInstallation(t *testing.T, pool *pgxpool.Pool) pgtype.UUID {
 	// behind it — relationships are application-owned by repository policy, and
 	// nothing on this path resolves it.
 	var installationID string
-	if err := pool.QueryRow(ctx,
+	if err := pool.QueryRowContext(ctx,
 		`INSERT INTO plugin_installation (workspace_id, plugin_key, package_version_id, version, manifest)
 		 VALUES ($1, $2, gen_random_uuid(), '1.0.0', $3) RETURNING id`,
 		workspaceID, fmt.Sprintf("com.example.storage%d", suffix), manifest,
@@ -55,8 +54,8 @@ func seedPluginInstallation(t *testing.T, pool *pgxpool.Pool) pgtype.UUID {
 		t.Fatalf("seed plugin installation: %v", err)
 	}
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM plugin_storage WHERE installation_id = $1`, installationID)
-		pool.Exec(context.Background(), `DELETE FROM plugin_installation WHERE id = $1`, installationID)
+		pool.ExecContext(context.Background(), `DELETE FROM plugin_storage WHERE installation_id = $1`, installationID)
+		pool.ExecContext(context.Background(), `DELETE FROM plugin_installation WHERE id = $1`, installationID)
 	})
 
 	parsed, err := util.ParseUUID(installationID)

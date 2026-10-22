@@ -1,13 +1,13 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"sort"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/logger"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -122,7 +122,7 @@ func canManageAgentEnv(agent db.Agent, member db.Member) bool {
 	if roleAllowed(member.Role, "owner", "admin") {
 		return true
 	}
-	ownerID := uuidToString(agent.OwnerID)
+	ownerID := uuidToString(agent.OwnerID.String)
 	return ownerID != "" && ownerID == uuidToString(member.UserID)
 }
 
@@ -156,11 +156,12 @@ func (h *Handler) GetAgentEnv(w http.ResponseWriter, r *http.Request) {
 	if _, err := h.Queries.CreateActivity(r.Context(), db.CreateActivityParams{
 		ID:          dbid.NewV7(),
 		WorkspaceID: agent.WorkspaceID,
-		IssueID:     pgtype.UUID{}, // env access is not tied to an issue
-		ActorType:   pgtype.Text{String: "member", Valid: true},
-		ActorID:     parseUUID(uuidToString(member.UserID)),
-		Action:      agentEnvActivityRevealed,
-		Details:     details,
+		IssueID:     sql.NullString{ // env access is not tied to an issue
+		},
+		ActorType: sql.NullString{String: "member", Valid: true},
+		ActorID:   nullString(parseUUID(uuidToString(member.UserID))),
+		Action:    agentEnvActivityRevealed,
+		Details:   string(details),
 	}); err != nil {
 		slog.Error("agent_env_revealed audit write failed; refusing to serve plaintext",
 			append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(agent.ID))...)
@@ -211,19 +212,19 @@ func (h *Handler) UpdateAgentEnv(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		slog.Error("agent_env update: begin tx failed",
 			append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(agent.ID))...)
 		writeError(w, http.StatusInternalServerError, "failed to update env")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	updated, err := qtx.UpdateAgentCustomEnv(r.Context(), db.UpdateAgentCustomEnvParams{
 		ID:        agent.ID,
-		CustomEnv: envBytes,
+		CustomEnv: string(envBytes),
 	})
 	if err != nil {
 		slog.Warn("update agent custom_env failed",
@@ -244,11 +245,11 @@ func (h *Handler) UpdateAgentEnv(w http.ResponseWriter, r *http.Request) {
 	if _, err := qtx.CreateActivity(r.Context(), db.CreateActivityParams{
 		ID:          dbid.NewV7(),
 		WorkspaceID: agent.WorkspaceID,
-		IssueID:     pgtype.UUID{},
-		ActorType:   pgtype.Text{String: "member", Valid: true},
-		ActorID:     parseUUID(uuidToString(member.UserID)),
+		IssueID:     sql.NullString{},
+		ActorType:   sql.NullString{String: "member", Valid: true},
+		ActorID:     nullString(parseUUID(uuidToString(member.UserID))),
 		Action:      agentEnvActivityUpdated,
-		Details:     details,
+		Details:     string(details),
 	}); err != nil {
 		slog.Error("agent_env_updated audit write failed; rolling back update",
 			append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(agent.ID))...)
@@ -256,7 +257,7 @@ func (h *Handler) UpdateAgentEnv(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		slog.Error("agent_env update: tx commit failed",
 			append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(agent.ID))...)
 		writeError(w, http.StatusInternalServerError, "failed to update env")
@@ -356,7 +357,7 @@ func unmarshalCustomEnv(a db.Agent) map[string]string {
 	if len(a.CustomEnv) == 0 {
 		return out
 	}
-	if err := json.Unmarshal(a.CustomEnv, &out); err != nil {
+	if err := json.Unmarshal([]byte(a.CustomEnv), &out); err != nil {
 		slog.Warn("failed to unmarshal agent custom_env", "agent_id", uuidToString(a.ID), "error", err)
 		return map[string]string{}
 	}

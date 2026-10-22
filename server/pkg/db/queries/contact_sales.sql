@@ -14,12 +14,12 @@ INSERT INTO contact_sales_inquiry (
     user_agent
 )
 VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-    sqlc.narg(submitter_ip)::inet,
-    $11
+    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+    sqlc.narg(submitter_ip),
+    ?11
 )
 RETURNING *;
 
 -- name: CountRecentContactSalesByEmail :one
 SELECT count(*) FROM contact_sales_inquiry
-WHERE business_email = $1 AND created_at > now() - interval '1 hour';
+WHERE business_email = ?1 AND created_at > datetime('now', '-1 hours');

@@ -2,16 +2,18 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	"strings"
-	"testing"
-	"time"
 )
 
 type cancelTranscriptTrace struct {
@@ -39,11 +41,11 @@ func TestCancelChatTranscriptReadIsBounded(t *testing.T) {
 				tr := &cancelTranscriptTrace{}
 				config := sharedTestPool(t).Config()
 				config.ConnConfig.Tracer = tr
-				pool, err := pgxpool.NewWithConfig(ctx, config)
+				pool, err := sql.Open("sqlite", os.Getenv("DATABASE_URL"))
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Cleanup(pool.Close)
+				t.Cleanup(func() { _ = pool.Close() })
 				fx := testutil.New(pool, "", "")
 				suffix := time.Now().UnixNano()
 				fx.UserID = fx.User(t, "cancel reader", fmt.Sprintf("cancel-reader-%d@example.test", suffix))
@@ -81,14 +83,14 @@ func TestCancelChatTranscriptReadIsBounded(t *testing.T) {
 					t.Fatalf("transcript read transferred %d rows across %d reads; want at most one scalar row", tr.maxRows, tr.reads)
 				}
 				var inputExists bool
-				if err := pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM chat_message WHERE id=$1)", inputID).Scan(&inputExists); err != nil {
+				if err := pool.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM chat_message WHERE id=$1)", inputID).Scan(&inputExists); err != nil {
 					t.Fatal(err)
 				}
 				if inputExists != (count > 0) {
 					t.Fatalf("input exists=%t for %d transcript rows", inputExists, count)
 				}
 				var stopped int
-				if err := pool.QueryRow(ctx, "SELECT count(*) FROM chat_message WHERE task_id=$1 AND role='assistant' AND content='Stopped.'", taskID).Scan(&stopped); err != nil {
+				if err := pool.QueryRowContext(ctx, "SELECT count(*) FROM chat_message WHERE task_id=$1 AND role='assistant' AND content='Stopped.'", taskID).Scan(&stopped); err != nil {
 					t.Fatal(err)
 				}
 				want := 0

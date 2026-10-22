@@ -2,11 +2,10 @@ package handler
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"math/big"
 	"net/http"
 	"strings"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const agentEmojiAvatarPrefix = "emoji:"
@@ -30,13 +29,13 @@ func randomAgentEmojiAvatar() string {
 // a way to publish a storage object, so it carries the same authorization
 // boundary as an update. ok=false means the error response is already written
 // and the caller must abort.
-func (h *Handler) newAgentAvatar(w http.ResponseWriter, r *http.Request, avatarURL *string) (pgtype.Text, bool) {
+func (h *Handler) newAgentAvatar(w http.ResponseWriter, r *http.Request, avatarURL *string) (sql.NullString, bool) {
 	if avatarURL != nil && strings.TrimSpace(*avatarURL) != "" {
 		accepted, ok := h.acceptAvatarURL(w, r, *avatarURL, "")
 		if !ok {
-			return pgtype.Text{}, false
+			return sql.NullString{}, false
 		}
-		return pgtype.Text{String: accepted, Valid: true}, true
+		return sql.NullString{String: accepted, Valid: true}, true
 	}
-	return pgtype.Text{String: randomAgentEmojiAvatar(), Valid: true}, true
+	return sql.NullString{String: randomAgentEmojiAvatar(), Valid: true}, true
 }

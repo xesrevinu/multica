@@ -16,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	sqlite "modernc.org/sqlite"
 )
 
 const (
@@ -271,6 +272,15 @@ func jitterDelay(delay time.Duration) time.Duration {
 func IsTransientDatabaseError(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) {
 		return false
+	}
+
+	var sqliteErr *sqlite.Error
+	if errors.As(err, &sqliteErr) {
+		// SQLITE_BUSY, SQLITE_LOCKED, SQLITE_IOERR, SQLITE_BUSY_RECOVERY.
+		switch sqliteErr.Code() {
+		case 5, 6, 10, 261:
+			return true
+		}
 	}
 
 	var pgErr *pgconn.PgError

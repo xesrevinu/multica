@@ -13,9 +13,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
+	"strings"
 )
 
 var (
@@ -25,6 +24,8 @@ var (
 	ErrThrottled = errors.New("maintenance job rate limited")
 	ErrNotFound  = errors.New("maintenance job not found")
 )
+
+type scanner interface{ Scan(dest ...any) error }
 
 type Options struct {
 	BatchSize          int `json:"batch_size"`
@@ -90,15 +91,15 @@ type Processor interface {
 	Type() string
 	Version() int
 	Validate(scope string, dryRun bool, parameters json.RawMessage) (json.RawMessage, error)
-	Preflight(context.Context, pgx.Tx) error
-	Step(context.Context, pgx.Tx, Job) (checkpoint, progress, result json.RawMessage, complete bool, err error)
+	Preflight(context.Context, *sql.Tx) error
+	Step(context.Context, *sql.Tx, Job) (checkpoint, progress, result json.RawMessage, complete bool, err error)
 }
 type Service struct {
-	pool       *pgxpool.Pool
+	pool       *sql.DB
 	processors map[string]Processor
 }
 
-func NewService(pool *pgxpool.Pool, processors ...Processor) *Service {
+func NewService(pool *sql.DB, processors ...Processor) *Service {
 	s := &Service{pool: pool, processors: make(map[string]Processor)}
 	for _, p := range processors {
 		if _, ok := s.processors[p.Type()]; ok {
@@ -128,13 +129,13 @@ const columns = `id::text, job_type, job_version, scope_key, idempotency_key, re
 dry_run, options, parameters, checkpoint, progress, result, last_error, next_allowed_at,
 created_at, updated_at, completed_at`
 
-func scan(row pgx.Row) (Job, error) {
+func scan(row scanner) (Job, error) {
 	var j Job
 	var opts []byte
 	err := row.Scan(&j.ID, &j.Type, &j.Version, &j.Scope, &j.IdempotencyKey, &j.RequestHash, &j.Status, &j.Revision,
 		&j.DryRun, &opts, &j.Parameters, &j.Checkpoint, &j.Progress, &j.Result, &j.LastError,
 		&j.NextAllowedAt, &j.CreatedAt, &j.UpdatedAt, &j.CompletedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return j, ErrNotFound
 	}
 	if err != nil {
@@ -151,22 +152,22 @@ func (s *Service) processor(j Job) (Processor, error) {
 	return p, nil
 }
 func (s *Service) Get(ctx context.Context, id string) (Job, error) {
-	return scan(s.pool.QueryRow(ctx, "SELECT "+columns+" FROM maintenance_job WHERE id=$1::uuid", id))
+	return scan(s.pool.QueryRowContext(ctx, "SELECT "+columns+" FROM maintenance_job WHERE id=$1::uuid", id))
 }
-func setTimeouts(ctx context.Context, tx pgx.Tx, o Options) error {
-	_, err := tx.Exec(ctx, `SELECT set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)`,
+func setTimeouts(ctx context.Context, tx *sql.Tx, o Options) error {
+	_, err := tx.ExecContext(ctx, `SELECT set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)`,
 		fmt.Sprintf("%dms", o.LockTimeoutMS), fmt.Sprintf("%dms", o.StatementTimeoutMS))
 	return err
 }
 func classify(err error) error {
-	var pe *pgconn.PgError
-	if errors.As(err, &pe) {
-		switch pe.Code {
-		case "55P03":
-			return ErrBusy
-		case "23505":
-			return ErrConflict
-		}
+	if err == nil {
+		return nil
+	}
+	if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		return ErrConflict
+	}
+	if strings.Contains(err.Error(), "database is locked") {
+		return ErrBusy
 	}
 	return err
 }
@@ -192,17 +193,17 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (Job, error) {
 	}
 	// Keep creation identity stable even after operational options are tuned.
 	hash := fmt.Sprintf("%x", sha256.Sum256(asJSON([]any{r.Type, r.Version, r.Scope, dry, r.Options, params})))
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.pool.BeginTx(ctx, nil)
 	if err != nil {
 		return Job{}, err
 	}
-	defer tx.Rollback(context.Background())
+	defer tx.Rollback()
 	if err = setTimeouts(ctx, tx, r.Options); err != nil {
 		return Job{}, err
 	}
 	// Every processor relies on these shared identity/concurrency constraints.
 	var count int
-	if err = tx.QueryRow(ctx, `SELECT count(*) FROM pg_index i
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM pg_index i
  WHERE i.indrelid='maintenance_job'::regclass AND i.indexrelid IN
  (to_regclass('idx_maintenance_job_id'),to_regclass('idx_maintenance_job_idempotency'),to_regclass('idx_maintenance_job_active'))
  AND i.indisvalid AND i.indisunique`).Scan(&count); err != nil {
@@ -213,14 +214,14 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (Job, error) {
 	}
 	// Serialize creation requests for this type/scope; the unique indexes remain the final guard.
 	var locked bool
-	err = tx.QueryRow(ctx, "SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))", "maintenance:"+r.Type+":"+r.Scope).Scan(&locked)
+	err = tx.QueryRowContext(ctx, "SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))", "maintenance:"+r.Type+":"+r.Scope).Scan(&locked)
 	if err != nil {
 		return Job{}, err
 	}
 	if !locked {
 		return Job{}, ErrBusy
 	}
-	existing, err := scan(tx.QueryRow(ctx, "SELECT "+columns+" FROM maintenance_job WHERE idempotency_key=$1", r.IdempotencyKey))
+	existing, err := scan(tx.QueryRowContext(ctx, "SELECT "+columns+" FROM maintenance_job WHERE idempotency_key=$1", r.IdempotencyKey))
 	if err == nil {
 		if existing.RequestHash != hash {
 			return existing, ErrConflict
@@ -233,14 +234,14 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (Job, error) {
 	if err = p.Preflight(ctx, tx); err != nil {
 		return Job{}, err
 	}
-	j, err = scan(tx.QueryRow(ctx, `INSERT INTO maintenance_job
+	j, err = scan(tx.QueryRowContext(ctx, `INSERT INTO maintenance_job
  (job_type,job_version,scope_key,idempotency_key,status,dry_run,options,parameters,request_hash)
  VALUES ($1,$2,$3,$4,'ready',$5,$6,$7,$8) RETURNING `+columns,
 		r.Type, r.Version, r.Scope, r.IdempotencyKey, dry, asJSON(r.Options), params, hash))
 	if err != nil {
 		return Job{}, classify(err)
 	}
-	return j, tx.Commit(ctx)
+	return j, tx.Commit()
 }
 
 // Mutate uses a row lock and a caller-supplied revision. Stale retries return
@@ -262,15 +263,15 @@ func (s *Service) mutate(ctx context.Context, id string, revision int64, action 
 	if revision < 0 {
 		return Job{}, ErrInvalid
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.pool.BeginTx(ctx, nil)
 	if err != nil {
 		return Job{}, err
 	}
-	defer tx.Rollback(context.Background())
+	defer tx.Rollback()
 	if err = setTimeouts(ctx, tx, Options{LockTimeoutMS: 500, StatementTimeoutMS: 5000}); err != nil {
 		return Job{}, err
 	}
-	j, err := scan(tx.QueryRow(ctx, "SELECT "+columns+" FROM maintenance_job WHERE id=$1::uuid FOR UPDATE NOWAIT", id))
+	j, err := scan(tx.QueryRowContext(ctx, "SELECT "+columns+" FROM maintenance_job WHERE id=$1::uuid FOR UPDATE NOWAIT", id))
 	if err != nil {
 		return Job{}, classify(err)
 	}
@@ -302,7 +303,7 @@ func (s *Service) mutate(ctx context.Context, id string, revision int64, action 
 			return j, e
 		}
 		var eligible bool
-		if err = tx.QueryRow(ctx, "SELECT clock_timestamp() >= $1", j.NextAllowedAt).Scan(&eligible); err != nil {
+		if err = tx.QueryRowContext(ctx, "SELECT clock_timestamp() >= $1", j.NextAllowedAt).Scan(&eligible); err != nil {
 			return j, err
 		}
 		if !eligible {
@@ -315,10 +316,10 @@ func (s *Service) mutate(ctx context.Context, id string, revision int64, action 
 			return j, e
 		}
 		// Savepoint lets failures retain diagnostics without retaining partial data.
-		batch, e := tx.Begin(ctx)
-		if e != nil {
+		if _, e = tx.ExecContext(ctx, "SAVEPOINT maintenance_batch"); e != nil {
 			return j, e
 		}
+		batch := tx
 		e = setTimeouts(ctx, batch, j.Options)
 		if e == nil {
 			e = p.Preflight(ctx, batch)
@@ -329,7 +330,7 @@ func (s *Service) mutate(ctx context.Context, id string, revision int64, action 
 			cp, progress, result, complete, e = p.Step(ctx, batch, j)
 		}
 		if e != nil {
-			if rollbackErr := batch.Rollback(ctx); rollbackErr != nil {
+			if rollbackErr := batch.Rollback(); rollbackErr != nil {
 				return j, e
 			}
 			stepErr = e
@@ -337,7 +338,7 @@ func (s *Service) mutate(ctx context.Context, id string, revision int64, action 
 			// Repeated failures require an explicit operator resume.
 			j.Status = "paused"
 		} else {
-			if e = batch.Commit(ctx); e != nil {
+			if e = batch.Commit(); e != nil {
 				return j, e
 			}
 			j.Checkpoint, j.Progress, j.Result = cp, progress, result
@@ -349,7 +350,7 @@ func (s *Service) mutate(ctx context.Context, id string, revision int64, action 
 	default:
 		return j, ErrInvalid
 	}
-	j, err = scan(tx.QueryRow(ctx, `UPDATE maintenance_job SET status=$2, revision=revision+1,
+	j, err = scan(tx.QueryRowContext(ctx, `UPDATE maintenance_job SET status=$2, revision=revision+1,
  checkpoint=$3,progress=$4,result=$5,last_error=$6,updated_at=clock_timestamp(),
 	next_allowed_at=CASE WHEN $7 THEN GREATEST(next_allowed_at,clock_timestamp()+$8*interval '1 millisecond') ELSE next_allowed_at END,
 	options=$9,
@@ -359,7 +360,7 @@ func (s *Service) mutate(ctx context.Context, id string, revision int64, action 
 	if err != nil {
 		return j, err
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = tx.Commit(); err != nil {
 		return Job{}, err
 	}
 	slog.Info("maintenance job operation committed", "job_id", j.ID, "job_type", j.Type, "action", action, "status", j.Status, "revision", j.Revision, "progress", string(j.Progress))

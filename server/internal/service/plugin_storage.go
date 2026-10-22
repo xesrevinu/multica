@@ -2,10 +2,9 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -38,14 +37,14 @@ type PluginStorageKey struct {
 }
 
 // ResolveStorageScope maps a scope name to the row's scope_id.
-func ResolveStorageScope(scopeType string, workspaceID, userID pgtype.UUID) (pgtype.UUID, error) {
+func ResolveStorageScope(scopeType string, workspaceID, userID string) (string, error) {
 	switch scopeType {
 	case PluginStorageWorkspace:
 		return workspaceID, nil
 	case PluginStorageUser:
 		return userID, nil
 	default:
-		return pgtype.UUID{}, pluginErrf(PluginErrorInvalid, "storage scope must be %q or %q", PluginStorageWorkspace, PluginStorageUser)
+		return "", pluginErrf(PluginErrorInvalid, "storage scope must be %q or %q", PluginStorageWorkspace, PluginStorageUser)
 	}
 }
 
@@ -62,7 +61,7 @@ func validateStorageKey(key string) error {
 // GetStorageValue reads one value. This path can never reach plugin_secret:
 // secrets live in a different table with no read query that returns ciphertext
 // to a request handler.
-func (s *PluginService) GetStorageValue(ctx context.Context, installationID pgtype.UUID, scopeType string, scopeID pgtype.UUID, key string) (string, error) {
+func (s *PluginService) GetStorageValue(ctx context.Context, installationID string, scopeType string, scopeID string, key string) (string, error) {
 	if err := validateStorageKey(key); err != nil {
 		return "", err
 	}
@@ -72,7 +71,7 @@ func (s *PluginService) GetStorageValue(ctx context.Context, installationID pgty
 		ScopeID:        scopeID,
 		Key:            key,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", pluginErrf(PluginErrorNotFound, "storage key not found")
 	}
 	if err != nil {
@@ -81,7 +80,7 @@ func (s *PluginService) GetStorageValue(ctx context.Context, installationID pgty
 	return row.Value, nil
 }
 
-func (s *PluginService) ListStorageKeys(ctx context.Context, installationID pgtype.UUID, scopeType string, scopeID pgtype.UUID) ([]PluginStorageKey, error) {
+func (s *PluginService) ListStorageKeys(ctx context.Context, installationID string, scopeType string, scopeID string) ([]PluginStorageKey, error) {
 	rows, err := s.Queries.ListPluginStorageKeys(ctx, db.ListPluginStorageKeysParams{
 		InstallationID: installationID,
 		ScopeType:      scopeType,
@@ -94,8 +93,8 @@ func (s *PluginService) ListStorageKeys(ctx context.Context, installationID pgty
 	for _, row := range rows {
 		keys = append(keys, PluginStorageKey{
 			Key:       row.Key,
-			SizeBytes: row.SizeBytes,
-			UpdatedAt: row.UpdatedAt.Time.UTC().Format("2006-01-02T15:04:05Z07:00"),
+			SizeBytes: asInt64(row.SizeBytes),
+			UpdatedAt: asTime(row.UpdatedAt).UTC().Format("2006-01-02T15:04:05Z07:00"),
 		})
 	}
 	return keys, nil
@@ -118,7 +117,7 @@ func EnforceStorageQuota(usage db.GetPluginStorageUsageRow, valueBytes int) erro
 	if usage.KeyCount+1 > MaxPluginStorageKeys {
 		return pluginErrf(PluginErrorQuota, "storage scope already holds the maximum of %d keys", MaxPluginStorageKeys)
 	}
-	if usage.TotalBytes+int64(valueBytes) > MaxPluginStorageTotalBytes {
+	if asInt64(usage.TotalBytes)+int64(valueBytes) > MaxPluginStorageTotalBytes {
 		return pluginErrf(PluginErrorQuota, "storage scope exceeds its %d byte budget", MaxPluginStorageTotalBytes)
 	}
 	return nil
@@ -127,7 +126,7 @@ func EnforceStorageQuota(usage db.GetPluginStorageUsageRow, valueBytes int) erro
 // SetStorageValue writes one value after checking every quota. The usage query
 // excludes the key being written, so replacing a value is measured as a
 // replacement and cannot fail a limit the existing row already occupies.
-func (s *PluginService) SetStorageValue(ctx context.Context, installationID pgtype.UUID, scopeType string, scopeID pgtype.UUID, key, value string) error {
+func (s *PluginService) SetStorageValue(ctx context.Context, installationID string, scopeType string, scopeID string, key, value string) error {
 	if err := validateStorageKey(key); err != nil {
 		return err
 	}
@@ -155,7 +154,7 @@ func (s *PluginService) SetStorageValue(ctx context.Context, installationID pgty
 	return nil
 }
 
-func (s *PluginService) DeleteStorageValue(ctx context.Context, installationID pgtype.UUID, scopeType string, scopeID pgtype.UUID, key string) error {
+func (s *PluginService) DeleteStorageValue(ctx context.Context, installationID string, scopeType string, scopeID string, key string) error {
 	if err := validateStorageKey(key); err != nil {
 		return err
 	}

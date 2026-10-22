@@ -2,13 +2,12 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -76,7 +75,7 @@ func failTaskSuccessorCase(t *testing.T, failureReason string) {
 
 	// The operator reruns while that task is still running: allowed now, and it
 	// takes the single queued/dispatched slot the unique index permits.
-	rerun, err := testHandler.TaskService.RerunIssue(ctx, parseUUID(issueID), pgtype.UUID{}, pgtype.UUID{}, parseUUID(testUserID), nil)
+	rerun, err := testHandler.TaskService.RerunIssue(ctx, parseUUID(issueID), "", "", parseUUID(testUserID), nil)
 	if err != nil {
 		t.Fatalf("RerunIssue behind running task: %v", err)
 	}
@@ -86,8 +85,7 @@ func failTaskSuccessorCase(t *testing.T, failureReason string) {
 
 	// The retry child for this reason is created immediately as 'queued' — the
 	// exact shape that collides with the rerun already holding the slot.
-	if _, err := testHandler.TaskService.FailTask(ctx, parseUUID(runningID),
-		"run died", "", "", "", failureReason, false, "", ""); err != nil {
+	if _, err := testHandler.TaskService.FailTask(ctx, parseUUID(runningID), "run died", "", "", "", failureReason, false, "", ""); err != nil {
 		t.Fatalf("FailTask with a manual rerun already queued: %v", err)
 	}
 
@@ -130,7 +128,7 @@ func failTaskSuccessorCase(t *testing.T, failureReason string) {
 // of interleaving is the insert itself: ON CONFLICT DO NOTHING yields the slot
 // rather than raising 23505 and aborting the caller's transaction.
 //
-// Asserting pgx.ErrNoRows here — not a unique violation — is what proves the
+// Asserting sql.ErrNoRows here — not a unique violation — is what proves the
 // enclosing transaction can never be poisoned by losing the race.
 func TestCreateRetryTask_YieldsPendingSlotInsteadOfRaising(t *testing.T) {
 	if testHandler == nil || testPool == nil {
@@ -165,8 +163,8 @@ func TestCreateRetryTask_YieldsPendingSlotInsteadOfRaising(t *testing.T) {
 	})
 
 	_, err := testHandler.TaskService.Queries.CreateRetryTask(ctx, db.CreateRetryTaskParams{ID: parseUUID(parentID)})
-	if !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("CreateRetryTask against an occupied slot must yield (pgx.ErrNoRows), got %v", err)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("CreateRetryTask against an occupied slot must yield (sql.ErrNoRows), got %v", err)
 	}
 }
 
@@ -213,13 +211,12 @@ func TestFailTaskAndRerunConcurrently_NeverStrandsRunningTask(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			_, failErr = testHandler.TaskService.FailTask(ctx, parseUUID(runningID),
-				"run died", "", "", "", "timeout", false, "", "")
+			_, failErr = testHandler.TaskService.FailTask(ctx, parseUUID(runningID), "run died", "", "", "", "timeout", false, "", "")
 		}()
 		go func() {
 			defer wg.Done()
 			<-start
-			_, rerunErr = testHandler.TaskService.RerunIssue(ctx, parseUUID(issueID), pgtype.UUID{}, pgtype.UUID{}, parseUUID(testUserID), nil)
+			_, rerunErr = testHandler.TaskService.RerunIssue(ctx, parseUUID(issueID), "", "", parseUUID(testUserID), nil)
 		}()
 		close(start)
 		wg.Wait()
@@ -424,13 +421,12 @@ func TestFailTaskAndRerunConcurrently_NonAssigneeTarget(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			_, failErr = testHandler.TaskService.FailTask(ctx, parseUUID(runningID),
-				"run died", "", "", "", "timeout", false, "", "")
+			_, failErr = testHandler.TaskService.FailTask(ctx, parseUUID(runningID), "run died", "", "", "", "timeout", false, "", "")
 		}()
 		go func() {
 			defer wg.Done()
 			<-start
-			_, rerunErr = testHandler.TaskService.RerunIssue(ctx, parseUUID(issueID), parseUUID(sourceTaskID), pgtype.UUID{}, parseUUID(testUserID), nil)
+			_, rerunErr = testHandler.TaskService.RerunIssue(ctx, parseUUID(issueID), parseUUID(sourceTaskID), "", parseUUID(testUserID), nil)
 		}()
 		close(start)
 		wg.Wait()
@@ -501,7 +497,7 @@ func TestPromoteDueDeferred_ToleratesConcurrentUncommittedEnqueue(t *testing.T) 
 	if err != nil {
 		t.Fatalf("begin holder tx: %v", err)
 	}
-	defer tx.Rollback(context.Background())
+	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority)
 		VALUES ($1, $2, $3, 'queued', 0)
@@ -522,7 +518,7 @@ func TestPromoteDueDeferred_ToleratesConcurrentUncommittedEnqueue(t *testing.T) 
 	if !waitForWaiterBlockedBy(t, holderPID, 10*time.Second) {
 		t.Fatal("promotion never blocked on the uncommitted competitor's index entry")
 	}
-	if err := tx.Commit(context.Background()); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		t.Fatalf("commit competitor: %v", err)
 	}
 	if err := <-promoted; err != nil {

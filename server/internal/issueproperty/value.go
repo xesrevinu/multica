@@ -235,7 +235,7 @@ func ValidateValue(def db.IssueProperty, raw json.RawMessage) ([]byte, error) {
 		return nil, errors.New("value cannot be null (use DELETE to unset a property)")
 	}
 
-	config := parseConfig(def.Config)
+	config := parseConfig([]byte(def.Config))
 	switch def.Type {
 	case "text":
 		text, ok := value.(string)

@@ -1,36 +1,35 @@
 package service
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 func TestAutopilotSquadAttribution(t *testing.T) {
-	id := pgtype.UUID{Valid: true}
-	copy(id.Bytes[:], []byte("01234567890123456789012345678901"))
+	id := "00000000-0000-4000-8000-000000000001"
+	id = "01234567-8901-2345-6789-012345678901"
 
 	tests := []struct {
 		name string
 		ap   db.Autopilot
-		want pgtype.UUID
+		want string
 	}{
-		{"agent assignee returns zero", db.Autopilot{AssigneeType: "agent", AssigneeID: id}, pgtype.UUID{}},
+		{"agent assignee returns zero", db.Autopilot{AssigneeType: "agent", AssigneeID: id}, ""},
 		{"squad assignee returns squad id", db.Autopilot{AssigneeType: "squad", AssigneeID: id}, id},
-		{"squad with invalid id returns zero", db.Autopilot{AssigneeType: "squad", AssigneeID: pgtype.UUID{}}, pgtype.UUID{}},
-		{"unset type defaults to non-squad", db.Autopilot{AssigneeID: id}, pgtype.UUID{}},
+		{"squad with invalid id returns zero", db.Autopilot{AssigneeType: "squad", AssigneeID: ""}, ""},
+		{"unset type defaults to non-squad", db.Autopilot{AssigneeID: id}, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := autopilotSquadAttribution(tc.ap)
-			if got.Valid != tc.want.Valid {
-				t.Fatalf("Valid mismatch: got %v want %v", got.Valid, tc.want.Valid)
+			if (got != "") != (tc.want != "") {
+				t.Fatalf("Valid mismatch: got %v want %v", (got != ""), (tc.want != ""))
 			}
-			if got.Valid && got.Bytes != tc.want.Bytes {
+			if (got != "") && got != tc.want {
 				t.Fatalf("Bytes mismatch")
 			}
 		})
@@ -75,10 +74,10 @@ func TestErrDispatchSkippedUnwraps(t *testing.T) {
 		t.Fatalf("reason mismatch: got %q want %q", got.reason, base.reason)
 	}
 
-	// pgx.ErrNoRows must NOT pass through the same gate — otherwise transient
+	// sql.ErrNoRows must NOT pass through the same gate — otherwise transient
 	// "row not found" errors that should fail-open via shouldSkipDispatch
 	// would be swallowed silently as skips at the dispatch level.
-	if errors.As(pgx.ErrNoRows, &got) {
-		t.Fatal("pgx.ErrNoRows wrongly satisfied errDispatchSkipped")
+	if errors.As(sql.ErrNoRows, &got) {
+		t.Fatal("sql.ErrNoRows wrongly satisfied errDispatchSkipped")
 	}
 }

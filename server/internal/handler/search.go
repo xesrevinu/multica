@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/multica-ai/multica/server/internal/middleware"
 )
@@ -104,7 +104,7 @@ func effectiveSearchStatementTimeout() time.Duration {
 
 // runSearchQuery executes a search SQL query inside a short-lived read-only
 // transaction with transaction-local timeout and working-memory settings.
-// rowsFn receives each pgx.Rows result and is responsible for scanning and
+// rowsFn receives each *sql.Rows result and is responsible for scanning and
 // accumulating results before returning; runSearchQuery handles commit /
 // rollback and returns the first error encountered.
 //
@@ -115,9 +115,9 @@ func runSearchQuery(
 	txStarter txStarter,
 	sql string,
 	args []any,
-	rowsFn func(pgx.Rows) error,
+	rowsFn func(*sql.Rows) error,
 ) error {
-	tx, err := txStarter.Begin(ctx)
+	tx, err := txStarter.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin search tx: %w", err)
 	}
@@ -126,7 +126,7 @@ func runSearchQuery(
 		if !committed {
 			// Best-effort rollback with a fresh context so a caller
 			// cancellation still lets the connection go back clean.
-			_ = tx.Rollback(context.Background())
+			_ = tx.Rollback()
 		}
 	}()
 
@@ -134,24 +134,24 @@ func runSearchQuery(
 	// connection back out after COMMIT without search-specific settings leaking
 	// to unrelated queries.
 	timeoutMs := int(effectiveSearchStatementTimeout() / time.Millisecond)
-	if _, err := tx.Exec(ctx, fmt.Sprintf("SET LOCAL statement_timeout = %d", timeoutMs)); err != nil {
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL statement_timeout = %d", timeoutMs)); err != nil {
 		return fmt.Errorf("set search statement_timeout: %w", err)
 	}
 	if workMem := searchWorkMemValue(); workMem != "" {
 		// workMem is constructed only from the bounded integer parsed above, so
 		// interpolating it cannot introduce SQL syntax or user input.
-		if _, err := tx.Exec(ctx, fmt.Sprintf("SET LOCAL work_mem = '%s'", workMem)); err != nil {
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL work_mem = '%s'", workMem)); err != nil {
 			return fmt.Errorf("set search work_mem: %w", err)
 		}
 	}
 	// The read-only mode is applied here rather than via TxOptions so we
 	// keep the txStarter interface signature (Begin only) intact. It's
 	// belt-and-suspenders — the search queries only SELECT anyway.
-	if _, err := tx.Exec(ctx, "SET LOCAL transaction_read_only = on"); err != nil {
+	if _, err := tx.ExecContext(ctx, "SET LOCAL transaction_read_only = on"); err != nil {
 		return fmt.Errorf("set search transaction_read_only: %w", err)
 	}
 
-	rows, err := tx.Query(ctx, sql, args...)
+	rows, err := tx.QueryContext(ctx, sql, args...)
 	if err != nil {
 		return err
 	}
@@ -163,7 +163,7 @@ func runSearchQuery(
 	}
 	rows.Close()
 
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return err
 	}
 	committed = true

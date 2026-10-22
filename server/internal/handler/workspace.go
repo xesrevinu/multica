@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +15,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/logger"
@@ -110,15 +110,15 @@ type WorkspaceResponse struct {
 
 func (h *Handler) workspaceToResponse(w db.Workspace) WorkspaceResponse {
 	var settings any
-	if w.Settings != nil {
-		json.Unmarshal(w.Settings, &settings)
+	if w.Settings != "" {
+		json.Unmarshal([]byte(w.Settings), &settings)
 	}
 	if settings == nil {
 		settings = map[string]any{}
 	}
 	var repos any
-	if w.Repos != nil {
-		json.Unmarshal(w.Repos, &repos)
+	if w.Repos != "" {
+		json.Unmarshal([]byte(w.Repos), &repos)
 	}
 	if repos == nil {
 		repos = []any{}
@@ -251,12 +251,12 @@ func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		issuePrefix = defaultIssuePrefixFromSlug(req.Slug)
 	}
 
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create workspace")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 
 	qtx := h.Queries.WithTx(tx)
 	ws, err := qtx.CreateWorkspace(r.Context(), db.CreateWorkspaceParams{
@@ -304,7 +304,7 @@ func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// gate (web layout / desktop App.tsx overlay) redirects un-onboarded
 	// users back to /onboarding instead.
 
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create workspace")
 		return
 	}
@@ -395,13 +395,13 @@ func (h *Handler) UpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "name is required")
 			return
 		}
-		params.Name = pgtype.Text{String: name, Valid: true}
+		params.Name = sql.NullString{String: name, Valid: true}
 	}
 	if req.Description != nil {
-		params.Description = pgtype.Text{String: *req.Description, Valid: true}
+		params.Description = sql.NullString{String: *req.Description, Valid: true}
 	}
 	if req.Context != nil {
-		params.Context = pgtype.Text{String: *req.Context, Valid: true}
+		params.Context = sql.NullString{String: *req.Context, Valid: true}
 	}
 	if req.Settings != nil {
 		if incoming, ok := req.Settings.(map[string]any); ok {
@@ -410,13 +410,13 @@ func (h *Handler) UpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 			var stored map[string]any
 			if _, sent := incoming[prAutoCompleteLegacyKey]; sent {
 				if existing, err := h.Queries.GetWorkspace(r.Context(), idUUID); err == nil {
-					_ = json.Unmarshal(existing.Settings, &stored)
+					_ = json.Unmarshal([]byte(existing.Settings), &stored)
 				}
 			}
 			reconcilePRMergeSettings(stored, incoming)
 		}
 		s, _ := json.Marshal(req.Settings)
-		params.Settings = s
+		params.Settings = nullString(string(s))
 	}
 	if req.Repos != nil {
 		reposJSON, err := validateAndNormalizeWorkspaceRepos(req.Repos)
@@ -424,7 +424,7 @@ func (h *Handler) UpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		params.Repos = reposJSON
+		params.Repos = nullString(string(reposJSON))
 	}
 	if req.IssuePrefix != nil {
 		prefix, ok := normalizeIssuePrefix(*req.IssuePrefix)
@@ -433,7 +433,7 @@ func (h *Handler) UpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if prefix != "" {
-			params.IssuePrefix = pgtype.Text{String: prefix, Valid: true}
+			params.IssuePrefix = sql.NullString{String: prefix, Valid: true}
 		}
 	}
 	if req.AvatarURL != nil {
@@ -448,7 +448,7 @@ func (h *Handler) UpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		params.AvatarUrl = pgtype.Text{String: accepted, Valid: true}
+		params.AvatarUrl = sql.NullString{String: accepted, Valid: true}
 	}
 
 	ws, err := h.Queries.UpdateWorkspace(r.Context(), params)
@@ -695,7 +695,7 @@ func (h *Handler) DeleteMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.Hub.DisconnectMember(uuidToString(target.WorkspaceID), uuidToString(target.UserID), uuidToString(target.ID))
-	h.settleMemberCapacityRelease(r.Context(), uuid.UUID(target.WorkspaceID.Bytes), uuid.UUID(target.ID.Bytes))
+	h.settleMemberCapacityRelease(r.Context(), uuid.MustParse(target.WorkspaceID), uuid.MustParse(target.ID))
 
 	h.MembershipCache.Invalidate(r.Context(), uuidToString(target.UserID), workspaceID)
 
@@ -740,7 +740,7 @@ func (h *Handler) LeaveWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.Hub.DisconnectMember(uuidToString(member.WorkspaceID), uuidToString(member.UserID), uuidToString(member.ID))
-	h.settleMemberCapacityRelease(r.Context(), uuid.UUID(member.WorkspaceID.Bytes), uuid.UUID(member.ID.Bytes))
+	h.settleMemberCapacityRelease(r.Context(), uuid.MustParse(member.WorkspaceID), uuid.MustParse(member.ID))
 
 	h.MembershipCache.Invalidate(r.Context(), uuidToString(member.UserID), workspaceID)
 
@@ -881,35 +881,35 @@ const workspaceDeleteVerifyPasses = 3
 // Late arrivals are handled by the fence, not here: migration 284 makes every task
 // write take FOR KEY SHARE on its owners' workspace rows, which conflicts with the
 // FOR UPDATE that LockWorkspaceForDelete holds for this whole transaction.
-func deleteWorkspaceTasks(ctx context.Context, qtx *db.Queries, workspaceID pgtype.UUID) error {
+func deleteWorkspaceTasks(ctx context.Context, qtx *db.Queries, workspaceID string) error {
 	ownerKinds := []struct {
 		label          string
-		ownerFirstPage func(context.Context, int32) ([]pgtype.UUID, error)
-		ownerPage      func(context.Context, pgtype.UUID, int32) ([]pgtype.UUID, error)
-		taskFirstPage  func(context.Context, pgtype.UUID, int32) ([]pgtype.UUID, error)
-		taskPage       func(context.Context, pgtype.UUID, pgtype.UUID, int32) ([]pgtype.UUID, error)
+		ownerFirstPage func(context.Context, int32) ([]string, error)
+		ownerPage      func(context.Context, string, int32) ([]string, error)
+		taskFirstPage  func(context.Context, string, int32) ([]string, error)
+		taskPage       func(context.Context, string, string, int32) ([]string, error)
 		sweepAgent     bool
 	}{
 		{
 			label: "agent",
-			ownerFirstPage: func(ctx context.Context, limit int32) ([]pgtype.UUID, error) {
+			ownerFirstPage: func(ctx context.Context, limit int32) ([]string, error) {
 				return qtx.ListWorkspaceAgentIDFirstPage(ctx, db.ListWorkspaceAgentIDFirstPageParams{
-					WorkspaceID: workspaceID, Limit: limit,
+					WorkspaceID: workspaceID, Limit: int64(limit),
 				})
 			},
-			ownerPage: func(ctx context.Context, cursor pgtype.UUID, limit int32) ([]pgtype.UUID, error) {
+			ownerPage: func(ctx context.Context, cursor string, limit int32) ([]string, error) {
 				return qtx.ListWorkspaceAgentIDPage(ctx, db.ListWorkspaceAgentIDPageParams{
-					WorkspaceID: workspaceID, ID: cursor, Limit: limit,
+					WorkspaceID: workspaceID, ID: cursor, Limit: int64(limit),
 				})
 			},
-			taskFirstPage: func(ctx context.Context, owner pgtype.UUID, limit int32) ([]pgtype.UUID, error) {
+			taskFirstPage: func(ctx context.Context, owner string, limit int32) ([]string, error) {
 				return qtx.ListTaskIDsByAgentFirstPage(ctx, db.ListTaskIDsByAgentFirstPageParams{
-					AgentID: owner, Limit: limit,
+					AgentID: owner, Limit: int64(limit),
 				})
 			},
-			taskPage: func(ctx context.Context, owner, cursor pgtype.UUID, limit int32) ([]pgtype.UUID, error) {
+			taskPage: func(ctx context.Context, owner, cursor string, limit int32) ([]string, error) {
 				return qtx.ListTaskIDsByAgentPage(ctx, db.ListTaskIDsByAgentPageParams{
-					AgentID: owner, ID: cursor, Limit: limit,
+					AgentID: owner, ID: cursor, Limit: int64(limit),
 				})
 			},
 			// The third explicit task_token path. workspace_id (leaf data) and
@@ -919,47 +919,47 @@ func deleteWorkspaceTasks(ctx context.Context, qtx *db.Queries, workspaceID pgty
 		},
 		{
 			label: "issue",
-			ownerFirstPage: func(ctx context.Context, limit int32) ([]pgtype.UUID, error) {
+			ownerFirstPage: func(ctx context.Context, limit int32) ([]string, error) {
 				return qtx.ListWorkspaceIssueIDFirstPage(ctx, db.ListWorkspaceIssueIDFirstPageParams{
-					WorkspaceID: workspaceID, Limit: limit,
+					WorkspaceID: workspaceID, Limit: int64(limit),
 				})
 			},
-			ownerPage: func(ctx context.Context, cursor pgtype.UUID, limit int32) ([]pgtype.UUID, error) {
+			ownerPage: func(ctx context.Context, cursor string, limit int32) ([]string, error) {
 				return qtx.ListWorkspaceIssueIDPage(ctx, db.ListWorkspaceIssueIDPageParams{
-					WorkspaceID: workspaceID, ID: cursor, Limit: limit,
+					WorkspaceID: workspaceID, ID: cursor, Limit: int64(limit),
 				})
 			},
-			taskFirstPage: func(ctx context.Context, owner pgtype.UUID, limit int32) ([]pgtype.UUID, error) {
+			taskFirstPage: func(ctx context.Context, owner string, limit int32) ([]string, error) {
 				return qtx.ListTaskIDsByIssueFirstPage(ctx, db.ListTaskIDsByIssueFirstPageParams{
-					IssueID: owner, Limit: limit,
+					IssueID: nullString(owner), Limit: int64(limit),
 				})
 			},
-			taskPage: func(ctx context.Context, owner, cursor pgtype.UUID, limit int32) ([]pgtype.UUID, error) {
+			taskPage: func(ctx context.Context, owner, cursor string, limit int32) ([]string, error) {
 				return qtx.ListTaskIDsByIssuePage(ctx, db.ListTaskIDsByIssuePageParams{
-					IssueID: owner, ID: cursor, Limit: limit,
+					IssueID: nullString(owner), ID: cursor, Limit: int64(limit),
 				})
 			},
 		},
 		{
 			label: "runtime",
-			ownerFirstPage: func(ctx context.Context, limit int32) ([]pgtype.UUID, error) {
+			ownerFirstPage: func(ctx context.Context, limit int32) ([]string, error) {
 				return qtx.ListWorkspaceRuntimeIDFirstPage(ctx, db.ListWorkspaceRuntimeIDFirstPageParams{
-					WorkspaceID: workspaceID, Limit: limit,
+					WorkspaceID: workspaceID, Limit: int64(limit),
 				})
 			},
-			ownerPage: func(ctx context.Context, cursor pgtype.UUID, limit int32) ([]pgtype.UUID, error) {
+			ownerPage: func(ctx context.Context, cursor string, limit int32) ([]string, error) {
 				return qtx.ListWorkspaceRuntimeIDPage(ctx, db.ListWorkspaceRuntimeIDPageParams{
-					WorkspaceID: workspaceID, ID: cursor, Limit: limit,
+					WorkspaceID: workspaceID, ID: cursor, Limit: int64(limit),
 				})
 			},
-			taskFirstPage: func(ctx context.Context, owner pgtype.UUID, limit int32) ([]pgtype.UUID, error) {
+			taskFirstPage: func(ctx context.Context, owner string, limit int32) ([]string, error) {
 				return qtx.ListTaskIDsByRuntimeFirstPage(ctx, db.ListTaskIDsByRuntimeFirstPageParams{
-					RuntimeID: owner, Limit: limit,
+					RuntimeID: nullString(owner), Limit: int64(limit),
 				})
 			},
-			taskPage: func(ctx context.Context, owner, cursor pgtype.UUID, limit int32) ([]pgtype.UUID, error) {
+			taskPage: func(ctx context.Context, owner, cursor string, limit int32) ([]string, error) {
 				return qtx.ListTaskIDsByRuntimePage(ctx, db.ListTaskIDsByRuntimePageParams{
-					RuntimeID: owner, ID: cursor, Limit: limit,
+					RuntimeID: nullString(owner), ID: cursor, Limit: int64(limit),
 				})
 			},
 		},
@@ -974,7 +974,42 @@ func deleteWorkspaceTasks(ctx context.Context, qtx *db.Queries, workspaceID pgty
 			for _, ownerID := range owners {
 				if err := sweepTasksForOwner(ctx, kind.label, ownerID,
 					kind.taskFirstPage, kind.taskPage,
-					qtx.DetachTaskBatchReferences, qtx.DeleteTaskBatch); err != nil {
+					func(ctx context.Context, taskIDs []string) error {
+						if err := qtx.DetachTaskBatchReferences(ctx, taskIDs); err != nil {
+							return err
+						}
+						return qtx.DetachTaskBatchReferences_Step2(ctx, taskIDs)
+					},
+					func(ctx context.Context, taskIDs []string) error {
+						if err := qtx.DeleteTaskBatch(ctx, taskIDs); err != nil {
+							return err
+						}
+						if err := qtx.DeleteTaskBatch_Step2(ctx, taskIDs); err != nil {
+							return err
+						}
+						if err := qtx.DeleteTaskBatch_Step3(ctx, taskIDs); err != nil {
+							return err
+						}
+						if err := qtx.DeleteTaskBatch_Step4(ctx, taskIDs); err != nil {
+							return err
+						}
+						if err := qtx.DeleteTaskBatch_Step5(ctx, taskIDs); err != nil {
+							return err
+						}
+						if err := qtx.DeleteTaskBatch_Step6(ctx, taskIDs); err != nil {
+							return err
+						}
+						if err := qtx.DeleteTaskBatch_Step7(ctx, taskIDs); err != nil {
+							return err
+						}
+						if err := qtx.DeleteTaskBatch_Step8(ctx, taskIDs); err != nil {
+							return err
+						}
+						if err := qtx.DeleteTaskBatch_Step9(ctx, taskIDs); err != nil {
+							return err
+						}
+						return qtx.DeleteTaskBatch_Step10(ctx, taskIDs)
+					}); err != nil {
 					return err
 				}
 				if kind.sweepAgent {
@@ -1002,11 +1037,11 @@ func deleteWorkspaceTasks(ctx context.Context, qtx *db.Queries, workspaceID pgty
 func sweepTasksForOwner(
 	ctx context.Context,
 	label string,
-	ownerID pgtype.UUID,
-	taskFirstPage func(context.Context, pgtype.UUID, int32) ([]pgtype.UUID, error),
-	taskPage func(context.Context, pgtype.UUID, pgtype.UUID, int32) ([]pgtype.UUID, error),
-	detach func(context.Context, []pgtype.UUID) error,
-	deletePage func(context.Context, []pgtype.UUID) error,
+	ownerID string,
+	taskFirstPage func(context.Context, string, int32) ([]string, error),
+	taskPage func(context.Context, string, string, int32) ([]string, error),
+	detach func(context.Context, []string) error,
+	deletePage func(context.Context, []string) error,
 ) error {
 	for pass := 1; pass <= workspaceDeleteVerifyPasses; pass++ {
 		deleted := 0
@@ -1059,7 +1094,7 @@ func sweepTasksForOwner(
 // The wait is bounded by SET LOCAL lock_timeout, and taking these locks can
 // deadlock against a concurrent task update that locks in the opposite order
 // (task row, then owner); both outcomes surface as a retryable 503.
-func lockWorkspaceTaskOwners(ctx context.Context, qtx *db.Queries, workspaceID pgtype.UUID) error {
+func lockWorkspaceTaskOwners(ctx context.Context, qtx *db.Queries, workspaceID string) error {
 	if err := qtx.LockWorkspaceTaskOwnerAgents(ctx, workspaceID); err != nil {
 		return fmt.Errorf("lock workspace agents: %w", err)
 	}
@@ -1068,6 +1103,15 @@ func lockWorkspaceTaskOwners(ctx context.Context, qtx *db.Queries, workspaceID p
 	}
 	if err := qtx.LockWorkspaceTaskOwnerRuntimes(ctx, workspaceID); err != nil {
 		return fmt.Errorf("lock workspace runtimes: %w", err)
+	}
+	return nil
+}
+
+func runWorkspaceDeleteSteps(steps ...func() error) error {
+	for _, step := range steps {
+		if err := step(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1116,13 +1160,13 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	// delete window would otherwise slip in a session nobody locked, and its
 	// restore would outlive the cascade the same way. Holding the workspace row
 	// FOR UPDATE blocks that insert on its workspace FK (FOR KEY SHARE).
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		slog.Warn("begin workspace delete tx failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
 		writeError(w, http.StatusInternalServerError, "failed to delete workspace")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 	var sourceContextAttachmentURLs []string
 	var sourceContextIntentURLs []string
@@ -1132,7 +1176,7 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	// It caps waiting for a lock, not the teardown work itself — deleting a
 	// large workspace is allowed to take as long as it takes.
 	lockTimeoutMs := int(effectiveWorkspaceDeleteLockTimeout() / time.Millisecond)
-	if _, err := tx.Exec(r.Context(), fmt.Sprintf("SET LOCAL lock_timeout = %d", lockTimeoutMs)); err != nil {
+	if _, err := tx.ExecContext(r.Context(), fmt.Sprintf("SET LOCAL lock_timeout = %d", lockTimeoutMs)); err != nil {
 		failWorkspaceDelete(w, r, workspaceID, "set lock timeout", err)
 		return
 	}
@@ -1185,7 +1229,13 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		},
 		{
 			name: "prepare relationship graph",
-			run:  func() error { return qtx.PrepareWorkspaceDeletionLinks(ctx, requester.WorkspaceID) },
+			run: func() error {
+				return runWorkspaceDeleteSteps(
+					func() error { return qtx.PrepareWorkspaceDeletionLinks(ctx, requester.WorkspaceID) },
+					func() error { return qtx.PrepareWorkspaceDeletionLinks_Step2(ctx, requester.WorkspaceID) },
+					func() error { return qtx.PrepareWorkspaceDeletionLinks_Step3(ctx, requester.WorkspaceID) },
+				)
+			},
 		},
 		{
 			// These FK-free intents deliberately survive the transaction so the
@@ -1230,7 +1280,62 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		},
 		{
 			name: "delete leaf data",
-			run:  func() error { return qtx.DeleteWorkspaceLeafData(ctx, requester.WorkspaceID) },
+			run: func() error {
+				return runWorkspaceDeleteSteps(
+					func() error { return qtx.DeleteWorkspaceLeafData(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step2(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step3(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step4(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step5(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step6(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step7(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step8(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step9(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step10(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step11(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step12(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step13(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step14(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step15(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step16(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step17(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step18(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step19(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step20(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step21(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step22(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step23(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step24(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step25(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step26(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step27(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step28(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step29(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step30(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step31(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step32(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step33(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step34(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step35(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step36(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step37(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step38(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step39(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step40(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step41(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step42(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step43(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step44(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step45(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step46(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step47(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step48(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step49(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step50(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step51(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceLeafData_Step52(ctx, requester.WorkspaceID) },
+				)
+			},
 		},
 		{
 			name: "delete autopilot runs",
@@ -1250,7 +1355,15 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		},
 		{
 			name: "delete communication roots",
-			run:  func() error { return qtx.DeleteWorkspaceCommunicationRoots(ctx, requester.WorkspaceID) },
+			run: func() error {
+				return runWorkspaceDeleteSteps(
+					func() error { return qtx.DeleteWorkspaceCommunicationRoots(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceCommunicationRoots_Step2(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceCommunicationRoots_Step3(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceCommunicationRoots_Step4(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceCommunicationRoots_Step5(ctx, requester.WorkspaceID) },
+				)
+			},
 		},
 		{
 			name: "delete comments",
@@ -1281,7 +1394,19 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		},
 		{
 			name: "delete issue roots",
-			run:  func() error { return qtx.DeleteWorkspaceIssueRoots(ctx, requester.WorkspaceID) },
+			run: func() error {
+				return runWorkspaceDeleteSteps(
+					func() error { return qtx.DeleteWorkspaceIssueRoots(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceIssueRoots_Step2(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceIssueRoots_Step3(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceIssueRoots_Step4(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceIssueRoots_Step5(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceIssueRoots_Step6(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceIssueRoots_Step7(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceIssueRoots_Step8(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceIssueRoots_Step9(ctx, requester.WorkspaceID) },
+				)
+			},
 		},
 		{
 			// issue_status carries no foreign key by project rule, so its rows
@@ -1303,7 +1428,12 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		},
 		{
 			name: "delete autopilot children",
-			run:  func() error { return qtx.DeleteWorkspaceAutopilotChildren(ctx, requester.WorkspaceID) },
+			run: func() error {
+				return runWorkspaceDeleteSteps(
+					func() error { return qtx.DeleteWorkspaceAutopilotChildren(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceAutopilotChildren_Step2(ctx, requester.WorkspaceID) },
+				)
+			},
 		},
 		{
 			name: "delete autopilots",
@@ -1311,38 +1441,120 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		},
 		{
 			name: "delete pull requests",
-			run:  func() error { return qtx.DeleteWorkspacePullRequests(ctx, requester.WorkspaceID) },
+			run: func() error {
+				return runWorkspaceDeleteSteps(
+					func() error { return qtx.DeleteWorkspacePullRequests(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspacePullRequests_Step2(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspacePullRequests_Step3(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspacePullRequests_Step4(ctx, requester.WorkspaceID) },
+				)
+			},
 		},
 		{
 			name: "delete integrations",
-			run:  func() error { return qtx.DeleteWorkspaceConnections(ctx, requester.WorkspaceID) },
+			run: func() error {
+				return runWorkspaceDeleteSteps(
+					func() error { return qtx.DeleteWorkspaceConnections(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceConnections_Step2(ctx, requester.WorkspaceID) },
+				)
+			},
 		},
 		{
 			name: "delete squads and skills",
-			run:  func() error { return qtx.DeleteWorkspaceSquadsAndSkills(ctx, requester.WorkspaceID) },
+			run: func() error {
+				return runWorkspaceDeleteSteps(
+					func() error { return qtx.DeleteWorkspaceSquadsAndSkills(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceSquadsAndSkills_Step2(ctx, requester.WorkspaceID) },
+				)
+			},
 		},
 		{
 			name: "delete plugin data",
-			run:  func() error { return qtx.DeleteWorkspacePluginData(ctx, requester.WorkspaceID) },
+			run: func() error {
+				return runWorkspaceDeleteSteps(
+					func() error { return qtx.DeleteWorkspacePluginData(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspacePluginData_Step2(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspacePluginData_Step3(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspacePluginData_Step4(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspacePluginData_Step5(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspacePluginData_Step6(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspacePluginData_Step7(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspacePluginData_Step8(ctx, requester.WorkspaceID) },
+				)
+			},
 		},
 		{
 			name: "delete agents",
-			run:  func() error { return qtx.DeleteWorkspaceAgents(ctx, requester.WorkspaceID) },
+			run: func() error {
+				return runWorkspaceDeleteSteps(
+					func() error { return qtx.DeleteWorkspaceAgents(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceAgents_Step2(ctx, requester.WorkspaceID) },
+				)
+			},
 		},
 		{
 			name: "delete runtimes and projects",
-			run:  func() error { return qtx.DeleteWorkspaceRuntimesAndProjects(ctx, requester.WorkspaceID) },
+			run: func() error {
+				return runWorkspaceDeleteSteps(
+					func() error { return qtx.DeleteWorkspaceRuntimesAndProjects(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceRuntimesAndProjects_Step2(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceRuntimesAndProjects_Step3(ctx, requester.WorkspaceID) },
+				)
+			},
 		},
 		{
 			name: "delete administration data",
-			run:  func() error { return qtx.DeleteWorkspaceAdministration(ctx, requester.WorkspaceID) },
+			run: func() error {
+				return runWorkspaceDeleteSteps(
+					func() error { return qtx.DeleteWorkspaceAdministration(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceAdministration_Step2(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceAdministration_Step3(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceAdministration_Step4(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceAdministration_Step5(ctx, nullString(requester.WorkspaceID)) },
+					func() error { return qtx.DeleteWorkspaceAdministration_Step6(ctx, nullString(requester.WorkspaceID)) },
+					func() error { return qtx.DeleteWorkspaceAdministration_Step7(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspaceAdministration_Step8(ctx, requester.WorkspaceID) },
+				)
+			},
 		},
 		{
 			// At this point workspaceMember has resolved → workspaceID is a
 			// valid UUID, so reuse the resolved value. The existing final
 			// statement also sweeps any expand-phase compatibility leftovers.
 			name: "delete workspace",
-			run:  func() error { return qtx.DeleteWorkspace(ctx, requester.WorkspaceID) },
+			run: func() error {
+				return runWorkspaceDeleteSteps(
+					func() error { return qtx.DeleteWorkspace(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step2(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step3(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step4(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step5(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step6(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step7(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step7b(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step7c(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step7d(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step7e(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step7f(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step8(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step9(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step10(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step11(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step12(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step13(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step14(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step15(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step16(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step17(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step18(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step19(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step20(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step21(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step22(ctx, requester.WorkspaceID) },
+					func() error { return qtx.DeleteWorkspace_Step23(ctx, nullString(requester.WorkspaceID)) },
+					func() error { return qtx.DeleteWorkspace_Step24(ctx, requester.WorkspaceID) },
+				)
+			},
 		},
 	}
 	for _, step := range deleteSteps {
@@ -1352,7 +1564,7 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		slog.Warn("commit workspace delete failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
 		writeError(w, http.StatusInternalServerError, "failed to delete workspace")
 		return

@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -20,7 +19,7 @@ func TestIssueWakeupMemberFilterPreservesOnceUntilMatchingComment(t *testing.T) 
 	f.Exec(t, `INSERT INTO comment(issue_id,workspace_id,author_type,author_id,content,type) VALUES($1,$2,'agent',$3,'agent reply','comment')`, issue, f.WorkspaceID, agent)
 	wakeDispatch(t, s, w)
 	current, err := f.q.GetIssueWakeup(context.Background(), db.GetIssueWakeupParams{ID: w.ID, WorkspaceID: parseTestUUID(t, f.WorkspaceID)})
-	if err != nil || !current.Enabled || current.LastTaskID.Valid {
+	if err != nil || (current.Enabled == 0) || current.LastTaskID.Valid {
 		t.Fatalf("nonmatching input consumed once rule: %+v %v", current, err)
 	}
 	if got := f.Count(t, "SELECT count(*) FROM issue_wakeup_receipt WHERE wakeup_id=$1", w.ID); got != 0 {
@@ -32,7 +31,7 @@ func TestIssueWakeupMemberFilterPreservesOnceUntilMatchingComment(t *testing.T) 
 		t.Fatalf("matching comment did not enqueue: %d", got)
 	}
 	current, err = f.q.GetIssueWakeup(context.Background(), db.GetIssueWakeupParams{ID: w.ID, WorkspaceID: parseTestUUID(t, f.WorkspaceID)})
-	if err != nil || current.Enabled {
+	if err != nil || current.Enabled != 0 {
 		t.Fatal("one-shot did not finish")
 	}
 }
@@ -49,19 +48,19 @@ func TestIssueWakeupActorMatchesEditorNotOriginalAuthor(t *testing.T) {
 	edit := func(kind, id, body string, commit bool) {
 		t.Helper()
 		ctx := context.Background()
-		tx, err := f.Pool.Begin(ctx)
+		tx, err := f.Pool.BeginTx(ctx, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer tx.Rollback(ctx)
-		if _, err = tx.Exec(ctx, "SELECT set_config('multica.actor_type',$1,true),set_config('multica.actor_id',$2,true)", kind, id); err != nil {
+		defer tx.Rollback()
+		if _, err = tx.ExecContext(ctx, "SELECT set_config('multica.actor_type',$1,true),set_config('multica.actor_id',$2,true)", kind, id); err != nil {
 			t.Fatal(err)
 		}
-		if _, err = tx.Exec(ctx, "UPDATE comment SET content=$2 WHERE id=$1", comment, body); err != nil {
+		if _, err = tx.ExecContext(ctx, "UPDATE comment SET content=$2 WHERE id=$1", comment, body); err != nil {
 			t.Fatal(err)
 		}
 		if commit {
-			if err = tx.Commit(ctx); err != nil {
+			if err = tx.Commit(); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -105,7 +104,7 @@ func TestIssueWakeupActorValidationAndWorkspaceScope(t *testing.T) {
 		in := base
 		in.FilterActorType = tc.kind
 		in.FilterActorID = tc.id
-		if _, err := s.Create(context.Background(), issue, parseTestUUID(t, f.UserID), pgtype.UUID{}, in); !errors.Is(err, tc.want) {
+		if _, err := s.Create(context.Background(), issue, parseTestUUID(t, f.UserID), "", in); !errors.Is(err, tc.want) {
 			t.Fatalf("scope error %v, want %v", err, tc.want)
 		}
 	}
@@ -121,17 +120,17 @@ func TestIssueWakeupActorFilterSurvivesEnableAndExplicitReplacement(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	enabled, err := s.Enable(ctx, issue, owner, pgtype.UUID{}, w.ID, WakeupEnableInput{Revision: disabled.Revision})
+	enabled, err := s.Enable(ctx, issue, owner, "", w.ID, WakeupEnableInput{Revision: disabled.Revision})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if enabled.FilterActorType.String != "member" || enabled.FilterActorID != owner {
+	if enabled.FilterActorType.String != "member" || enabled.FilterActorID.String != owner {
 		t.Fatal("enable lost filter")
 	}
 	f.Comment(t, util.UUIDToString(issue), "matching old rule")
 	in.FilterActorType = "agent"
 	in.FilterActorID = agent
-	replaced, err := s.Save(ctx, issue, owner, pgtype.UUID{}, w.ID, in)
+	replaced, err := s.Save(ctx, issue, owner, "", w.ID, in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +143,7 @@ func TestIssueWakeupActorFilterSurvivesEnableAndExplicitReplacement(t *testing.T
 	}
 	in.FilterActorType = ""
 	in.FilterActorID = ""
-	cleared, err := s.Save(ctx, issue, owner, pgtype.UUID{}, w.ID, in)
+	cleared, err := s.Save(ctx, issue, owner, "", w.ID, in)
 	if err != nil {
 		t.Fatal(err)
 	}

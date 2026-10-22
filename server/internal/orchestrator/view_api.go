@@ -99,7 +99,7 @@ func (s *Service) scanView(sc rowScanner, userID string) (*IssueView, error) {
 }
 
 func (s *Service) listViews(ctx context.Context, wsID, userID, where string, args ...any) ([]*IssueView, error) {
-	rows, err := s.opt.Pool.Query(ctx, viewSQL+where, append([]any{wsID}, args...)...)
+	rows, err := s.opt.Pool.QueryContext(ctx, viewSQL+where, append([]any{wsID}, args...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +144,7 @@ func (s *Service) hIssues(w http.ResponseWriter, r *http.Request) {
 		q += ` AND project_id::text=$2`
 		qargs = append(qargs, pid)
 	}
-	_ = s.opt.Pool.QueryRow(r.Context(), q, qargs...).Scan(&settledTotal)
+	_ = s.opt.Pool.QueryRowContext(r.Context(), q, qargs...).Scan(&settledTotal)
 	writeJSON(w, 200, map[string]any{"issues": vs, "settled_total": settledTotal})
 }
 
@@ -180,7 +180,7 @@ func (s *Service) hIssueTimeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runs := []viewRun{}
-	rows, err := s.opt.Pool.Query(r.Context(), `SELECT t.id::text, t.agent_id::text, COALESCE(a.name,''), t.status, t.created_at, t.started_at, t.completed_at, COALESCE(t.error,'')
+	rows, err := s.opt.Pool.QueryContext(r.Context(), `SELECT t.id::text, t.agent_id::text, COALESCE(a.name,''), t.status, t.created_at, t.started_at, t.completed_at, COALESCE(t.error,'')
 		FROM agent_task_queue t LEFT JOIN agent a ON a.id=t.agent_id WHERE t.issue_id=$1 ORDER BY t.created_at LIMIT 300`, v.ID)
 	if err == nil {
 		for rows.Next() {
@@ -193,7 +193,7 @@ func (s *Service) hIssueTimeline(w http.ResponseWriter, r *http.Request) {
 		rows.Close()
 	}
 	trs := []timelineTransition{}
-	rows, err = s.opt.Pool.Query(r.Context(), `SELECT id, tid, state, COALESCE(decision->>'why',''), COALESCE(decision->>'status',''), COALESCE(decision->'meta'->>'phase',''),
+	rows, err = s.opt.Pool.QueryContext(r.Context(), `SELECT id, tid, state, COALESCE(decision->>'why',''), COALESCE(decision->>'status',''), COALESCE(decision->'meta'->>'phase',''),
 		COALESCE(decision->>'assignee',''), error, created_at, decision->'handoff' FROM orchestrator_transition WHERE issue_id=$1 ORDER BY id LIMIT 500`, v.ID)
 	if err == nil {
 		for rows.Next() {
@@ -219,7 +219,7 @@ func (s *Service) hIssueTimeline(w http.ResponseWriter, r *http.Request) {
 	}
 	var waiting, lastErr string
 	var backoff *time.Time
-	_ = s.opt.Pool.QueryRow(r.Context(), `SELECT last_wait, last_error, next_at FROM orchestrator_issue_state WHERE issue_id=$1`, v.ID).Scan(&waiting, &lastErr, &backoff)
+	_ = s.opt.Pool.QueryRowContext(r.Context(), `SELECT last_wait, last_error, next_at FROM orchestrator_issue_state WHERE issue_id=$1`, v.ID).Scan(&waiting, &lastErr, &backoff)
 	writeJSON(w, 200, map[string]any{"issue": v, "flow": flow, "runs": runs, "transitions": trs,
 		"waiting": waiting, "last_error": short(lastErr, 400), "backoff_until": backoff})
 }

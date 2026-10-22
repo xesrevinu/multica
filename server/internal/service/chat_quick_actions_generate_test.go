@@ -5,26 +5,25 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
-
+	"github.com/google/uuid"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 func TestSelectChatQuickActionsContextExcludesFutureTurnAfterItCompletes(t *testing.T) {
-	previousID := pgtype.UUID{Bytes: [16]byte{1}, Valid: true}
-	targetID := pgtype.UUID{Bytes: [16]byte{2}, Valid: true}
-	futureID := pgtype.UUID{Bytes: [16]byte{3}, Valid: true}
+	previousID := uuid.UUID([16]byte{1}).String()
+	targetID := uuid.UUID([16]byte{2}).String()
+	futureID := uuid.UUID([16]byte{3}).String()
 	rows := []db.ChatMessage{
-		{Role: "user", Content: "future queued prompt", TaskID: futureID, MessageKind: protocol.ChatMessageKindMessage},
-		{Role: "user", Content: "target prompt", TaskID: targetID, MessageKind: protocol.ChatMessageKindMessage},
-		{Role: "assistant", Content: "previous reply", TaskID: previousID, MessageKind: protocol.ChatMessageKindMessage},
-		{Role: "user", Content: "previous prompt", TaskID: previousID, MessageKind: protocol.ChatMessageKindMessage},
+		{Role: "user", Content: "future queued prompt", TaskID: nullString(futureID), MessageKind: protocol.ChatMessageKindMessage},
+		{Role: "user", Content: "target prompt", TaskID: nullString(targetID), MessageKind: protocol.ChatMessageKindMessage},
+		{Role: "assistant", Content: "previous reply", TaskID: nullString(previousID), MessageKind: protocol.ChatMessageKindMessage},
+		{Role: "user", Content: "previous prompt", TaskID: nullString(previousID), MessageKind: protocol.ChatMessageKindMessage},
 	}
 	target := db.ChatMessage{
 		Role:        "assistant",
 		Content:     "target reply",
-		TaskID:      targetID,
+		TaskID:      nullString(targetID),
 		MessageKind: protocol.ChatMessageKindMessage,
 	}
 
@@ -40,15 +39,15 @@ func TestSelectChatQuickActionsContextExcludesFutureTurnAfterItCompletes(t *test
 }
 
 func TestSelectChatQuickActionsContextIncludesAutoRetryInputOwner(t *testing.T) {
-	rootID := pgtype.UUID{Bytes: [16]byte{1}, Valid: true}
-	retryID := pgtype.UUID{Bytes: [16]byte{2}, Valid: true}
+	rootID := uuid.UUID([16]byte{1}).String()
+	retryID := uuid.UUID([16]byte{2}).String()
 	rows := []db.ChatMessage{
-		{Role: "user", Content: "root prompt", TaskID: rootID, MessageKind: protocol.ChatMessageKindMessage},
+		{Role: "user", Content: "root prompt", TaskID: nullString(rootID), MessageKind: protocol.ChatMessageKindMessage},
 	}
 	target := db.ChatMessage{
 		Role:        "assistant",
 		Content:     "retry reply",
-		TaskID:      retryID,
+		TaskID:      nullString(retryID),
 		MessageKind: protocol.ChatMessageKindMessage,
 	}
 
@@ -69,7 +68,7 @@ func chatMsg(role, content string, actions ...protocol.ChatQuickAction) db.ChatM
 		if err != nil {
 			panic(err)
 		}
-		msg.QuickActions = encoded
+		msg.QuickActions = string(encoded)
 	}
 	return msg
 }
@@ -195,7 +194,7 @@ func TestCollectPreviousChatQuickActionsCapsTheList(t *testing.T) {
 
 func TestCollectPreviousChatQuickActionsSkipsUnparseableAndBlank(t *testing.T) {
 	msgs := []db.ChatMessage{
-		{Role: "assistant", QuickActions: []byte("not json")},
+		{Role: "assistant", QuickActions: string([]byte("not json"))},
 		chatMsg("assistant", "reply", protocol.ChatQuickAction{Label: "   "}),
 		chatMsg("assistant", "reply", protocol.ChatQuickAction{Label: "Real"}),
 	}

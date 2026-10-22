@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -279,7 +278,7 @@ func TestBuildClaimedTaskResponseRejectsAgentReboundAfterClaim(t *testing.T) {
 // re-registration would in production.
 func (h *Handler) finalizeClaimDeliveryForTest(
 	r *http.Request, task *db.AgentTaskQueue, runtimeID, runtimeWorkspaceID string,
-) (AgentTaskResponse, []pgtype.UUID, int, int, *claimBuildFailure, error) {
+) (AgentTaskResponse, []string, int, int, *claimBuildFailure, error) {
 	runtime, err := h.Queries.GetAgentRuntimeForWorkspace(r.Context(), db.GetAgentRuntimeForWorkspaceParams{
 		ID:          parseUUID(runtimeID),
 		WorkspaceID: parseUUID(runtimeWorkspaceID),
@@ -292,7 +291,7 @@ func (h *Handler) finalizeClaimDeliveryForTest(
 
 func (h *Handler) finalizeClaimDeliveryForTestWithRuntime(
 	r *http.Request, task *db.AgentTaskQueue, runtime db.AgentRuntime, runtimeID, runtimeWorkspaceID string,
-) (AgentTaskResponse, []pgtype.UUID, int, int, *claimBuildFailure, error) {
+) (AgentTaskResponse, []string, int, int, *claimBuildFailure, error) {
 	resp, deliveredCommentIDs, _, agentSkillCount, builtinSkillCount, buildFailure := h.buildClaimedTaskResponse(
 		r, task, runtime, runtimeID, runtimeWorkspaceID,
 	)
@@ -318,8 +317,8 @@ func (h *Handler) finalizeClaimDeliveryForTestWithRuntime(
 		TaskID:      task.ID,
 		AgentID:     task.AgentID,
 		WorkspaceID: parseUUID(resp.WorkspaceID),
-		UserID:      runtime.OwnerID,
-		ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(24 * time.Hour), Valid: true},
+		UserID:      runtime.OwnerID.String,
+		ExpiresAt:   time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339Nano),
 	}, deliveredCommentIDs, commentBackedTask, nil, daemonTokens...)
 	if ferr != nil {
 		return resp, deliveredCommentIDs, agentSkillCount, builtinSkillCount, nil, ferr
@@ -447,7 +446,7 @@ func TestFinalizeClaimDelivery_UsesCurrentRuntimeOwnerForTaskToken(t *testing.T)
 	if !runtimeSnapshot.OwnerID.Valid {
 		t.Fatal("claim-time runtime owner unexpectedly missing")
 	}
-	claimOwner, err := testHandler.Queries.GetUser(ctx, runtimeSnapshot.OwnerID)
+	claimOwner, err := testHandler.Queries.GetUser(ctx, runtimeSnapshot.OwnerID.String)
 	if err != nil {
 		t.Fatalf("load claim-time runtime owner: %v", err)
 	}

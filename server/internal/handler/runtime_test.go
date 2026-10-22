@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -266,8 +265,8 @@ func TestListRuntimeUsageByAgent_MergesMixedCaseProvider(t *testing.T) {
 	insert("cursor", 500)
 
 	rows, err := testHandler.Queries.ListRuntimeUsageByAgent(ctx, db.ListRuntimeUsageByAgentParams{
-		RuntimeID: parseUUID(runtimeID),
-		Since:     pgtype.Timestamptz{Time: now.Add(-time.Hour), Valid: true},
+		RuntimeID: nullString(parseUUID(runtimeID)),
+		Since:     now.Add(-time.Hour).UTC().Format(time.RFC3339Nano),
 	})
 	if err != nil {
 		t.Fatalf("ListRuntimeUsageByAgent: %v", err)
@@ -316,7 +315,7 @@ func TestListRuntimeUsageBucketsByViewerTimezone(t *testing.T) {
 	// Seed task_usage_hourly directly with one bucket per Shanghai calendar
 	// day. Pick 04:00 local (= 20:00 UTC the previous day) to catch
 	// off-by-one tz-cutoff bugs.
-	var agentID pgtype.UUID
+	var agentID string
 	if err := testPool.QueryRow(ctx, `
 		SELECT id FROM agent WHERE workspace_id = $1 ORDER BY id LIMIT 1
 	`, testWorkspaceID).Scan(&agentID); err != nil {
@@ -343,10 +342,7 @@ func TestListRuntimeUsageBucketsByViewerTimezone(t *testing.T) {
 		t.Fatalf("seed hourly rows: %v", err)
 	}
 
-	resp, err := testHandler.listRuntimeUsage(ctx, parseUUID(runtimeID), "Asia/Shanghai", pgtype.Timestamptz{
-		Time:  cutoff,
-		Valid: true,
-	})
+	resp, err := testHandler.listRuntimeUsage(ctx, parseUUID(runtimeID), "Asia/Shanghai", cutoff.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		t.Fatalf("listRuntimeUsage: %v", err)
 	}

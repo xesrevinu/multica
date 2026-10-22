@@ -2,11 +2,10 @@ package lark
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util/secretbox"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -18,13 +17,13 @@ import (
 // callers never see (and therefore cannot leak) the ciphertext that
 // lands in the DB.
 type InstallationParams struct {
-	WorkspaceID     pgtype.UUID
-	AgentID         pgtype.UUID
+	WorkspaceID     string
+	AgentID         string
 	AppID           string
 	AppSecret       string // plaintext; encrypted at the service boundary
 	TenantKey       string // optional, "" treated as NULL
 	BotOpenID       string
-	InstallerUserID pgtype.UUID
+	InstallerUserID string
 	Region          Region // which cloud (feishu/lark); empty defaults to feishu
 }
 
@@ -81,7 +80,7 @@ func (s *InstallationService) Upsert(ctx context.Context, p InstallationParams) 
 // events. The row is preserved (no DELETE) so audit history remains
 // queryable; a subsequent re-install via Upsert flips status back to
 // 'active' atomically.
-func (s *InstallationService) Revoke(ctx context.Context, id pgtype.UUID) error {
+func (s *InstallationService) Revoke(ctx context.Context, id string) error {
 	return s.queries.SetLarkInstallationStatus(ctx, SetInstallationStatusParams{
 		ID:     id,
 		Status: string(InstallationRevoked),
@@ -107,13 +106,13 @@ func (s *InstallationService) DecryptAppSecret(inst Installation) (string, error
 // know the workspace and should use this so a forged installation_id
 // from a different workspace returns NotFound instead of leaking
 // existence.
-func (s *InstallationService) GetInWorkspace(ctx context.Context, id, workspaceID pgtype.UUID) (Installation, error) {
+func (s *InstallationService) GetInWorkspace(ctx context.Context, id, workspaceID string) (Installation, error) {
 	row, err := s.queries.GetLarkInstallationInWorkspace(ctx, GetInstallationInWorkspaceParams{
 		ID:          id,
 		WorkspaceID: workspaceID,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return Installation{}, ErrInstallationNotFound
 		}
 		return Installation{}, err
@@ -124,22 +123,22 @@ func (s *InstallationService) GetInWorkspace(ctx context.Context, id, workspaceI
 // ListByWorkspace returns every installation rooted at the workspace,
 // active and revoked, oldest first. The status column lets the UI
 // distinguish "wired up" from "torn down but kept for audit".
-func (s *InstallationService) ListByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]Installation, error) {
+func (s *InstallationService) ListByWorkspace(ctx context.Context, workspaceID string) ([]Installation, error) {
 	return s.queries.ListLarkInstallationsByWorkspace(ctx, workspaceID)
 }
 
 // ErrInstallationNotFound surfaces "no row matches in this workspace"
 // — used by the HTTP layer to return 404. Distinct from a plain
-// pgx.ErrNoRows so handlers do not need to import pgx.
+// sql.ErrNoRows so handlers do not need to import pgx.
 var ErrInstallationNotFound = errors.New("lark installation not found")
 
 func validateInstallationParams(p InstallationParams) error {
 	switch {
-	case !p.WorkspaceID.Valid:
+	case p.WorkspaceID == "":
 		return errors.New("workspace_id is required")
-	case !p.AgentID.Valid:
+	case p.AgentID == "":
 		return errors.New("agent_id is required")
-	case !p.InstallerUserID.Valid:
+	case p.InstallerUserID == "":
 		return errors.New("installer_user_id is required")
 	case p.AppID == "":
 		return errors.New("app_id is required")
@@ -151,9 +150,13 @@ func validateInstallationParams(p InstallationParams) error {
 	return nil
 }
 
-func textOrNull(s string) pgtype.Text {
+func textOrNull(s string) sql.NullString {
+	return nullString(s)
+}
+
+func nullString(s string) sql.NullString {
 	if s == "" {
-		return pgtype.Text{}
+		return sql.NullString{}
 	}
-	return pgtype.Text{String: s, Valid: true}
+	return sql.NullString{String: s, Valid: true}
 }

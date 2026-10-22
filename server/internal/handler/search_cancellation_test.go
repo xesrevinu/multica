@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -21,7 +22,8 @@ import (
 // searchFailureTx injects a query failure after the transaction-local settings
 // have been applied, including cancellation while the search is in flight.
 type searchFailureTx struct {
-	pgx.Tx
+	*sql.Tx
+
 	err          error
 	cancel       context.CancelFunc
 	rows         pgx.Rows
@@ -54,7 +56,9 @@ func (tx searchFailureTx) Commit(context.Context) error {
 
 type searchFailureTxStarter struct{ tx searchFailureTx }
 
-func (s searchFailureTxStarter) Begin(context.Context) (pgx.Tx, error) { return s.tx, nil }
+func (s searchFailureTxStarter) BeginTx(_ context.Context, _ *sql.TxOptions) (*sql.Tx, error) {
+	return s.tx, nil
+}
 
 func TestSearchRequestErrorClassification(t *testing.T) {
 	for _, endpoint := range []string{"issues", "projects"} {
@@ -247,7 +251,7 @@ func TestSearchCancellationDuringEnrichment(t *testing.T) {
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			d := &searchEnrichmentDB{DBTX: testPool, cancel: cancel}
+			d := &searchEnrichmentDB{DBTX: testSQLite, cancel: cancel}
 			h := *testHandler
 			h.Queries = db.New(d)
 			assertSearchStatus(t, &h, endpoint, ctx, 499)
@@ -260,15 +264,15 @@ func TestSearchCancellationDuringEnrichment(t *testing.T) {
 
 type searchBlockingTxStarter struct{ txStarter }
 
-func (s searchBlockingTxStarter) Begin(ctx context.Context) (pgx.Tx, error) {
-	tx, err := s.txStarter.Begin(ctx)
+func (s searchBlockingTxStarter) BeginTx(ctx context.Context, _ *sql.TxOptions) (*sql.Tx, error) {
+	tx, err := s.txStarter.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	return searchBlockingTx{Tx: tx}, nil
 }
 
-type searchBlockingTx struct{ pgx.Tx }
+type searchBlockingTx struct{ *sql.Tx }
 
 const cancellationSleepQuery = "SELECT pg_sleep(10) /* search cancellation regression */"
 

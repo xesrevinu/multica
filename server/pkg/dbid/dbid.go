@@ -11,19 +11,10 @@
 //   - Only for identity columns of rows we insert and keep — task queue entries,
 //     messages, comments, activity and audit rows. NOT for lease/claim tokens,
 //     idempotency keys, or anything used as a secret: those want
-//     unpredictability and no embedded timestamp, so they stay on
-//     gen_random_uuid()/v4.
-//   - The DB-side `DEFAULT gen_random_uuid()` on these columns stays in place,
-//     and every query that takes an id from here wraps it in
-//     `COALESCE(sqlc.narg('id')::uuid, gen_random_uuid())`. A table therefore
-//     holds a mix of v4 and v7 ids forever, which Postgres's uuid type and every
-//     parser in this repo accept, and an unset id degrades to today's behaviour
-//     instead of violating NOT NULL.
-//   - The database fallback makes NewV7 suitable only when the id is used solely
-//     as the inserted row's identity. If the application must also use the id as
-//     an object key, filename, correlation id, or any other external reference,
-//     call uuid.NewV7 directly and handle its error instead; otherwise the
-//     database may mint a different id after entropy generation fails.
+//     unpredictability and no embedded timestamp, so they stay on random v4.
+//   - Identity columns are TEXT. Callers pass NewV7() straight into a sqlc
+//     parameter. An empty return means entropy generation failed; callers that
+//     must use the id externally should call uuid.NewV7 directly instead.
 //   - A v7 embeds its creation time only to millisecond precision and is only
 //     approximately ordered across writers. It is not a substitute for
 //     created_at and must not be used to derive ordering guarantees.
@@ -36,23 +27,20 @@ import (
 	"log/slog"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// NewV7 returns a fresh UUIDv7 wrapped as a pgtype.UUID, ready to assign to a
-// sqlc-generated parameter struct's ID field.
+// NewV7 returns a fresh UUIDv7 string, ready to assign to a sqlc-generated
+// parameter struct's ID field.
 //
 // It deliberately has no error return. uuid.NewV7 only fails when the OS
 // entropy source does, which does not happen on a healthy host; if it ever
-// does, this returns the zero (NULL) pgtype.UUID and the query's
-// COALESCE(..., gen_random_uuid()) fallback lets Postgres mint the id instead.
-// That keeps the insert working rather than failing a user request over an id
-// flavour, and keeps ~60 call sites free of an error path that would never run.
-func NewV7() pgtype.UUID {
+// does, this returns an empty string so the caller can see the failure instead
+// of inserting a zero id.
+func NewV7() string {
 	id, err := uuid.NewV7()
 	if err != nil {
-		slog.Error("dbid: uuidv7 generation failed, falling back to the database default", "error", err)
-		return pgtype.UUID{}
+		slog.Error("dbid: uuidv7 generation failed", "error", err)
+		return ""
 	}
-	return pgtype.UUID{Bytes: [16]byte(id), Valid: true}
+	return id.String()
 }

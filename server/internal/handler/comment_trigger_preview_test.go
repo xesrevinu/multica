@@ -611,11 +611,11 @@ func TestCreateComment_ThreadReplyDoesNotEscalateToAssignee(t *testing.T) {
 			requirePreviewAgents(t, previewCommentTriggersForTest(t, issueID, body), ownerID)
 			replyID := postCommentForTriggerPreviewTest(t, issueID, body)
 			// Read raw rows so hiding unused fallbacks in history cannot satisfy this assertion.
-			tasks, err := testHandler.Queries.ListTasksByIssue(ctx, parseUUID(issueID))
+			tasks, err := testHandler.Queries.ListTasksByIssue(ctx, nullString(parseUUID(issueID)))
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(tasks) != 1 || uuidToString(tasks[0].AgentID) != ownerID || uuidToString(tasks[0].TriggerCommentID) != replyID {
+			if len(tasks) != 1 || uuidToString(tasks[0].AgentID) != ownerID || uuidToString(tasks[0].TriggerCommentID.String) != replyID {
 				t.Fatalf("reply must create only the thread owner's task, got %+v", tasks)
 			}
 			primary, err := testHandler.TaskService.ClaimTask(ctx, parseUUID(ownerID))

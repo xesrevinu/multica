@@ -10,8 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
@@ -32,7 +31,7 @@ const typingCleanupTimeout = 2 * time.Second
 // TypingIndicatorState is a process-local view of one durable cleanup record.
 // It never owns the only copy of a remote reaction's cleanup anchor.
 type TypingIndicatorState struct {
-	LedgerID              pgtype.UUID
+	LedgerID              string
 	MessageID, ReactionID string
 	ended                 bool // guarded by mu; Reconcile may end an Add before HTTP returns.
 }
@@ -40,7 +39,7 @@ type TypingIndicatorState struct {
 // TypingIndicatorQueries is the narrow DB surface the manager needs.
 type TypingIndicatorQueries interface {
 	typingLedgerQueries
-	GetLarkInstallation(ctx context.Context, id pgtype.UUID) (Installation, error)
+	GetLarkInstallation(ctx context.Context, id string) (Installation, error)
 	IsChannelMessageTypingActive(ctx context.Context, arg db.IsChannelMessageTypingActiveParams) (bool, error)
 }
 
@@ -87,7 +86,7 @@ func NewTypingIndicatorManager(client APIClient, credentials CredentialsResolver
 // Messages older than typingIndicatorMaxAge are silently skipped so that
 // WebSocket replays and stale reconnects do not surface misleading "processing"
 // badges on long-finished conversations.
-func (m *TypingIndicatorManager) Add(ctx context.Context, inst Installation, chatSessionID pgtype.UUID, messageID string, createTime string, chatMessageID pgtype.UUID) {
+func (m *TypingIndicatorManager) Add(ctx context.Context, inst Installation, chatSessionID string, messageID string, createTime string, chatMessageID string) {
 	if messageID == "" {
 		return
 	}
@@ -119,18 +118,18 @@ func (m *TypingIndicatorManager) Add(ctx context.Context, inst Installation, cha
 	registrationCtx, registrationCancel := context.WithTimeout(context.WithoutCancel(ctx), typingCleanupTimeout)
 	row, err := m.queries.RegisterChannelTypingReaction(registrationCtx, db.RegisterChannelTypingReactionParams{
 		ID: dbid.NewV7(), WorkspaceID: inst.WorkspaceID, ChatSessionID: chatSessionID,
-		ChatMessageID: chatMessageID, InstallationID: inst.ID, ChannelMessageID: messageID, InstallationSnapshot: snapshot,
+		ChatMessageID: chatMessageID, InstallationID: inst.ID, ChannelMessageID: messageID, InstallationSnapshot: string(snapshot),
 	})
 	registrationCancel()
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			m.log.Warn("lark typing: Add skipped; input unavailable or workspace quota occupied", "workspace_id", uuidString(inst.WorkspaceID))
 			return
 		}
 		m.log.Warn("lark typing: register cleanup anchor", "message_id", messageID, "err", err)
 		return
 	}
-	if row.CleanupRequired {
+	if row.CleanupRequired != 0 {
 		skipCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), typingCleanupTimeout)
 		defer cancel()
 		if err := m.queries.SkipChannelTypingReactionAdd(skipCtx, row.ID); err != nil {
@@ -160,7 +159,7 @@ func (m *TypingIndicatorManager) Add(ctx context.Context, inst Installation, cha
 		defer cancel()
 		// A transport failure does not prove the remote side did not add it.
 		// Keep the anchor in the durable retry queue, including across restart.
-		if _, finishErr := m.queries.FinishChannelTypingReactionAdd(finishCtx, db.FinishChannelTypingReactionAddParams{ID: row.ID, CleanupRequired: true}); finishErr != nil {
+		if _, finishErr := m.queries.FinishChannelTypingReactionAdd(finishCtx, db.FinishChannelTypingReactionAddParams{ID: row.ID, CleanupRequired: 1}); finishErr != nil {
 			m.log.Warn("lark typing: record uncertain Add", "err", finishErr)
 		}
 		m.log.Warn("lark typing indicator: add reaction failed",
@@ -193,16 +192,16 @@ func (m *TypingIndicatorManager) Add(ctx context.Context, inst Installation, cha
 	ended := state.ended || !active || checkErr != nil
 	m.mu.Unlock()
 	finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(ctx), typingCleanupTimeout)
-	finished, finishErr := m.queries.FinishChannelTypingReactionAdd(finishCtx, db.FinishChannelTypingReactionAddParams{ID: row.ID, ReactionID: reactionID, CleanupRequired: ended})
+	finished, finishErr := m.queries.FinishChannelTypingReactionAdd(finishCtx, db.FinishChannelTypingReactionAddParams{ID: row.ID, ReactionID: reactionID, CleanupRequired: boolToInt64(ended)})
 	finishCancel()
 	if finishErr != nil {
 		m.log.Warn("lark typing: record Add result; durable unfinished anchor remains", "err", finishErr)
 		row.ReactionID = reactionID
-		row.CleanupRequired = true
+		row.CleanupRequired = 1
 		finished = row
 	}
 	m.mu.Lock()
-	ended = ended || state.ended || finished.CleanupRequired || finishErr != nil
+	ended = ended || state.ended || finished.CleanupRequired != 0 || finishErr != nil
 	if ended {
 		m.removeState(key, state)
 	} else {
@@ -302,11 +301,11 @@ func (m *TypingIndicatorManager) SweepMessage(ctx context.Context, creds Install
 // secret. Nil means the clear cannot proceed for that installation; the reason
 // is already logged. The decrypted secret exists only from here on, never in the
 // state map.
-func (m *TypingIndicatorManager) credentialsForInstallation(ctx context.Context, sessionKey string, id pgtype.UUID, snapshot Installation) *InstallationCredentials {
+func (m *TypingIndicatorManager) credentialsForInstallation(ctx context.Context, sessionKey string, id string, snapshot Installation) *InstallationCredentials {
 	inst, err := m.queries.GetLarkInstallation(ctx, id)
 	switch {
 	case err == nil:
-	case errors.Is(err, pgx.ErrNoRows) && snapshot.ID.Valid:
+	case errors.Is(err, sql.ErrNoRows) && snapshot.ID != "":
 		// The row is gone, which on this path means the runtime teardown
 		// deleted it in the transaction that cancelled these tasks. The
 		// reaction it added is still on the message and this is the only thing
@@ -334,6 +333,13 @@ func (m *TypingIndicatorManager) credentialsForInstallation(ctx context.Context,
 		return nil
 	}
 	return &creds
+}
+
+func boolToInt64(v bool) int64 {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 func isMessageTooOld(createTime string) bool {

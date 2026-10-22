@@ -4,9 +4,6 @@ import (
 	"context"
 	"sync"
 	"time"
-
-	"github.com/google/uuid"
-	"github.com/redis/go-redis/v9"
 )
 
 // SlidingWindowRateLimit configures a per-key sliding-window limiter.
@@ -201,6 +198,15 @@ func (l *memoryWebhookRateLimiter) sweepExpired(now, cutoff time.Time) {
 	l.lastSweep = now
 }
 
+// NewMemoryWebhookIPRateLimiter is the single-process per-IP limiter.
+func NewMemoryWebhookIPRateLimiter(cfg WebhookRateLimit) WebhookRateLimiter {
+	return NewMemoryWebhookRateLimiter(cfg)
+}
+
+func NewMemoryWebhookAbsoluteIPRateLimiter(cfg WebhookRateLimit) WebhookRateLimiter {
+	return NewMemoryWebhookRateLimiter(cfg)
+}
+
 func (l *memoryWebhookRateLimiter) RetryAfter(_ context.Context, key string) time.Duration {
 	if l.cfg.Limit <= 0 {
 		return 0
@@ -216,185 +222,4 @@ func (l *memoryWebhookRateLimiter) RetryAfter(_ context.Context, key string) tim
 		return time.Second
 	}
 	return retry
-}
-
-// ── Redis implementation ────────────────────────────────────────────────────
-
-// webhookLimiterKey:<token> is the ZSET we keep timestamps in. The score is
-// the request's nanosecond timestamp so ZREMRANGEBYSCORE can drop everything
-// older than the cutoff and ZCARD tells us the remaining count. The member is
-// a per-request unique id (NOT the timestamp): two requests landing in the
-// same nanosecond would otherwise collide on an identical member, ZADD would
-// update-in-place instead of inserting, and the window would under-count.
-const (
-	webhookLimiterKeyPrefix           = "mul:webhook:rate:"
-	webhookIPLimiterKeyPrefix         = "mul:webhook:ip:"
-	webhookAbsoluteIPLimiterKeyPrefix = "mul:webhook:absolute-ip:"
-)
-
-// webhookLimiterAllowSrc runs the slide-window check atomically on Redis:
-//
-//	KEYS[1] = ZSET key
-//	ARGV[1] = now (unix nanos as string, used as the entry score)
-//	ARGV[2] = cutoff (unix nanos as string)
-//	ARGV[3] = limit
-//	ARGV[4] = expiry seconds (TTL refresh, larger than window)
-//	ARGV[5] = unique member id for this request
-//
-// Returns 1 when the request is admitted, 0 when it should be rejected.
-//
-// We trim first, then count, then optionally insert. Doing all three in a
-// single Lua call avoids the classic "two pods both see count=limit-1 and
-// both insert" race.
-const webhookLimiterAllowSrc = `
-local key = KEYS[1]
-local now = tonumber(ARGV[1])
-local cutoff = tonumber(ARGV[2])
-local limit = tonumber(ARGV[3])
-local ttl = tonumber(ARGV[4])
-local member = ARGV[5]
-redis.call('ZREMRANGEBYSCORE', key, '-inf', cutoff)
-local count = redis.call('ZCARD', key)
-if count >= limit then
-    return 0
-end
-redis.call('ZADD', key, now, member)
-redis.call('EXPIRE', key, ttl)
-return 1
-`
-
-var webhookLimiterAllowScript = redis.NewScript(webhookLimiterAllowSrc)
-
-const webhookLimiterCheckSrc = `
-local key = KEYS[1]
-local cutoff = tonumber(ARGV[1])
-local limit = tonumber(ARGV[2])
-redis.call('ZREMRANGEBYSCORE', key, '-inf', cutoff)
-local count = redis.call('ZCARD', key)
-if count >= limit then
-    return 0
-end
-return 1
-`
-
-var webhookLimiterCheckScript = redis.NewScript(webhookLimiterCheckSrc)
-
-// webhookLimiterAllowSource exposes the script body for tests that want to
-// assert structural invariants (e.g. trim before count before insert)
-// without spinning up a real Redis. Lower-cased "Source" makes the
-// test-only intent explicit.
-func webhookLimiterAllowSource() string { return webhookLimiterAllowSrc }
-
-type redisWebhookRateLimiter struct {
-	cfg       SlidingWindowRateLimit
-	rdb       redis.UniversalClient
-	keyPrefix string
-}
-
-func newRedisSlidingWindowRateLimiter(rdb redis.UniversalClient, cfg SlidingWindowRateLimit, keyPrefix string) SlidingWindowRateLimiter {
-	return &redisWebhookRateLimiter{cfg: cfg, rdb: rdb, keyPrefix: keyPrefix}
-}
-
-func NewRedisWebhookRateLimiter(rdb redis.UniversalClient, cfg WebhookRateLimit) WebhookRateLimiter {
-	return newRedisSlidingWindowRateLimiter(rdb, cfg, webhookLimiterKeyPrefix)
-}
-
-// NewRedisWebhookIPRateLimiter is the per-IP variant: same sliding-window
-// Lua script, different key namespace so the two budgets don't interfere.
-func NewRedisWebhookIPRateLimiter(rdb redis.UniversalClient, cfg WebhookRateLimit) WebhookRateLimiter {
-	return newRedisSlidingWindowRateLimiter(rdb, cfg, webhookIPLimiterKeyPrefix)
-}
-
-func NewRedisWebhookAbsoluteIPRateLimiter(rdb redis.UniversalClient, cfg WebhookRateLimit) WebhookRateLimiter {
-	return newRedisSlidingWindowRateLimiter(rdb, cfg, webhookAbsoluteIPLimiterKeyPrefix)
-}
-
-// NewMemoryWebhookIPRateLimiter is the in-memory per-IP variant used when no
-// Redis client is configured. Same per-key semantics as the per-token memory
-// limiter — single-node only.
-func NewMemoryWebhookIPRateLimiter(cfg WebhookRateLimit) WebhookRateLimiter {
-	return NewMemoryWebhookRateLimiter(cfg)
-}
-
-func NewMemoryWebhookAbsoluteIPRateLimiter(cfg WebhookRateLimit) WebhookRateLimiter {
-	return NewMemoryWebhookRateLimiter(cfg)
-}
-
-func (l *redisWebhookRateLimiter) Allow(ctx context.Context, key string) bool {
-	allowed, err := l.AllowWithError(ctx, key)
-	if err != nil {
-		// Webhook ingress keeps its historical fail-open behavior because this
-		// limiter is a safety net, not a correctness requirement.
-		return true
-	}
-	return allowed
-}
-
-func (l *redisWebhookRateLimiter) AllowWithError(ctx context.Context, key string) (bool, error) {
-	if l.cfg.Limit <= 0 || l.rdb == nil {
-		return true, nil
-	}
-	nowTime := time.Now()
-	now := nowTime.UnixNano()
-	cutoff := nowTime.Add(-l.cfg.Window).UnixNano()
-	ttlSeconds := int64(l.cfg.Window/time.Second) * 2
-	if ttlSeconds < 1 {
-		ttlSeconds = 1
-	}
-	prefix := l.keyPrefix
-	if prefix == "" {
-		prefix = webhookLimiterKeyPrefix
-	}
-	// Unique member per request: the score carries the timestamp for the
-	// sliding-window trim, but two requests in the same nanosecond must not
-	// collapse onto one ZSET member, or the window under-counts.
-	member := uuid.NewString()
-	res, err := webhookLimiterAllowScript.Run(
-		ctx,
-		l.rdb,
-		[]string{prefix + key},
-		now, cutoff, l.cfg.Limit, ttlSeconds, member,
-	).Int()
-	if err != nil {
-		return false, err
-	}
-	return res == 1, nil
-}
-
-func (l *redisWebhookRateLimiter) Check(ctx context.Context, key string) bool {
-	allowed, err := l.CheckWithError(ctx, key)
-	if err != nil {
-		return true
-	}
-	return allowed
-}
-
-func (l *redisWebhookRateLimiter) CheckWithError(ctx context.Context, key string) (bool, error) {
-	if l.cfg.Limit <= 0 || l.rdb == nil {
-		return true, nil
-	}
-	cutoff := time.Now().Add(-l.cfg.Window).UnixNano()
-	prefix := l.keyPrefix
-	if prefix == "" {
-		prefix = webhookLimiterKeyPrefix
-	}
-	res, err := webhookLimiterCheckScript.Run(
-		ctx,
-		l.rdb,
-		[]string{prefix + key},
-		cutoff, l.cfg.Limit,
-	).Int()
-	if err != nil {
-		return false, err
-	}
-	return res == 1, nil
-}
-
-func (l *redisWebhookRateLimiter) RetryAfter(_ context.Context, _ string) time.Duration {
-	if l.cfg.Window <= 0 {
-		return time.Second
-	}
-	// A full window is conservative and remains correct across replicas even
-	// if the oldest ZSET member changes between rejection and this response.
-	return l.cfg.Window
 }

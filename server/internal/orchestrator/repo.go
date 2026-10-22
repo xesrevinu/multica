@@ -369,7 +369,7 @@ func (s *Service) prSnapshot(ctx context.Context, sp *Spec, num string, maxAge t
 		return nil
 	}
 	p := &prSnap{}
-	err := s.opt.Pool.QueryRow(ctx, `SELECT COALESCE(snapshot_head_sha, head_sha, ''), COALESCE(checks_rollup_state,''), COALESCE(api_mergeable::text, mergeable_state, ''), snapshot_fetched_at
+	err := s.opt.Pool.QueryRowContext(ctx, `SELECT COALESCE(snapshot_head_sha, head_sha, ''), COALESCE(checks_rollup_state,''), COALESCE(api_mergeable::text, mergeable_state, ''), snapshot_fetched_at
 		FROM github_pull_request WHERE lower(repo_owner)=lower($1) AND lower(repo_name)=lower($2) AND pr_number::text=$3 AND snapshot_fetched_at > now() - make_interval(secs => $4)`,
 		parts[0], parts[1], num, maxAge.Seconds()).Scan(&p.headSHA, &p.rollup, &p.mergeable, &p.fetched)
 	if err != nil {
@@ -388,7 +388,7 @@ func (r *repoOps) retryCI(ctx context.Context, g *ghRepo, head string) bool {
 	// Durable claim: only the first INSERT for a head wins, across restarts.
 	if r.svc.opt.Pool == nil {
 		// no database (unit tests): the in-memory claim above is all there is
-	} else if tag, err := r.svc.opt.Pool.Exec(ctx, `INSERT INTO orchestrator_ci_retry (head_sha) VALUES ($1) ON CONFLICT DO NOTHING`, head); err != nil || tag.RowsAffected() == 0 {
+	} else if tag, err := r.svc.opt.Pool.ExecContext(ctx, `INSERT INTO orchestrator_ci_retry (head_sha) VALUES ($1) ON CONFLICT DO NOTHING`, head); err != nil || rowsAffected(tag) == 0 {
 		return false
 	}
 	n, err := g.c.RerunFailedChecks(ctx, g.inst, g.owner, g.name, head)

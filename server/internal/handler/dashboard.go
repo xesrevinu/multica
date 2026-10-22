@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -132,15 +131,15 @@ func (h *Handler) dashboardRestrictedAgents(
 // argument resolves to SQL NULL and the WHERE clause degrades to "no
 // project filter". On a malformed UUID it writes a 400 and returns
 // ok=false; callers must return immediately.
-func parseProjectIDParam(w http.ResponseWriter, r *http.Request) (pgtype.UUID, bool) {
+func parseProjectIDParam(w http.ResponseWriter, r *http.Request) (string, bool) {
 	raw := r.URL.Query().Get("project_id")
 	if raw == "" {
-		return pgtype.UUID{}, true
+		return "", true
 	}
 	u, err := util.ParseUUID(raw)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid project_id")
-		return pgtype.UUID{}, false
+		return "", false
 	}
 	return u, true
 }
@@ -195,10 +194,10 @@ func (h *Handler) GetDashboardUsageDaily(w http.ResponseWriter, r *http.Request)
 
 func (h *Handler) listDashboardUsageDaily(
 	ctx context.Context,
-	workspaceID pgtype.UUID,
+	workspaceID string,
 	tz string,
-	since pgtype.Timestamptz,
-	projectID pgtype.UUID,
+	since string,
+	projectID string,
 ) ([]DashboardUsageDailyResponse, error) {
 	rows, err := h.Queries.ListDashboardUsageDaily(ctx, db.ListDashboardUsageDailyParams{
 		WorkspaceID: workspaceID,
@@ -212,19 +211,19 @@ func (h *Handler) listDashboardUsageDaily(
 	resp := make([]DashboardUsageDailyResponse, len(rows))
 	for i, row := range rows {
 		resp[i] = DashboardUsageDailyResponse{
-			Date:                     row.Date.Time.Format("2006-01-02"),
+			Date:                     ifaceDate(row.Date),
 			Provider:                 row.Provider,
 			Model:                    row.Model,
-			InputTokens:              row.InputTokens,
-			OutputTokens:             row.OutputTokens,
-			CacheReadTokens:          row.CacheReadTokens,
-			CacheWriteTokens:         row.CacheWriteTokens,
-			CostUSDTicks:             row.CostUsdTicks,
-			UncostedInputTokens:      row.UncostedInputTokens,
-			UncostedOutputTokens:     row.UncostedOutputTokens,
-			UncostedCacheReadTokens:  row.UncostedCacheReadTokens,
-			UncostedCacheWriteTokens: row.UncostedCacheWriteTokens,
-			TaskCount:                row.TaskCount,
+			InputTokens:              int64(row.InputTokens.Float64),
+			OutputTokens:             int64(row.OutputTokens.Float64),
+			CacheReadTokens:          int64(row.CacheReadTokens.Float64),
+			CacheWriteTokens:         int64(row.CacheWriteTokens.Float64),
+			CostUSDTicks:             int64(row.CostUsdTicks.Float64),
+			UncostedInputTokens:      int64(row.UncostedInputTokens.Float64),
+			UncostedOutputTokens:     int64(row.UncostedOutputTokens.Float64),
+			UncostedCacheReadTokens:  int64(row.UncostedCacheReadTokens.Float64),
+			UncostedCacheWriteTokens: int64(row.UncostedCacheWriteTokens.Float64),
+			TaskCount:                int32(row.TaskCount.Float64),
 		}
 	}
 	return resp, nil
@@ -327,9 +326,9 @@ func foldRestrictedUsageByAgent(
 
 func (h *Handler) listDashboardUsageByAgent(
 	ctx context.Context,
-	workspaceID pgtype.UUID,
-	since pgtype.Timestamptz,
-	projectID pgtype.UUID,
+	workspaceID string,
+	since string,
+	projectID string,
 ) ([]DashboardUsageByAgentResponse, error) {
 	rows, err := h.Queries.ListDashboardUsageByAgent(ctx, db.ListDashboardUsageByAgentParams{
 		WorkspaceID: workspaceID,
@@ -345,16 +344,16 @@ func (h *Handler) listDashboardUsageByAgent(
 			AgentID:                  uuidToString(row.AgentID),
 			Provider:                 row.Provider,
 			Model:                    row.Model,
-			InputTokens:              row.InputTokens,
-			OutputTokens:             row.OutputTokens,
-			CacheReadTokens:          row.CacheReadTokens,
-			CacheWriteTokens:         row.CacheWriteTokens,
-			CostUSDTicks:             row.CostUsdTicks,
-			UncostedInputTokens:      row.UncostedInputTokens,
-			UncostedOutputTokens:     row.UncostedOutputTokens,
-			UncostedCacheReadTokens:  row.UncostedCacheReadTokens,
-			UncostedCacheWriteTokens: row.UncostedCacheWriteTokens,
-			TaskCount:                row.TaskCount,
+			InputTokens:              int64(row.InputTokens.Float64),
+			OutputTokens:             int64(row.OutputTokens.Float64),
+			CacheReadTokens:          int64(row.CacheReadTokens.Float64),
+			CacheWriteTokens:         int64(row.CacheWriteTokens.Float64),
+			CostUSDTicks:             int64(row.CostUsdTicks.Float64),
+			UncostedInputTokens:      int64(row.UncostedInputTokens.Float64),
+			UncostedOutputTokens:     int64(row.UncostedOutputTokens.Float64),
+			UncostedCacheReadTokens:  int64(row.UncostedCacheReadTokens.Float64),
+			UncostedCacheWriteTokens: int64(row.UncostedCacheWriteTokens.Float64),
+			TaskCount:                int32(row.TaskCount.Float64),
 		}
 	}
 	return resp, nil
@@ -405,7 +404,7 @@ func (h *Handler) GetDashboardAgentRunTime(w http.ResponseWriter, r *http.Reques
 
 	rows, err := h.Queries.ListDashboardAgentRunTime(r.Context(), db.ListDashboardAgentRunTimeParams{
 		WorkspaceID: parseUUID(workspaceID),
-		Since:       since,
+		Since:       nullString(since),
 		ProjectID:   projectID,
 	})
 	if err != nil {
@@ -417,11 +416,11 @@ func (h *Handler) GetDashboardAgentRunTime(w http.ResponseWriter, r *http.Reques
 	for i, row := range rows {
 		resp[i] = DashboardAgentRunTimeResponse{
 			AgentID:          uuidToString(row.AgentID),
-			TotalSeconds:     row.TotalSeconds,
-			TaskCount:        row.TaskCount,
-			MeteredTaskCount: row.MeteredTaskCount,
-			FailedCount:      row.FailedCount,
-			CancelledCount:   row.CancelledCount,
+			TotalSeconds:     ifaceInt64(row.TotalSeconds),
+			TaskCount:        int32(row.TaskCount),
+			MeteredTaskCount: int32(row.MeteredTaskCount),
+			FailedCount:      int32(row.FailedCount.Float64),
+			CancelledCount:   int32(row.CancelledCount.Float64),
 		}
 	}
 	writeJSON(w, http.StatusOK, foldRestrictedAgentRunTime(resp, restricted))
@@ -486,7 +485,7 @@ func (h *Handler) GetDashboardRunTimeDaily(w http.ResponseWriter, r *http.Reques
 	rows, err := h.Queries.ListDashboardRunTimeDaily(r.Context(), db.ListDashboardRunTimeDailyParams{
 		WorkspaceID: parseUUID(workspaceID),
 		Tz:          tz,
-		Since:       since,
+		Since:       nullString(since),
 		ProjectID:   projectID,
 	})
 	if err != nil {
@@ -497,11 +496,11 @@ func (h *Handler) GetDashboardRunTimeDaily(w http.ResponseWriter, r *http.Reques
 	resp := make([]DashboardRunTimeDailyResponse, len(rows))
 	for i, row := range rows {
 		resp[i] = DashboardRunTimeDailyResponse{
-			Date:           row.Date.Time.Format("2006-01-02"),
-			TotalSeconds:   row.TotalSeconds,
-			TaskCount:      row.TaskCount,
-			FailedCount:    row.FailedCount,
-			CancelledCount: row.CancelledCount,
+			Date:           ifaceDate(row.Date),
+			TotalSeconds:   ifaceInt64(row.TotalSeconds),
+			TaskCount:      int32(row.TaskCount),
+			FailedCount:    int32(row.FailedCount.Float64),
+			CancelledCount: int32(row.CancelledCount.Float64),
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -551,7 +550,7 @@ func (h *Handler) GetDashboardFailuresDaily(w http.ResponseWriter, r *http.Reque
 	rows, err := h.Queries.ListDashboardFailuresDaily(r.Context(), db.ListDashboardFailuresDailyParams{
 		WorkspaceID: parseUUID(workspaceID),
 		Tz:          tz,
-		Since:       since,
+		Since:       nullString(since),
 		ProjectID:   projectID,
 	})
 	if err != nil {
@@ -562,9 +561,9 @@ func (h *Handler) GetDashboardFailuresDaily(w http.ResponseWriter, r *http.Reque
 	resp := make([]DashboardFailureDailyResponse, len(rows))
 	for i, row := range rows {
 		resp[i] = DashboardFailureDailyResponse{
-			Date:          row.Date.Time.Format("2006-01-02"),
+			Date:          ifaceDate(row.Date),
 			FailureReason: row.FailureReason,
-			TaskCount:     row.TaskCount,
+			TaskCount:     int32(row.TaskCount),
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -606,7 +605,7 @@ func (h *Handler) GetDashboardFailuresByAgent(w http.ResponseWriter, r *http.Req
 
 	rows, err := h.Queries.ListDashboardFailuresByAgent(r.Context(), db.ListDashboardFailuresByAgentParams{
 		WorkspaceID: parseUUID(workspaceID),
-		Since:       since,
+		Since:       nullString(since),
 		ProjectID:   projectID,
 	})
 	if err != nil {
@@ -619,7 +618,7 @@ func (h *Handler) GetDashboardFailuresByAgent(w http.ResponseWriter, r *http.Req
 		resp[i] = DashboardFailureByAgentResponse{
 			AgentID:       uuidToString(row.AgentID),
 			FailureReason: row.FailureReason,
-			TaskCount:     row.TaskCount,
+			TaskCount:     int32(row.TaskCount),
 		}
 	}
 	writeJSON(w, http.StatusOK, foldRestrictedFailuresByAgent(resp, restricted))

@@ -2,13 +2,13 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -30,10 +30,10 @@ type failLinkAttachmentsTxStarter struct {
 }
 
 type failLinkAttachmentsTx struct {
-	pgx.Tx
+	*sql.Tx
 }
 
-func (s *failLinkAttachmentsTxStarter) Begin(ctx context.Context) (pgx.Tx, error) {
+func (s *failLinkAttachmentsTxStarter) BeginTx(ctx context.Context, _ *sql.TxOptions) (*sql.Tx, error) {
 	tx, err := s.delegate.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -189,7 +189,7 @@ func TestCreateCommentWithAttachmentFollowsOwnerFirstLockOrder(t *testing.T) {
 			if err != nil {
 				t.Fatalf("begin holder: %v", err)
 			}
-			defer holder.Rollback(context.Background())
+			defer holder.Rollback(ctx)
 			// DeleteAttachment's own order, through its own query: the owner
 			// issue, then the row. Taking the lock here by hand would let a
 			// production mode too weak to serialize issue writers pass.
@@ -258,7 +258,7 @@ func TestCreateCommentWithAttachmentDoesNotDeadlockWithIssueTeardown(t *testing.
 	if err != nil {
 		t.Fatalf("begin issue teardown: %v", err)
 	}
-	defer teardown.Rollback(context.Background())
+	defer teardown.Rollback(ctx)
 	qtx := testHandler.Queries.WithTx(teardown)
 	if _, err := qtx.LockIssueForDelete(ctx, db.LockIssueForDeleteParams{
 		ID:          parseUUID(issueID),
@@ -317,7 +317,7 @@ func TestDeleteAttachmentTakesTheIssueBeforeTheRow(t *testing.T) {
 			if err != nil {
 				t.Fatalf("begin holder: %v", err)
 			}
-			defer holder.Rollback(context.Background())
+			defer holder.Rollback(ctx)
 			if _, err := holder.Exec(ctx, `SELECT id FROM issue WHERE id = $1 `+holderMode, issueID); err != nil {
 				t.Fatalf("hold issue: %v", err)
 			}

@@ -1,28 +1,12 @@
 package middleware
 
 import (
-	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/redis/go-redis/v9"
 )
-
-// rateLimitScript atomically increments the counter and sets the TTL on
-// first access. Using a Lua script ensures INCR and EXPIRE cannot be
-// split by a network failure — if INCR succeeds the TTL is guaranteed
-// to be set, preventing a stuck key that acts as a permanent ban.
-var rateLimitScript = redis.NewScript(`
-local count = redis.call('INCR', KEYS[1])
-if count == 1 then
-    redis.call('EXPIRE', KEYS[1], ARGV[1])
-end
-return count
-`)
 
 // ParseTrustedProxies parses a comma-separated list of CIDRs into a
 // slice of *net.IPNet. Invalid entries are warned and skipped.
@@ -48,41 +32,14 @@ func ParseTrustedProxies(raw string) []*net.IPNet {
 	return nets
 }
 
-// RateLimit returns a per-IP fixed-window rate limiter backed by Redis.
-// If rdb is nil the middleware is a no-op (fail-open).
-//
-// trustedProxies controls X-Forwarded-For handling: when the direct
-// connection (RemoteAddr) originates from a CIDR in the list, the
-// rightmost non-trusted IP in the XFF chain is used as the client IP.
-// When the list is empty (default), XFF is never consulted — only
-// RemoteAddr is used. This matches the project's conservative trust
-// model (see health_realtime.go).
-func RateLimit(rdb redis.UniversalClient, limit int, window time.Duration, trustedProxies []*net.IPNet) func(http.Handler) http.Handler {
+// RateLimit is a no-op. The single-process server has no shared auth
+// limiter; the previous Redis limiter failed open when no client was
+// configured, and that is the only remaining behavior. limit, window, and
+// trustedProxies are accepted so route registration can keep its env knobs
+// without inventing a new in-process limiter.
+func RateLimit(limit int, window time.Duration, trustedProxies []*net.IPNet) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
-		if rdb == nil {
-			return next
-		}
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := extractIP(r, trustedProxies)
-			key := rateLimitKey(r.URL.Path, ip)
-			ctx := r.Context()
-
-			count, err := rateLimitScript.Run(ctx, rdb, []string{key}, int(window.Seconds())).Int64()
-			if err != nil {
-				slog.Warn("ratelimit: redis error; allowing request", "error", err, "ip", ip)
-				next.ServeHTTP(w, r)
-				return
-			}
-			if count > int64(limit) {
-				w.Header().Set("Retry-After", fmt.Sprintf("%d", int(window.Seconds())))
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusTooManyRequests)
-				json.NewEncoder(w).Encode(map[string]string{"error": "too many requests"})
-				return
-			}
-
-			next.ServeHTTP(w, r)
-		})
+		return next
 	}
 }
 
@@ -125,10 +82,4 @@ func isTrustedProxy(ip net.IP, cidrs []*net.IPNet) bool {
 		}
 	}
 	return false
-}
-
-func rateLimitKey(path, ip string) string {
-	sanitized := strings.TrimPrefix(path, "/")
-	sanitized = strings.ReplaceAll(sanitized, "/", ":")
-	return fmt.Sprintf("mul:ratelimit:%s:%s", sanitized, ip)
 }

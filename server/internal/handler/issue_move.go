@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -9,8 +10,6 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 )
 
@@ -71,7 +70,7 @@ func (h *Handler) MoveIssue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var exists bool
-		err := h.DB.QueryRow(r.Context(), `
+		err := h.DB.QueryRowContext(r.Context(), `
 			SELECT EXISTS (
 				SELECT 1
 				FROM project
@@ -144,7 +143,7 @@ func (h *Handler) MoveIssue(w http.ResponseWriter, r *http.Request) {
 	h.UpdateIssue(w, r)
 }
 
-func decodeIssueMoveAnchor(w http.ResponseWriter, raw json.RawMessage, field string) (*pgtype.UUID, bool) {
+func decodeIssueMoveAnchor(w http.ResponseWriter, raw json.RawMessage, field string) (*string, bool) {
 	if rawJSONNull(raw) {
 		return nil, true
 	}
@@ -168,20 +167,20 @@ func rawJSONNull(raw json.RawMessage) bool {
 func (h *Handler) issueMoveAnchorPosition(
 	w http.ResponseWriter,
 	r *http.Request,
-	workspaceID pgtype.UUID,
-	id *pgtype.UUID,
+	workspaceID string,
+	id *string,
 ) (*float64, bool) {
 	if id == nil {
 		return nil, true
 	}
 	var position float64
-	err := h.DB.QueryRow(r.Context(), `
+	err := h.DB.QueryRowContext(r.Context(), `
 		SELECT position
 		FROM issue
 		WHERE workspace_id = $1 AND id = $2
 	`, workspaceID, *id).Scan(&position)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusBadRequest, "move anchor not found in this workspace")
 		} else {
 			writeIssueTableQueryFailure(w, r, "failed to resolve move anchor")

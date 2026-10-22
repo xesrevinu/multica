@@ -5,8 +5,6 @@ import (
 	"errors"
 	"sync"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // The device-flow bind session is transient coordination state, not
@@ -34,13 +32,13 @@ import (
 // InstallSessionState is the status projection the install dialog reads.
 type InstallSessionState struct {
 	ID          string
-	WorkspaceID pgtype.UUID
+	WorkspaceID string
 	// InitiatorID authorizes the status read (session initiator, or a
 	// workspace owner/admin). Never serialized to the client.
-	InitiatorID pgtype.UUID
+	InitiatorID string
 
 	Status         RegistrationSessionStatus
-	InstallationID pgtype.UUID
+	InstallationID string
 	ErrorReason    string
 	ErrorMessage   string
 
@@ -69,7 +67,7 @@ type InstallSessionStore interface {
 
 	// Get returns the session scoped to workspaceID, or
 	// ErrInstallSessionNotFound.
-	Get(ctx context.Context, workspaceID pgtype.UUID, id string) (InstallSessionState, error)
+	Get(ctx context.Context, workspaceID string, id string) (InstallSessionState, error)
 
 	// MarkTerminal records the first terminal outcome for id and ignores
 	// any later one. It must also be self-repairing: a call that loses the
@@ -85,7 +83,7 @@ type InstallSessionStore interface {
 // that ever changes after Create.
 type InstallSessionOutcome struct {
 	Status         RegistrationSessionStatus
-	InstallationID pgtype.UUID
+	InstallationID string
 	ErrorReason    string
 	ErrorMessage   string
 }
@@ -122,7 +120,7 @@ func (s *MemoryInstallSessionStore) Create(_ context.Context, state InstallSessi
 	return nil
 }
 
-func (s *MemoryInstallSessionStore) Get(_ context.Context, workspaceID pgtype.UUID, id string) (InstallSessionState, error) {
+func (s *MemoryInstallSessionStore) Get(_ context.Context, workspaceID string, id string) (InstallSessionState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entry, ok := s.entries[id]

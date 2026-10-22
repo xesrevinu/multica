@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -79,7 +78,7 @@ func (h *Handler) invokeAgentDecision(ctx context.Context, agent db.Agent, actor
 	}
 
 	// The agent owner may always invoke their own agent.
-	if effectiveUser != "" && uuidToString(agent.OwnerID) == effectiveUser {
+	if effectiveUser != "" && uuidToString(agent.OwnerID.String) == effectiveUser {
 		return true
 	}
 
@@ -146,7 +145,7 @@ func (h *Handler) canAccessPrivateAgent(ctx context.Context, agent db.Agent, act
 	if actorType == "agent" {
 		return true
 	}
-	if uuidToString(agent.OwnerID) == actorID {
+	if uuidToString(agent.OwnerID.String) == actorID {
 		return true
 	}
 	member, err := h.getWorkspaceMember(ctx, actorID, workspaceID)
@@ -193,7 +192,7 @@ func memberAllowedToViewAgent(agent db.Agent, targets []db.AgentInvocationTarget
 	if roleAllowed(role, "owner", "admin") {
 		return true
 	}
-	if uuidToString(agent.OwnerID) == userID {
+	if uuidToString(agent.OwnerID.String) == userID {
 		return true
 	}
 	if agent.PermissionMode != "public_to" {
@@ -230,7 +229,7 @@ func (h *Handler) invokeOriginatorFromRequest(r *http.Request, actorType, actorI
 					if isTerminalTaskStatus(task.Status) {
 						return ""
 					}
-					return uuidToString(task.OriginatorUserID)
+					return uuidToString(task.OriginatorUserID.String)
 				}
 			}
 		}
@@ -262,10 +261,10 @@ func isTerminalTaskStatus(status string) bool {
 // another issue. That is safe for the invoke gate because the gate keys on the
 // task's own originator (MUL-6951) — a human who already holds those rights —
 // rather than on a same-issue binding standing in for one.
-func (h *Handler) commentSourceTaskID(r *http.Request) pgtype.UUID {
+func (h *Handler) commentSourceTaskID(r *http.Request) string {
 	task, ok := h.taskFromRequestHeader(r)
 	if !ok {
-		return pgtype.UUID{}
+		return ""
 	}
 	return task.ID
 }
@@ -382,7 +381,7 @@ func (h *Handler) restrictedAgentIDs(ctx context.Context, workspaceID, actorType
 // agents and buckets them by agent id string. Avoids the per-agent query the
 // list / aggregation paths would otherwise incur.
 func (h *Handler) loadInvocationTargetsByAgent(ctx context.Context, agents []db.Agent) (map[string][]db.AgentInvocationTarget, bool) {
-	ids := make([]pgtype.UUID, 0, len(agents))
+	ids := make([]string, 0, len(agents))
 	for _, a := range agents {
 		ids = append(ids, a.ID)
 	}
@@ -407,7 +406,7 @@ func (h *Handler) loadInvocationTargetsByAgent(ctx context.Context, agents []db.
 // exactly like a direct assignment/mention. Non-public leaders require owner /
 // allow-list; system-initiated triggers (e.g. github webhooks) are judged as
 // system principals (workspace target only).
-func (h *Handler) canEnqueueSquadLeader(ctx context.Context, leaderID pgtype.UUID, actorType, actorID, originatorUserID, workspaceID string) bool {
+func (h *Handler) canEnqueueSquadLeader(ctx context.Context, leaderID string, actorType, actorID, originatorUserID, workspaceID string) bool {
 	agent, err := h.Queries.GetAgent(ctx, leaderID)
 	if err != nil {
 		return false

@@ -3,7 +3,6 @@ package service
 import (
 	"encoding/json"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/pkg/plugincontract"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -71,10 +70,10 @@ func SubscribePluginEvents(bus *events.Bus, dispatcher EventSink) {
 // issueIDFromPayload finds the issue an event is about, so the callback token
 // issued for the hook can be narrowed to it. A payload with no issue yields the
 // zero UUID, which simply means the grant is not issue-scoped.
-func issueIDFromPayload(payload any) pgtype.UUID {
+func issueIDFromPayload(payload any) string {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
-		return pgtype.UUID{}
+		return ""
 	}
 	var shape struct {
 		Issue struct {
@@ -86,7 +85,7 @@ func issueIDFromPayload(payload any) pgtype.UUID {
 		IssueID string `json:"issue_id"`
 	}
 	if err := json.Unmarshal(encoded, &shape); err != nil {
-		return pgtype.UUID{}
+		return ""
 	}
 	for _, candidate := range []string{shape.Issue.ID, shape.Comment.IssueID, shape.IssueID} {
 		if candidate == "" {
@@ -96,7 +95,7 @@ func issueIDFromPayload(payload any) pgtype.UUID {
 			return parsed
 		}
 	}
-	return pgtype.UUID{}
+	return ""
 }
 
 func payloadFlag(payload any, key string) bool {

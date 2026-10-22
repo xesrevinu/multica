@@ -7,56 +7,61 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const archiveAllInbox = `-- name: ArchiveAllInbox :execrows
 UPDATE inbox_item SET archived = true
-WHERE workspace_id = $1 AND recipient_type = 'member' AND recipient_id = $2 AND archived = false
+WHERE workspace_id = ?1 AND recipient_type = 'member' AND recipient_id = ?2 AND archived = false
 `
 
 type ArchiveAllInboxParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	RecipientID pgtype.UUID `json:"recipient_id"`
+	WorkspaceID string `json:"workspace_id"`
+	RecipientID string `json:"recipient_id"`
 }
 
 func (q *Queries) ArchiveAllInbox(ctx context.Context, arg ArchiveAllInboxParams) (int64, error) {
-	result, err := q.db.Exec(ctx, archiveAllInbox, arg.WorkspaceID, arg.RecipientID)
+	result, err := q.db.ExecContext(ctx, archiveAllInbox, arg.WorkspaceID, arg.RecipientID)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const archiveAllReadInbox = `-- name: ArchiveAllReadInbox :execrows
 WITH newest_groups AS (
-    SELECT DISTINCT ON (COALESCE(i.issue_id, i.id))
-           COALESCE(i.issue_id, i.id) AS group_id,
-           i.read
-    FROM inbox_item i
-    WHERE i.workspace_id = $1
-      AND i.recipient_type = 'member'
-      AND i.recipient_id = $2
-      AND i.archived = false
-    ORDER BY COALESCE(i.issue_id, i.id), i.created_at DESC, i.id DESC
+    SELECT group_id, read
+    FROM (
+        SELECT COALESCE(i.issue_id, i.id) AS group_id,
+               i.read AS read,
+               row_number() OVER (
+                   PARTITION BY COALESCE(i.issue_id, i.id)
+                   ORDER BY i.created_at DESC, i.id DESC
+               ) AS rn
+        FROM inbox_item i
+        WHERE i.workspace_id = ?1
+          AND i.recipient_type = 'member'
+          AND i.recipient_id = ?2
+          AND i.archived = false
+    ) grouped
+    WHERE rn = 1
 ), read_groups AS (
     SELECT group_id
     FROM newest_groups
     WHERE read = true
 )
-UPDATE inbox_item i SET archived = true
-FROM read_groups selected
-WHERE i.workspace_id = $1
+UPDATE inbox_item AS i
+SET archived = true
+WHERE i.workspace_id = ?1
   AND i.recipient_type = 'member'
-  AND i.recipient_id = $2
+  AND i.recipient_id = ?2
   AND i.archived = false
-  AND COALESCE(i.issue_id, i.id) = selected.group_id
+  AND COALESCE(i.issue_id, i.id) IN (SELECT group_id FROM read_groups)
 `
 
 type ArchiveAllReadInboxParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	RecipientID pgtype.UUID `json:"recipient_id"`
+	WorkspaceID string `json:"workspace_id"`
+	RecipientID string `json:"recipient_id"`
 }
 
 // "Read" is the state of the one issue row the inbox renders: the newest
@@ -65,51 +70,51 @@ type ArchiveAllReadInboxParams struct {
 // read rows instead makes an older unread sibling reappear after the newest
 // row is archived (and can archive an older read sibling under an unread row).
 func (q *Queries) ArchiveAllReadInbox(ctx context.Context, arg ArchiveAllReadInboxParams) (int64, error) {
-	result, err := q.db.Exec(ctx, archiveAllReadInbox, arg.WorkspaceID, arg.RecipientID)
+	result, err := q.db.ExecContext(ctx, archiveAllReadInbox, arg.WorkspaceID, arg.RecipientID)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const archiveCompletedInbox = `-- name: ArchiveCompletedInbox :execrows
-UPDATE inbox_item i SET archived = true
-WHERE i.workspace_id = $1 AND i.recipient_type = 'member' AND i.recipient_id = $2 AND i.archived = false
+UPDATE inbox_item AS i SET archived = true
+WHERE i.workspace_id = ?1 AND i.recipient_type = 'member' AND i.recipient_id = ?2 AND i.archived = false
   AND i.issue_id IN (
     SELECT id FROM issue
-    WHERE workspace_id = $1
-      AND status = ANY($3::text[])
+    WHERE workspace_id = ?1
+      AND status IN (SELECT value FROM json_each(?3))
   )
 `
 
 type ArchiveCompletedInboxParams struct {
-	WorkspaceID        pgtype.UUID `json:"workspace_id"`
-	RecipientID        pgtype.UUID `json:"recipient_id"`
-	TerminalStatusKeys []string    `json:"terminal_status_keys"`
+	WorkspaceID        string      `json:"workspace_id"`
+	RecipientID        string      `json:"recipient_id"`
+	TerminalStatusKeys interface{} `json:"terminal_status_keys"`
 }
 
 func (q *Queries) ArchiveCompletedInbox(ctx context.Context, arg ArchiveCompletedInboxParams) (int64, error) {
-	result, err := q.db.Exec(ctx, archiveCompletedInbox, arg.WorkspaceID, arg.RecipientID, arg.TerminalStatusKeys)
+	result, err := q.db.ExecContext(ctx, archiveCompletedInbox, arg.WorkspaceID, arg.RecipientID, arg.TerminalStatusKeys)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const archiveInboxByIssue = `-- name: ArchiveInboxByIssue :execrows
 UPDATE inbox_item SET archived = true
-WHERE workspace_id = $1 AND recipient_type = $2 AND recipient_id = $3 AND issue_id = $4 AND archived = false
+WHERE workspace_id = ?1 AND recipient_type = ?2 AND recipient_id = ?3 AND issue_id = ?4 AND archived = false
 `
 
 type ArchiveInboxByIssueParams struct {
-	WorkspaceID   pgtype.UUID `json:"workspace_id"`
-	RecipientType string      `json:"recipient_type"`
-	RecipientID   pgtype.UUID `json:"recipient_id"`
-	IssueID       pgtype.UUID `json:"issue_id"`
+	WorkspaceID   string         `json:"workspace_id"`
+	RecipientType string         `json:"recipient_type"`
+	RecipientID   string         `json:"recipient_id"`
+	IssueID       sql.NullString `json:"issue_id"`
 }
 
 func (q *Queries) ArchiveInboxByIssue(ctx context.Context, arg ArchiveInboxByIssueParams) (int64, error) {
-	result, err := q.db.Exec(ctx, archiveInboxByIssue,
+	result, err := q.db.ExecContext(ctx, archiveInboxByIssue,
 		arg.WorkspaceID,
 		arg.RecipientType,
 		arg.RecipientID,
@@ -118,28 +123,28 @@ func (q *Queries) ArchiveInboxByIssue(ctx context.Context, arg ArchiveInboxByIss
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const archiveInboxByIssueAndType = `-- name: ArchiveInboxByIssueAndType :many
 UPDATE inbox_item SET archived = true
-WHERE workspace_id = $1 AND issue_id = $2 AND type = $3 AND archived = false
+WHERE workspace_id = ?1 AND issue_id = ?2 AND type = ?3 AND archived = false
 RETURNING recipient_type, recipient_id
 `
 
 type ArchiveInboxByIssueAndTypeParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	IssueID     pgtype.UUID `json:"issue_id"`
-	Type        string      `json:"type"`
+	WorkspaceID string         `json:"workspace_id"`
+	IssueID     sql.NullString `json:"issue_id"`
+	Type        string         `json:"type"`
 }
 
 type ArchiveInboxByIssueAndTypeRow struct {
-	RecipientType string      `json:"recipient_type"`
-	RecipientID   pgtype.UUID `json:"recipient_id"`
+	RecipientType string `json:"recipient_type"`
+	RecipientID   string `json:"recipient_id"`
 }
 
 func (q *Queries) ArchiveInboxByIssueAndType(ctx context.Context, arg ArchiveInboxByIssueAndTypeParams) ([]ArchiveInboxByIssueAndTypeRow, error) {
-	rows, err := q.db.Query(ctx, archiveInboxByIssueAndType, arg.WorkspaceID, arg.IssueID, arg.Type)
+	rows, err := q.db.QueryContext(ctx, archiveInboxByIssueAndType, arg.WorkspaceID, arg.IssueID, arg.Type)
 	if err != nil {
 		return nil, err
 	}
@@ -152,6 +157,9 @@ func (q *Queries) ArchiveInboxByIssueAndType(ctx context.Context, arg ArchiveInb
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -160,12 +168,12 @@ func (q *Queries) ArchiveInboxByIssueAndType(ctx context.Context, arg ArchiveInb
 
 const archiveInboxItem = `-- name: ArchiveInboxItem :one
 UPDATE inbox_item SET archived = true
-WHERE id = $1
+WHERE id = ?1
 RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details
 `
 
-func (q *Queries) ArchiveInboxItem(ctx context.Context, id pgtype.UUID) (InboxItem, error) {
-	row := q.db.QueryRow(ctx, archiveInboxItem, id)
+func (q *Queries) ArchiveInboxItem(ctx context.Context, id string) (InboxItem, error) {
+	row := q.db.QueryRowContext(ctx, archiveInboxItem, id)
 	var i InboxItem
 	err := row.Scan(
 		&i.ID,
@@ -189,17 +197,17 @@ func (q *Queries) ArchiveInboxItem(ctx context.Context, id pgtype.UUID) (InboxIt
 
 const countUnreadInbox = `-- name: CountUnreadInbox :one
 SELECT count(*) FROM inbox_item
-WHERE workspace_id = $1 AND recipient_type = $2 AND recipient_id = $3 AND read = false AND archived = false
+WHERE workspace_id = ?1 AND recipient_type = ?2 AND recipient_id = ?3 AND read = false AND archived = false
 `
 
 type CountUnreadInboxParams struct {
-	WorkspaceID   pgtype.UUID `json:"workspace_id"`
-	RecipientType string      `json:"recipient_type"`
-	RecipientID   pgtype.UUID `json:"recipient_id"`
+	WorkspaceID   string `json:"workspace_id"`
+	RecipientType string `json:"recipient_type"`
+	RecipientID   string `json:"recipient_id"`
 }
 
 func (q *Queries) CountUnreadInbox(ctx context.Context, arg CountUnreadInboxParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countUnreadInbox, arg.WorkspaceID, arg.RecipientType, arg.RecipientID)
+	row := q.db.QueryRowContext(ctx, countUnreadInbox, arg.WorkspaceID, arg.RecipientType, arg.RecipientID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -208,22 +216,28 @@ func (q *Queries) CountUnreadInbox(ctx context.Context, arg CountUnreadInboxPara
 const countUnreadInboxByWorkspace = `-- name: CountUnreadInboxByWorkspace :many
 SELECT newest.workspace_id, count(*) AS count
 FROM (
-    SELECT DISTINCT ON (i.workspace_id, COALESCE(i.issue_id, i.id))
-        i.workspace_id, i.read
-    FROM inbox_item i
-    JOIN member m ON m.workspace_id = i.workspace_id AND m.user_id = i.recipient_id
-    WHERE i.recipient_type = 'member'
-      AND i.recipient_id = $1
-      AND i.archived = false
-    ORDER BY i.workspace_id, COALESCE(i.issue_id, i.id), i.created_at DESC
+    SELECT workspace_id, read
+    FROM (
+        SELECT i.workspace_id, i.read,
+               row_number() OVER (
+                   PARTITION BY i.workspace_id, COALESCE(i.issue_id, i.id)
+                   ORDER BY i.created_at DESC
+               ) AS rn
+        FROM inbox_item i
+        JOIN member m ON m.workspace_id = i.workspace_id AND m.user_id = i.recipient_id
+        WHERE i.recipient_type = 'member'
+          AND i.recipient_id = ?1
+          AND i.archived = false
+    )
+    WHERE rn = 1
 ) newest
 WHERE newest.read = false
 GROUP BY newest.workspace_id
 `
 
 type CountUnreadInboxByWorkspaceRow struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Count       int64       `json:"count"`
+	WorkspaceID string `json:"workspace_id"`
+	Count       int64  `json:"count"`
 }
 
 // Per-workspace unread inbox counts for a recipient member, matching the
@@ -236,8 +250,8 @@ type CountUnreadInboxByWorkspaceRow struct {
 // member join keeps counts scoped to workspaces the user still belongs to,
 // so a stale item left behind in a workspace the user has since left cannot
 // light the dot.
-func (q *Queries) CountUnreadInboxByWorkspace(ctx context.Context, recipientID pgtype.UUID) ([]CountUnreadInboxByWorkspaceRow, error) {
-	rows, err := q.db.Query(ctx, countUnreadInboxByWorkspace, recipientID)
+func (q *Queries) CountUnreadInboxByWorkspace(ctx context.Context, recipientID string) ([]CountUnreadInboxByWorkspaceRow, error) {
+	rows, err := q.db.QueryContext(ctx, countUnreadInboxByWorkspace, recipientID)
 	if err != nil {
 		return nil, err
 	}
@@ -249,6 +263,9 @@ func (q *Queries) CountUnreadInboxByWorkspace(ctx context.Context, recipientID p
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -262,34 +279,37 @@ INSERT INTO inbox_item (
     type, severity, issue_id, title, body,
     actor_type, actor_id, details, id
 )
-SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12::uuid, gen_random_uuid())
-WHERE ($2::text = 'member' AND EXISTS (
-    SELECT 1 FROM member WHERE workspace_id = $1 AND user_id = $3
-)) OR ($2::text = 'agent' AND EXISTS (
-    SELECT 1 FROM agent WHERE workspace_id = $1 AND id = $3
+SELECT ?1 AS workspace_id, ?2 AS recipient_type, ?3 AS recipient_id,
+       ?4 AS type, ?5 AS severity, ?6 AS issue_id, ?7 AS title, ?8 AS body,
+       ?9 AS actor_type, ?10 AS actor_id, ?11 AS details,
+       COALESCE(?12, gen_random_uuid()) AS id
+WHERE (?2 = 'member' AND EXISTS (
+    SELECT 1 FROM member WHERE workspace_id = ?1 AND user_id = ?3
+)) OR (?2 = 'agent' AND EXISTS (
+    SELECT 1 FROM agent WHERE workspace_id = ?1 AND id = ?3
 ))
 RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details
 `
 
 type CreateInboxItemParams struct {
-	WorkspaceID   pgtype.UUID `json:"workspace_id"`
-	RecipientType string      `json:"recipient_type"`
-	RecipientID   pgtype.UUID `json:"recipient_id"`
-	Type          string      `json:"type"`
-	Severity      string      `json:"severity"`
-	IssueID       pgtype.UUID `json:"issue_id"`
-	Title         string      `json:"title"`
-	Body          pgtype.Text `json:"body"`
-	ActorType     pgtype.Text `json:"actor_type"`
-	ActorID       pgtype.UUID `json:"actor_id"`
-	Details       []byte      `json:"details"`
-	ID            pgtype.UUID `json:"id"`
+	WorkspaceID   string         `json:"workspace_id"`
+	RecipientType string         `json:"recipient_type"`
+	RecipientID   string         `json:"recipient_id"`
+	Type          string         `json:"type"`
+	Severity      string         `json:"severity"`
+	IssueID       sql.NullString `json:"issue_id"`
+	Title         string         `json:"title"`
+	Body          sql.NullString `json:"body"`
+	ActorType     sql.NullString `json:"actor_type"`
+	ActorID       sql.NullString `json:"actor_id"`
+	Details       sql.NullString `json:"details"`
+	ID            sql.NullString `json:"id"`
 }
 
 // A missing recipient is a quiet skip (pgx.ErrNoRows), not a delivery failure.
 // Check the insertion snapshot without adding recipient row locks.
 func (q *Queries) CreateInboxItem(ctx context.Context, arg CreateInboxItemParams) (InboxItem, error) {
-	row := q.db.QueryRow(ctx, createInboxItem,
+	row := q.db.QueryRowContext(ctx, createInboxItem,
 		arg.WorkspaceID,
 		arg.RecipientType,
 		arg.RecipientID,
@@ -326,11 +346,11 @@ func (q *Queries) CreateInboxItem(ctx context.Context, arg CreateInboxItemParams
 
 const getInboxItem = `-- name: GetInboxItem :one
 SELECT id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details FROM inbox_item
-WHERE id = $1
+WHERE id = ?1
 `
 
-func (q *Queries) GetInboxItem(ctx context.Context, id pgtype.UUID) (InboxItem, error) {
-	row := q.db.QueryRow(ctx, getInboxItem, id)
+func (q *Queries) GetInboxItem(ctx context.Context, id string) (InboxItem, error) {
+	row := q.db.QueryRowContext(ctx, getInboxItem, id)
 	var i InboxItem
 	err := row.Scan(
 		&i.ID,
@@ -354,16 +374,16 @@ func (q *Queries) GetInboxItem(ctx context.Context, id pgtype.UUID) (InboxItem, 
 
 const getInboxItemInWorkspace = `-- name: GetInboxItemInWorkspace :one
 SELECT id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details FROM inbox_item
-WHERE id = $1 AND workspace_id = $2
+WHERE id = ?1 AND workspace_id = ?2
 `
 
 type GetInboxItemInWorkspaceParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 func (q *Queries) GetInboxItemInWorkspace(ctx context.Context, arg GetInboxItemInWorkspaceParams) (InboxItem, error) {
-	row := q.db.QueryRow(ctx, getInboxItemInWorkspace, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, getInboxItemInWorkspace, arg.ID, arg.WorkspaceID)
 	var i InboxItem
 	err := row.Scan(
 		&i.ID,
@@ -386,15 +406,15 @@ func (q *Queries) GetInboxItemInWorkspace(ctx context.Context, arg GetInboxItemI
 }
 
 const listArchivedInboxItems = `-- name: ListArchivedInboxItems :many
-WITH eligible_archived AS MATERIALIZED (
+WITH eligible_archived AS (
     SELECT i.id,
            COALESCE(i.issue_id, i.id) AS group_id,
            i.created_at,
            i.details
     FROM inbox_item i
-    WHERE i.workspace_id = $1
-      AND i.recipient_type = $2
-      AND i.recipient_id = $3
+    WHERE i.workspace_id = ?1
+      AND i.recipient_type = ?2
+      AND i.recipient_id = ?3
       AND i.archived = true
       AND (i.issue_id IS NULL OR NOT EXISTS (
           SELECT 1
@@ -406,25 +426,34 @@ WITH eligible_archived AS MATERIALIZED (
             AND active.archived = false
       ))
 ), newest_groups AS (
-    SELECT DISTINCT ON (group_id)
-           group_id,
-           id AS newest_id,
-           created_at AS newest_created_at
-    FROM eligible_archived
-    ORDER BY group_id, created_at DESC, id DESC
+    SELECT group_id, newest_id, newest_created_at
+    FROM (
+        SELECT group_id,
+               id AS newest_id,
+               created_at AS newest_created_at,
+               row_number() OVER (PARTITION BY group_id ORDER BY created_at DESC, id DESC) AS rn
+        FROM eligible_archived
+    )
+    WHERE rn = 1
 ), limited_groups AS (
     SELECT group_id, newest_id
     FROM newest_groups
     ORDER BY newest_created_at DESC, newest_id DESC
     LIMIT 200
 ), comment_anchors AS (
-    SELECT DISTINCT ON (archived.group_id)
-           archived.group_id,
-           archived.id
-    FROM eligible_archived archived
-    JOIN limited_groups selected USING (group_id)
-    WHERE NULLIF(archived.details->>'comment_id', '') IS NOT NULL
-    ORDER BY archived.group_id, archived.created_at DESC, archived.id DESC
+    SELECT group_id, id
+    FROM (
+        SELECT archived.group_id,
+               archived.id,
+               row_number() OVER (
+                   PARTITION BY archived.group_id
+                   ORDER BY archived.created_at DESC, archived.id DESC
+               ) AS rn
+        FROM eligible_archived archived
+        JOIN limited_groups selected USING (group_id)
+        WHERE NULLIF(json_extract(archived.details, '$.comment_id'), '') IS NOT NULL
+    )
+    WHERE rn = 1
 ), selected_ids AS (
     SELECT newest_id AS id FROM limited_groups
     UNION
@@ -440,29 +469,29 @@ ORDER BY i.created_at DESC, i.id DESC
 `
 
 type ListArchivedInboxItemsParams struct {
-	WorkspaceID   pgtype.UUID `json:"workspace_id"`
-	RecipientType string      `json:"recipient_type"`
-	RecipientID   pgtype.UUID `json:"recipient_id"`
+	WorkspaceID   string `json:"workspace_id"`
+	RecipientType string `json:"recipient_type"`
+	RecipientID   string `json:"recipient_id"`
 }
 
 type ListArchivedInboxItemsRow struct {
-	ID            pgtype.UUID        `json:"id"`
-	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
-	RecipientType string             `json:"recipient_type"`
-	RecipientID   pgtype.UUID        `json:"recipient_id"`
-	Type          string             `json:"type"`
-	Severity      string             `json:"severity"`
-	IssueID       pgtype.UUID        `json:"issue_id"`
-	Title         string             `json:"title"`
-	Body          pgtype.Text        `json:"body"`
-	Read          bool               `json:"read"`
-	Archived      bool               `json:"archived"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	ActorType     pgtype.Text        `json:"actor_type"`
-	ActorID       pgtype.UUID        `json:"actor_id"`
-	Details       []byte             `json:"details"`
-	IssueStatus   pgtype.Text        `json:"issue_status"`
-	IssuePriority pgtype.Text        `json:"issue_priority"`
+	ID            string         `json:"id"`
+	WorkspaceID   string         `json:"workspace_id"`
+	RecipientType string         `json:"recipient_type"`
+	RecipientID   string         `json:"recipient_id"`
+	Type          string         `json:"type"`
+	Severity      string         `json:"severity"`
+	IssueID       sql.NullString `json:"issue_id"`
+	Title         string         `json:"title"`
+	Body          sql.NullString `json:"body"`
+	Read          int64          `json:"read"`
+	Archived      int64          `json:"archived"`
+	CreatedAt     string         `json:"created_at"`
+	ActorType     sql.NullString `json:"actor_type"`
+	ActorID       sql.NullString `json:"actor_id"`
+	Details       sql.NullString `json:"details"`
+	IssueStatus   sql.NullString `json:"issue_status"`
+	IssuePriority sql.NullString `json:"issue_priority"`
 }
 
 // Archived counterpart of ListInboxItems, backing the inbox's "Archived"
@@ -472,7 +501,7 @@ type ListArchivedInboxItemsRow struct {
 // issue-level, so a NEW notification on an already-archived issue leaves the
 // old archived rows in place alongside the fresh active one. The issue belongs
 // in the main inbox at that point, and the two lists must stay mutually
-// exclusive per issue group — otherwise the same issue renders in both. The
+// exclusive per issue group - otherwise the same issue renders in both. The
 // exclusion lives here rather than in the client so neither list depends on
 // the other's cache being loaded. Items without an issue_id group on their own
 // id and can never have an active sibling, hence the IS NULL short-circuit.
@@ -484,10 +513,10 @@ type ListArchivedInboxItemsRow struct {
 // renders plus, when different, the newest row carrying a comment anchor. The
 // client already merges those two rows while deduplicating, preserving direct
 // comment landing without sending every historical notification in the group.
-// Keep the materialized working set narrow: full row data is joined only for
+// Keep the working set narrow: full row data is joined only for
 // the final selected ids, not copied for every archived notification scanned.
 func (q *Queries) ListArchivedInboxItems(ctx context.Context, arg ListArchivedInboxItemsParams) ([]ListArchivedInboxItemsRow, error) {
-	rows, err := q.db.Query(ctx, listArchivedInboxItems, arg.WorkspaceID, arg.RecipientType, arg.RecipientID)
+	rows, err := q.db.QueryContext(ctx, listArchivedInboxItems, arg.WorkspaceID, arg.RecipientType, arg.RecipientID)
 	if err != nil {
 		return nil, err
 	}
@@ -518,6 +547,9 @@ func (q *Queries) ListArchivedInboxItems(ctx context.Context, arg ListArchivedIn
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -530,38 +562,38 @@ SELECT i.id, i.workspace_id, i.recipient_type, i.recipient_id, i.type, i.severit
        iss.priority AS issue_priority
 FROM inbox_item i
 LEFT JOIN issue iss ON iss.id = i.issue_id
-WHERE i.workspace_id = $1 AND i.recipient_type = $2 AND i.recipient_id = $3 AND i.archived = false
+WHERE i.workspace_id = ?1 AND i.recipient_type = ?2 AND i.recipient_id = ?3 AND i.archived = false
 ORDER BY i.created_at DESC
 `
 
 type ListInboxItemsParams struct {
-	WorkspaceID   pgtype.UUID `json:"workspace_id"`
-	RecipientType string      `json:"recipient_type"`
-	RecipientID   pgtype.UUID `json:"recipient_id"`
+	WorkspaceID   string `json:"workspace_id"`
+	RecipientType string `json:"recipient_type"`
+	RecipientID   string `json:"recipient_id"`
 }
 
 type ListInboxItemsRow struct {
-	ID            pgtype.UUID        `json:"id"`
-	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
-	RecipientType string             `json:"recipient_type"`
-	RecipientID   pgtype.UUID        `json:"recipient_id"`
-	Type          string             `json:"type"`
-	Severity      string             `json:"severity"`
-	IssueID       pgtype.UUID        `json:"issue_id"`
-	Title         string             `json:"title"`
-	Body          pgtype.Text        `json:"body"`
-	Read          bool               `json:"read"`
-	Archived      bool               `json:"archived"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	ActorType     pgtype.Text        `json:"actor_type"`
-	ActorID       pgtype.UUID        `json:"actor_id"`
-	Details       []byte             `json:"details"`
-	IssueStatus   pgtype.Text        `json:"issue_status"`
-	IssuePriority pgtype.Text        `json:"issue_priority"`
+	ID            string         `json:"id"`
+	WorkspaceID   string         `json:"workspace_id"`
+	RecipientType string         `json:"recipient_type"`
+	RecipientID   string         `json:"recipient_id"`
+	Type          string         `json:"type"`
+	Severity      string         `json:"severity"`
+	IssueID       sql.NullString `json:"issue_id"`
+	Title         string         `json:"title"`
+	Body          sql.NullString `json:"body"`
+	Read          int64          `json:"read"`
+	Archived      int64          `json:"archived"`
+	CreatedAt     string         `json:"created_at"`
+	ActorType     sql.NullString `json:"actor_type"`
+	ActorID       sql.NullString `json:"actor_id"`
+	Details       sql.NullString `json:"details"`
+	IssueStatus   sql.NullString `json:"issue_status"`
+	IssuePriority sql.NullString `json:"issue_priority"`
 }
 
 func (q *Queries) ListInboxItems(ctx context.Context, arg ListInboxItemsParams) ([]ListInboxItemsRow, error) {
-	rows, err := q.db.Query(ctx, listInboxItems, arg.WorkspaceID, arg.RecipientType, arg.RecipientID)
+	rows, err := q.db.QueryContext(ctx, listInboxItems, arg.WorkspaceID, arg.RecipientType, arg.RecipientID)
 	if err != nil {
 		return nil, err
 	}
@@ -592,6 +624,9 @@ func (q *Queries) ListInboxItems(ctx context.Context, arg ListInboxItemsParams) 
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -600,30 +635,30 @@ func (q *Queries) ListInboxItems(ctx context.Context, arg ListInboxItemsParams) 
 
 const markAllInboxRead = `-- name: MarkAllInboxRead :execrows
 UPDATE inbox_item SET read = true
-WHERE workspace_id = $1 AND recipient_type = 'member' AND recipient_id = $2 AND archived = false AND read = false
+WHERE workspace_id = ?1 AND recipient_type = 'member' AND recipient_id = ?2 AND archived = false AND read = false
 `
 
 type MarkAllInboxReadParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	RecipientID pgtype.UUID `json:"recipient_id"`
+	WorkspaceID string `json:"workspace_id"`
+	RecipientID string `json:"recipient_id"`
 }
 
 func (q *Queries) MarkAllInboxRead(ctx context.Context, arg MarkAllInboxReadParams) (int64, error) {
-	result, err := q.db.Exec(ctx, markAllInboxRead, arg.WorkspaceID, arg.RecipientID)
+	result, err := q.db.ExecContext(ctx, markAllInboxRead, arg.WorkspaceID, arg.RecipientID)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const markInboxRead = `-- name: MarkInboxRead :one
 UPDATE inbox_item SET read = true
-WHERE id = $1
+WHERE id = ?1
 RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details
 `
 
-func (q *Queries) MarkInboxRead(ctx context.Context, id pgtype.UUID) (InboxItem, error) {
-	row := q.db.QueryRow(ctx, markInboxRead, id)
+func (q *Queries) MarkInboxRead(ctx context.Context, id string) (InboxItem, error) {
+	row := q.db.QueryRowContext(ctx, markInboxRead, id)
 	var i InboxItem
 	err := row.Scan(
 		&i.ID,
@@ -647,7 +682,7 @@ func (q *Queries) MarkInboxRead(ctx context.Context, id pgtype.UUID) (InboxItem,
 
 const markInboxUnread = `-- name: MarkInboxUnread :one
 UPDATE inbox_item SET read = false
-WHERE id = $1
+WHERE id = ?1
 RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details
 `
 
@@ -657,8 +692,8 @@ RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_
 // unread would resurrect older siblings the user already dealt with and
 // inflate CountUnreadInbox (which counts raw rows), while changing nothing the
 // UI shows.
-func (q *Queries) MarkInboxUnread(ctx context.Context, id pgtype.UUID) (InboxItem, error) {
-	row := q.db.QueryRow(ctx, markInboxUnread, id)
+func (q *Queries) MarkInboxUnread(ctx context.Context, id string) (InboxItem, error) {
+	row := q.db.QueryRowContext(ctx, markInboxUnread, id)
 	var i InboxItem
 	err := row.Scan(
 		&i.ID,
@@ -682,21 +717,21 @@ func (q *Queries) MarkInboxUnread(ctx context.Context, id pgtype.UUID) (InboxIte
 
 const unarchiveInboxByIssue = `-- name: UnarchiveInboxByIssue :execrows
 UPDATE inbox_item SET archived = false
-WHERE workspace_id = $1 AND recipient_type = $2 AND recipient_id = $3 AND issue_id = $4 AND archived = true
+WHERE workspace_id = ?1 AND recipient_type = ?2 AND recipient_id = ?3 AND issue_id = ?4 AND archived = true
 `
 
 type UnarchiveInboxByIssueParams struct {
-	WorkspaceID   pgtype.UUID `json:"workspace_id"`
-	RecipientType string      `json:"recipient_type"`
-	RecipientID   pgtype.UUID `json:"recipient_id"`
-	IssueID       pgtype.UUID `json:"issue_id"`
+	WorkspaceID   string         `json:"workspace_id"`
+	RecipientType string         `json:"recipient_type"`
+	RecipientID   string         `json:"recipient_id"`
+	IssueID       sql.NullString `json:"issue_id"`
 }
 
 // Issue-level restore, mirroring ArchiveInboxByIssue: archiving one item
 // archives every sibling for the same issue, so unarchiving must bring the
 // whole group back. Leaves `read` untouched for the same reason as above.
 func (q *Queries) UnarchiveInboxByIssue(ctx context.Context, arg UnarchiveInboxByIssueParams) (int64, error) {
-	result, err := q.db.Exec(ctx, unarchiveInboxByIssue,
+	result, err := q.db.ExecContext(ctx, unarchiveInboxByIssue,
 		arg.WorkspaceID,
 		arg.RecipientType,
 		arg.RecipientID,
@@ -705,20 +740,20 @@ func (q *Queries) UnarchiveInboxByIssue(ctx context.Context, arg UnarchiveInboxB
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const unarchiveInboxItem = `-- name: UnarchiveInboxItem :one
 UPDATE inbox_item SET archived = false
-WHERE id = $1
+WHERE id = ?1
 RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details
 `
 
 // Deliberately does not touch `read`: unarchiving restores an item to the main
 // inbox in the exact read/unread state it was archived in, so restoring an
 // unread item legitimately raises the unread badge again (MUL-3736).
-func (q *Queries) UnarchiveInboxItem(ctx context.Context, id pgtype.UUID) (InboxItem, error) {
-	row := q.db.QueryRow(ctx, unarchiveInboxItem, id)
+func (q *Queries) UnarchiveInboxItem(ctx context.Context, id string) (InboxItem, error) {
+	row := q.db.QueryRowContext(ctx, unarchiveInboxItem, id)
 	var i InboxItem
 	err := row.Scan(
 		&i.ID,

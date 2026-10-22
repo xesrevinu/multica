@@ -2,14 +2,13 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/attribution"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -50,7 +49,7 @@ func receiptActor(r db.IssueWakeupReceipt) (actorType, actorID string, single bo
 		AgentID   string `json:"agent_id"`
 		Count     int64  `json:"coalesced_count"`
 	}
-	_ = json.Unmarshal(r.Payload, &p)
+	_ = json.Unmarshal([]byte(r.Payload), &p)
 	if p.ActorType == "" && p.AgentID != "" {
 		p.ActorType, p.ActorID = "agent", p.AgentID
 	}
@@ -59,21 +58,21 @@ func receiptActor(r db.IssueWakeupReceipt) (actorType, actorID string, single bo
 
 // acknowledgedBySelf reports whether every input of this firing came from the
 // target agent itself (see the rules above).
-func acknowledgedBySelf(ctx context.Context, q *db.Queries, w db.IssueWakeup, agentID, issueID pgtype.UUID, receipts []db.IssueWakeupReceipt) (bool, error) {
+func acknowledgedBySelf(ctx context.Context, q *db.Queries, w db.IssueWakeup, agentID, issueID string, receipts []db.IssueWakeupReceipt) (bool, error) {
 	if len(receipts) == 0 {
 		return false, nil
 	}
 	agent := util.UUIDToString(agentID)
 	ownRule := w.SystemRule.Valid
 	if !ownRule && w.SourceTaskID.Valid {
-		source, err := q.GetAgentTask(ctx, w.SourceTaskID)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		source, err := q.GetAgentTask(ctx, w.SourceTaskID.String)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return false, err
 		}
 		ownRule = err == nil && source.AgentID == agentID
 	}
-	seen := map[pgtype.UUID]bool{}
-	var causes []pgtype.UUID
+	seen := map[string]bool{}
+	var causes []string
 	for _, r := range receipts {
 		switch {
 		case r.EventType == wakeupConditionEventType:
@@ -83,7 +82,7 @@ func acknowledgedBySelf(ctx context.Context, q *db.Queries, w db.IssueWakeup, ag
 			var p struct {
 				SourceTaskIDs []string `json:"source_task_ids"`
 			}
-			_ = json.Unmarshal(r.Payload, &p)
+			_ = json.Unmarshal([]byte(r.Payload), &p)
 			if len(p.SourceTaskIDs) == 0 {
 				return false, nil
 			}
@@ -103,7 +102,7 @@ func acknowledgedBySelf(ctx context.Context, q *db.Queries, w db.IssueWakeup, ag
 			return false, nil
 		default:
 			// A rule that names the agent itself as the actor asked for this.
-			if w.FilterActorType.String == "agent" && w.FilterActorID == agentID {
+			if w.FilterActorType.String == "agent" && w.FilterActorID.String == agentID {
 				return false, nil
 			}
 			actorType, actorID, single := receiptActor(r)
@@ -115,7 +114,7 @@ func acknowledgedBySelf(ctx context.Context, q *db.Queries, w db.IssueWakeup, ag
 	if len(causes) == 0 {
 		return true, nil
 	}
-	active, err := q.CountActiveIssueRunsOfAgent(ctx, db.CountActiveIssueRunsOfAgentParams{Ids: causes, AgentID: agentID, IssueID: issueID})
+	active, err := q.CountActiveIssueRunsOfAgent(ctx, db.CountActiveIssueRunsOfAgentParams{Ids: causes, AgentID: agentID, IssueID: nullString(issueID)})
 	if err != nil {
 		return false, err
 	}
@@ -124,12 +123,12 @@ func acknowledgedBySelf(ctx context.Context, q *db.Queries, w db.IssueWakeup, ag
 
 // hasWaitingRun reports whether a run of the agent that runs as this person
 // is waiting to start on the issue. A firing then keeps its inputs for it.
-func hasWaitingRun(ctx context.Context, q *db.Queries, issueID, agentID, runAs pgtype.UUID) (bool, error) {
-	if !runAs.Valid {
+func hasWaitingRun(ctx context.Context, q *db.Queries, issueID, agentID, runAs string) (bool, error) {
+	if runAs == "" {
 		return false, nil
 	}
-	_, err := q.FindWaitingIssueRun(ctx, db.FindWaitingIssueRunParams{IssueID: issueID, AgentID: agentID, OriginatorUserID: runAs})
-	if errors.Is(err, pgx.ErrNoRows) {
+	_, err := q.FindWaitingIssueRun(ctx, db.FindWaitingIssueRunParams{IssueID: nullString(issueID), AgentID: agentID, OriginatorUserID: nullString(runAs)})
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	return err == nil, err
@@ -139,7 +138,7 @@ func hasWaitingRun(ctx context.Context, q *db.Queries, issueID, agentID, runAs p
 // caused the parent to exist, as a run the parent's own assignment would
 // start.
 func (s *IssueWakeupService) childDoneRunAs(ctx context.Context, issue db.Issue, agent db.Agent) (attribution.Result, error) {
-	attr := s.Tasks.attributionForIssueTask(ctx, issue, pgtype.UUID{}, attribution.SourceDelegation, pgtype.UUID{})
+	attr := s.Tasks.attributionForIssueTask(ctx, issue, "", attribution.SourceDelegation, "")
 	return s.Tasks.applyAttributionFallback(ctx, attr, agent)
 }
 
@@ -148,7 +147,7 @@ func joinedWakeupNote(w db.IssueWakeup, instruction string, receipts []db.IssueW
 	var b strings.Builder
 	fmt.Fprintf(&b, "Wakeup %s fired while this run was waiting to start, so it did not start a run of its own; handle it in this run. Instruction:\n%s\nTrigger facts (read current state before deciding what to do):\n", util.UUIDToString(w.ID), instruction)
 	for _, r := range receipts {
-		line := r.EventType + " " + string(canonicalWakeupPayload(r.Payload)) + "\n"
+		line := r.EventType + " " + string(canonicalWakeupPayload([]byte(fmt.Sprint(r.Payload)))) + "\n"
 		if b.Len()+len(line) > maxJoinedWakeupNote {
 			b.WriteString(wakeupOmittedEvidence)
 			break
@@ -173,19 +172,19 @@ type joinedWakeup struct {
 // A rule another writer holds keeps what it had.
 func (s *IssueWakeupService) JoinWaitingWakeups(ctx context.Context, task db.AgentTaskQueue) ([]byte, error) {
 	if !task.IssueID.Valid || !task.OriginatorUserID.Valid || task.Status != "dispatched" {
-		return task.Context, nil
+		return []byte(task.Context.String), nil
 	}
 	var stored struct {
 		Joined []joinedWakeup `json:"wakeup_joined"`
 		Chain  []string       `json:"wakeup_chain"`
 	}
-	_ = json.Unmarshal(task.Context, &stored)
-	candidates, err := s.Tasks.Queries.ListWaitingWakeups(ctx, db.ListWaitingWakeupsParams{IssueID: task.IssueID, AgentID: task.AgentID})
+	_ = json.Unmarshal([]byte(task.Context.String), &stored)
+	candidates, err := s.Tasks.Queries.ListWaitingWakeups(ctx, db.ListWaitingWakeupsParams{IssueID: task.IssueID.String, AgentID: nullString(task.AgentID)})
 	if err != nil || (len(candidates) == 0 && len(stored.Joined) == 0) {
-		return task.Context, err
+		return []byte(task.Context.String), err
 	}
-	previous := map[pgtype.UUID]joinedWakeup{}
-	var rules []pgtype.UUID
+	previous := map[string]joinedWakeup{}
+	var rules []string
 	for _, entry := range stored.Joined {
 		if id, err := util.ParseUUID(entry.WakeupID); err == nil {
 			previous[id] = entry
@@ -199,22 +198,22 @@ func (s *IssueWakeupService) JoinWaitingWakeups(ctx context.Context, task db.Age
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	tx, err := s.Tasks.TxStarter.Begin(ctx)
+	tx, err := s.Tasks.TxStarter.BeginTx(ctx, nil)
 	if err != nil {
-		return task.Context, err
+		return []byte(task.Context.String), err
 	}
-	defer tx.Rollback(ctx)
-	if _, err = tx.Exec(ctx, "SET LOCAL lock_timeout = '50ms'"); err != nil {
-		return task.Context, err
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, "SET LOCAL lock_timeout = '50ms'"); err != nil {
+		return []byte(task.Context.String), err
 	}
 	q := s.Tasks.Queries.WithTx(tx)
-	issue, err := q.GetIssue(ctx, task.IssueID)
+	issue, err := q.GetIssue(ctx, task.IssueID.String)
 	if err != nil {
-		return task.Context, err
+		return []byte(task.Context.String), err
 	}
 	active, err := wakeupIssueActive(ctx, q, issue)
 	if err != nil {
-		return task.Context, err
+		return []byte(task.Context.String), err
 	}
 	changed := len(previous) != len(stored.Joined)
 	joined := make([]joinedWakeup, 0, len(rules))
@@ -222,10 +221,10 @@ func (s *IssueWakeupService) JoinWaitingWakeups(ctx context.Context, task db.Age
 	for _, id := range rules {
 		prev, had := previous[id]
 		w, err := q.TryLockIssueWakeup(ctx, id)
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			// Busy: keep what an earlier claim reserved. Deleted: nothing left.
-			if _, err = q.LocklessWakeup(ctx, id); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-				return task.Context, err
+			if _, err = q.LocklessWakeup(ctx, id); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return []byte(task.Context.String), err
 			}
 			if had && err == nil {
 				joined = append(joined, prev)
@@ -235,11 +234,11 @@ func (s *IssueWakeupService) JoinWaitingWakeups(ctx context.Context, task db.Age
 			continue
 		}
 		if err != nil {
-			return task.Context, err
+			return []byte(task.Context.String), err
 		}
 		entry, ruleChain, err := s.reserveForRun(ctx, q, issue, active, task, w)
 		if err != nil {
-			return task.Context, err
+			return []byte(task.Context.String), err
 		}
 		if entry == nil {
 			changed = changed || had
@@ -252,30 +251,30 @@ func (s *IssueWakeupService) JoinWaitingWakeups(ctx context.Context, task db.Age
 		}
 	}
 	if !changed {
-		return task.Context, nil
+		return []byte(task.Context.String), nil
 	}
 	if len(chain) > wakeupChainLimit {
 		chain = chain[len(chain)-wakeupChainLimit:]
 	}
 	values := map[string]json.RawMessage{}
-	_ = json.Unmarshal(task.Context, &values)
+	_ = json.Unmarshal([]byte(task.Context.String), &values)
 	values["wakeup_joined"], _ = json.Marshal(joined)
 	if len(chain) > 0 {
 		values["wakeup_chain"], _ = json.Marshal(chain)
 	}
 	next, _ := json.Marshal(values)
-	updated, err := q.SetClaimedTaskContext(ctx, db.SetClaimedTaskContextParams{Context: next, ID: task.ID, DispatchedAt: task.DispatchedAt})
-	if errors.Is(err, pgx.ErrNoRows) {
+	updated, err := q.SetClaimedTaskContext(ctx, db.SetClaimedTaskContextParams{Context: nullString(string(next)), ID: task.ID, DispatchedAt: task.DispatchedAt})
+	if errors.Is(err, sql.ErrNoRows) {
 		// A newer claim of this run answers instead.
-		return task.Context, nil
+		return []byte(task.Context.String), nil
 	}
 	if err != nil {
-		return task.Context, err
+		return []byte(task.Context.String), err
 	}
-	if err = tx.Commit(ctx); err != nil {
-		return task.Context, err
+	if err = tx.Commit(); err != nil {
+		return []byte(task.Context.String), err
 	}
-	return updated.Context, nil
+	return []byte(updated.Context.String), nil
 }
 
 // reserveForRun reserves one locked rule's pending inputs for the run and
@@ -288,15 +287,15 @@ func (s *IssueWakeupService) reserveForRun(ctx context.Context, q *db.Queries, i
 		return nil, nil, err
 	}
 	var receipts []db.IssueWakeupReceipt
-	var held, free []pgtype.UUID
+	var held, free []string
 	for _, r := range pending {
-		if len(w.Condition) > 0 && r.EventType != wakeupConditionEventType && r.EventType != wakeupTimeoutEventType && r.EventType != wakeupManualEventType {
+		if len(w.Condition.String) > 0 && r.EventType != wakeupConditionEventType && r.EventType != wakeupTimeoutEventType && r.EventType != wakeupManualEventType {
 			continue
 		}
-		switch r.TaskID {
-		case task.ID:
+		switch {
+		case r.TaskID.Valid && r.TaskID.String == task.ID:
 			held = append(held, r.ID)
-		case pgtype.UUID{}:
+		case !r.TaskID.Valid || r.TaskID.String == "":
 			free = append(free, r.ID)
 		default:
 			continue
@@ -309,10 +308,10 @@ func (s *IssueWakeupService) reserveForRun(ctx context.Context, q *db.Queries, i
 		}
 		return nil, nil, q.ReleaseWakeupReceipts(ctx, held)
 	}
-	if len(receipts) == 0 || !active || w.DisabledAt.Valid || w.IssueID != task.IssueID {
+	if len(receipts) == 0 || !active || w.DisabledAt.Valid || w.IssueID != task.IssueID.String {
 		return release()
 	}
-	if _, err := q.FindPendingWakeupTask(ctx, util.UUIDToString(w.ID)); err == nil || !errors.Is(err, pgx.ErrNoRows) {
+	if _, err := q.FindPendingWakeupTask(ctx, nullString(util.UUIDToString(w.ID))); err == nil || !errors.Is(err, sql.ErrNoRows) {
 		// The rule's own run takes its inputs.
 		if err != nil {
 			return nil, nil, err
@@ -340,7 +339,7 @@ func (s *IssueWakeupService) reserveForRun(ctx context.Context, q *db.Queries, i
 		return release()
 	}
 	if len(free) > 0 {
-		if err = q.ReserveWakeupReceipts(ctx, db.ReserveWakeupReceiptsParams{TaskID: task.ID, Ids: free}); err != nil {
+		if err = q.ReserveWakeupReceipts(ctx, db.ReserveWakeupReceiptsParams{TaskID: nullString(task.ID), Ids: free}); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -352,17 +351,17 @@ func (s *IssueWakeupService) reserveForRun(ctx context.Context, q *db.Queries, i
 // the instruction the run gets.
 func (s *IssueWakeupService) mayJoin(ctx context.Context, q *db.Queries, issue db.Issue, task db.AgentTaskQueue, w db.IssueWakeup) (string, bool, error) {
 	agent, err := q.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: task.AgentID, WorkspaceID: w.WorkspaceID})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
 	if err != nil {
 		return "", false, err
 	}
 	if !w.SystemRule.Valid {
-		if w.AgentID != task.AgentID || w.CreatedBy != task.OriginatorUserID || (w.Mode == "once" && w.LastTaskID.Valid) {
+		if w.AgentID.String != task.AgentID || w.CreatedBy != task.OriginatorUserID || (w.Mode == "once" && w.LastTaskID.Valid) {
 			return "", false, nil
 		}
-		if err := s.authorize(ctx, q, w.WorkspaceID, w.CreatedBy, agent); err != nil {
+		if err := s.authorize(ctx, q, w.WorkspaceID, w.CreatedBy.String, agent); err != nil {
 			if errors.Is(err, ErrWakeupForbidden) {
 				err = nil
 			}
@@ -370,7 +369,7 @@ func (s *IssueWakeupService) mayJoin(ctx context.Context, q *db.Queries, issue d
 		}
 		return w.Instruction, true, nil
 	}
-	if !w.Enabled || issuestatus.Effective(ctx, q, issue.WorkspaceID, issue.Status) == "backlog" {
+	if (w.Enabled == 0) || issuestatus.Effective(ctx, q, issue.WorkspaceID, issue.Status) == "backlog" {
 		return "", false, nil
 	}
 	target, err := resolveWakeTarget(ctx, q, issue)
@@ -383,7 +382,7 @@ func (s *IssueWakeupService) mayJoin(ctx context.Context, q *db.Queries, issue d
 	}
 	var settings []byte
 	if ws, err := q.GetWorkspace(ctx, issue.WorkspaceID); err == nil {
-		settings = ws.Settings
+		settings = []byte(ws.Settings)
 	}
 	return ChildDoneInstruction(w.Instruction, settings), true, nil
 }
@@ -400,25 +399,25 @@ type takenRun struct {
 // yet still holds some, and the runs that started with some, whose inputs
 // the caller consumes as a merged firing.
 func takenReceipts(ctx context.Context, q *db.Queries, receipts []db.IssueWakeupReceipt) ([]db.IssueWakeupReceipt, bool, []takenRun, error) {
-	byRun := map[pgtype.UUID][]db.IssueWakeupReceipt{}
-	var runs []pgtype.UUID
+	byRun := map[string][]db.IssueWakeupReceipt{}
+	var runs []string
 	for _, r := range receipts {
 		if r.TaskID.Valid {
-			if _, ok := byRun[r.TaskID]; !ok {
-				runs = append(runs, r.TaskID)
+			if _, ok := byRun[r.TaskID.String]; !ok {
+				runs = append(runs, r.TaskID.String)
 			}
-			byRun[r.TaskID] = append(byRun[r.TaskID], r)
+			byRun[r.TaskID.String] = append(byRun[r.TaskID.String], r)
 		}
 	}
 	if len(runs) == 0 {
 		return receipts, false, nil, nil
 	}
-	released := map[pgtype.UUID]bool{}
+	released := map[string]bool{}
 	holding := false
 	var taken []takenRun
 	for _, id := range runs {
 		task, err := q.GetAgentTask(ctx, id)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, false, nil, err
 		}
 		switch {
@@ -427,7 +426,7 @@ func takenReceipts(ctx context.Context, q *db.Queries, receipts []db.IssueWakeup
 		case err == nil && task.Status != "completed" && task.Status != "failed" && task.Status != "cancelled":
 			holding = true
 		default:
-			ids := make([]pgtype.UUID, 0, len(byRun[id]))
+			ids := make([]string, 0, len(byRun[id]))
 			for _, r := range byRun[id] {
 				ids = append(ids, r.ID)
 				released[r.ID] = true
@@ -440,7 +439,7 @@ func takenReceipts(ctx context.Context, q *db.Queries, receipts []db.IssueWakeup
 	free := make([]db.IssueWakeupReceipt, 0, len(receipts))
 	for _, r := range receipts {
 		if released[r.ID] {
-			r.TaskID = pgtype.UUID{}
+			r.TaskID = nullString("")
 		}
 		if !r.TaskID.Valid {
 			free = append(free, r)
@@ -449,8 +448,8 @@ func takenReceipts(ctx context.Context, q *db.Queries, receipts []db.IssueWakeup
 	return free, holding, taken, nil
 }
 
-func receiptIDs(receipts []db.IssueWakeupReceipt) []pgtype.UUID {
-	ids := make([]pgtype.UUID, 0, len(receipts))
+func receiptIDs(receipts []db.IssueWakeupReceipt) []string {
+	ids := make([]string, 0, len(receipts))
 	for _, r := range receipts {
 		ids = append(ids, r.ID)
 	}

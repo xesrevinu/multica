@@ -1,9 +1,8 @@
 package handler
 
 import (
+	"database/sql"
 	"testing"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // TestWaitReasonForStatus pins the gate that keeps a finished hold from being
@@ -13,7 +12,7 @@ import (
 func TestWaitReasonForStatus(t *testing.T) {
 	t.Parallel()
 
-	held := pgtype.Text{String: "NuvioTV (held by task a1b2c3d4)", Valid: true}
+	held := sql.NullString{String: "NuvioTV (held by task a1b2c3d4)", Valid: true}
 
 	t.Run("returned while the task is parked", func(t *testing.T) {
 		if got := waitReasonForStatus("waiting_local_directory", held); got != "NuvioTV (held by task a1b2c3d4)" {
@@ -30,13 +29,13 @@ func TestWaitReasonForStatus(t *testing.T) {
 	})
 
 	t.Run("absent reason is empty, not NULL text", func(t *testing.T) {
-		if got := waitReasonForStatus("waiting_local_directory", pgtype.Text{}); got != "" {
+		if got := waitReasonForStatus("waiting_local_directory", sql.NullString{}); got != "" {
 			t.Fatalf("wait reason = %q, want empty for a NULL column", got)
 		}
 	})
 
 	t.Run("whitespace-only reason reads as absent", func(t *testing.T) {
-		blank := pgtype.Text{String: "   ", Valid: true}
+		blank := sql.NullString{String: "   ", Valid: true}
 		if got := waitReasonForStatus("waiting_local_directory", blank); got != "" {
 			t.Fatalf("wait reason = %q, want empty", got)
 		}

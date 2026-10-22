@@ -12,8 +12,8 @@ func TestParseUUID_Valid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
-	if !u.Valid {
-		t.Fatalf("expected u.Valid = true")
+	if u == "" {
+		t.Fatalf("expected a parsed UUID")
 	}
 }
 
@@ -23,12 +23,12 @@ func TestParseUUID_InvalidReturnsError(t *testing.T) {
 		t.Run(s, func(t *testing.T) {
 			u, err := ParseUUID(s)
 			if err == nil {
-				t.Fatalf("expected error for %q, got nil (u.Valid=%v)", s, u.Valid)
+				t.Fatalf("expected error for %q, got nil (u=%q)", s, u)
 			}
-			if u.Valid {
-				// Critical invariant: invalid input must NOT yield a valid UUID.
+			if u != "" {
+				// Critical invariant: invalid input must NOT yield a UUID.
 				// Returning a valid zero-UUID was the root cause of #1661.
-				t.Fatalf("expected u.Valid = false for %q, got true", s)
+				t.Fatalf("expected empty UUID for %q, got %q", s, u)
 			}
 		})
 	}

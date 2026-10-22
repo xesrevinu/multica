@@ -3,7 +3,6 @@ package handler
 import (
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -20,8 +19,8 @@ func TestTaskCoversReplyParent(t *testing.T) {
 	stranger := "99999999-9999-9999-9999-999999999999"
 
 	task := db.AgentTaskQueue{
-		TriggerCommentID: util.MustParseUUID(trigger),
-		CoalescedCommentIds: []pgtype.UUID{
+		TriggerCommentID: nullString(util.MustParseUUID(trigger)),
+		CoalescedCommentIds: []string{
 			util.MustParseUUID(c1),
 			util.MustParseUUID(c2),
 		},
@@ -29,14 +28,14 @@ func TestTaskCoversReplyParent(t *testing.T) {
 
 	cases := []struct {
 		name   string
-		parent pgtype.UUID
+		parent string
 		want   bool
 	}{
 		{"trigger comment allowed", util.MustParseUUID(trigger), true},
 		{"first coalesced comment allowed", util.MustParseUUID(c1), true},
 		{"second coalesced comment allowed", util.MustParseUUID(c2), true},
 		{"unrelated comment rejected", util.MustParseUUID(stranger), false},
-		{"invalid/empty parent rejected", pgtype.UUID{}, false},
+		{"invalid/empty parent rejected", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

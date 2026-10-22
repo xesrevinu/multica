@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +14,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
@@ -245,16 +245,16 @@ func sourceContextThreadChangeReasons(captured, current service.SourceContextSna
 }
 
 func (h *Handler) issueSourceContextDetail(ctx context.Context, issue db.Issue) (*sourceContextDetailResponse, error) {
-	row, err := h.Queries.GetIssueSourceContextByIssue(ctx, db.GetIssueSourceContextByIssueParams{WorkspaceID: issue.WorkspaceID, IssueID: issue.ID})
+	row, err := h.Queries.GetIssueSourceContextByIssue(ctx, db.GetIssueSourceContextByIssueParams{WorkspaceID: issue.WorkspaceID, IssueID: nullString(issue.ID)})
 	if err != nil {
 		return nil, err
 	}
 	var captured service.SourceContextSnapshot
-	if err := json.Unmarshal(row.Snapshot, &captured); err != nil {
+	if err := json.Unmarshal([]byte(row.Snapshot), &captured); err != nil {
 		return nil, fmt.Errorf("decode source context snapshot: %w", err)
 	}
 	response := &sourceContextDetailResponse{
-		ID: uuidToString(row.ID), Version: row.SnapshotVersion, Usage: service.SourceContextUsage,
+		ID: uuidToString(row.ID), Version: int16(row.SnapshotVersion), Usage: service.SourceContextUsage,
 		CapturedAt: timestampToString(row.CapturedAt), DisplayState: "unchanged",
 		SourceIssueState: "unchanged", CommentThreadState: "unchanged", AnchorCommentState: "unavailable", ChangeReasons: []string{},
 		ChangeDetails: sourceContextChangeDetails{ChangedCommentIDs: []string{}, DescriptionAttachmentChanges: []sourceContextDescriptionAttachmentChange{}},
@@ -271,7 +271,7 @@ func (h *Handler) issueSourceContextDetail(ctx context.Context, issue db.Issue) 
 			IssueID: uuidToString(anchor.IssueID), AnchorCommentID: uuidToString(row.AnchorCommentID), Identifier: captured.SourceIssue.Identifier,
 		}
 		response.CanOpenCurrentSource = true
-	} else if errors.Is(anchorErr, pgx.ErrNoRows) || anchorErr == nil {
+	} else if errors.Is(anchorErr, sql.ErrNoRows) || anchorErr == nil {
 		response.AnchorCommentState = "deleted"
 	}
 
@@ -350,7 +350,7 @@ func (h *Handler) issueSourceContextDetail(ctx context.Context, issue db.Issue) 
 	return response, nil
 }
 
-func (h *Handler) resolveSourceContextAuthors(ctx context.Context, workspaceID pgtype.UUID, comments []service.SourceContextCommentSnapshot) []sourceContextAuthorState {
+func (h *Handler) resolveSourceContextAuthors(ctx context.Context, workspaceID string, comments []service.SourceContextCommentSnapshot) []sourceContextAuthorState {
 	seen := make(map[string]struct{})
 	states := make([]sourceContextAuthorState, 0)
 	for _, comment := range comments {
@@ -367,7 +367,7 @@ func (h *Handler) resolveSourceContextAuthors(ctx context.Context, workspaceID p
 		}
 		switch comment.Author.Type {
 		case "member":
-			if _, err := h.Queries.GetMemberByUserAndWorkspace(ctx, db.GetMemberByUserAndWorkspaceParams{UserID: authorID, WorkspaceID: workspaceID}); errors.Is(err, pgx.ErrNoRows) {
+			if _, err := h.Queries.GetMemberByUserAndWorkspace(ctx, db.GetMemberByUserAndWorkspaceParams{UserID: authorID, WorkspaceID: workspaceID}); errors.Is(err, sql.ErrNoRows) {
 				state.State = "no_longer_in_workspace"
 			} else if err == nil {
 				user, userErr := h.Queries.GetUser(ctx, authorID)
@@ -384,7 +384,7 @@ func (h *Handler) resolveSourceContextAuthors(ctx context.Context, workspaceID p
 			}
 		case "agent":
 			agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: authorID, WorkspaceID: workspaceID})
-			if errors.Is(err, pgx.ErrNoRows) {
+			if errors.Is(err, sql.ErrNoRows) {
 				state.State = "deleted_agent"
 			} else if err == nil {
 				state.CurrentName = &agent.Name
@@ -467,7 +467,7 @@ func (h *Handler) CreateCommentSubIssue(w http.ResponseWriter, r *http.Request) 
 	}
 	build, err := service.BuildSourceContext(r.Context(), h.Queries, wsUUID, anchorCommentID)
 	if errors.Is(err, service.ErrAnchorCommentDeleted) {
-		if _, issueErr := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{ID: tokenIssueID, WorkspaceID: wsUUID}); errors.Is(issueErr, pgx.ErrNoRows) {
+		if _, issueErr := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{ID: tokenIssueID, WorkspaceID: wsUUID}); errors.Is(issueErr, sql.ErrNoRows) {
 			err = service.ErrSourceIssueDeleted
 		}
 	}
@@ -539,7 +539,7 @@ func (h *Handler) CreateCommentSubIssue(w http.ResponseWriter, r *http.Request) 
 			WorkspaceID: wsUUID, ID: capture.ID,
 		})
 		switch {
-		case errors.Is(lookupErr, pgx.ErrNoRows):
+		case errors.Is(lookupErr, sql.ErrNoRows):
 			cleanup()
 		case lookupErr != nil:
 			// A commit error can be ambiguous. Never delete an object while DB
@@ -569,7 +569,7 @@ func (h *Handler) CreateCommentSubIssue(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-func sourceContextAuditAttrs(r *http.Request, contextID pgtype.UUID, sourceIssueID, anchorCommentID string, capturedBy pgtype.UUID, mode string, limits service.SourceContextLimitUsage, result string) []any {
+func sourceContextAuditAttrs(r *http.Request, contextID string, sourceIssueID, anchorCommentID string, capturedBy string, mode string, limits service.SourceContextLimitUsage, result string) []any {
 	return append(logger.RequestAttrs(r),
 		"source_context_id", util.UUIDToString(contextID),
 		"source_issue_id", sourceIssueID,
@@ -584,7 +584,7 @@ func sourceContextAuditAttrs(r *http.Request, contextID pgtype.UUID, sourceIssue
 	)
 }
 
-func (h *Handler) cloneSourceContext(ctx context.Context, workspaceID, userID, contextID pgtype.UUID, build service.SourceContextBuild) (service.SourceContextCapture, []string, error) {
+func (h *Handler) cloneSourceContext(ctx context.Context, workspaceID, userID, contextID string, build service.SourceContextBuild) (service.SourceContextCapture, []string, error) {
 	if len(build.Rows) == 0 {
 		capture, err := service.PrepareSourceContextCapture(build, contextID, workspaceID, userID, time.Now(), nil)
 		return capture, nil, err
@@ -637,7 +637,7 @@ func (h *Handler) cloneSourceContext(ctx context.Context, workspaceID, userID, c
 	return capture, keys, nil
 }
 
-func (h *Handler) createManualCommentSubIssue(w http.ResponseWriter, r *http.Request, workspaceID, userID pgtype.UUID, input CreateIssueRequest, capture service.SourceContextCapture, limits service.SourceContextLimitUsage) error {
+func (h *Handler) createManualCommentSubIssue(w http.ResponseWriter, r *http.Request, workspaceID, userID string, input CreateIssueRequest, capture service.SourceContextCapture, limits service.SourceContextLimitUsage) error {
 	title := strings.TrimSpace(input.Title)
 	if title == "" {
 		return sourceContextBadRequest("title is required")
@@ -658,10 +658,10 @@ func (h *Handler) createManualCommentSubIssue(w http.ResponseWriter, r *http.Req
 	if !validateIssueEnum(w, "priority", priority, validIssuePriorities) {
 		return errSourceContextResponseWritten
 	}
-	var assigneeType pgtype.Text
-	var assigneeID pgtype.UUID
+	var assigneeType sql.NullString
+	var assigneeID string
 	if input.AssigneeType != nil && strings.TrimSpace(*input.AssigneeType) != "" {
-		assigneeType = pgtype.Text{String: strings.TrimSpace(*input.AssigneeType), Valid: true}
+		assigneeType = sql.NullString{String: strings.TrimSpace(*input.AssigneeType), Valid: true}
 	}
 	if input.AssigneeID != nil && strings.TrimSpace(*input.AssigneeID) != "" {
 		parsed, err := util.ParseUUID(strings.TrimSpace(*input.AssigneeID))
@@ -674,7 +674,7 @@ func (h *Handler) createManualCommentSubIssue(w http.ResponseWriter, r *http.Req
 		writeError(w, code, message)
 		return errSourceContextResponseWritten
 	}
-	var projectID pgtype.UUID
+	var projectID string
 	if input.ProjectID != nil && strings.TrimSpace(*input.ProjectID) != "" {
 		parsed, err := util.ParseUUID(strings.TrimSpace(*input.ProjectID))
 		if err != nil {
@@ -711,19 +711,19 @@ func (h *Handler) createManualCommentSubIssue(w http.ResponseWriter, r *http.Req
 		}
 		dueDate = parsed
 	}
-	var stage pgtype.Int4
+	var stage sql.NullInt64
 	if input.Stage != nil {
 		if *input.Stage < 1 {
 			writeError(w, http.StatusBadRequest, "stage must be at least 1")
 			return errSourceContextResponseWritten
 		}
-		stage = pgtype.Int4{Int32: *input.Stage, Valid: true}
+		stage = sql.NullInt64{Int64: int64(*input.Stage), Valid: true}
 	}
 	prefix := h.getIssuePrefix(r.Context(), workspaceID)
 	result, err := h.IssueService.Create(r.Context(), service.IssueCreateParams{
 		WorkspaceID: workspaceID, Title: title, Description: ptrToText(input.Description), Status: status, Priority: priority,
 		AssigneeType: assigneeType, AssigneeID: assigneeID, CreatorType: "member", CreatorID: userID,
-		ParentIssueID: capture.SourceIssueID, ProjectID: projectID, StartDate: startDate, DueDate: dueDate,
+		ParentIssueID: capture.SourceIssueID, ProjectID: projectID, StartDate: formatDate(startDate.Time, startDate.Valid), DueDate: formatDate(dueDate.Time, dueDate.Valid),
 		AttachmentIDs: attachmentIDs, LabelIDs: labelIDs, Properties: properties, Stage: stage,
 		AllowDuplicate: input.AllowDuplicate, SourceContext: &capture,
 	}, service.IssueCreateOpts{
@@ -748,13 +748,13 @@ func (h *Handler) createManualCommentSubIssue(w http.ResponseWriter, r *http.Req
 }
 
 type preparedAgentCommentSubIssue struct {
-	agentID, squadID, runtimeID pgtype.UUID
+	agentID, squadID, runtimeID string
 	prompt, priority, dueDate   string
-	projectID                   pgtype.UUID
-	attachmentIDs               []pgtype.UUID
+	projectID                   string
+	attachmentIDs               []string
 }
 
-func (h *Handler) prepareAgentCommentSubIssue(w http.ResponseWriter, r *http.Request, workspaceID pgtype.UUID, input QuickCreateIssueRequest) (*preparedAgentCommentSubIssue, error) {
+func (h *Handler) prepareAgentCommentSubIssue(w http.ResponseWriter, r *http.Request, workspaceID string, input QuickCreateIssueRequest) (*preparedAgentCommentSubIssue, error) {
 	prompt := strings.TrimSpace(input.Prompt)
 	if prompt == "" {
 		return nil, sourceContextBadRequest("prompt is required")
@@ -768,7 +768,7 @@ func (h *Handler) prepareAgentCommentSubIssue(w http.ResponseWriter, r *http.Req
 	if priority != "" && priority != "urgent" && priority != "high" && priority != "medium" && priority != "low" {
 		return nil, sourceContextBadRequest("invalid priority")
 	}
-	var agentID, squadID pgtype.UUID
+	var agentID, squadID string
 	if hasSquad {
 		parsed, err := util.ParseUUID(strings.TrimSpace(input.SquadID))
 		if err != nil {
@@ -787,7 +787,7 @@ func (h *Handler) prepareAgentCommentSubIssue(w http.ResponseWriter, r *http.Req
 		}
 		agentID = parsed
 	}
-	if status, message := h.validateAssigneePair(r.Context(), r, util.UUIDToString(workspaceID), pgtype.Text{String: "agent", Valid: true}, agentID); status != 0 {
+	if status, message := h.validateAssigneePair(r.Context(), r, util.UUIDToString(workspaceID), sql.NullString{String: "agent", Valid: true}, agentID); status != 0 {
 		writeError(w, status, message)
 		return nil, errSourceContextResponseWritten
 	}
@@ -803,12 +803,12 @@ func (h *Handler) prepareAgentCommentSubIssue(w http.ResponseWriter, r *http.Req
 		writeAgentUnavailable(w, verdict.Detail, verdict.Reason)
 		return nil, errSourceContextResponseWritten
 	}
-	if status, payload := h.checkQuickCreateDaemonVersion(r.Context(), obsmetrics.RuntimeLookupSourceSourceContext, agent.RuntimeID); status != 0 {
+	if status, payload := h.checkQuickCreateDaemonVersion(r.Context(), obsmetrics.RuntimeLookupSourceSourceContext, agent.RuntimeID.String); status != 0 {
 		writeJSON(w, status, payload)
 		return nil, errSourceContextResponseWritten
 	}
-	runtime, err := h.getAgentRuntime(r.Context(), obsmetrics.RuntimeLookupSourceSourceContext, agent.RuntimeID)
-	if err != nil || !runtimeHasCapability(runtime.Metadata, protocol.DaemonCapabilitySourceContextQuickCreateV1) {
+	runtime, err := h.getAgentRuntime(r.Context(), obsmetrics.RuntimeLookupSourceSourceContext, agent.RuntimeID.String)
+	if err != nil || !runtimeHasCapability([]byte(runtime.Metadata), protocol.DaemonCapabilitySourceContextQuickCreateV1) {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"code": "source_context_quick_create_unsupported", "error": "selected agent runtime must be updated before using captured context"})
 		return nil, errSourceContextResponseWritten
 	}
@@ -821,7 +821,7 @@ func (h *Handler) prepareAgentCommentSubIssue(w http.ResponseWriter, r *http.Req
 		dueDate = parsed.Time.Format("2006-01-02")
 	}
 	if priority != "" || dueDate != "" {
-		if status, payload := h.checkQuickCreateDaemonVersionAtLeast(r.Context(), obsmetrics.RuntimeLookupSourceSourceContext, agent.RuntimeID, agentpkg.MinQuickCreateFieldsCLIVersion); status != 0 {
+		if status, payload := h.checkQuickCreateDaemonVersionAtLeast(r.Context(), obsmetrics.RuntimeLookupSourceSourceContext, agent.RuntimeID.String, agentpkg.MinQuickCreateFieldsCLIVersion); status != 0 {
 			writeJSON(w, status, payload)
 			return nil, errSourceContextResponseWritten
 		}
@@ -830,7 +830,7 @@ func (h *Handler) prepareAgentCommentSubIssue(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return nil, errSourceContextResponseWritten
 	}
-	var projectID pgtype.UUID
+	var projectID string
 	if strings.TrimSpace(input.ProjectID) != "" {
 		parsed, err := util.ParseUUID(strings.TrimSpace(input.ProjectID))
 		if err != nil {
@@ -842,17 +842,17 @@ func (h *Handler) prepareAgentCommentSubIssue(w http.ResponseWriter, r *http.Req
 		projectID = parsed
 	}
 	return &preparedAgentCommentSubIssue{
-		agentID: agentID, squadID: squadID, runtimeID: agent.RuntimeID,
+		agentID: agentID, squadID: squadID, runtimeID: agent.RuntimeID.String,
 		prompt: prompt, priority: priority, dueDate: dueDate,
 		projectID: projectID, attachmentIDs: attachmentIDs,
 	}, nil
 }
 
-func (h *Handler) createAgentCommentSubIssue(w http.ResponseWriter, r *http.Request, workspaceID, userID pgtype.UUID, prepared preparedAgentCommentSubIssue, capture service.SourceContextCapture, limits service.SourceContextLimitUsage) error {
+func (h *Handler) createAgentCommentSubIssue(w http.ResponseWriter, r *http.Request, workspaceID, userID string, prepared preparedAgentCommentSubIssue, capture service.SourceContextCapture, limits service.SourceContextLimitUsage) error {
 	// Recheck the capability after potentially long streaming copies. A runtime
 	// can re-register during the copy; the final enqueue must still fail closed.
 	runtime, err := h.getAgentRuntime(r.Context(), obsmetrics.RuntimeLookupSourceSourceContext, prepared.runtimeID)
-	if err != nil || !runtimeHasCapability(runtime.Metadata, protocol.DaemonCapabilitySourceContextQuickCreateV1) {
+	if err != nil || !runtimeHasCapability([]byte(runtime.Metadata), protocol.DaemonCapabilitySourceContextQuickCreateV1) {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"code": "source_context_quick_create_unsupported", "error": "selected agent runtime must be updated before using captured context"})
 		return errSourceContextResponseWritten
 	}

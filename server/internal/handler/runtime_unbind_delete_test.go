@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -131,10 +130,10 @@ func TestActiveAgentSetMatches(t *testing.T) {
 	})
 }
 
-func uuidFromString(s string) (pgtype.UUID, error) {
-	var u pgtype.UUID
+func uuidFromString(s string) (string, error) {
+	var u string
 	if err := u.Scan(s); err != nil {
-		return pgtype.UUID{}, err
+		return "", err
 	}
 	return u, nil
 }
@@ -287,8 +286,7 @@ func TestAutopilotAssignmentLockBlocksRuntimeTeardown(t *testing.T) {
 		t.Fatalf("set lock timeout: %v", err)
 	}
 	if _, err := testHandler.Queries.WithTx(deleteTx).ListUserAgentsByRuntimeForUpdate(
-		ctx,
-		parseUUID(runtimeID),
+		ctx, nullString(parseUUID(runtimeID)),
 	); err == nil {
 		t.Fatal("runtime teardown unexpectedly bypassed the Autopilot assignment lock")
 	}

@@ -13,7 +13,7 @@ import (
 func TestProjectTerminalIssueStatusKeysFallsBackToCanonicalKeys(t *testing.T) {
 	h := *testHandler
 	h.Queries = db.New(failQueryDBTX{
-		DBTX:   testPool,
+		DBTX:   testSQLite,
 		failOn: "SELECT key FROM issue_status",
 		err:    errors.New("status catalog unavailable"),
 	})

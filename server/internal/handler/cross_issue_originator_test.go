@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/testutil"
 )
 
@@ -181,19 +180,19 @@ func asRun(req *http.Request, agentID, taskID string) *http.Request {
 
 // queuedTaskFor returns the queued task for (issue, agent) and its originator.
 // ok is false when the delegation was refused and nothing was enqueued.
-func queuedTaskFor(t *testing.T, issueID, agentID string) (taskID string, originator pgtype.UUID, ok bool) {
+func queuedTaskFor(t *testing.T, issueID, agentID string) (taskID string, originator string, ok bool) {
 	t.Helper()
 	const where = `FROM agent_task_queue WHERE issue_id = $1 AND agent_id = $2 AND status = 'queued'`
 	if dbfx.Count(t, `SELECT count(*) `+where, issueID, agentID) == 0 {
-		return "", pgtype.UUID{}, false
+		return "", "", false
 	}
 	dbfx.QueryRow(t, `SELECT id, originator_user_id `+where, issueID, agentID).Scan(&taskID, &originator)
 	return taskID, originator, true
 }
 
-func commentSourceTaskOf(t *testing.T, commentID string) pgtype.UUID {
+func commentSourceTaskOf(t *testing.T, commentID string) string {
 	t.Helper()
-	var sourceTaskID pgtype.UUID
+	var sourceTaskID string
 	dbfx.QueryRow(t, `SELECT source_task_id FROM comment WHERE id = $1`, commentID).Scan(&sourceTaskID)
 	return sourceTaskID
 }
@@ -211,7 +210,7 @@ func lastCommentOn(t *testing.T, issueID string) string {
 // parent its replies may use (taskCoversReplyParent).
 func triggerCommentOf(t *testing.T, taskID string) string {
 	t.Helper()
-	var triggerCommentID pgtype.UUID
+	var triggerCommentID string
 	dbfx.QueryRow(t, `SELECT trigger_comment_id FROM agent_task_queue WHERE id = $1`, taskID).Scan(&triggerCommentID)
 	return uuidToString(triggerCommentID)
 }
@@ -267,7 +266,7 @@ func TestCrossIssueDelegation_OriginatorChainSurvivesTheHop(t *testing.T) {
 			}
 			if uuidToString(originator) != bohan {
 				t.Fatalf("woken run originator = %q (valid=%v), want %q — the chain lost its human across the hop",
-					uuidToString(originator), originator.Valid, bohan)
+					uuidToString(originator), (originator != ""), bohan)
 			}
 
 			// A third hop proves the chain keeps travelling rather than surviving

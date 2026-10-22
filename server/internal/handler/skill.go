@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,8 +19,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
 	skillpkg "github.com/multica-ai/multica/server/internal/skill"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -177,20 +176,20 @@ func skillToResponse(s db.Skill) SkillResponse {
 		Name:        s.Name,
 		Description: s.Description,
 		Content:     s.Content,
-		Config:      decodeSkillConfig(s.Config),
+		Config:      decodeSkillConfig([]byte(s.Config)),
 		CreatedBy:   uuidToPtr(s.CreatedBy),
 		CreatedAt:   timestampToString(s.CreatedAt),
 		UpdatedAt:   timestampToString(s.UpdatedAt),
 	}
 }
 
-func (h *Handler) existingSkillIdentityByName(ctx context.Context, workspaceID pgtype.UUID, name string) (ExistingSkillIdentity, bool, error) {
+func (h *Handler) existingSkillIdentityByName(ctx context.Context, workspaceID string, name string) (ExistingSkillIdentity, bool, error) {
 	skill, err := h.Queries.GetSkillByWorkspaceAndName(ctx, db.GetSkillByWorkspaceAndNameParams{
 		WorkspaceID: workspaceID,
 		Name:        name,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return ExistingSkillIdentity{}, false, nil
 		}
 		return ExistingSkillIdentity{}, false, err
@@ -205,7 +204,7 @@ func existingSkillIdentity(skill db.Skill, userID string) ExistingSkillIdentity 
 		CanOverwrite: canOverwriteSkillByLocalImport(userID, skill),
 	}
 	if skill.CreatedBy.Valid {
-		identity.CreatedBy = uuidToString(skill.CreatedBy)
+		identity.CreatedBy = uuidToString(skill.CreatedBy.String)
 	}
 	return identity
 }
@@ -224,11 +223,11 @@ func decodeSkillConfig(raw []byte) any {
 }
 
 func skillSummaryToResponse(
-	id, workspaceID pgtype.UUID,
+	id, workspaceID string,
 	name, description string,
 	config []byte,
-	createdBy pgtype.UUID,
-	createdAt, updatedAt pgtype.Timestamptz,
+	createdBy string,
+	createdAt, updatedAt string,
 ) SkillSummaryResponse {
 	return SkillSummaryResponse{
 		ID:          uuidToString(id),
@@ -236,7 +235,7 @@ func skillSummaryToResponse(
 		Name:        name,
 		Description: description,
 		Config:      decodeSkillConfig(config),
-		CreatedBy:   uuidToPtr(createdBy),
+		CreatedBy:   uuidToPtr(nullString(createdBy)),
 		CreatedAt:   timestampToString(createdAt),
 		UpdatedAt:   timestampToString(updatedAt),
 	}
@@ -258,8 +257,8 @@ func skillFileMetadataToResponse(f db.ListSkillFileMetadataRow) SkillFileMetadat
 		ID:          uuidToString(f.ID),
 		SkillID:     uuidToString(f.SkillID),
 		Path:        f.Path,
-		Size:        f.Size,
-		ContentHash: f.ContentHash,
+		Size:        ifaceInt64(f.Size),
+		ContentHash: ifaceString(f.ContentHash),
 		CreatedAt:   timestampToString(f.CreatedAt),
 		UpdatedAt:   timestampToString(f.UpdatedAt),
 	}
@@ -356,7 +355,7 @@ func (h *Handler) ListSkills(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ids := make([]pgtype.UUID, len(skills))
+	ids := make([]string, len(skills))
 	for i, s := range skills {
 		ids[i] = s.ID
 	}
@@ -365,8 +364,7 @@ func (h *Handler) ListSkills(w http.ResponseWriter, r *http.Request) {
 	resp := make([]SkillSummaryResponse, len(skills))
 	for i, s := range skills {
 		resp[i] = skillSummaryToResponse(
-			s.ID, s.WorkspaceID, s.Name, s.Description, s.Config,
-			s.CreatedBy, s.CreatedAt, s.UpdatedAt,
+			s.ID, s.WorkspaceID, s.Name, s.Description, []byte(s.Config), s.CreatedBy.String, s.CreatedAt, s.UpdatedAt,
 		)
 		// Own a non-nil slice so JSON is `labels: []` (not `null`/omitted).
 		// append(nil, xs...) keeps a nil header when xs is empty.
@@ -381,7 +379,7 @@ func (h *Handler) ListSkills(w http.ResponseWriter, r *http.Request) {
 // keyed by skill UUID string. On error or empty input, returns an empty map —
 // label rendering is non-critical and we'd rather serve skills without labels
 // than fail the whole list call.
-func (h *Handler) labelsBySkill(ctx context.Context, wsUUID pgtype.UUID, skillIDs []pgtype.UUID) map[string][]LabelResponse {
+func (h *Handler) labelsBySkill(ctx context.Context, wsUUID string, skillIDs []string) map[string][]LabelResponse {
 	out := map[string][]LabelResponse{}
 	if len(skillIDs) == 0 {
 		return out
@@ -516,8 +514,7 @@ func (h *Handler) writeSkillMetadata(w http.ResponseWriter, r *http.Request, ski
 
 	writeJSON(w, http.StatusOK, SkillWithFileMetadataResponse{
 		SkillSummaryResponse: skillSummaryToResponse(
-			skill.ID, skill.WorkspaceID, skill.Name, skill.Description,
-			skill.Config, skill.CreatedBy, skill.CreatedAt, skill.UpdatedAt,
+			skill.ID, skill.WorkspaceID, skill.Name, skill.Description, []byte(skill.Config), skill.CreatedBy.String, skill.CreatedAt, skill.UpdatedAt,
 		),
 		ContentSize: int64(len(skill.Content)),
 		ContentHash: contentHash(skill.Content),
@@ -588,7 +585,7 @@ func (h *Handler) canManageSkill(w http.ResponseWriter, r *http.Request, skill d
 		return false
 	}
 	isAdmin := roleAllowed(member.Role, "owner", "admin")
-	isSkillCreator := skill.CreatedBy.Valid && uuidToString(skill.CreatedBy) == requestUserID(r)
+	isSkillCreator := skill.CreatedBy.Valid && uuidToString(skill.CreatedBy.String) == requestUserID(r)
 	if !isAdmin && !isSkillCreator {
 		writeError(w, http.StatusForbidden, "only the skill creator can manage this skill")
 		return false
@@ -602,7 +599,7 @@ func (h *Handler) canManageSkill(w http.ResponseWriter, r *http.Request, skill d
 // Workspace owners/admins who want to change a skill they did not create must
 // edit it in-app instead. See MUL-2701 / MUL-2800.
 func canOverwriteSkillByLocalImport(userID string, skill db.Skill) bool {
-	return skill.CreatedBy.Valid && uuidToString(skill.CreatedBy) == userID
+	return skill.CreatedBy.Valid && uuidToString(skill.CreatedBy.String) == userID
 }
 
 func (h *Handler) UpdateSkill(w http.ResponseWriter, r *http.Request) {
@@ -628,12 +625,12 @@ func (h *Handler) UpdateSkill(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start transaction")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 
 	qtx := h.Queries.WithTx(tx)
 
@@ -641,17 +638,17 @@ func (h *Handler) UpdateSkill(w http.ResponseWriter, r *http.Request) {
 		ID: parseUUID(id),
 	}
 	if req.Name != nil {
-		params.Name = pgtype.Text{String: sanitizeNullBytes(*req.Name), Valid: true}
+		params.Name = sql.NullString{String: sanitizeNullBytes(*req.Name), Valid: true}
 	}
 	if req.Description != nil {
-		params.Description = pgtype.Text{String: sanitizeNullBytes(*req.Description), Valid: true}
+		params.Description = sql.NullString{String: sanitizeNullBytes(*req.Description), Valid: true}
 	}
 	if req.Content != nil {
-		params.Content = pgtype.Text{String: sanitizeNullBytes(*req.Content), Valid: true}
+		params.Content = sql.NullString{String: sanitizeNullBytes(*req.Content), Valid: true}
 	}
 	if req.Config != nil {
 		config, _ := json.Marshal(req.Config)
-		params.Config = config
+		params.Config = nullString(string(config))
 	}
 
 	skill, err = qtx.UpdateSkill(r.Context(), params)
@@ -698,7 +695,7 @@ func (h *Handler) UpdateSkill(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit")
 		return
 	}
@@ -723,12 +720,12 @@ func (h *Handler) DeleteSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start transaction")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 	if err := qtx.DeleteSkillLabelAssignmentsBySkill(r.Context(), skill.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to remove skill label assignments")
@@ -741,7 +738,7 @@ func (h *Handler) DeleteSkill(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete skill")
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit skill deletion")
 		return
 	}
@@ -2204,7 +2201,7 @@ func skillImportConflictReason() string {
 	return "a skill with this name already exists; use --on-conflict overwrite to replace it or --on-conflict rename to import a copy"
 }
 
-func (h *Handler) createImportedSkillWithName(ctx context.Context, workspaceID, creatorID pgtype.UUID, name string, imported *importedSkill, config map[string]any, files []CreateSkillFileRequest) (SkillWithFilesResponse, error) {
+func (h *Handler) createImportedSkillWithName(ctx context.Context, workspaceID, creatorID string, name string, imported *importedSkill, config map[string]any, files []CreateSkillFileRequest) (SkillWithFilesResponse, error) {
 	return h.createSkillWithFiles(ctx, skillCreateInput{
 		WorkspaceID: workspaceID,
 		CreatorID:   creatorID,
@@ -2216,7 +2213,7 @@ func (h *Handler) createImportedSkillWithName(ctx context.Context, workspaceID, 
 	})
 }
 
-func (h *Handler) createRenamedImportedSkill(ctx context.Context, workspaceID, creatorID pgtype.UUID, baseName string, imported *importedSkill, config map[string]any, files []CreateSkillFileRequest) (SkillWithFilesResponse, error) {
+func (h *Handler) createRenamedImportedSkill(ctx context.Context, workspaceID, creatorID string, baseName string, imported *importedSkill, config map[string]any, files []CreateSkillFileRequest) (SkillWithFilesResponse, error) {
 	for suffix := 2; suffix < maxImportRenameAttempts+2; suffix++ {
 		candidate := fmt.Sprintf("%s-%d", baseName, suffix)
 		resp, err := h.createImportedSkillWithName(ctx, workspaceID, creatorID, candidate, imported, config, files)
@@ -2243,7 +2240,7 @@ func skillImportOverwriteFailure(err error) (int, string) {
 	}
 }
 
-func (h *Handler) resolveImportSkillConflict(w http.ResponseWriter, r *http.Request, strategy string, workspaceID string, workspaceUUID, creatorUUID pgtype.UUID, creatorID string, name string, imported *importedSkill, config map[string]any, files []CreateSkillFileRequest, existing db.Skill) {
+func (h *Handler) resolveImportSkillConflict(w http.ResponseWriter, r *http.Request, strategy string, workspaceID string, workspaceUUID, creatorUUID string, creatorID string, name string, imported *importedSkill, config map[string]any, files []CreateSkillFileRequest, existing db.Skill) {
 	existingInfo := existingSkillIdentity(existing, creatorID)
 	switch strategy {
 	case importOnConflictSkip:
@@ -2430,7 +2427,7 @@ func importedSkillFileRequests(imported *importedSkill) []CreateSkillFileRequest
 // the extracted files onto CreateSkillFileRequest, records provenance into
 // config.origin, and creates the skill, routing same-name collisions through
 // the on_conflict strategy.
-func (h *Handler) finishSkillImport(w http.ResponseWriter, r *http.Request, workspaceID string, workspaceUUID, creatorUUID pgtype.UUID, creatorID, strategy string, structuredResult bool, imported *importedSkill) {
+func (h *Handler) finishSkillImport(w http.ResponseWriter, r *http.Request, workspaceID string, workspaceUUID, creatorUUID string, creatorID, strategy string, structuredResult bool, imported *importedSkill) {
 	files := importedSkillFileRequests(imported)
 
 	// Persist provenance into skill.config.origin so list/detail UI can show
@@ -2610,10 +2607,10 @@ func (h *Handler) ListAgentSkills(w http.ResponseWriter, r *http.Request) {
 	resp := make([]SkillSummaryResponse, len(skills))
 	for i, s := range skills {
 		resp[i] = skillSummaryToResponse(
-			s.ID, s.WorkspaceID, s.Name, s.Description, s.Config,
-			s.CreatedBy, s.CreatedAt, s.UpdatedAt,
+			s.ID, s.WorkspaceID, s.Name, s.Description, []byte(s.Config), s.CreatedBy.String, s.CreatedAt, s.UpdatedAt,
 		)
-		resp[i].Enabled = &s.Enabled
+		enabled := int64ToBool(s.Enabled)
+		resp[i].Enabled = &enabled
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -2641,12 +2638,12 @@ func (h *Handler) SetAgentSkills(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start transaction")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 
 	qtx := h.Queries.WithTx(tx)
 
@@ -2666,7 +2663,7 @@ func (h *Handler) SetAgentSkills(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit")
 		return
 	}
@@ -2697,12 +2694,12 @@ func (h *Handler) AddAgentSkills(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start transaction")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 
 	qtx := h.Queries.WithTx(tx)
 	for _, skillID := range skillUUIDs {
@@ -2716,7 +2713,7 @@ func (h *Handler) AddAgentSkills(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit")
 		return
 	}
@@ -2748,7 +2745,7 @@ func (h *Handler) SetAgentSkillEnabled(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.Queries.SetAgentSkillEnabled(r.Context(), db.SetAgentSkillEnabledParams{
 		AgentID: agent.ID,
 		SkillID: skillID,
-		Enabled: *req.Enabled,
+		Enabled: boolToInt64(*req.Enabled),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update agent skill")
@@ -2785,7 +2782,7 @@ func (h *Handler) RemoveAgentSkill(w http.ResponseWriter, r *http.Request) {
 	h.writeUpdatedAgentSkills(w, r, agent)
 }
 
-func (h *Handler) validateAgentSkillIDsInWorkspace(w http.ResponseWriter, r *http.Request, agent db.Agent, skillUUIDs []pgtype.UUID) bool {
+func (h *Handler) validateAgentSkillIDsInWorkspace(w http.ResponseWriter, r *http.Request, agent db.Agent, skillUUIDs []string) bool {
 	seen := map[string]struct{}{}
 	for _, skillID := range skillUUIDs {
 		key := uuidToString(skillID)
@@ -2814,10 +2811,10 @@ func (h *Handler) writeUpdatedAgentSkills(w http.ResponseWriter, r *http.Request
 	resp := make([]SkillSummaryResponse, len(skills))
 	for i, s := range skills {
 		resp[i] = skillSummaryToResponse(
-			s.ID, s.WorkspaceID, s.Name, s.Description, s.Config,
-			s.CreatedBy, s.CreatedAt, s.UpdatedAt,
+			s.ID, s.WorkspaceID, s.Name, s.Description, []byte(s.Config), s.CreatedBy.String, s.CreatedAt, s.UpdatedAt,
 		)
-		resp[i].Enabled = &s.Enabled
+		enabled := int64ToBool(s.Enabled)
+		resp[i].Enabled = &enabled
 	}
 	actorType, actorID := h.resolveActor(r, requestUserID(r), uuidToString(agent.WorkspaceID))
 	h.publish(protocol.EventAgentStatus, uuidToString(agent.WorkspaceID), actorType, actorID, map[string]any{"agent_id": uuidToString(agent.ID), "skills": resp})

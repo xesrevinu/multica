@@ -2,10 +2,9 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -15,9 +14,9 @@ import (
 // authorizer. Declared as an interface so the authorizer can be unit tested
 // with an in-memory fake (no DB required).
 type scopeAuthQuerier interface {
-	GetAgentTask(ctx context.Context, id pgtype.UUID) (db.AgentTaskQueue, error)
-	GetIssue(ctx context.Context, id pgtype.UUID) (db.Issue, error)
-	GetChatSession(ctx context.Context, id pgtype.UUID) (db.ChatSession, error)
+	GetAgentTask(ctx context.Context, id string) (db.AgentTaskQueue, error)
+	GetIssue(ctx context.Context, id string) (db.Issue, error)
+	GetChatSession(ctx context.Context, id string) (db.ChatSession, error)
 }
 
 // dbScopeAuthorizer implements realtime.ScopeAuthorizer for the per-task and
@@ -31,14 +30,14 @@ type dbScopeAuthorizer struct{ q scopeAuthQuerier }
 func newScopeAuthorizer(q scopeAuthQuerier) *dbScopeAuthorizer { return &dbScopeAuthorizer{q: q} }
 
 // scopeLookupErr converts a scope-resource query error into an authorizer
-// result. A missing resource (pgx.ErrNoRows) is a legitimate denial — the
+// result. A missing resource (sql.ErrNoRows) is a legitimate denial — the
 // HTTP layer treats not-found as 404 rather than 403, so the realtime layer
 // reports it as a plain "forbidden" refusal. Any other error (pool
 // exhaustion, a cancelled context, a network blip) is a transient lookup
 // failure and must propagate so handleSubscribe reports "lookup_failed"
 // instead of masking a database outage as a wave of permission denials.
 func scopeLookupErr(err error) (bool, error) {
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	return false, err
@@ -64,7 +63,7 @@ func (a *dbScopeAuthorizer) AuthorizeScope(ctx context.Context, userID, workspac
 		}
 		// Issue tasks: visible to any workspace member.
 		if task.IssueID.Valid {
-			issue, err := a.q.GetIssue(ctx, task.IssueID)
+			issue, err := a.q.GetIssue(ctx, task.IssueID.String)
 			if err != nil {
 				return scopeLookupErr(err)
 			}
@@ -73,7 +72,7 @@ func (a *dbScopeAuthorizer) AuthorizeScope(ctx context.Context, userID, workspac
 		// Chat tasks: only the chat session's creator may subscribe, mirroring
 		// the HTTP layer's creator-only access on chat resources.
 		if task.ChatSessionID.Valid {
-			sess, err := a.q.GetChatSession(ctx, task.ChatSessionID)
+			sess, err := a.q.GetChatSession(ctx, task.ChatSessionID.String)
 			if err != nil {
 				return scopeLookupErr(err)
 			}

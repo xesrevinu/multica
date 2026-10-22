@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/service"
@@ -76,7 +76,7 @@ func TestEnsureIsIdempotent(t *testing.T) {
 
 	systemByKey := map[string]db.IssueStatus{}
 	for _, e := range entries {
-		if e.IsSystem {
+		if e.IsSystem != 0 {
 			systemByKey[e.Key] = e
 		}
 	}
@@ -106,7 +106,7 @@ func TestCatalogOrderMatchesLifecycleGroups(t *testing.T) {
 
 	var gotSystem []string
 	for _, e := range entries {
-		if e.IsSystem {
+		if e.IsSystem != 0 {
 			gotSystem = append(gotSystem, e.Key)
 		}
 	}
@@ -325,7 +325,7 @@ func TestBuiltInStatusesAreImmutable(t *testing.T) {
 		if _, err := testHandler.Queries.UpdateIssueStatusEntry(ctx, db.UpdateIssueStatusEntryParams{
 			ID:          builtIn.ID,
 			WorkspaceID: parseUUID(testWorkspaceID),
-			Name:        pgtype.Text{String: "Renamed", Valid: true},
+			Name:        sql.NullString{String: "Renamed", Valid: true},
 		}); err == nil {
 			t.Error("UpdateIssueStatusEntry must not touch a built-in row")
 		}
@@ -513,7 +513,7 @@ func TestCustomTerminalStatusCountsAsTerminalInSQL(t *testing.T) {
 		t.Fatalf("expanded terminal keys %v do not include archived custom status", terminalStatusKeys)
 	}
 
-	mkIssue := func(title, status string) pgtype.UUID {
+	mkIssue := func(title, status string) string {
 		t.Helper()
 		rec := httptest.NewRecorder()
 		testHandler.CreateIssue(rec, newRequest(http.MethodPost, "/api/issues", map[string]any{
@@ -568,7 +568,7 @@ func TestCustomTerminalStatusCountsAsTerminalInSQL(t *testing.T) {
 	})
 
 	t.Run("project completion counts it as done", func(t *testing.T) {
-		var projectID pgtype.UUID
+		var projectID string
 		if err := testPool.QueryRow(ctx,
 			`INSERT INTO project (workspace_id, title) VALUES ($1, 'Status SQL Probe') RETURNING id`,
 			parseUUID(testWorkspaceID)).Scan(&projectID); err != nil {
@@ -576,7 +576,7 @@ func TestCustomTerminalStatusCountsAsTerminalInSQL(t *testing.T) {
 		}
 		t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM project WHERE id = $1`, projectID) })
 
-		for _, id := range []pgtype.UUID{
+		for _, id := range []string{
 			mkIssue("sql project custom done", "gate_approved_s"),
 			mkIssue("sql project open", "todo"),
 		} {
@@ -593,7 +593,7 @@ func TestCustomTerminalStatusCountsAsTerminalInSQL(t *testing.T) {
 
 		stats, err := testHandler.Queries.GetProjectIssueStats(ctx, db.GetProjectIssueStatsParams{
 			WorkspaceID:        parseUUID(testWorkspaceID),
-			ProjectIds:         []pgtype.UUID{projectID},
+			ProjectIds:         []string{projectID},
 			TerminalStatusKeys: terminalStatusKeys,
 		})
 		if err != nil {
@@ -610,7 +610,7 @@ func TestCustomTerminalStatusCountsAsTerminalInSQL(t *testing.T) {
 
 	t.Run("sub-issue progress counts it as done", func(t *testing.T) {
 		parent := mkIssue("sql child progress parent", "in_progress")
-		for _, id := range []pgtype.UUID{
+		for _, id := range []string{
 			mkIssue("sql child custom done", "gate_approved_s"),
 			mkIssue("sql child open", "todo"),
 		} {
@@ -884,13 +884,13 @@ func TestArchiveCommitsInsideTheWriteRaceWindow(t *testing.T) {
 	cases := []struct {
 		name  string
 		key   string
-		seed  func(t *testing.T, key string) pgtype.UUID
-		write func(t *testing.T, key string, seed pgtype.UUID) int
+		seed  func(t *testing.T, key string) string
+		write func(t *testing.T, key string, seed string) int
 	}{
 		{
 			name: "create",
 			key:  "win_create",
-			write: func(t *testing.T, key string, _ pgtype.UUID) int {
+			write: func(t *testing.T, key string, _ string) int {
 				rec := httptest.NewRecorder()
 				testHandler.CreateIssue(rec, newRequest(http.MethodPost, "/api/issues", map[string]any{
 					"title": "race window create", "status": key,
@@ -901,10 +901,10 @@ func TestArchiveCommitsInsideTheWriteRaceWindow(t *testing.T) {
 		{
 			name: "update",
 			key:  "win_update",
-			seed: func(t *testing.T, key string) pgtype.UUID {
+			seed: func(t *testing.T, key string) string {
 				return mustCreateIssue(t, "race window update "+key, "todo")
 			},
-			write: func(t *testing.T, key string, seed pgtype.UUID) int {
+			write: func(t *testing.T, key string, seed string) int {
 				rec := httptest.NewRecorder()
 				testHandler.UpdateIssue(rec, withURLParam(
 					newRequest(http.MethodPatch, "/api/issues/"+uuidToString(seed), map[string]any{"status": key}),
@@ -915,10 +915,10 @@ func TestArchiveCommitsInsideTheWriteRaceWindow(t *testing.T) {
 		{
 			name: "update with description merge",
 			key:  "win_upd_merge",
-			seed: func(t *testing.T, key string) pgtype.UUID {
+			seed: func(t *testing.T, key string) string {
 				return mustCreateIssue(t, "race window merge "+key, "todo")
 			},
-			write: func(t *testing.T, key string, seed pgtype.UUID) int {
+			write: func(t *testing.T, key string, seed string) int {
 				rec := httptest.NewRecorder()
 				testHandler.UpdateIssue(rec, withURLParam(
 					newRequest(http.MethodPatch, "/api/issues/"+uuidToString(seed), map[string]any{
@@ -931,10 +931,10 @@ func TestArchiveCommitsInsideTheWriteRaceWindow(t *testing.T) {
 		{
 			name: "batch",
 			key:  "win_batch",
-			seed: func(t *testing.T, key string) pgtype.UUID {
+			seed: func(t *testing.T, key string) string {
 				return mustCreateIssue(t, "race window batch "+key, "todo")
 			},
-			write: func(t *testing.T, key string, seed pgtype.UUID) int {
+			write: func(t *testing.T, key string, seed string) int {
 				rec := httptest.NewRecorder()
 				testHandler.BatchUpdateIssues(rec, newRequest(http.MethodPatch, "/api/issues/batch", map[string]any{
 					"issue_ids": []string{uuidToString(seed)},
@@ -946,10 +946,10 @@ func TestArchiveCommitsInsideTheWriteRaceWindow(t *testing.T) {
 		{
 			name: "batch with description merge",
 			key:  "win_batch_merge",
-			seed: func(t *testing.T, key string) pgtype.UUID {
+			seed: func(t *testing.T, key string) string {
 				return mustCreateIssue(t, "race window batch merge "+key, "todo")
 			},
-			write: func(t *testing.T, key string, seed pgtype.UUID) int {
+			write: func(t *testing.T, key string, seed string) int {
 				rec := httptest.NewRecorder()
 				testHandler.BatchUpdateIssues(rec, newRequest(http.MethodPatch, "/api/issues/batch", map[string]any{
 					"issue_ids": []string{uuidToString(seed)},
@@ -965,7 +965,7 @@ func TestArchiveCommitsInsideTheWriteRaceWindow(t *testing.T) {
 			ctx := context.Background()
 			entry := createTestCustomStatus(t, tc.key, issuestatus.InProgress)
 
-			var seedID pgtype.UUID
+			var seedID string
 			if tc.seed != nil {
 				seedID = tc.seed(t, tc.key)
 			}
@@ -1032,7 +1032,7 @@ func TestArchiveCommitsInsideTheWriteRaceWindow(t *testing.T) {
 }
 
 // mustCreateIssue creates an issue through the real endpoint and returns its id.
-func mustCreateIssue(t *testing.T, title, status string) pgtype.UUID {
+func mustCreateIssue(t *testing.T, title, status string) string {
 	t.Helper()
 	rec := httptest.NewRecorder()
 	testHandler.CreateIssue(rec, newRequest(http.MethodPost, "/api/issues", map[string]any{

@@ -2,14 +2,13 @@ package lark
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -55,8 +54,8 @@ type RenderInput struct {
 	Kind         CardKind
 	AgentName    string
 	IssueNumber  int32
-	IssueID      pgtype.UUID
-	TaskID       pgtype.UUID
+	IssueID      string
+	TaskID       string
 	Content      string
 	ErrorMessage string
 }
@@ -143,14 +142,14 @@ func (defaultRenderer) Render(in RenderInput) (CardRender, error) {
 // needs. Declared as an interface so the patcher is unit-testable
 // without a real Postgres connection.
 type PatcherQueries interface {
-	GetAgentTask(ctx context.Context, id pgtype.UUID) (db.AgentTaskQueue, error)
-	TaskHasChannelIngestedMessages(ctx context.Context, taskID pgtype.UUID) (bool, error)
-	GetChannelTaskDelivery(ctx context.Context, taskID pgtype.UUID) (db.ChannelTaskDelivery, error)
-	GetChatSession(ctx context.Context, id pgtype.UUID) (db.ChatSession, error)
-	GetAgent(ctx context.Context, id pgtype.UUID) (db.Agent, error)
-	GetLarkInstallation(ctx context.Context, id pgtype.UUID) (Installation, error)
-	GetLarkChatSessionBindingBySession(ctx context.Context, chatSessionID pgtype.UUID) (ChatSessionBinding, error)
-	GetLarkOutboundCardByTask(ctx context.Context, taskID pgtype.UUID) (OutboundCardMessage, error)
+	GetAgentTask(ctx context.Context, id string) (db.AgentTaskQueue, error)
+	TaskHasChannelIngestedMessages(ctx context.Context, taskID sql.NullString) (bool, error)
+	GetChannelTaskDelivery(ctx context.Context, taskID string) (db.ChannelTaskDelivery, error)
+	GetChatSession(ctx context.Context, id string) (db.ChatSession, error)
+	GetAgent(ctx context.Context, id string) (db.Agent, error)
+	GetLarkInstallation(ctx context.Context, id string) (Installation, error)
+	GetLarkChatSessionBindingBySession(ctx context.Context, chatSessionID string) (ChatSessionBinding, error)
+	GetLarkOutboundCardByTask(ctx context.Context, taskID string) (OutboundCardMessage, error)
 	CreateLarkOutboundCardMessage(ctx context.Context, arg CreateOutboundCardMessageParams) (OutboundCardMessage, error)
 	UpdateLarkOutboundCardStatus(ctx context.Context, arg UpdateOutboundCardStatusParams) error
 }
@@ -271,7 +270,7 @@ func (p *Patcher) processEvent(ctx context.Context, e events.Event) error {
 	if !ok {
 		return nil
 	}
-	if !chatSessionID.Valid {
+	if chatSessionID == "" {
 		// Issue / autopilot tasks have no chat_session.
 		return nil
 	}
@@ -292,7 +291,7 @@ func (p *Patcher) processEvent(ctx context.Context, e events.Event) error {
 
 	delivery, err := p.queries.GetChannelTaskDelivery(ctx, taskID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
 		return fmt.Errorf("lookup lark task delivery: %w", err)
@@ -355,21 +354,21 @@ func (p *Patcher) processEvent(ctx context.Context, e events.Event) error {
 
 // sweepTypingForTask uses the frozen trigger message. Session deletion carries
 // that anchor on the internal event before deleting the delivery row.
-func (p *Patcher) sweepTypingForTask(ctx context.Context, taskID pgtype.UUID, target *events.ChannelReactionTarget, covered map[string]bool) {
+func (p *Patcher) sweepTypingForTask(ctx context.Context, taskID string, target *events.ChannelReactionTarget, covered map[string]bool) {
 	delivery, err := p.queries.GetChannelTaskDelivery(ctx, taskID)
-	if errors.Is(err, pgx.ErrNoRows) && target != nil {
+	if errors.Is(err, sql.ErrNoRows) && target != nil {
 		installationID, parseErr := util.ParseUUID(target.InstallationID)
 		if parseErr != nil {
 			return
 		}
 		delivery = db.ChannelTaskDelivery{
 			ChannelType: target.ChannelType, InstallationID: installationID,
-			ChannelMessageID: pgtype.Text{String: target.MessageID, Valid: target.MessageID != ""},
+			ChannelMessageID: sql.NullString{String: target.MessageID, Valid: target.MessageID != ""},
 		}
 		err = nil
 	}
 	if err != nil {
-		if !errors.Is(err, pgx.ErrNoRows) {
+		if !errors.Is(err, sql.ErrNoRows) {
 			p.cfg.Logger.Warn("lark patcher: typing sweep delivery lookup failed",
 				"task_id", uuidString(taskID),
 				"error", err,
@@ -503,7 +502,7 @@ func (p *Patcher) sendChatReply(ctx context.Context, creds InstallationCredentia
 func outboundChatID(b ChatSessionBinding) ChatID {
 	if len(b.Config) > 0 {
 		var cfg larkBindingConfig
-		if err := json.Unmarshal(b.Config, &cfg); err == nil && cfg.ChatID != "" {
+		if err := json.Unmarshal([]byte(b.Config), &cfg); err == nil && cfg.ChatID != "" {
 			return ChatID(cfg.ChatID)
 		}
 	}
@@ -537,7 +536,7 @@ func isTopicIsolated(b ChatSessionBinding) bool {
 		return false
 	}
 	var cfg larkBindingConfig
-	if err := json.Unmarshal(b.Config, &cfg); err != nil {
+	if err := json.Unmarshal([]byte(b.Config), &cfg); err != nil {
 		return false
 	}
 	return cfg.ChatID != "" && cfg.ChatID != b.ChannelChatID
@@ -648,7 +647,7 @@ func (p *Patcher) installationCredentials(inst Installation) (InstallationCreden
 // One-shot send (no patching, no DB row): if the task fails a second
 // time we'd just send a second card, which is fine — failure is
 // usually a single terminal event.
-func (p *Patcher) fail(ctx context.Context, creds InstallationCredentials, binding ChatSessionBinding, taskID pgtype.UUID, agentName string, payload any) error {
+func (p *Patcher) fail(ctx context.Context, creds InstallationCredentials, binding ChatSessionBinding, taskID string, agentName string, payload any) error {
 	if topicSendWithoutTrigger(binding) {
 		p.cfg.Logger.Warn("lark: no trigger for a topic-isolated session; skipping error card rather than posting it to the parent group",
 			"chat_session_id", uuidString(binding.ChatSessionID),
@@ -679,38 +678,30 @@ func (p *Patcher) fail(ctx context.Context, creds InstallationCredentials, bindi
 // emit — a map[string]any with `task_id` (always) and
 // `chat_session_id` (chat tasks only). EventChatDone carries a
 // ChatDonePayload struct instead.
-func taskAndSessionFromEvent(e events.Event) (taskID, chatSessionID pgtype.UUID, ok bool) {
-	if e.TaskID != "" {
-		if err := taskID.Scan(e.TaskID); err != nil {
-			taskID = pgtype.UUID{}
-		}
-	}
-	if e.ChatSessionID != "" {
-		if err := chatSessionID.Scan(e.ChatSessionID); err != nil {
-			chatSessionID = pgtype.UUID{}
-		}
-	}
+func taskAndSessionFromEvent(e events.Event) (taskID, chatSessionID string, ok bool) {
+	taskID = e.TaskID
+	chatSessionID = e.ChatSessionID
 	switch p := e.Payload.(type) {
 	case map[string]any:
-		if !taskID.Valid {
+		if taskID == "" {
 			if s, _ := p["task_id"].(string); s != "" {
-				_ = taskID.Scan(s)
+				taskID = s
 			}
 		}
-		if !chatSessionID.Valid {
+		if chatSessionID == "" {
 			if s, _ := p["chat_session_id"].(string); s != "" {
-				_ = chatSessionID.Scan(s)
+				chatSessionID = s
 			}
 		}
 	case protocol.ChatDonePayload:
-		if !taskID.Valid {
-			_ = taskID.Scan(p.TaskID)
+		if taskID == "" {
+			taskID = p.TaskID
 		}
-		if !chatSessionID.Valid {
-			_ = chatSessionID.Scan(p.ChatSessionID)
+		if chatSessionID == "" {
+			chatSessionID = p.ChatSessionID
 		}
 	}
-	return taskID, chatSessionID, taskID.Valid
+	return taskID, chatSessionID, taskID != ""
 }
 
 func chatDoneContent(payload any) string {

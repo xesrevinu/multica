@@ -150,14 +150,14 @@ func TestEventBridgeFindsTheIssueInEveryPayloadShape(t *testing.T) {
 
 	// A payload with no issue yields the zero UUID, which simply means the
 	// grant is not issue-scoped — not an error.
-	if issueIDFromPayload(map[string]any{"unrelated": true}).Valid {
+	if issueIDFromPayload(map[string]any{"unrelated": true}) != "" {
 		t.Fatal("a payload with no issue must not produce an issue-scoped grant")
 	}
-	if issueIDFromPayload(nil).Valid {
+	if issueIDFromPayload(nil) != "" {
 		t.Fatal("a nil payload must not produce an issue-scoped grant")
 	}
 	// Not a UUID: refuse rather than pass a malformed id into a grant.
-	if issueIDFromPayload(map[string]any{"issue_id": "not-a-uuid"}).Valid {
+	if issueIDFromPayload(map[string]any{"issue_id": "not-a-uuid"}) != "" {
 		t.Fatal("a malformed id must not produce an issue-scoped grant")
 	}
 }

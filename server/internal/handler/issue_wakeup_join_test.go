@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -78,7 +77,7 @@ func claimRun(t *testing.T, taskID string, rendersJoined bool) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := testHandler.Queries.GetAgentRuntime(ctx, task.RuntimeID)
+	runtime, err := testHandler.Queries.GetAgentRuntime(ctx, task.RuntimeID.String)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +85,7 @@ func claimRun(t *testing.T, taskID string, rendersJoined bool) string {
 	if rendersJoined {
 		req.Header.Set("X-Client-Capabilities", protocol.DaemonCapabilityJoinedWakeupsV1)
 	}
-	resp, _, _, _, _, failure := testHandler.buildClaimedTaskResponse(req, &task, runtime, uuidToString(task.RuntimeID), testWorkspaceID)
+	resp, _, _, _, _, failure := testHandler.buildClaimedTaskResponse(req, &task, runtime, uuidToString(task.RuntimeID.String), testWorkspaceID)
 	if failure != nil {
 		t.Fatalf("claim: %+v", failure)
 	}
@@ -99,7 +98,7 @@ func startRun(t *testing.T, taskID string) {
 	dbfx.Exec(t, `UPDATE agent_task_queue SET status = 'running', started_at = clock_timestamp() WHERE id = $1`, taskID)
 }
 
-func createRule(t *testing.T, issueID, agentID string, source pgtype.UUID, in service.WakeupInput) string {
+func createRule(t *testing.T, issueID, agentID string, source string, in service.WakeupInput) string {
 	t.Helper()
 	in.AgentID = agentID
 	w, err := (&service.IssueWakeupService{Tasks: testHandler.TaskService}).Create(context.Background(), parseUUID(issueID), parseUUID(testUserID), source, in)
@@ -151,7 +150,7 @@ func TestWakeupSkipsTheAgentsOwnComment(t *testing.T) {
 	issue := dbfx.Issue(t, "own comment")
 	t.Cleanup(func() { cleanupChildDoneIssue(issue) })
 	agentID := handlerTestAgentID(t)
-	rule := createRule(t, issue, agentID, pgtype.UUID{}, service.WakeupInput{Instruction: "Reply to new comments", Kind: "event", Mode: "continuous", EventTypes: []string{"comment.created"}})
+	rule := createRule(t, issue, agentID, "", service.WakeupInput{Instruction: "Reply to new comments", Kind: "event", Mode: "continuous", EventTypes: []string{"comment.created"}})
 	run := dbfx.Task(t, agentID, testutil.Cols{"issue_id": issue, "runtime_id": testRuntimeID, "status": "running"})
 
 	commentOn(t, issue, "Deployed the fix.", agentID, run)
@@ -179,7 +178,7 @@ func TestWakeupJoinsTheAgentsWaitingRun(t *testing.T) {
 	agentID := handlerTestAgentID(t)
 	setIssueAssigneeDirect(t, issue, "agent", agentID)
 	waiting := dbfx.Task(t, agentID, testutil.Cols{"issue_id": issue, "runtime_id": testRuntimeID, "status": "queued", "originator_user_id": testUserID, "accountable_user_id": testUserID})
-	rule := createRule(t, issue, agentID, pgtype.UUID{}, service.WakeupInput{Instruction: "Summarize the discussion", Kind: "event", Mode: "continuous", EventTypes: []string{"comment.created"}})
+	rule := createRule(t, issue, agentID, "", service.WakeupInput{Instruction: "Summarize the discussion", Kind: "event", Mode: "continuous", EventTypes: []string{"comment.created"}})
 
 	commentOn(t, issue, "Here is more context.", "", "")
 	runWakeupTick(t)
@@ -211,7 +210,7 @@ func TestWakeupRunsOnItsOwnAfterAnOlderDaemonsClaim(t *testing.T) {
 	t.Cleanup(func() { cleanupChildDoneIssue(issue) })
 	agentID := handlerTestAgentID(t)
 	waiting := dbfx.Task(t, agentID, testutil.Cols{"issue_id": issue, "runtime_id": testRuntimeID, "status": "queued", "originator_user_id": testUserID, "accountable_user_id": testUserID})
-	rule := createRule(t, issue, agentID, pgtype.UUID{}, service.WakeupInput{Instruction: "Summarize the discussion", Kind: "event", EventTypes: []string{"comment.created"}})
+	rule := createRule(t, issue, agentID, "", service.WakeupInput{Instruction: "Summarize the discussion", Kind: "event", EventTypes: []string{"comment.created"}})
 
 	commentOn(t, issue, "Here is more context.", "", "")
 	runWakeupTick(t)
@@ -241,7 +240,7 @@ func TestConditionRuleAndTheAgentsOwnChange(t *testing.T) {
 			issue := dbfx.Issue(t, "own condition", testutil.Cols{"status": "in_progress"})
 			t.Cleanup(func() { cleanupChildDoneIssue(issue) })
 			agentID := handlerTestAgentID(t)
-			var source pgtype.UUID
+			var source string
 			if tc.ownRule {
 				earlier := dbfx.Task(t, agentID, testutil.Cols{"issue_id": issue, "runtime_id": testRuntimeID, "status": "completed"})
 				source = parseUUID(earlier)

@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/dispatch"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/testutil"
@@ -325,19 +325,19 @@ func TestEnqueueRefusesADerivedRunInTriage(t *testing.T) {
 			return err
 		},
 		"mention funnel, derived": func() error {
-			_, err := testHandler.TaskService.EnqueueTaskForMention(ctx, issue, agent, pgtype.UUID{}, service.OriginDerived)
+			_, err := testHandler.TaskService.EnqueueTaskForMention(ctx, issue, agent, "", service.OriginDerived)
 			return err
 		},
 		"squad leader, derived": func() error {
-			_, err := testHandler.TaskService.EnqueueTaskForSquadLeader(ctx, issue, leader, squad, pgtype.UUID{}, service.OriginDerived)
+			_, err := testHandler.TaskService.EnqueueTaskForSquadLeader(ctx, issue, leader, squad, "", service.OriginDerived)
 			return err
 		},
 		"squad leader on assign": func() error {
-			_, err := testHandler.TaskService.EnqueueTaskForSquadLeaderByActor(ctx, issue, leader, squad, pgtype.UUID{})
+			_, err := testHandler.TaskService.EnqueueTaskForSquadLeaderByActor(ctx, issue, leader, squad, "")
 			return err
 		},
 		"rerun with no source": func() error {
-			_, err := testHandler.TaskService.RerunIssue(ctx, issue.ID, pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, nil)
+			_, err := testHandler.TaskService.RerunIssue(ctx, issue.ID, "", "", "", nil)
 			return err
 		},
 	}
@@ -356,11 +356,11 @@ func TestEnqueueRefusesADerivedRunInTriage(t *testing.T) {
 	// doing and not the funnel's.
 	named := map[string]func() error{
 		"mention funnel, named": func() error {
-			_, err := testHandler.TaskService.EnqueueTaskForMention(ctx, issue, agent, pgtype.UUID{}, service.OriginNamed)
+			_, err := testHandler.TaskService.EnqueueTaskForMention(ctx, issue, agent, "", service.OriginNamed)
 			return err
 		},
 		"thread parent": func() error {
-			_, err := testHandler.TaskService.EnqueueTaskForThreadParent(ctx, issue, leader, pgtype.UUID{})
+			_, err := testHandler.TaskService.EnqueueTaskForThreadParent(ctx, issue, leader, "")
 			return err
 		},
 	}
@@ -518,10 +518,10 @@ func TestRerunInTriageFollowsItsSource(t *testing.T) {
 // one case where the refusal above was not in effect when the row was created.
 func TestRerunSourceScopeRejectsATriageSource(t *testing.T) {
 	agent := parseUUID(testUserID)
-	issue := pgtype.UUID{Bytes: [16]byte{7}, Valid: true}
-	task := db.AgentTaskQueue{AgentID: agent, IssueID: issue}
-	ordinary := db.AgentTaskQueue{AgentID: agent, IssueID: issue}
-	triage := db.AgentTaskQueue{AgentID: agent, IssueID: issue, Context: []byte(`{"type":"triage"}`)}
+	issue := uuid.UUID([16]byte{7}).String()
+	task := db.AgentTaskQueue{AgentID: agent, IssueID: nullString(issue)}
+	ordinary := db.AgentTaskQueue{AgentID: agent, IssueID: nullString(issue)}
+	triage := db.AgentTaskQueue{AgentID: agent, IssueID: nullString(issue), Context: nullString(string([]byte(`{"type":"triage"}`)))}
 
 	if !rerunSourceMatchesTaskScope(task, ordinary) {
 		t.Fatal("an ordinary same-issue source is in scope, so the triage case below proves nothing")

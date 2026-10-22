@@ -34,7 +34,7 @@ func mergeWakeupEvidence(w db.IssueWakeup, previous db.AgentTaskQueue, receipts 
 	var stored struct {
 		Evidence wakeupEvidence `json:"wakeup_evidence"`
 	}
-	_ = json.Unmarshal(previous.Context, &stored)
+	_ = json.Unmarshal([]byte(previous.Context.String), &stored)
 	evidence := stored.Evidence
 	// jsonb can reorder object keys/spacing; normalize before rendering.
 	for i := range evidence.Facts {
@@ -78,11 +78,11 @@ func mergeWakeupEvidence(w db.IssueWakeup, previous db.AgentTaskQueue, receipts 
 		var summary struct {
 			Count int64 `json:"coalesced_count"`
 		}
-		_ = json.Unmarshal(r.Payload, &summary)
+		_ = json.Unmarshal([]byte(r.Payload), &summary)
 		if summary.Count > 1 {
 			evidence.Omitted = true
 		}
-		payload := canonicalWakeupPayload(r.Payload)
+		payload := canonicalWakeupPayload([]byte(fmt.Sprint(r.Payload)))
 		if len(r.EventType)+len(payload)+2 > budget {
 			// Keep references as data even when a changed-field list is oversized.
 			var fields map[string]json.RawMessage

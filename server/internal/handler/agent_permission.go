@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -50,7 +49,7 @@ func applyInvocationTargetsToResponse(resp *AgentResponse, targets []db.AgentInv
 	dto := make([]AgentInvocationTargetDTO, 0, len(targets))
 	for _, t := range targets {
 		var idPtr *string
-		if t.TargetID.Valid {
+		if t.TargetID != "" {
 			s := uuidToString(t.TargetID)
 			idPtr = &s
 		}
@@ -69,7 +68,7 @@ type resolvedPermission struct {
 
 type targetSpec struct {
 	targetType string
-	targetID   pgtype.UUID // invalid for team placeholders
+	targetID   string // invalid for team placeholders
 }
 
 // legacyVisibility is what this permission maps to for the visibility column
@@ -96,7 +95,7 @@ func (p resolvedPermission) legacyVisibility() string {
 //
 // workspaceID seeds workspace targets (stored as the workspace id). The
 // returned error is a client-facing 400 message.
-func parsePermissionInput(workspaceID pgtype.UUID, permissionMode *string, targets []AgentInvocationTargetDTO, hasPermissionMode, hasTargets bool, legacyVisibility *string) (resolvedPermission, bool, error) {
+func parsePermissionInput(workspaceID string, permissionMode *string, targets []AgentInvocationTargetDTO, hasPermissionMode, hasTargets bool, legacyVisibility *string) (resolvedPermission, bool, error) {
 	if !hasPermissionMode && legacyVisibility == nil {
 		return resolvedPermission{}, false, nil
 	}
@@ -188,7 +187,7 @@ func parsePermissionInput(workspaceID pgtype.UUID, permissionMode *string, targe
 
 // replaceInvocationTargets rewrites an agent's invocation allow-list wholesale:
 // clear then re-insert. Called inside create/update after the agent row exists.
-func (h *Handler) replaceInvocationTargets(ctx context.Context, agentID pgtype.UUID, createdBy pgtype.UUID, targets []targetSpec) error {
+func (h *Handler) replaceInvocationTargets(ctx context.Context, agentID string, createdBy string, targets []targetSpec) error {
 	return replaceInvocationTargetsWithQueries(ctx, h.Queries, agentID, createdBy, targets)
 }
 
@@ -197,7 +196,7 @@ func (h *Handler) replaceInvocationTargets(ctx context.Context, agentID pgtype.U
 // target rows are written inside the same transaction as the agent row. A
 // fresh agent row must not observe a state where the row exists but its targets
 // are missing.
-func replaceInvocationTargetsWithQueries(ctx context.Context, q *db.Queries, agentID pgtype.UUID, createdBy pgtype.UUID, targets []targetSpec) error {
+func replaceInvocationTargetsWithQueries(ctx context.Context, q *db.Queries, agentID string, createdBy string, targets []targetSpec) error {
 	if err := q.DeleteAgentInvocationTargets(ctx, agentID); err != nil {
 		return err
 	}
@@ -206,7 +205,7 @@ func replaceInvocationTargetsWithQueries(ctx context.Context, q *db.Queries, age
 			AgentID:    agentID,
 			TargetType: t.targetType,
 			TargetID:   t.targetID,
-			CreatedBy:  createdBy,
+			CreatedBy:  nullString(createdBy),
 		}); err != nil {
 			return err
 		}
@@ -284,7 +283,7 @@ func (h *Handler) permissionInputChangesAgent(ctx context.Context, existing db.A
 // enrichAgentResponseWithTargets loads an agent's invocation targets and
 // applies them to the response (InvocationTargets + derived Visibility). Used
 // by the single-agent detail / create / update responses.
-func (h *Handler) enrichAgentResponseWithTargets(ctx context.Context, resp *AgentResponse, agentID pgtype.UUID) error {
+func (h *Handler) enrichAgentResponseWithTargets(ctx context.Context, resp *AgentResponse, agentID string) error {
 	targets, err := h.Queries.ListAgentInvocationTargets(ctx, agentID)
 	if err != nil {
 		return err
@@ -295,7 +294,7 @@ func (h *Handler) enrichAgentResponseWithTargets(ctx context.Context, resp *Agen
 
 // enrichAgentResponseWithTargetsHTTP is the HTTP-boundary wrapper that writes a
 // 500 and returns false on failure.
-func (h *Handler) enrichAgentResponseWithTargetsHTTP(w http.ResponseWriter, r *http.Request, resp *AgentResponse, agentID pgtype.UUID) bool {
+func (h *Handler) enrichAgentResponseWithTargetsHTTP(w http.ResponseWriter, r *http.Request, resp *AgentResponse, agentID string) bool {
 	if err := h.enrichAgentResponseWithTargets(r.Context(), resp, agentID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load agent invocation targets")
 		return false

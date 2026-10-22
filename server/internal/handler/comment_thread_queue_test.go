@@ -2,11 +2,10 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -42,7 +41,7 @@ func TestCommentThreadQueuesMergeAndExecuteIndependently(t *testing.T) {
 	enqueue(rootB, true, DispatchQueued)
 	enqueue(replyA, true, DispatchCoalesced)
 	enqueue(nestedA, true, DispatchCoalesced)
-	tasks, err := testHandler.Queries.ListTasksByIssue(ctx, parseUUID(issueID))
+	tasks, err := testHandler.Queries.ListTasksByIssue(ctx, nullString(parseUUID(issueID)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,19 +50,19 @@ func TestCommentThreadQueuesMergeAndExecuteIndependently(t *testing.T) {
 	}
 	var a, b db.AgentTaskQueue
 	for _, task := range tasks {
-		switch uuidToString(task.CommentThreadID) {
+		switch uuidToString(task.CommentThreadID.String) {
 		case rootA:
 			a = task
 		case rootB:
 			b = task
 		default:
-			t.Fatalf("wrong thread scope: %s", uuidToString(task.CommentThreadID))
+			t.Fatalf("wrong thread scope: %s", uuidToString(task.CommentThreadID.String))
 		}
 	}
-	if uuidToString(a.TriggerCommentID) != nestedA || len(a.CoalescedCommentIds) != 2 || len(b.CoalescedCommentIds) != 0 {
+	if uuidToString(a.TriggerCommentID.String) != nestedA || len(a.CoalescedCommentIds) != 2 || len(b.CoalescedCommentIds) != 0 {
 		t.Fatalf("wrong input batches: A=%+v B=%+v", a.TriggerCommentID, b.CoalescedCommentIds)
 	}
-	claim := db.ClaimAgentTaskParams{AgentID: parseUUID(agentID), RuntimeID: parseUUID(runtimeID), PrepareLeaseSecs: 60, RuntimeStaleSecs: 120}
+	claim := db.ClaimAgentTaskParams{AgentID: parseUUID(agentID), RuntimeID: nullString(parseUUID(runtimeID)), PrepareLeaseSecs: 60, RuntimeStaleSecs: 120}
 	claimed, err := testHandler.Queries.ClaimAgentTask(ctx, claim)
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +70,7 @@ func TestCommentThreadQueuesMergeAndExecuteIndependently(t *testing.T) {
 	if claimed.ID != a.ID {
 		t.Fatal("oldest thread should execute first")
 	}
-	if _, err := testHandler.Queries.ClaimAgentTask(ctx, claim); !errors.Is(err, pgx.ErrNoRows) {
+	if _, err := testHandler.Queries.ClaimAgentTask(ctx, claim); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("another thread ran concurrently on the same issue: %v", err)
 	}
 	// A new instruction after execution starts belongs to a successor run.
@@ -84,7 +83,7 @@ func TestCommentThreadQueuesMergeAndExecuteIndependently(t *testing.T) {
 		t.Fatal(err)
 	}
 	testHandler.reconcileCommentsOnCompletion(ctx, &completed)
-	tasks, err = testHandler.Queries.ListTasksByIssue(ctx, parseUUID(issueID))
+	tasks, err = testHandler.Queries.ListTasksByIssue(ctx, nullString(parseUUID(issueID)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +91,7 @@ func TestCommentThreadQueuesMergeAndExecuteIndependently(t *testing.T) {
 		t.Fatalf("completion duplicated another thread: got %d tasks", len(tasks))
 	}
 	// A row-specific rerun replaces only A's pending successor.
-	rerun, err := testHandler.TaskService.RerunIssue(ctx, issue.ID, a.ID, pgtype.UUID{}, parseUUID(testUserID), nil)
+	rerun, err := testHandler.TaskService.RerunIssue(ctx, issue.ID, a.ID, "", parseUUID(testUserID), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +123,7 @@ func TestDeferredCommentThreadsPromoteIndependently(t *testing.T) {
 	}
 	a, b := create(rootA), create(rootB)
 	anotherA := create(rootA)
-	promoted, err := testHandler.Queries.PromoteDueDeferredTasksForRuntime(ctx, db.PromoteDueDeferredTasksForRuntimeParams{RuntimeID: parseUUID(runtimeID), RuntimeStaleSecs: 120})
+	promoted, err := testHandler.Queries.PromoteDueDeferredTasksForRuntime(ctx, db.PromoteDueDeferredTasksForRuntimeParams{RuntimeID: nullString(parseUUID(runtimeID)), RuntimeStaleSecs: 120})
 	if err != nil {
 		t.Fatal(err)
 	}

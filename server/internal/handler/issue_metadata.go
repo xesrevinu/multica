@@ -1,18 +1,19 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/multica-ai/multica/server/internal/orchestrator"
 	"log/slog"
 	"net/http"
 	"regexp"
 	"sync/atomic"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/orchestrator"
+
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -152,7 +153,7 @@ func (h *Handler) ListIssueMetadata(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"metadata": parseIssueMetadata(issue.Metadata)})
+	writeJSON(w, http.StatusOK, map[string]any{"metadata": parseIssueMetadata([]byte(issue.Metadata))})
 }
 
 func (h *Handler) SetIssueMetadataKey(w http.ResponseWriter, r *http.Request) {
@@ -190,7 +191,7 @@ func (h *Handler) SetIssueMetadataKey(w http.ResponseWriter, r *http.Request) {
 	// Enforce the key-count cap in the handler. The DB only guards size,
 	// and a clear 4xx for "too many keys" beats a CHECK violation that
 	// happens to fire on the size cap once enough keys accumulate.
-	existing := parseIssueMetadata(issue.Metadata)
+	existing := parseIssueMetadata([]byte(issue.Metadata))
 	if _, present := existing[key]; !present && len(existing) >= maxIssueMetadataKeys {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("metadata cannot exceed %d keys", maxIssueMetadataKeys))
 		return
@@ -201,20 +202,20 @@ func (h *Handler) SetIssueMetadataKey(w http.ResponseWriter, r *http.Request) {
 		return q.SetIssueMetadataKey(r.Context(), db.SetIssueMetadataKeyParams{
 			ID:          issue.ID,
 			WorkspaceID: issue.WorkspaceID,
-			Key:         key,
+			Key:         nullString(key),
 			Value:       []byte(req.Value),
 		})
 	})
 	queryDuration := time.Since(queryStarted)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			fallbackStarted := time.Now()
 			current, getErr := h.Queries.GetIssueMetadataInWorkspace(r.Context(), db.GetIssueMetadataInWorkspaceParams{
 				ID:          issue.ID,
 				WorkspaceID: issue.WorkspaceID,
 			})
 			queryDuration += time.Since(fallbackStarted)
-			if errors.Is(getErr, pgx.ErrNoRows) {
+			if errors.Is(getErr, sql.ErrNoRows) {
 				h.recordIssueMetadataMutation(r, "set", "not_found", issueID, key, queryDuration)
 				writeError(w, http.StatusNotFound, "issue not found")
 				return
@@ -227,7 +228,7 @@ func (h *Handler) SetIssueMetadataKey(w http.ResponseWriter, r *http.Request) {
 			}
 			h.recordIssueMetadataMutation(r, "set", "noop", issueID, key, queryDuration)
 			writeJSON(w, http.StatusOK, map[string]any{
-				"metadata":       parseIssueMetadata(current.Metadata),
+				"metadata":       parseIssueMetadata([]byte(current.Metadata)),
 				"issue_revision": current.Revision,
 			})
 			return
@@ -245,7 +246,7 @@ func (h *Handler) SetIssueMetadataKey(w http.ResponseWriter, r *http.Request) {
 
 	workspaceID := uuidToString(updated.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	metadata := parseIssueMetadata(updated.Metadata)
+	metadata := parseIssueMetadata([]byte(updated.Metadata))
 	h.publish(protocol.EventIssueMetadataChanged, workspaceID, actorType, actorID, map[string]any{
 		"issue_id":       uuidToString(updated.ID),
 		"metadata":       metadata,
@@ -281,19 +282,19 @@ func (h *Handler) DeleteIssueMetadataKey(w http.ResponseWriter, r *http.Request)
 		return q.DeleteIssueMetadataKey(r.Context(), db.DeleteIssueMetadataKeyParams{
 			ID:          issue.ID,
 			WorkspaceID: issue.WorkspaceID,
-			Key:         key,
+			Key:         nullString(key),
 		})
 	})
 	queryDuration := time.Since(queryStarted)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			fallbackStarted := time.Now()
 			current, getErr := h.Queries.GetIssueMetadataInWorkspace(r.Context(), db.GetIssueMetadataInWorkspaceParams{
 				ID:          issue.ID,
 				WorkspaceID: issue.WorkspaceID,
 			})
 			queryDuration += time.Since(fallbackStarted)
-			if errors.Is(getErr, pgx.ErrNoRows) {
+			if errors.Is(getErr, sql.ErrNoRows) {
 				h.recordIssueMetadataMutation(r, "delete", "not_found", issueID, key, queryDuration)
 				writeError(w, http.StatusNotFound, "issue not found")
 				return
@@ -306,7 +307,7 @@ func (h *Handler) DeleteIssueMetadataKey(w http.ResponseWriter, r *http.Request)
 			}
 			h.recordIssueMetadataMutation(r, "delete", "noop", issueID, key, queryDuration)
 			writeJSON(w, http.StatusOK, map[string]any{
-				"metadata":       parseIssueMetadata(current.Metadata),
+				"metadata":       parseIssueMetadata([]byte(current.Metadata)),
 				"issue_revision": current.Revision,
 			})
 			return
@@ -320,7 +321,7 @@ func (h *Handler) DeleteIssueMetadataKey(w http.ResponseWriter, r *http.Request)
 
 	workspaceID := uuidToString(updated.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	metadata := parseIssueMetadata(updated.Metadata)
+	metadata := parseIssueMetadata([]byte(updated.Metadata))
 	h.publish(protocol.EventIssueMetadataChanged, workspaceID, actorType, actorID, map[string]any{
 		"issue_id":       uuidToString(updated.ID),
 		"metadata":       metadata,

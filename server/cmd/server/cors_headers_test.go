@@ -16,7 +16,7 @@ import (
 func TestRouterCORSContract(t *testing.T) {
 	const origin = "https://cors-client.example"
 	t.Setenv("CORS_ALLOWED_ORIGINS", origin)
-	router := NewRouter(nil, realtime.NewHub(), events.New(), analytics.NoopClient{}, nil)
+	router := NewRouter(nil, realtime.NewHub(), events.New(), analytics.NoopClient{})
 
 	t.Run("preflight accepts browser request headers", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodOptions, "/api/config", nil)
@@ -80,7 +80,7 @@ func headerListContains(header, want string) bool {
 func TestRouterCORSAllowsTheCSRFHeader(t *testing.T) {
 	const origin = "https://cors-client.example"
 	t.Setenv("CORS_ALLOWED_ORIGINS", origin)
-	router := NewRouter(nil, realtime.NewHub(), events.New(), analytics.NoopClient{}, nil)
+	router := NewRouter(nil, realtime.NewHub(), events.New(), analytics.NoopClient{})
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/config", nil)
 	req.Header.Set("Origin", origin)

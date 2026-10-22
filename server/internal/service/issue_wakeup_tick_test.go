@@ -5,17 +5,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	"github.com/multica-ai/multica/server/pkg/dbid"
 )
 
 // drainTick runs one pass over the workspace with room to finish: these tests
 // pin which rules a pass reaches, not how fast a loaded CI machine runs them.
-func drainTick(t *testing.T, s *IssueWakeupService, ws pgtype.UUID) {
+func drainTick(t *testing.T, s *IssueWakeupService, ws string) {
 	t.Helper()
-	if err := s.tickWith(context.Background(), []pgtype.UUID{ws}, tickLimits{budget: 5 * time.Minute, inputBudget: 5 * time.Minute}); err != nil {
+	if err := s.tickWith(context.Background(), []string{ws}, tickLimits{budget: 5 * time.Minute, inputBudget: 5 * time.Minute}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -33,14 +31,14 @@ func idleConditionRules(t *testing.T, f principalFixture, s *IssueWakeupService,
 		f.Cleanup(t, "DELETE FROM issue_wakeup_receipt WHERE wakeup_id IN (SELECT id FROM issue_wakeup WHERE issue_id=$1)", idleIssue)
 		f.Cleanup(t, "DELETE FROM activity_log WHERE issue_id=$1", idleIssue)
 		seed := wakeCreate(t, f, s, idleIssue, WakeupInput{AgentID: agent, Kind: "event", Instruction: "never",
-			Condition: condition(t, map[string]any{"type": "issue_field", "field": "status", "value": "blocked"})})
+			Condition: nullString(string(condition(t, map[string]any{"type": "issue_field", "field": "status", "value": "blocked"})))})
 		cloneWakeup(t, f, seed.ID, min(perIssue, n-made)-1, false)
 	}
 	f.Exec(t, "UPDATE issue_wakeup SET next_fire_at=now()-interval '1 second', updated_at=now()-interval '1 hour' WHERE workspace_id=$1 AND instruction='never'", f.WorkspaceID)
 }
 
 // cloneWakeup copies a rule n times, optionally as turned-off rules.
-func cloneWakeup(t *testing.T, f principalFixture, id pgtype.UUID, n int, off bool) {
+func cloneWakeup(t *testing.T, f principalFixture, id string, n int, off bool) {
 	t.Helper()
 	if n <= 0 {
 		return
@@ -62,7 +60,7 @@ func TestWakeupTickFiresStatusHintBehindManyDueChecks(t *testing.T) {
 	idleConditionRules(t, f, s, reviewer, 2*wakeupTickBatch+30)
 
 	w := wakeCreate(t, f, s, issue, WakeupInput{AgentID: reviewer, Kind: "event", Instruction: "Review it",
-		Condition: condition(t, map[string]any{"type": "issue_field", "field": "status", "value": "in_review"})})
+		Condition: nullString(string(condition(t, map[string]any{"type": "issue_field", "field": "status", "value": "in_review"})))})
 	// Not due by time and last in scan order: only its hint can reach it.
 	f.Exec(t, "UPDATE issue_wakeup SET next_fire_at=now()+interval '1 hour', updated_at=now() WHERE id=$1", w.ID)
 
@@ -117,7 +115,7 @@ func TestWakeupTickDrainsBothLanesInOnePass(t *testing.T) {
 	f.Exec(t, `INSERT INTO issue_wakeup_receipt(id,wakeup_id,revision,event_key,event_type,payload)
 		SELECT gen_random_uuid(),id,revision,'k','comment.created','{}' FROM issue_wakeup WHERE issue_id=$1`, issue)
 
-	inputs, err := f.q.ListInputWakeups(ctx, db.ListInputWakeupsParams{WorkspaceIds: []pgtype.UUID{ws}, SkipIds: []pgtype.UUID{}, RowLimit: 1000})
+	inputs, err := f.q.ListInputWakeups(ctx, db.ListInputWakeupsParams{WorkspaceIds: []string{ws}, SkipIds: []string{}, RowLimit: 1000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +150,7 @@ func TestWakeupTickSlowInputsLeaveTimeForDueChecks(t *testing.T) {
 	// Each input takes at least 300ms; the input lane gets 500ms while due
 	// checks remain, so at most two inputs may run before the last due check.
 	var order []string
-	err := s.tickWith(ctx, []pgtype.UUID{ws}, tickLimits{budget: 5 * time.Minute, inputBudget: 500 * time.Millisecond,
+	err := s.tickWith(ctx, []string{ws}, tickLimits{budget: 5 * time.Minute, inputBudget: 500 * time.Millisecond,
 		beforeDispatch: func(w db.IssueWakeup) {
 			order = append(order, w.Instruction)
 			if w.Instruction == "noisy" {
@@ -197,9 +195,9 @@ func TestWakeupTickSlowInputsLeaveTimeForDueChecks(t *testing.T) {
 func TestPendingWakeupInputsSeparatesHeldFromBacklog(t *testing.T) {
 	f, s, issue, agent := conditionFixture(t)
 	ctx := context.Background()
-	ws := []pgtype.UUID{parseTestUUID(t, f.WorkspaceID)}
+	ws := []string{parseTestUUID(t, f.WorkspaceID)}
 	w := wakeCreate(t, f, s, issue, WakeupInput{AgentID: agent, Kind: "event", Mode: "continuous", EventTypes: []string{"comment.created"}, Instruction: "follow up"})
-	f.Comment(t, issue.String(), "hello")
+	f.Comment(t, issue, "hello")
 	f.Exec(t, "UPDATE issue_wakeup_receipt SET created_at=now()-interval '10 minutes' WHERE wakeup_id=$1", w.ID)
 	read := func() pendingInputSummary {
 		t.Helper()
@@ -224,7 +222,7 @@ func TestPendingWakeupInputsSeparatesHeldFromBacklog(t *testing.T) {
 	}
 	backlog("unhandled input")
 	// A queued run of the agent for the rule's creator will take the input.
-	run := f.Task(t, agent, testutil.Cols{"issue_id": issue.String(), "originator_user_id": f.UserID, "accountable_user_id": f.UserID,
+	run := f.Task(t, agent, testutil.Cols{"issue_id": issue, "originator_user_id": f.UserID, "accountable_user_id": f.UserID,
 		"runtime_id": testutil.Raw("(SELECT runtime_id FROM agent WHERE id='" + agent + "')")})
 	held("input waiting for a queued run")
 	// A claim reserved the input for that run, which has not started yet.
@@ -248,13 +246,13 @@ func TestPendingWakeupInputsSeparatesHeldFromBacklog(t *testing.T) {
 func TestPendingWakeupInputsSystemRuleHeldOnlyByItsTarget(t *testing.T) {
 	f, s, issue, target := conditionFixture(t)
 	ctx := context.Background()
-	ws := []pgtype.UUID{parseTestUUID(t, f.WorkspaceID)}
+	ws := []string{parseTestUUID(t, f.WorkspaceID)}
 	var owner string
 	f.QueryRow(t, "SELECT owner_id::text FROM agent WHERE id=$1", target).Scan(&owner)
 	other := f.privateAgentOwnedBy(t, owner, "other")
 	f.Exec(t, "UPDATE issue SET assignee_type='agent', assignee_id=$2 WHERE id=$1", issue, target)
-	rule, err := f.q.CreateSystemWakeup(ctx, db.CreateSystemWakeupParams{ID: dbid.NewV7(), WorkspaceID: ws[0], IssueID: issue,
-		EventTypes: []string{"issue.status_changed"}, Condition: childDoneCondition, Enabled: true, SystemRule: systemRuleText(SystemRuleChildDone)})
+	rule, err := f.q.CreateSystemWakeup(ctx, db.CreateSystemWakeupParams{ID: newV7(), WorkspaceID: ws[0], IssueID: issue,
+		EventTypes: stringListJSON([]string{"issue.status_changed"}), Condition: nullString(string(childDoneCondition)), Enabled: 1, SystemRule: systemRuleText(SystemRuleChildDone)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +268,7 @@ func TestPendingWakeupInputsSystemRuleHeldOnlyByItsTarget(t *testing.T) {
 	}
 	queued := func(agent, runAs string) string {
 		t.Helper()
-		return f.Task(t, agent, testutil.Cols{"issue_id": issue.String(), "originator_user_id": runAs, "accountable_user_id": runAs,
+		return f.Task(t, agent, testutil.Cols{"issue_id": issue, "originator_user_id": runAs, "accountable_user_id": runAs,
 			"runtime_id": testutil.Raw("(SELECT runtime_id FROM agent WHERE id='" + agent + "')")})
 	}
 	issueRow, err := f.q.GetIssue(ctx, issue)
@@ -286,7 +284,7 @@ func TestPendingWakeupInputsSystemRuleHeldOnlyByItsTarget(t *testing.T) {
 		t.Fatalf("run-as for the target: %+v %v", runAs, err)
 	}
 	// Another agent's queued run cannot take a platform rule's input.
-	queued(other, runAs.UserID.String())
+	queued(other, runAs.UserID.String)
 	if p := read(); !p.OldestReady.Valid || p.Held != 0 {
 		t.Fatalf("input with only another agent's run queued: %+v, want backlog", p)
 	}
@@ -296,7 +294,7 @@ func TestPendingWakeupInputsSystemRuleHeldOnlyByItsTarget(t *testing.T) {
 		t.Fatalf("input with the target's run as another person: %+v, want backlog", p)
 	}
 	f.Exec(t, "UPDATE agent_task_queue SET status='cancelled', completed_at=now() WHERE id=$1", stranger)
-	queued(target, runAs.UserID.String())
+	queued(target, runAs.UserID.String)
 	if p := read(); p.OldestReady.Valid || p.Held != 1 {
 		t.Fatalf("input with the target's run queued: %+v, want held", p)
 	}
@@ -307,14 +305,14 @@ func TestPendingWakeupInputsSystemRuleHeldOnlyByItsTarget(t *testing.T) {
 func TestPendingWakeupInputsScansPastAFullPageOfHeldGroups(t *testing.T) {
 	f, s, issue, agent := conditionFixture(t)
 	ctx := context.Background()
-	ws := []pgtype.UUID{parseTestUUID(t, f.WorkspaceID)}
+	ws := []string{parseTestUUID(t, f.WorkspaceID)}
 	// A page of turned-off rules whose inputs a queued run will take along.
 	seed := wakeCreate(t, f, s, issue, WakeupInput{AgentID: agent, Kind: "event", Mode: "continuous", EventTypes: []string{"comment.created"}, Instruction: "held"})
 	f.Exec(t, "UPDATE issue_wakeup SET enabled=false, disabled_at=now() WHERE id=$1", seed.ID)
 	cloneWakeup(t, f, seed.ID, wakeupPendingScanPage-1, true)
 	f.Exec(t, `INSERT INTO issue_wakeup_receipt(id,wakeup_id,revision,event_key,event_type,payload,created_at)
 		SELECT gen_random_uuid(),id,revision,'k','comment.created','{}',now()-interval '20 minutes' FROM issue_wakeup WHERE issue_id=$1`, issue)
-	f.Task(t, agent, testutil.Cols{"issue_id": issue.String(), "originator_user_id": f.UserID, "accountable_user_id": f.UserID,
+	f.Task(t, agent, testutil.Cols{"issue_id": issue, "originator_user_id": f.UserID, "accountable_user_id": f.UserID,
 		"runtime_id": testutil.Raw("(SELECT runtime_id FROM agent WHERE id='" + agent + "')")})
 	// One ready input, younger than every held one, on another issue.
 	other := parseTestUUID(t, f.Issue(t, "Ready input"))
@@ -347,7 +345,7 @@ func TestPendingWakeupInputsReportsAnIncompleteScan(t *testing.T) {
 		VALUES(gen_random_uuid(),$1,$2,'k','comment.created','{}')`, w.ID, w.Revision)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := s.pendingInputs(ctx, []pgtype.UUID{parseTestUUID(t, f.WorkspaceID)}, wakeupPendingScanPage); err == nil {
+	if _, err := s.pendingInputs(ctx, []string{parseTestUUID(t, f.WorkspaceID)}, wakeupPendingScanPage); err == nil {
 		t.Fatal("a scan whose context ended reported a complete result")
 	}
 }

@@ -9,15 +9,12 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/daemonws"
-	"github.com/multica-ai/multica/server/internal/database"
 	"github.com/multica-ai/multica/server/internal/dbreader"
 	"github.com/multica-ai/multica/server/internal/dbstartup"
 	"github.com/multica-ai/multica/server/internal/events"
@@ -33,82 +30,12 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/featureflag"
 	"github.com/multica-ai/multica/server/pkg/llm"
-	"github.com/redis/go-redis/v9"
 )
 
 var (
 	version = "dev"
 	commit  = "unknown"
 )
-
-func newNamedRedisClient(base *redis.UniversalOptions, suffix string) redis.UniversalClient {
-	opts := *base
-	if envBool("REDIS_DISABLE_CLIENT_NAME", false) {
-		opts.ClientName = ""
-	} else {
-		opts.ClientName = redisClientName(opts.ClientName, suffix)
-	}
-	return redis.NewUniversalClient(&opts)
-}
-
-func redisClientName(existing, suffix string) string {
-	if suffix == "" {
-		return existing
-	}
-	if existing != "" {
-		return existing + ":" + suffix
-	}
-	return "multica-api:" + suffix
-}
-
-func closeRedisClient(label string, client redis.UniversalClient) {
-	if client == nil {
-		return
-	}
-	if err := client.Close(); err != nil {
-		slog.Warn("redis client close failed", "client", label, "error", err)
-	}
-}
-
-func shardedRelayConfigFromEnv() realtime.ShardedStreamRelayConfig {
-	cfg := realtime.DefaultShardedStreamRelayConfig()
-	cfg.Shards = envPositiveInt("REALTIME_RELAY_SHARDS", cfg.Shards)
-	cfg.StreamMaxLen = envPositiveInt64("REALTIME_RELAY_STREAM_MAXLEN", cfg.StreamMaxLen)
-	cfg.ReadCount = envPositiveInt64("REALTIME_RELAY_XREAD_COUNT", cfg.ReadCount)
-	cfg.ReadBlock = envDuration("REALTIME_RELAY_XREAD_BLOCK", cfg.ReadBlock)
-	cfg.ReplayGrace = envDuration("REALTIME_RELAY_REPLAY_GRACE", cfg.ReplayGrace)
-	cfg.TrimHorizon = envDuration("REALTIME_RELAY_TRIM_HORIZON", 2*cfg.ReplayGrace)
-	cfg.StreamTTL = envDuration("REALTIME_RELAY_STREAM_TTL", cfg.TrimHorizon+cfg.ReplayGrace)
-	cfg.TTLRefreshInterval = envDuration("REALTIME_RELAY_TTL_REFRESH_INTERVAL", cfg.TTLRefreshInterval)
-	cfg.MaintenanceInterval = envDuration("REALTIME_RELAY_MAINTENANCE_INTERVAL", cfg.MaintenanceInterval)
-	cfg.StreamTTLEnabled = envBool("REALTIME_RELAY_STREAM_TTL_ENABLED", false)
-	if err := cfg.Validate(); err != nil {
-		slog.Warn("invalid realtime relay retention config; normalizing to safe values", "error", err)
-	}
-	return cfg.Normalized()
-}
-
-func realtimeRelayModeFromEnv() string {
-	const defaultMode = "sharded"
-	raw := strings.ToLower(strings.TrimSpace(os.Getenv("REALTIME_RELAY_MODE")))
-	if raw == "" {
-		return defaultMode
-	}
-	switch raw {
-	case "sharded", "dual", "legacy":
-		return raw
-	default:
-		slog.Warn("invalid env var, using default", "name", "REALTIME_RELAY_MODE", "value", raw, "default", defaultMode)
-		return defaultMode
-	}
-}
-
-func validateRealtimeRelayMode(mode string, clusterMode bool) error {
-	if clusterMode && mode != "sharded" {
-		return fmt.Errorf("REALTIME_RELAY_MODE=%s is incompatible with REDIS_CLUSTER_MODE=true; use sharded mode", mode)
-	}
-	return nil
-}
 
 func envPositiveInt(name string, def int) int {
 	raw := os.Getenv(name)
@@ -193,19 +120,6 @@ func parseLLMDisableThinking(raw string) (bool, error) {
 	default:
 		return false, fmt.Errorf("must be a boolean (true/false or 1/0), got %q", raw)
 	}
-}
-
-func envPositiveInt64(name string, def int64) int64 {
-	raw := os.Getenv(name)
-	if raw == "" {
-		return def
-	}
-	v, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || v <= 0 {
-		slog.Warn("invalid env var, using default", "name", name, "value", raw, "default", def, "error", err)
-		return def
-	}
-	return v
 }
 
 func envDuration(name string, def time.Duration) time.Duration {
@@ -358,7 +272,7 @@ func main() {
 
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
-		dbURL = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
+		dbURL = "file:./data/multica.db"
 	}
 
 	startupSettings := dbstartup.SettingsFromEnv()
@@ -379,7 +293,7 @@ func main() {
 			"error", event.Err,
 		)
 	}
-	if err := dbstartup.Retry(startupCtx, retryOptions, pool.Ping); err != nil {
+	if err := dbstartup.Retry(startupCtx, retryOptions, pool.PingContext); err != nil {
 		stopStartup()
 		slog.Error("unable to ping database", "error", err)
 		os.Exit(1)
@@ -387,23 +301,6 @@ func main() {
 	stopStartup()
 	slog.Info("connected to database")
 	logPoolConfig("primary", pool)
-
-	// The replica is an optional capacity optimization, never a startup
-	// dependency. Invalid configuration preserves primary-only behavior. New
-	// replica connections are validated as read-only by the pool configuration,
-	// while request-driven fallback and a passive circuit breaker handle runtime
-	// failures without background SQL.
-	var replicaPool *pgxpool.Pool
-	if replicaURL := strings.TrimSpace(os.Getenv("DATABASE_REPLICA_URL")); replicaURL != "" {
-		replicaPool, err = newReplicaDBPool(context.Background(), replicaURL, startupSettings.ConnectTimeout)
-		if err != nil {
-			slog.Warn("database replica configuration is invalid; using primary for reads", "error", err)
-			replicaPool = nil
-		} else {
-			defer replicaPool.Close()
-			logPoolConfig("replica", replicaPool)
-		}
-	}
 
 	bus := events.New()
 	hub := realtime.NewHub()
@@ -413,131 +310,10 @@ func main() {
 		service.TaskWakeupNotifier
 		handler.RuntimeGoneNotifier
 	} = daemonHub
-	// MUL-1138: when REDIS_URL is set, route fanout through a Redis relay so
-	// multiple API nodes can deliver each other's events. Without it the hub
-	// is the sole broadcaster and the server stays single-node (legacy).
-	// Runtime local-skill stores and realtime relay traffic use separate Redis
-	// clients so blocking stream consumers cannot starve request-path Redis
-	// operations. Channel leases are initialized separately below from the same
-	// global Redis configuration.
-	relayCtx, relayCancel := context.WithCancel(context.Background())
+	// The in-memory hub is the only broadcaster. There is no cross-node relay.
 	var broadcaster realtime.Broadcaster = hub
-	var storeRedis redis.UniversalClient
-	var storeRedisPoolSize int
-	var channelLeaseRedis redis.UniversalClient
-	var relayWriteRedis redis.UniversalClient
-	var relayReadRedis redis.UniversalClient
-	var shardedReadRedis redis.UniversalClient
-	var legacyReadRedis redis.UniversalClient
-	var relay realtime.ManagedRelay
-	// stopRelay halts the relay readers. The defer keeps a second call
-	// (idempotent via the Once) for the early-return paths that never reach
-	// the body's shutdown sequence.
-	var stopRelayOnce sync.Once
-	stopRelay := func() {
-		stopRelayOnce.Do(func() {
-			if relay != nil {
-				relay.Stop()
-			}
-			relayCancel()
-			if relay != nil {
-				relay.Wait()
-			}
-		})
-	}
-	defer func() {
-		stopRelay()
-		closeRedisClient("realtime-read-legacy", legacyReadRedis)
-		closeRedisClient("realtime-read-sharded", shardedReadRedis)
-		closeRedisClient("realtime-read", relayReadRedis)
-		closeRedisClient("realtime-write", relayWriteRedis)
-		closeRedisClient("channel-lease", channelLeaseRedis)
-		closeRedisClient("store", storeRedis)
-	}()
-	sharedRedisURL := strings.TrimSpace(os.Getenv("REDIS_URL"))
-	redisClusterMode := envBool("REDIS_CLUSTER_MODE", false)
-	// Main parses shared options instead of using database.NewRedisClient so it
-	// can create separate role-specific pools. Request-path clients must also
-	// survive a transient startup outage; relay and lease components own their
-	// existing bounded readiness probes and failure policies.
-	if sharedRedisURL != "" && envBool("REDIS_DISABLE_CLIENT_NAME", false) {
-		slog.Info("redis: CLIENT SETNAME disabled (REDIS_DISABLE_CLIENT_NAME=true) for managed Redis compatibility")
-	}
-	if sharedRedisURL != "" {
-		if opts, err := database.NewRedisOptions(database.RedisConfig{URL: sharedRedisURL, ClusterMode: redisClusterMode}); err != nil {
-			slog.Error("invalid REDIS_URL — request-path Redis features disabled", "error", err)
-		} else {
-			storeRedis = newNamedRedisClient(opts, "store")
-			storeRedisPoolSize = opts.PoolSize
-		}
-	}
-	if sharedRedisURL != "" {
-		opts, err := database.NewRedisOptions(database.RedisConfig{URL: sharedRedisURL, ClusterMode: redisClusterMode})
-		if err != nil {
-			slog.Error("invalid REDIS_URL — realtime relay falling back to in-memory hub", "error", err)
-		} else {
-			relayMode := realtimeRelayModeFromEnv()
-			if err := validateRealtimeRelayMode(relayMode, redisClusterMode); err != nil {
-				slog.Error("invalid realtime relay configuration", "error", err)
-				os.Exit(1)
-			}
-			relayWriteRedis = newNamedRedisClient(opts, "realtime-write")
-
-			relayConfig := shardedRelayConfigFromEnv()
-			switch relayMode {
-			case "legacy":
-				relayReadRedis = newNamedRedisClient(opts, "realtime-read")
-				relay = realtime.NewRedisRelayWithClientsAndConfig(hub, relayWriteRedis, relayReadRedis, relayConfig.RetentionConfig())
-				slog.Info("daemon websocket wakeup: Redis fanout disabled in legacy realtime relay mode")
-			case "dual":
-				shardedReadRedis = newNamedRedisClient(opts, "realtime-read-sharded")
-				legacyReadRedis = newNamedRedisClient(opts, "realtime-read-legacy")
-				sharded := realtime.NewShardedStreamRelay(hub, relayWriteRedis, shardedReadRedis, relayConfig)
-				sharded.SetDaemonRuntimeDeliverer(daemonHub)
-				legacy := realtime.NewRedisRelayWithClientsAndConfig(hub, relayWriteRedis, legacyReadRedis, relayConfig.RetentionConfig())
-				relay = realtime.NewMirroredRelay(sharded, legacy)
-				daemonWakeup = daemonws.NewRelayNotifier(daemonHub, sharded)
-			default:
-				relayReadRedis = newNamedRedisClient(opts, "realtime-read")
-				sharded := realtime.NewShardedStreamRelay(hub, relayWriteRedis, relayReadRedis, relayConfig)
-				sharded.SetDaemonRuntimeDeliverer(daemonHub)
-				relay = sharded
-				daemonWakeup = daemonws.NewRelayNotifier(daemonHub, sharded)
-			}
-			// Every deliverer is registered by this point. The shard readers
-			// open on a replay window, so anything registered after Start
-			// silently misses it.
-			relay.Start(relayCtx)
-			broadcaster = realtime.NewDualWriteBroadcaster(hub, relay)
-			slog.Info(
-				"realtime: Redis relay enabled",
-				"node_id", relay.NodeID(),
-				"mode", relayMode,
-				"shards", relayConfig.Shards,
-				"stream_max_len", relayConfig.StreamMaxLen,
-				"replay_grace", relayConfig.ReplayGrace.String(),
-				"trim_horizon", relayConfig.TrimHorizon.String(),
-				"stream_ttl", relayConfig.StreamTTL.String(),
-				"stream_ttl_enabled", relayConfig.StreamTTLEnabled,
-				"xread_count", relayConfig.ReadCount,
-				"xread_block", relayConfig.ReadBlock.String(),
-				"store_pool_size", storeRedisPoolSize,
-				"realtime_write_pool_size", opts.PoolSize,
-				"realtime_read_pool_size", opts.PoolSize,
-			)
-		}
-	} else {
-		slog.Info("realtime: REDIS_URL is unset — using in-memory hub (single-node mode)")
-	}
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("CHANNEL_WS_LEASE_BACKEND")), "redis") {
-		if sharedRedisURL == "" {
-			slog.Error("channel leases: REDIS_URL is unset")
-		} else if opts, err := database.NewRedisOptions(database.RedisConfig{URL: sharedRedisURL, ClusterMode: redisClusterMode}); err != nil {
-			slog.Error("channel leases: invalid Redis URL; supervisor will fail closed", "error", err)
-		} else {
-			channelLeaseRedis = newNamedRedisClient(opts, "channel-lease")
-		}
-	}
+	stopRelay := func() {}
+	slog.Info("realtime: using in-memory hub (single-node mode)")
 	registerListeners(bus, broadcaster)
 
 	analyticsClient := analytics.NewFromEnv()
@@ -561,12 +337,11 @@ func main() {
 	var dbRoutingMetrics *obsmetrics.DBRoutingMetrics
 	if metricsConfig.Enabled() {
 		metricsRegistry := obsmetrics.NewRegistry(obsmetrics.RegistryOptions{
-			Pool:        pool,
-			ReplicaPool: replicaPool,
-			Realtime:    realtime.M,
-			DaemonWS:    daemonws.M,
-			Version:     version,
-			Commit:      commit,
+			Pool:     pool,
+			Realtime: realtime.M,
+			DaemonWS: daemonws.M,
+			Version:  version,
+			Commit:   commit,
 		})
 		httpMetrics = metricsRegistry.HTTP
 		businessMetrics = metricsRegistry.Business
@@ -613,11 +388,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	r, h := NewRouterWithOptions(pool, hub, bus, analyticsClient, storeRedis, RouterOptions{
+	r, h := NewRouterWithOptions(pool, hub, bus, analyticsClient, RouterOptions{
 		HTTPMetrics:         httpMetrics,
 		BusinessMetrics:     businessMetrics,
 		ChannelLeaseMetrics: channelLeaseMetrics,
-		ChannelLeaseRedis:   channelLeaseRedis,
 		DaemonHub:           daemonHub,
 		DaemonWakeup:        daemonWakeup,
 		FeatureFlags:        flags,
@@ -625,13 +399,8 @@ func main() {
 		LLMMaxRetries:       llmMaxRetries,
 		LLMDisableThinking:  llmDisableThinking,
 	})
-	var replicaQueries *db.Queries
-	if replicaPool != nil {
-		replicaQueries = db.New(replicaPool)
-	}
-	// Reuse the handler's primary Queries handle so replica routing does not
-	// create a second wrapper around the same primary pool.
-	h.ReadSelector = dbreader.New(h.Queries, replicaQueries, readRecorder)
+	// SQLite is a single local database. There is no replica pool.
+	h.ReadSelector = dbreader.New(h.Queries, nil, readRecorder)
 	h.PRRefresh.SetReadSelector(h.ReadSelector)
 	// In-app orchestrator: consumes the bus, reconciles every minute and
 	// applies decisions through the router as its service member.
@@ -662,14 +431,9 @@ func main() {
 	taskSvc, autopilotSvc := backgroundServices(h)
 	registerAutopilotListeners(bus, autopilotSvc)
 
-	// Construct a LivenessStore that mirrors the one wired into the HTTP
-	// handler. Both the heartbeat write path (handler) and the sweeper read
-	// path (here) must agree on the same Redis-or-Noop choice; if they
-	// disagree, online runtimes get falsely marked offline.
+	// Heartbeats and the sweeper share the noop liveness store. Online
+	// detection stays on the database heartbeat columns.
 	var liveness handler.LivenessStore = handler.NewNoopLivenessStore()
-	if storeRedis != nil {
-		liveness = handler.NewRedisLivenessStore(storeRedis)
-	}
 
 	// Start background sweeper to mark stale runtimes as offline.
 	runtimeReconnectGrace := envDuration("MULTICA_RUNTIME_RECONNECT_GRACE", defaultRuntimeReconnectGrace)
@@ -698,9 +462,6 @@ func main() {
 		go runAutopilotQuotaReconciler(autopilotCtx, autopilotSvc)
 	}
 	go runDBStatsLogger(sweepCtx, "primary", pool)
-	if replicaPool != nil {
-		go runDBStatsLogger(sweepCtx, "replica", replicaPool)
-	}
 	if h.WebhookDeliveryWorker != nil {
 		go h.WebhookDeliveryWorker.Run(sweepCtx)
 	}

@@ -2,14 +2,13 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/integrations/vcs"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -28,7 +27,7 @@ func vcsPullRequestToResponse(p db.VcsPullRequest) GitHubPullRequestResponse {
 		WorkspaceID:      uuidToString(p.WorkspaceID),
 		RepoOwner:        p.RepoOwner,
 		RepoName:         p.RepoName,
-		Number:           p.PrNumber,
+		Number:           int32(p.PrNumber),
 		Title:            p.Title,
 		State:            p.State,
 		HtmlURL:          p.HtmlUrl,
@@ -41,9 +40,9 @@ func vcsPullRequestToResponse(p db.VcsPullRequest) GitHubPullRequestResponse {
 		PRUpdatedAt:      timestampToString(p.PrUpdatedAt),
 		MergeableState:   nil,
 		ChecksConclusion: nil,
-		Additions:        p.Additions,
-		Deletions:        p.Deletions,
-		ChangedFiles:     p.ChangedFiles,
+		Additions:        int32(p.Additions),
+		Deletions:        int32(p.Deletions),
+		ChangedFiles:     int32(p.ChangedFiles),
 	}
 }
 
@@ -56,7 +55,7 @@ func vcsPullRequestRowToResponse(p db.ListVCSPullRequestsByIssueRow) GitHubPullR
 		WorkspaceID:      uuidToString(p.WorkspaceID),
 		RepoOwner:        p.RepoOwner,
 		RepoName:         p.RepoName,
-		Number:           p.PrNumber,
+		Number:           int32(p.PrNumber),
 		Title:            p.Title,
 		State:            p.State,
 		HtmlURL:          p.HtmlUrl,
@@ -68,16 +67,16 @@ func vcsPullRequestRowToResponse(p db.ListVCSPullRequestsByIssueRow) GitHubPullR
 		PRCreatedAt:      timestampToString(p.PrCreatedAt),
 		PRUpdatedAt:      timestampToString(p.PrUpdatedAt),
 		MergeableState:   nil,
-		ChecksConclusion: aggregateChecksConclusion(p.ChecksFailed, p.ChecksPassed, p.ChecksPending, p.ChecksTotal),
+		ChecksConclusion: aggregateChecksConclusion(int64(p.ChecksFailed), int64(p.ChecksPassed), int64(p.ChecksPending), p.ChecksTotal),
 		ChecksTotal:      p.ChecksTotal,
-		ChecksPassed:     p.ChecksPassed,
-		ChecksFailed:     p.ChecksFailed,
-		ChecksPending:    p.ChecksPending,
-		ChecksRunning:    p.ChecksPending,
+		ChecksPassed:     int64(p.ChecksPassed),
+		ChecksFailed:     int64(p.ChecksFailed),
+		ChecksPending:    int64(p.ChecksPending),
+		ChecksRunning:    int64(p.ChecksPending),
 		FailedCheckNames: []string{},
-		Additions:        p.Additions,
-		Deletions:        p.Deletions,
-		ChangedFiles:     p.ChangedFiles,
+		Additions:        int32(p.Additions),
+		Deletions:        int32(p.Deletions),
+		ChangedFiles:     int32(p.ChangedFiles),
 	}
 }
 
@@ -112,7 +111,7 @@ func (h *Handler) HandleVCSWebhook(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := h.Queries.GetVCSConnectionByID(r.Context(), connUUID)
 	if err != nil {
-		if !errors.Is(err, pgx.ErrNoRows) {
+		if !errors.Is(err, sql.ErrNoRows) {
 			slog.Warn("vcs: lookup connection failed", "err", err)
 		}
 		writeError(w, http.StatusNotFound, "unknown connection")
@@ -168,7 +167,7 @@ func (h *Handler) mirrorVCSPullRequest(ctx context.Context, conn db.VcsConnectio
 		ConnectionID: conn.ID,
 		RepoOwner:    ev.RepoOwner,
 		RepoName:     ev.RepoName,
-		PrNumber:     ev.Number,
+		PrNumber:     int64(ev.Number),
 	}); err == nil {
 		prevState = prev.State
 	}
@@ -179,20 +178,20 @@ func (h *Handler) mirrorVCSPullRequest(ctx context.Context, conn db.VcsConnectio
 		Provider:        conn.Provider,
 		RepoOwner:       ev.RepoOwner,
 		RepoName:        ev.RepoName,
-		PrNumber:        ev.Number,
+		PrNumber:        int64(ev.Number),
 		Title:           ev.Title,
 		State:           ev.State,
 		HtmlUrl:         ev.HTMLURL,
 		Branch:          ptrToText(strPtrOrNil(ev.Branch)),
 		AuthorLogin:     ptrToText(strPtrOrNil(ev.AuthorLogin)),
 		AuthorAvatarUrl: ptrToText(strPtrOrNil(ev.AuthorAvatarURL)),
-		MergedAt:        parseGHTime(ev.MergedAt),
-		ClosedAt:        parseGHTime(ev.ClosedAt),
+		MergedAt:        nullString(parseGHTime(ev.MergedAt)),
+		ClosedAt:        nullString(parseGHTime(ev.ClosedAt)),
 		PrCreatedAt:     parseGHTimeRequired(ev.CreatedAt),
 		PrUpdatedAt:     parseGHTimeRequired(ev.UpdatedAt),
-		Additions:       ev.Additions,
-		Deletions:       ev.Deletions,
-		ChangedFiles:    ev.ChangedFiles,
+		Additions:       int64(ev.Additions),
+		Deletions:       int64(ev.Deletions),
+		ChangedFiles:    int64(ev.ChangedFiles),
 		HeadSha:         ev.HeadSHA,
 	})
 	if err != nil {
@@ -210,7 +209,7 @@ func (h *Handler) mirrorVCSPullRequest(ctx context.Context, conn db.VcsConnectio
 	// usable timestamp falls back to now(), which is never strictly after the
 	// stored value, so it proceeds.)
 	evUpdatedAt := parseGHTimeRequired(ev.UpdatedAt)
-	if pr.PrUpdatedAt.Valid && evUpdatedAt.Valid && pr.PrUpdatedAt.Time.After(evUpdatedAt.Time) {
+	if (pr.PrUpdatedAt != "") && (evUpdatedAt != "") && parseDBTime(pr.PrUpdatedAt).After(parseDBTime(evUpdatedAt)) {
 		return
 	}
 
@@ -225,19 +224,19 @@ func (h *Handler) mirrorVCSPullRequest(ctx context.Context, conn db.VcsConnectio
 	linkedIssueIDs := make([]string, 0)
 	ws, err := h.Queries.GetWorkspace(ctx, conn.WorkspaceID)
 	if err == nil {
-		var touched map[pgtype.UUID]struct{}
+		var touched map[string]struct{}
 		idents := prClaimedIdentifiers(ev.Title, ev.Body, ev.Branch)
 		linkedIssueIDs, touched = h.reconcileAutoLinks(ctx, ws, pr.ID, ev.State, prAutoLinkInput{
 			idents:    idents,
 			permits:   func(string) bool { return true },
 			ambiguous: func(string) bool { return false },
-			link: func(issueID pgtype.UUID) (int64, error) {
+			link: func(issueID string) (int64, error) {
 				return h.Queries.LinkIssueToVCSPullRequest(ctx, db.LinkIssueToVCSPullRequestParams{IssueID: issueID, PullRequestID: pr.ID})
 			},
-			unlink: func(issueID pgtype.UUID) (int64, error) {
+			unlink: func(issueID string) (int64, error) {
 				return h.Queries.UnlinkIssueFromVCSPullRequest(ctx, db.UnlinkIssueFromVCSPullRequestParams{IssueID: issueID, PullRequestID: pr.ID})
 			},
-			listAuto: func() ([]pgtype.UUID, error) {
+			listAuto: func() ([]string, error) {
 				return h.Queries.ListAutoLinkedIssueIDsForVCSPullRequest(ctx, pr.ID)
 			},
 		})

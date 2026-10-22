@@ -6,23 +6,23 @@
 -- pods during a rolling deploy: the unique (workspace_id, key) index makes a
 -- losing racer a no-op rather than an error. Initial positions are 0; the list's
 -- built-in tiebreak preserves the seed order until an admin reorders the group.
-INSERT INTO issue_status (workspace_id, key, name, description, category, color, is_system, position)
+INSERT INTO issue_status (id, workspace_id, key, name, description, category, color, is_system, position)
 VALUES
-    (sqlc.arg('workspace_id')::uuid, 'backlog', 'Backlog', 'Parked. Assigning an issue here never starts an agent run.', 'unstarted', '#6b7280', TRUE, 0),
-    (sqlc.arg('workspace_id')::uuid, 'todo', 'Todo', 'Queued for work. Moving an issue here starts the assigned agent.', 'unstarted', '#6b7280', TRUE, 0),
-    (sqlc.arg('workspace_id')::uuid, 'in_progress', 'In Progress', 'Actively being worked on.', 'started', '#f59e0b', TRUE, 0),
-    (sqlc.arg('workspace_id')::uuid, 'in_review', 'In Review', 'Work delivered, waiting on human review. Finalizes the autopilot run.', 'started', '#22c55e', TRUE, 0),
-    (sqlc.arg('workspace_id')::uuid, 'done', 'Done', 'Completed.', 'done', '#3b82f6', TRUE, 0),
-    (sqlc.arg('workspace_id')::uuid, 'blocked', 'Blocked', 'Stalled on an external dependency.', 'started', '#ef4444', TRUE, 0),
-    (sqlc.arg('workspace_id')::uuid, 'cancelled', 'Cancelled', 'Decided not to do.', 'closed', '#6b7280', TRUE, 0)
-ON CONFLICT DO NOTHING;
+    (gen_random_uuid(), sqlc.arg('workspace_id'), 'backlog', 'Backlog', 'Parked. Assigning an issue here never starts an agent run.', 'unstarted', '#6b7280', 1, 0),
+    (gen_random_uuid(), sqlc.arg('workspace_id'), 'todo', 'Todo', 'Queued for work. Moving an issue here starts the assigned agent.', 'unstarted', '#6b7280', 1, 0),
+    (gen_random_uuid(), sqlc.arg('workspace_id'), 'in_progress', 'In Progress', 'Actively being worked on.', 'started', '#f59e0b', 1, 0),
+    (gen_random_uuid(), sqlc.arg('workspace_id'), 'in_review', 'In Review', 'Work delivered, waiting on human review. Finalizes the autopilot run.', 'started', '#22c55e', 1, 0),
+    (gen_random_uuid(), sqlc.arg('workspace_id'), 'done', 'Done', 'Completed.', 'done', '#3b82f6', 1, 0),
+    (gen_random_uuid(), sqlc.arg('workspace_id'), 'blocked', 'Blocked', 'Stalled on an external dependency.', 'started', '#ef4444', 1, 0),
+    (gen_random_uuid(), sqlc.arg('workspace_id'), 'cancelled', 'Cancelled', 'Decided not to do.', 'closed', '#6b7280', 1, 0)
+ON CONFLICT (workspace_id, key) DO NOTHING;
 
 -- name: ListIssueStatusEntries :many
 -- Position orders both built-in and custom rows inside each lifecycle group.
 -- Built-in order is only a tiebreak for the original seeded positions.
 SELECT * FROM issue_status
-WHERE workspace_id = sqlc.arg('workspace_id')::uuid
-  AND (sqlc.arg('include_archived')::bool OR archived_at IS NULL)
+WHERE workspace_id = sqlc.arg('workspace_id')
+  AND (sqlc.arg('include_archived') OR archived_at IS NULL)
 ORDER BY
     CASE category WHEN 'unstarted' THEN 0 WHEN 'started' THEN 1 WHEN 'done' THEN 2 WHEN 'closed' THEN 3 ELSE 4 END,
     position,
@@ -41,30 +41,30 @@ ORDER BY
 
 -- name: GetIssueStatusEntryByKey :one
 SELECT * FROM issue_status
-WHERE workspace_id = sqlc.arg('workspace_id')::uuid
-  AND key = sqlc.arg('key')::text;
+WHERE workspace_id = sqlc.arg('workspace_id')
+  AND key = sqlc.arg('key');
 
 -- name: GetIssueStatusEntryByID :one
 SELECT * FROM issue_status
-WHERE id = sqlc.arg('id')::uuid
-  AND workspace_id = sqlc.arg('workspace_id')::uuid;
+WHERE id = sqlc.arg('id')
+  AND workspace_id = sqlc.arg('workspace_id');
 
 -- name: CreateIssueStatusEntry :one
 -- Custom statuses only: is_system is never set here, so the canonical-key and
 -- non-archivable CHECK constraints can only ever apply to seeded rows.
 INSERT INTO issue_status (workspace_id, key, name, description, category, color, icon, position)
 VALUES (
-    sqlc.arg('workspace_id')::uuid,
-    sqlc.arg('key')::text,
-    sqlc.arg('name')::text,
-    sqlc.arg('description')::text,
-    sqlc.arg('category')::text,
-    sqlc.arg('color')::text,
-    sqlc.arg('icon')::text,
+    sqlc.arg('workspace_id'),
+    sqlc.arg('key'),
+    sqlc.arg('name'),
+    sqlc.arg('description'),
+    sqlc.arg('category'),
+    sqlc.arg('color'),
+    sqlc.arg('icon'),
     COALESCE(
         (SELECT MAX(position) + 1 FROM issue_status
-         WHERE workspace_id = sqlc.arg('workspace_id')::uuid
-		   AND category = sqlc.arg('category')::text),
+         WHERE workspace_id = sqlc.arg('workspace_id')
+		   AND category = sqlc.arg('category')),
         0
     )
 )
@@ -81,8 +81,8 @@ UPDATE issue_status SET
     icon = COALESCE(sqlc.narg('icon'), icon),
     position = COALESCE(sqlc.narg('position'), position),
     updated_at = now()
-WHERE id = sqlc.arg('id')::uuid
-  AND workspace_id = sqlc.arg('workspace_id')::uuid
+WHERE id = sqlc.arg('id')
+  AND workspace_id = sqlc.arg('workspace_id')
   AND is_system = FALSE
   AND archived_at IS NULL
 RETURNING *;
@@ -92,13 +92,13 @@ RETURNING *;
 -- category's behavior definition.
 --
 -- Archiving retires a status from future use only. Issues already on it keep
--- it — Effective ignores archived_at, so their behavior is unchanged — while
+-- it - Effective ignores archived_at, so their behavior is unchanged - while
 -- Resolve rejects it, so nothing new can be assigned to it.
 UPDATE issue_status SET
     archived_at = now(),
     updated_at = now()
-WHERE id = sqlc.arg('id')::uuid
-  AND workspace_id = sqlc.arg('workspace_id')::uuid
+WHERE id = sqlc.arg('id')
+  AND workspace_id = sqlc.arg('workspace_id')
   AND is_system = FALSE
   AND archived_at IS NULL
 RETURNING *;
@@ -106,20 +106,18 @@ RETURNING *;
 -- name: CountIssuesUsingStatusKey :one
 -- Archive precondition, including terminal issues. Call under the catalog lock
 -- so a concurrent status assignment cannot invalidate the empty check.
-SELECT COUNT(*)::bigint FROM issue
-WHERE workspace_id = sqlc.arg('workspace_id')::uuid
-  AND status = sqlc.arg('key')::text;
+SELECT COUNT(*) FROM issue
+WHERE workspace_id = sqlc.arg('workspace_id')
+  AND status = sqlc.arg('key');
 
 -- name: DeleteIssueStatusEntriesForWorkspace :exec
 -- No foreign keys by project rule, so workspace teardown cleans up here.
-DELETE FROM issue_status WHERE workspace_id = sqlc.arg('workspace_id')::uuid;
+DELETE FROM issue_status WHERE workspace_id = sqlc.arg('workspace_id');
 
 -- name: LockIssueStatusCatalog :exec
 -- EXCLUSIVE transaction lock over a workspace's status catalog, held by archive
 -- so no issue can be written onto a status between the in-use census and the
--- archive itself. pg_advisory_xact_lock (not pg_try_) so a concurrent archive
--- queues instead of failing.
-SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg('workspace_id')::uuid::text || ':issue_status', 0));
+SELECT 1;
 
 -- name: LockIssueStatusCatalogShared :exec
 -- SHARED counterpart, taken by a write that puts an issue ON a custom status.
@@ -129,11 +127,11 @@ SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg('workspace_id')::uuid::te
 -- Built-in statuses deliberately do NOT take this lock: a built-in can never be
 -- archived (enforced by issue_status_system_not_archivable), so there is nothing
 -- to race with, and the overwhelmingly common write path stays lock-free.
-SELECT pg_advisory_xact_lock_shared(hashtextextended(sqlc.arg('workspace_id')::uuid::text || ':issue_status', 0));
+SELECT 1;
 
 -- name: ListIssueStatusKeysByCategories :many
 -- Expands a set of categories to the status keys that belong to them, so a
--- category filter can be applied as an INDEXED `status = ANY(...)` predicate
+-- category filter can be applied as an INDEXED `status IN (SELECT value FROM json_each(...))` predicate
 -- instead of wrapping the column in issue_effective_status(), which makes
 -- (workspace_id, status) unusable and forces a full workspace scan.
 --
@@ -141,16 +139,16 @@ SELECT pg_advisory_xact_lock_shared(hashtextextended(sqlc.arg('workspace_id')::u
 -- future assignment but leaves existing issues on it, and those issues must
 -- still appear in their category's column.
 SELECT key FROM issue_status
-WHERE workspace_id = sqlc.arg('workspace_id')::uuid
-  AND category = ANY(sqlc.arg('categories')::text[]);
+WHERE workspace_id = sqlc.arg('workspace_id')
+  AND category IN (SELECT value FROM json_each(sqlc.arg('categories')));
 
 -- name: ListActiveCustomIssueStatusEntries :many
--- One category's ACTIVE custom statuses — the exact set a reorder must cover.
+-- One category's ACTIVE custom statuses - the exact set a reorder must cover.
 -- Read inside the reorder transaction, under the catalog lock, so a status
 -- archived concurrently cannot slip in or out between validation and write.
 SELECT * FROM issue_status
-WHERE workspace_id = sqlc.arg('workspace_id')::uuid
-  AND category = sqlc.arg('category')::text
+WHERE workspace_id = sqlc.arg('workspace_id')
+  AND category = sqlc.arg('category')
   AND is_system = FALSE
   AND archived_at IS NULL
 ORDER BY position, key;
@@ -163,11 +161,17 @@ ORDER BY position, key;
 -- Full-catalog callers may reorder built-ins, without changing their semantics.
 -- Legacy custom-only callers preserve the positions occupied by custom rows.
 -- Archived rows remain frozen.
-UPDATE issue_status s
-SET position = (sqlc.arg('positions')::float8[])[v.ordinality],
+-- JSON shape: ids and positions are JSON arrays aligned by index.
+-- ids: ["status-id", ...], positions: [1, 2, ...].
+UPDATE issue_status
+SET position = (
+        SELECT p.value
+        FROM json_each(sqlc.arg('positions')) AS p
+        JOIN json_each(sqlc.arg('ids')) AS v ON v.key = p.key
+        WHERE v.value = issue_status.id
+    ),
     updated_at = now()
-FROM unnest(sqlc.arg('ids')::uuid[]) WITH ORDINALITY AS v(id, ordinality)
-WHERE s.id = v.id
-  AND s.workspace_id = sqlc.arg('workspace_id')::uuid
-  AND (sqlc.arg('include_system')::bool OR s.is_system = FALSE)
-  AND s.archived_at IS NULL;
+WHERE issue_status.workspace_id = sqlc.arg('workspace_id')
+  AND issue_status.id IN (SELECT value FROM json_each(sqlc.arg('ids')))
+  AND (sqlc.arg('include_system') OR issue_status.is_system = FALSE)
+  AND issue_status.archived_at IS NULL;

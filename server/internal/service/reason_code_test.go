@@ -1,13 +1,14 @@
 package service
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/dispatch"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -40,23 +41,23 @@ func TestDispatchFailReasonCode(t *testing.T) {
 // on a machine that is already connected (runtime_unusable, MUL-6164).
 // Collapsing any pair sends the user to fix the wrong thing.
 func TestAgentReadinessVerdict(t *testing.T) {
-	validRuntime := pgtype.UUID{Bytes: [16]byte{1}, Valid: true}
-	archivedAt := pgtype.Timestamptz{Valid: true}
+	validRuntime := uuid.UUID([16]byte{1}).String()
+	archivedAt := sql.NullString{String: "1970-01-01T00:00:00Z", Valid: true}
 
 	// The agent-only half needs no runtime row, so AgentReadiness answers before
 	// it queries one.
 	if got, _ := AgentReadiness(t.Context(), RuntimeLookup{}, db.Agent{}); got.Reason != dispatch.ReasonAgentRuntimeRequired || !got.Blocked() {
 		t.Errorf("no runtime bound: got %+v, want blocked/agent_runtime_required", got)
 	}
-	if got, _ := AgentReadiness(t.Context(), RuntimeLookup{}, db.Agent{ArchivedAt: archivedAt, RuntimeID: validRuntime}); got.Reason != dispatch.ReasonTargetUnavailable || !got.Blocked() {
+	if got, _ := AgentReadiness(t.Context(), RuntimeLookup{}, db.Agent{ArchivedAt: archivedAt, RuntimeID: nullString(validRuntime)}); got.Reason != dispatch.ReasonTargetUnavailable || !got.Blocked() {
 		t.Errorf("archived agent: got %+v, want blocked/target_unavailable", got)
 	}
 
 	// The runtime half. A private runtime with an owner admits only an agent
 	// owned by that same member; ownerless agents are blocked for new work.
-	ownerA := pgtype.UUID{Bytes: [16]byte{2}, Valid: true}
-	ownerB := pgtype.UUID{Bytes: [16]byte{3}, Valid: true}
-	if got := runtimeVerdict(db.AgentRuntime{Status: "online"}, db.Agent{OwnerID: ownerA}); !got.Ready() {
+	ownerA := uuid.UUID([16]byte{2}).String()
+	ownerB := uuid.UUID([16]byte{3}).String()
+	if got := runtimeVerdict(db.AgentRuntime{Status: "online"}, db.Agent{OwnerID: nullString(ownerA)}); !got.Ready() {
 		t.Errorf("online runtime: got %+v, want ready", got)
 	}
 	for name, tc := range map[string]struct {
@@ -66,28 +67,28 @@ func TestAgentReadinessVerdict(t *testing.T) {
 		reason  dispatch.ReasonCode
 	}{
 		"private mismatch": {
-			runtime: db.AgentRuntime{Status: "online", Visibility: "private", OwnerID: ownerA},
-			agent:   db.Agent{OwnerID: ownerB},
+			runtime: db.AgentRuntime{Status: "online", Visibility: "private", OwnerID: nullString(ownerA)},
+			agent:   db.Agent{OwnerID: nullString(ownerB)},
 			blocked: true,
 			reason:  dispatch.ReasonRuntimeAccessDenied,
 		},
 		"private ownerless agent": {
-			runtime: db.AgentRuntime{Status: "online", Visibility: "private", OwnerID: ownerA},
+			runtime: db.AgentRuntime{Status: "online", Visibility: "private", OwnerID: nullString(ownerA)},
 			agent:   db.Agent{},
 			blocked: true,
 			reason:  dispatch.ReasonRuntimeAccessDenied,
 		},
 		"private same owner": {
-			runtime: db.AgentRuntime{Status: "online", Visibility: "private", OwnerID: ownerA},
-			agent:   db.Agent{OwnerID: ownerA},
+			runtime: db.AgentRuntime{Status: "online", Visibility: "private", OwnerID: nullString(ownerA)},
+			agent:   db.Agent{OwnerID: nullString(ownerA)},
 		},
 		"public mismatch": {
-			runtime: db.AgentRuntime{Status: "online", Visibility: "public", OwnerID: ownerA},
-			agent:   db.Agent{OwnerID: ownerB},
+			runtime: db.AgentRuntime{Status: "online", Visibility: "public", OwnerID: nullString(ownerA)},
+			agent:   db.Agent{OwnerID: nullString(ownerB)},
 		},
 		"ownerless runtime": {
 			runtime: db.AgentRuntime{Status: "online", Visibility: "private"},
-			agent:   db.Agent{OwnerID: ownerB},
+			agent:   db.Agent{OwnerID: nullString(ownerB)},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -99,7 +100,7 @@ func TestAgentReadinessVerdict(t *testing.T) {
 	}
 	// Offline with no explanation is the sleeping-laptop case: work waits for it,
 	// so this must NOT be blocked.
-	offline := runtimeVerdict(db.AgentRuntime{Status: "offline"}, db.Agent{OwnerID: ownerA})
+	offline := runtimeVerdict(db.AgentRuntime{Status: "offline"}, db.Agent{OwnerID: nullString(ownerA)})
 	if offline.Blocked() || offline.Reason != dispatch.ReasonRuntimeOffline {
 		t.Errorf("plain offline runtime: got %+v, want waitable/runtime_offline", offline)
 	}
@@ -108,8 +109,8 @@ func TestAgentReadinessVerdict(t *testing.T) {
 	// thing that tells the user what to actually do.
 	unusable := runtimeVerdict(db.AgentRuntime{
 		Status:   "offline",
-		Metadata: []byte(`{"offline_reason":{"code":"not_executable","detail":"agent CLI is not executable","repair":{"package":"@anthropic-ai/claude-code","command":"cd '/pkg' && node install.cjs"}}}`),
-	}, db.Agent{OwnerID: ownerA})
+		Metadata: string([]byte(`{"offline_reason":{"code":"not_executable","detail":"agent CLI is not executable","repair":{"package":"@anthropic-ai/claude-code","command":"cd '/pkg' && node install.cjs"}}}`)),
+	}, db.Agent{OwnerID: nullString(ownerA)})
 	if !unusable.Blocked() || unusable.Reason != dispatch.ReasonRuntimeUnusable {
 		t.Fatalf("unusable runtime: got %+v, want blocked/runtime_unusable", unusable)
 	}
@@ -123,8 +124,8 @@ func TestAgentReadinessVerdict(t *testing.T) {
 	// the user to reinstall a CLI that runs perfectly.
 	profile := runtimeVerdict(db.AgentRuntime{
 		Status:   "offline",
-		Metadata: []byte(`{"offline_reason":{"code":"dsh_profile","detail":"the Multica runtime profile is not installed","repair":{"package":"DeepSeek Harness runtime profile"}}}`),
-	}, db.Agent{OwnerID: ownerA})
+		Metadata: string([]byte(`{"offline_reason":{"code":"dsh_profile","detail":"the Multica runtime profile is not installed","repair":{"package":"DeepSeek Harness runtime profile"}}}`)),
+	}, db.Agent{OwnerID: nullString(ownerA)})
 	if !profile.Blocked() || profile.Reason != dispatch.ReasonRuntimeProfileMissing {
 		t.Fatalf("missing DSH profile: got %+v, want blocked/runtime_profile_missing", profile)
 	}
@@ -155,20 +156,20 @@ func TestAgentReadinessVerdict(t *testing.T) {
 	installingRow := func(updatedAt time.Time) db.AgentRuntime {
 		return db.AgentRuntime{
 			Status:    "offline",
-			Metadata:  []byte(`{"offline_reason":{"code":"dsh_profile","installing":true,"detail":"installing the configured bundle now"}}`),
-			UpdatedAt: pgtype.Timestamptz{Time: updatedAt, Valid: true},
+			Metadata:  string([]byte(`{"offline_reason":{"code":"dsh_profile","installing":true,"detail":"installing the configured bundle now"}}`)),
+			UpdatedAt: nullTime(updatedAt, true).String,
 		}
 	}
 	// The one exception is an install the daemon is running right now: that wait
 	// DOES end by itself, so the work queues instead of being refused.
-	fresh := runtimeVerdict(installingRow(time.Now()), db.Agent{OwnerID: ownerA})
+	fresh := runtimeVerdict(installingRow(time.Now()), db.Agent{OwnerID: nullString(ownerA)})
 	if fresh.Blocked() {
 		t.Errorf("install in flight: got %+v, want the waitable verdict", fresh)
 	}
 	if fresh.Reason != dispatch.ReasonRuntimeOffline {
 		t.Errorf("install in flight: reason = %q, want %q", fresh.Reason, dispatch.ReasonRuntimeOffline)
 	}
-	stale := runtimeVerdict(installingRow(time.Now().Add(-runtimeInstallClaimWindow-time.Minute)), db.Agent{OwnerID: ownerA})
+	stale := runtimeVerdict(installingRow(time.Now().Add(-runtimeInstallClaimWindow-time.Minute)), db.Agent{OwnerID: nullString(ownerA)})
 	if !stale.Blocked() || stale.Reason != dispatch.ReasonRuntimeProfileMissing {
 		t.Fatalf("stale install claim: got %+v, want blocked/runtime_profile_missing", stale)
 	}
@@ -176,8 +177,8 @@ func TestAgentReadinessVerdict(t *testing.T) {
 	// that cannot be shown to be running.
 	unbounded := runtimeVerdict(db.AgentRuntime{
 		Status:   "offline",
-		Metadata: []byte(`{"offline_reason":{"code":"dsh_profile","installing":true}}`),
-	}, db.Agent{OwnerID: ownerA})
+		Metadata: string([]byte(`{"offline_reason":{"code":"dsh_profile","installing":true}}`)),
+	}, db.Agent{OwnerID: nullString(ownerA)})
 	if !unbounded.Blocked() {
 		t.Errorf("install claim with no updated_at: got %+v, want blocked", unbounded)
 	}
@@ -189,7 +190,7 @@ func TestAgentReadinessVerdict(t *testing.T) {
 		"malformed":    `{"offline_reason":`,
 		"empty":        ``,
 	} {
-		got := runtimeVerdict(db.AgentRuntime{Status: "offline", Metadata: []byte(metadata)}, db.Agent{OwnerID: ownerA})
+		got := runtimeVerdict(db.AgentRuntime{Status: "offline", Metadata: string([]byte(metadata))}, db.Agent{OwnerID: nullString(ownerA)})
 		if got.Blocked() {
 			t.Errorf("%s: got %+v, want the plain offline verdict", name, got)
 		}

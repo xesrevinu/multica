@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -17,7 +18,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/plugincontract"
 	"github.com/multica-ai/multica/server/pkg/remotemcp"
@@ -83,7 +83,7 @@ type HookResult struct {
 // resource.
 type HookActor struct {
 	Type string
-	ID   pgtype.UUID
+	ID   string
 }
 
 // HookInvocation is one call the engine has been asked to make.
@@ -91,7 +91,7 @@ type HookInvocation struct {
 	// ID is allocated before the outbound request. The receiver can log it and
 	// correlate a response with the durable invocation row even when the call
 	// itself fails.
-	ID           pgtype.UUID
+	ID           string
 	Installation db.PluginInstallation
 	Hook         plugincontract.Hook
 	Trigger      string
@@ -101,12 +101,12 @@ type HookInvocation struct {
 	// IssueID is the issue this call is about, when there is one. It narrows the
 	// callback token so a handler answering about one issue cannot use the same
 	// grant to reach across the workspace.
-	IssueID pgtype.UUID
+	IssueID string
 	Input   any
 	// DeliveryID is stable across retries of the same scheduled occurrence.
 	// PlannedAt is the canonical UTC cron occurrence, not delivery wall time.
 	DeliveryID string
-	PlannedAt  pgtype.Timestamptz
+	PlannedAt  sql.NullString
 	Attempt    int
 }
 
@@ -195,8 +195,8 @@ func HookAllowsTrigger(hook plugincontract.Hook, trigger string) bool {
 // result because a person is watching, event delivery runs outside the host
 // request, and schedule delivery runs under the durable scheduler lease.
 func (s *PluginService) InvokeHook(ctx context.Context, invocation HookInvocation, attempt int) (HookResult, error) {
-	if !invocation.ID.Valid {
-		invocation.ID = pgtype.UUID{Bytes: uuid.New(), Valid: true}
+	if invocation.ID == "" {
+		invocation.ID = uuid.NewString()
 	}
 	if attempt < 1 {
 		attempt = 1
@@ -205,7 +205,7 @@ func (s *PluginService) InvokeHook(ctx context.Context, invocation HookInvocatio
 	hook := invocation.Hook
 	result := HookResult{HookKey: hook.Key, Trigger: invocation.Trigger, Attempts: attempt}
 
-	if !invocation.Installation.Enabled {
+	if invocation.Installation.Enabled == 0 {
 		return result, pluginErrf(PluginErrorForbidden, "this Plugin is disabled")
 	}
 	if !HookAllowsTrigger(hook, invocation.Trigger) {
@@ -244,7 +244,7 @@ func (s *PluginService) InvokeHook(ctx context.Context, invocation HookInvocatio
 // callHookEndpoint is the network half: validate the destination, sign, send.
 func (s *PluginService) callHookEndpoint(ctx context.Context, invocation HookInvocation) (json.RawMessage, error) {
 	installation := invocation.Installation
-	granted := decodeScopes(installation.GrantedScopes)
+	granted := decodeScopes([]byte(installation.GrantedScopes))
 
 	// The destination must be inside the consented `net:` set. Passing the
 	// granted domains as the allowlist means the same string the admin approved
@@ -359,7 +359,7 @@ func nonSecretConfig(installation db.PluginInstallation) map[string]any {
 		return nil
 	}
 	values := map[string]any{}
-	if err := json.Unmarshal(installation.Config, &values); err != nil {
+	if err := json.Unmarshal([]byte(installation.Config), &values); err != nil {
 		return nil
 	}
 	manifest, err := ParseInstallationManifest(installation)
@@ -399,9 +399,9 @@ func (s *PluginService) buildHookBody(ctx context.Context, invocation HookInvoca
 		Actor:        hookRequestActor{Type: invocation.Actor.Type, ID: uuidString(invocation.Actor.ID)},
 	}
 	if invocation.PlannedAt.Valid {
-		body.Schedule = &hookRequestSchedule{PlannedAt: invocation.PlannedAt.Time.UTC()}
+		body.Schedule = &hookRequestSchedule{PlannedAt: asTime(invocation.PlannedAt).UTC()}
 	}
-	if invocation.IssueID.Valid {
+	if invocation.IssueID != "" {
 		body.IssueID = uuidString(invocation.IssueID)
 	}
 	body.Config = nonSecretConfig(invocation.Installation)
@@ -429,7 +429,7 @@ func (s *PluginService) buildHookBody(ctx context.Context, invocation HookInvoca
 // cannot appear in the timestamp. Signing the body alone would let a captured
 // request be replayed forever; signing a plain concatenation would let a
 // crafted timestamp and body pair swap bytes between the two fields.
-func (s *PluginService) SignHookPayload(installationID pgtype.UUID, timestamp string, body []byte) (string, error) {
+func (s *PluginService) SignHookPayload(installationID string, timestamp string, body []byte) (string, error) {
 	key, err := s.hookSigningKey(installationID)
 	if err != nil {
 		return "", err
@@ -450,7 +450,7 @@ func (s *PluginService) SignHookPayload(installationID pgtype.UUID, timestamp st
 // put a usable secret in reach of any database read. The install token goes the
 // other way — the plugin produces it and the host only ever verifies — so that
 // one is stored hashed. Same deployment key, opposite directions.
-func (s *PluginService) hookSigningKey(installationID pgtype.UUID) ([]byte, error) {
+func (s *PluginService) hookSigningKey(installationID string) ([]byte, error) {
 	if len(s.DeploymentKey) == 0 {
 		return nil, pluginErrf(PluginErrorUnavailable, "hooks are disabled: MULTICA_PLUGIN_SECRET_KEY is not configured")
 	}
@@ -465,7 +465,7 @@ func (s *PluginService) hookSigningKey(installationID pgtype.UUID) ([]byte, erro
 
 // HookSigningSecret is the same value in the form an author configures on their
 // own server. Shown once at install time next to the install token.
-func (s *PluginService) HookSigningSecret(installationID pgtype.UUID) (string, error) {
+func (s *PluginService) HookSigningSecret(installationID string) (string, error) {
 	key, err := s.hookSigningKey(installationID)
 	if err != nil {
 		return "", err
@@ -508,12 +508,12 @@ func VerifyHookSignature(secretHex, timestamp string, body []byte, presented str
 }
 
 // checkHookRate caps how often one hook may be called.
-func (s *PluginService) checkHookRate(ctx context.Context, installationID pgtype.UUID, hookKey string) error {
-	since := pgtype.Timestamptz{Time: time.Now().Add(-hookRateWindow), Valid: true}
+func (s *PluginService) checkHookRate(ctx context.Context, installationID string, hookKey string) error {
+	since := nullTime(time.Now().Add(-hookRateWindow), true)
 	count, err := s.Queries.CountRecentPluginInvocations(ctx, db.CountRecentPluginInvocationsParams{
 		InstallationID: installationID,
 		HookKey:        hookKey,
-		CreatedAt:      since,
+		CreatedAt:      since.String,
 	})
 	if err != nil {
 		// A telemetry read that fails must not take the feature down with it.
@@ -527,12 +527,12 @@ func (s *PluginService) checkHookRate(ctx context.Context, installationID pgtype
 
 // HookBreakerOpen reports whether background delivery for this hook is
 // currently suspended after repeated failures.
-func (s *PluginService) HookBreakerOpen(ctx context.Context, installationID pgtype.UUID, hookKey string) bool {
-	since := pgtype.Timestamptz{Time: time.Now().Add(-hookBreakerWindow), Valid: true}
+func (s *PluginService) HookBreakerOpen(ctx context.Context, installationID string, hookKey string) bool {
+	since := nullTime(time.Now().Add(-hookBreakerWindow), true)
 	failures, err := s.Queries.CountRecentPluginFailures(ctx, db.CountRecentPluginFailuresParams{
 		InstallationID: installationID,
 		HookKey:        hookKey,
-		CreatedAt:      since,
+		CreatedAt:      since.String,
 	})
 	if err != nil {
 		return false
@@ -548,20 +548,20 @@ func (s *PluginService) recordInvocation(ctx context.Context, invocation HookInv
 		HookKey:        invocation.Hook.Key,
 		Trigger:        invocation.Trigger,
 		Status:         status,
-		Attempt:        int32(attempt),
-		LatencyMs:      int32(latency),
+		Attempt:        int64(int32(attempt)),
+		LatencyMs:      int64(int32(latency)),
 	}
 	if invocation.DeliveryID != "" {
-		params.DeliveryID = pgtype.Text{String: invocation.DeliveryID, Valid: true}
+		params.DeliveryID = sql.NullString{String: invocation.DeliveryID, Valid: true}
 	}
 	if invocation.PlannedAt.Valid {
 		params.PlannedAt = invocation.PlannedAt
 	}
 	if invocation.EventType != "" {
-		params.EventType = pgtype.Text{String: invocation.EventType, Valid: true}
+		params.EventType = sql.NullString{String: invocation.EventType, Valid: true}
 	}
 	if message != "" {
-		params.Error = pgtype.Text{String: truncate(message, 500), Valid: true}
+		params.Error = sql.NullString{String: truncate(message, 500), Valid: true}
 	}
 	// Best effort: telemetry must never fail the call it is describing.
 	_, _ = s.Queries.CreatePluginInvocation(ctx, params)

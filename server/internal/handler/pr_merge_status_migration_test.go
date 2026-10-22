@@ -42,7 +42,7 @@ func TestPRMergeStatusMigration(t *testing.T) {
 		ws := dbfx.Workspace(t, "PR merge status migration", fmt.Sprintf("pr-merge-migration-%d", i),
 			testutil.Cols{"issue_prefix": "PMM", "settings": testutil.Raw(fmt.Sprintf("'%s'::jsonb", tc.settings))})
 		workspaces[i] = ws
-		fixture := testutil.New(testPool, ws, testUserID)
+		fixture := testutil.New(testSQLite, ws, testUserID)
 		for j, l := range tc.links {
 			issue := fixture.Issue(t, "Migration fixture")
 			pr := fixture.Insert(t, "github_pull_request", testutil.Cols{

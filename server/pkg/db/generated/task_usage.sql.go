@@ -7,34 +7,33 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const getIssueUsageSummary = `-- name: GetIssueUsageSummary :one
 WITH usage AS (
     SELECT
-        COALESCE(SUM(tu.input_tokens), 0)::bigint AS total_input_tokens,
-        COALESCE(SUM(tu.output_tokens), 0)::bigint AS total_output_tokens,
-        COALESCE(SUM(tu.cache_read_tokens), 0)::bigint AS total_cache_read_tokens,
-        COALESCE(SUM(tu.cache_write_tokens), 0)::bigint AS total_cache_write_tokens,
-        COALESCE(SUM(tu.cost_usd_ticks), 0)::bigint AS total_cost_usd_ticks,
-        COALESCE(SUM(tu.input_tokens)       FILTER (WHERE tu.cost_usd_ticks IS NULL), 0)::bigint AS uncosted_input_tokens,
-        COALESCE(SUM(tu.output_tokens)      FILTER (WHERE tu.cost_usd_ticks IS NULL), 0)::bigint AS uncosted_output_tokens,
-        COALESCE(SUM(tu.cache_read_tokens)  FILTER (WHERE tu.cost_usd_ticks IS NULL), 0)::bigint AS uncosted_cache_read_tokens,
-        COALESCE(SUM(tu.cache_write_tokens) FILTER (WHERE tu.cost_usd_ticks IS NULL), 0)::bigint AS uncosted_cache_write_tokens,
-        COUNT(DISTINCT tu.task_id)::int AS task_count
+        COALESCE(SUM(tu.input_tokens), 0) AS total_input_tokens,
+        COALESCE(SUM(tu.output_tokens), 0) AS total_output_tokens,
+        COALESCE(SUM(tu.cache_read_tokens), 0) AS total_cache_read_tokens,
+        COALESCE(SUM(tu.cache_write_tokens), 0) AS total_cache_write_tokens,
+        COALESCE(SUM(tu.cost_usd_ticks), 0) AS total_cost_usd_ticks,
+        COALESCE(SUM(tu.input_tokens)       FILTER (WHERE tu.cost_usd_ticks IS NULL), 0) AS uncosted_input_tokens,
+        COALESCE(SUM(tu.output_tokens)      FILTER (WHERE tu.cost_usd_ticks IS NULL), 0) AS uncosted_output_tokens,
+        COALESCE(SUM(tu.cache_read_tokens)  FILTER (WHERE tu.cost_usd_ticks IS NULL), 0) AS uncosted_cache_read_tokens,
+        COALESCE(SUM(tu.cache_write_tokens) FILTER (WHERE tu.cost_usd_ticks IS NULL), 0) AS uncosted_cache_write_tokens,
+        COUNT(DISTINCT tu.task_id) AS task_count
     FROM task_usage tu
     JOIN agent_task_queue atq ON atq.id = tu.task_id
-    WHERE atq.issue_id = $1
+    WHERE atq.issue_id = ?1
 ), terminal_runs AS (
     SELECT
-        COUNT(*)::int AS terminal_task_count,
+        COUNT(*) AS terminal_task_count,
         COUNT(*) FILTER (WHERE EXISTS (
             SELECT 1 FROM task_usage tu WHERE tu.task_id = atq.id
-        ))::int AS metered_task_count
+        )) AS metered_task_count
     FROM agent_task_queue atq
-    WHERE atq.issue_id = $1
+    WHERE atq.issue_id = ?1
       AND atq.status IN ('completed', 'failed', 'cancelled')
       AND atq.started_at IS NOT NULL
       AND atq.completed_at IS NOT NULL
@@ -43,33 +42,33 @@ SELECT
     usage.total_input_tokens, usage.total_output_tokens, usage.total_cache_read_tokens, usage.total_cache_write_tokens, usage.total_cost_usd_ticks, usage.uncosted_input_tokens, usage.uncosted_output_tokens, usage.uncosted_cache_read_tokens, usage.uncosted_cache_write_tokens, usage.task_count,
     terminal_runs.terminal_task_count,
     terminal_runs.metered_task_count,
-    (terminal_runs.terminal_task_count - terminal_runs.metered_task_count)::int AS unreported_task_count
+    (terminal_runs.terminal_task_count - terminal_runs.metered_task_count) AS unreported_task_count
 FROM usage
 CROSS JOIN terminal_runs
 `
 
 type GetIssueUsageSummaryRow struct {
-	TotalInputTokens         int64 `json:"total_input_tokens"`
-	TotalOutputTokens        int64 `json:"total_output_tokens"`
-	TotalCacheReadTokens     int64 `json:"total_cache_read_tokens"`
-	TotalCacheWriteTokens    int64 `json:"total_cache_write_tokens"`
-	TotalCostUsdTicks        int64 `json:"total_cost_usd_ticks"`
-	UncostedInputTokens      int64 `json:"uncosted_input_tokens"`
-	UncostedOutputTokens     int64 `json:"uncosted_output_tokens"`
-	UncostedCacheReadTokens  int64 `json:"uncosted_cache_read_tokens"`
-	UncostedCacheWriteTokens int64 `json:"uncosted_cache_write_tokens"`
-	TaskCount                int32 `json:"task_count"`
-	TerminalTaskCount        int32 `json:"terminal_task_count"`
-	MeteredTaskCount         int32 `json:"metered_task_count"`
-	UnreportedTaskCount      int32 `json:"unreported_task_count"`
+	TotalInputTokens         interface{} `json:"total_input_tokens"`
+	TotalOutputTokens        interface{} `json:"total_output_tokens"`
+	TotalCacheReadTokens     interface{} `json:"total_cache_read_tokens"`
+	TotalCacheWriteTokens    interface{} `json:"total_cache_write_tokens"`
+	TotalCostUsdTicks        interface{} `json:"total_cost_usd_ticks"`
+	UncostedInputTokens      interface{} `json:"uncosted_input_tokens"`
+	UncostedOutputTokens     interface{} `json:"uncosted_output_tokens"`
+	UncostedCacheReadTokens  interface{} `json:"uncosted_cache_read_tokens"`
+	UncostedCacheWriteTokens interface{} `json:"uncosted_cache_write_tokens"`
+	TaskCount                int64       `json:"task_count"`
+	TerminalTaskCount        int64       `json:"terminal_task_count"`
+	MeteredTaskCount         int64       `json:"metered_task_count"`
+	UnreportedTaskCount      interface{} `json:"unreported_task_count"`
 }
 
 // Keep the legacy usage aggregates intact, then report coverage over finite
 // terminal runs separately. A task_usage row is the durable evidence that a
 // run reported usage even when every token counter is legitimately zero.
 // Both passes use the existing issue_id / task_id indexes (migrations 035/032).
-func (q *Queries) GetIssueUsageSummary(ctx context.Context, issueID pgtype.UUID) (GetIssueUsageSummaryRow, error) {
-	row := q.db.QueryRow(ctx, getIssueUsageSummary, issueID)
+func (q *Queries) GetIssueUsageSummary(ctx context.Context, issueID sql.NullString) (GetIssueUsageSummaryRow, error) {
+	row := q.db.QueryRowContext(ctx, getIssueUsageSummary, issueID)
 	var i GetIssueUsageSummaryRow
 	err := row.Scan(
 		&i.TotalInputTokens,
@@ -91,12 +90,12 @@ func (q *Queries) GetIssueUsageSummary(ctx context.Context, issueID pgtype.UUID)
 
 const getTaskUsage = `-- name: GetTaskUsage :many
 SELECT id, task_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, created_at, updated_at, cost_usd_ticks FROM task_usage
-WHERE task_id = $1
+WHERE task_id = ?1
 ORDER BY model
 `
 
-func (q *Queries) GetTaskUsage(ctx context.Context, taskID pgtype.UUID) ([]TaskUsage, error) {
-	rows, err := q.db.Query(ctx, getTaskUsage, taskID)
+func (q *Queries) GetTaskUsage(ctx context.Context, taskID string) ([]TaskUsage, error) {
+	rows, err := q.db.QueryContext(ctx, getTaskUsage, taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -121,6 +120,9 @@ func (q *Queries) GetTaskUsage(ctx context.Context, taskID pgtype.UUID) ([]TaskU
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -139,25 +141,25 @@ SELECT
     tu.cost_usd_ticks
 FROM task_usage tu
 JOIN agent_task_queue atq ON atq.id = tu.task_id
-WHERE atq.agent_id = $1
-  AND tu.task_id = ANY($2::uuid[])
+WHERE atq.agent_id = ?1
+  AND tu.task_id IN (SELECT value FROM json_each(?2))
 ORDER BY tu.task_id, tu.model
 `
 
 type ListAgentTaskUsageParams struct {
-	AgentID pgtype.UUID   `json:"agent_id"`
-	TaskIds []pgtype.UUID `json:"task_ids"`
+	AgentID string      `json:"agent_id"`
+	TaskIds interface{} `json:"task_ids"`
 }
 
 type ListAgentTaskUsageRow struct {
-	TaskID           pgtype.UUID `json:"task_id"`
-	Provider         string      `json:"provider"`
-	Model            string      `json:"model"`
-	InputTokens      int64       `json:"input_tokens"`
-	OutputTokens     int64       `json:"output_tokens"`
-	CacheReadTokens  int64       `json:"cache_read_tokens"`
-	CacheWriteTokens int64       `json:"cache_write_tokens"`
-	CostUsdTicks     pgtype.Int8 `json:"cost_usd_ticks"`
+	TaskID           string        `json:"task_id"`
+	Provider         string        `json:"provider"`
+	Model            string        `json:"model"`
+	InputTokens      int64         `json:"input_tokens"`
+	OutputTokens     int64         `json:"output_tokens"`
+	CacheReadTokens  int64         `json:"cache_read_tokens"`
+	CacheWriteTokens int64         `json:"cache_write_tokens"`
+	CostUsdTicks     sql.NullInt64 `json:"cost_usd_ticks"`
 }
 
 // Per-(task, provider, model) usage rows for one agent's explicitly requested
@@ -165,7 +167,7 @@ type ListAgentTaskUsageRow struct {
 // the agent predicate preserves that authorization boundary, while task_ids
 // keeps hydration aligned with the exact response without an N+1 query.
 func (q *Queries) ListAgentTaskUsage(ctx context.Context, arg ListAgentTaskUsageParams) ([]ListAgentTaskUsageRow, error) {
-	rows, err := q.db.Query(ctx, listAgentTaskUsage, arg.AgentID, arg.TaskIds)
+	rows, err := q.db.QueryContext(ctx, listAgentTaskUsage, arg.AgentID, arg.TaskIds)
 	if err != nil {
 		return nil, err
 	}
@@ -187,6 +189,9 @@ func (q *Queries) ListAgentTaskUsage(ctx context.Context, arg ListAgentTaskUsage
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -197,46 +202,46 @@ const listDashboardAgentRunTime = `-- name: ListDashboardAgentRunTime :many
 SELECT
     atq.agent_id,
     COALESCE(
-        SUM(EXTRACT(EPOCH FROM (atq.completed_at - atq.started_at)))::bigint,
+        SUM((((julianday(atq.completed_at) - julianday(atq.started_at)))*86400)),
         0
-    )::bigint AS total_seconds,
-    COUNT(*)::int AS task_count,
+    ) AS total_seconds,
+    COUNT(*) AS task_count,
     COUNT(*) FILTER (WHERE EXISTS (
         SELECT 1 FROM task_usage tu WHERE tu.task_id = atq.id
-    ))::int AS metered_task_count,
-    COUNT(*) FILTER (WHERE atq.status = 'failed')::int AS failed_count,
-    COUNT(*) FILTER (WHERE atq.status = 'cancelled')::int AS cancelled_count
+    )) AS metered_task_count,
+    SUM(CASE WHEN atq.status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
+    SUM(CASE WHEN atq.status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_count
 FROM agent_task_queue atq
 JOIN agent a ON a.id = atq.agent_id
 LEFT JOIN issue i ON i.id = atq.issue_id
-WHERE a.workspace_id = $1
+WHERE a.workspace_id = ?1
   AND atq.status IN ('completed', 'failed', 'cancelled')
   AND atq.started_at IS NOT NULL
   AND atq.completed_at IS NOT NULL
-  AND atq.completed_at >= $2::timestamptz
-  AND ($3::uuid IS NULL OR i.project_id = $3)
+  AND atq.completed_at >= ?2
+  AND (?3 IS NULL OR i.project_id = ?3)
 GROUP BY atq.agent_id
 ORDER BY total_seconds DESC
 `
 
 type ListDashboardAgentRunTimeParams struct {
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	Since       pgtype.Timestamptz `json:"since"`
-	ProjectID   pgtype.UUID        `json:"project_id"`
+	WorkspaceID string         `json:"workspace_id"`
+	Since       sql.NullString `json:"since"`
+	ProjectID   interface{}    `json:"project_id"`
 }
 
 type ListDashboardAgentRunTimeRow struct {
-	AgentID          pgtype.UUID `json:"agent_id"`
-	TotalSeconds     int64       `json:"total_seconds"`
-	TaskCount        int32       `json:"task_count"`
-	MeteredTaskCount int32       `json:"metered_task_count"`
-	FailedCount      int32       `json:"failed_count"`
-	CancelledCount   int32       `json:"cancelled_count"`
+	AgentID          string          `json:"agent_id"`
+	TotalSeconds     interface{}     `json:"total_seconds"`
+	TaskCount        int64           `json:"task_count"`
+	MeteredTaskCount int64           `json:"metered_task_count"`
+	FailedCount      sql.NullFloat64 `json:"failed_count"`
+	CancelledCount   sql.NullFloat64 `json:"cancelled_count"`
 }
 
 // Per-agent total task run time and task count for the workspace, optionally
 // scoped to a single project. Counts only terminal runs (completed, failed,
-// or cancelled) with both started_at and completed_at populated — queued/
+// or cancelled) with both started_at and completed_at populated - queued/
 // running tasks have no finite duration. Anchored on completed_at so the
 // window matches the token cost window (which is anchored on tu.created_at,
 // ~= completion time).
@@ -245,13 +250,13 @@ type ListDashboardAgentRunTimeRow struct {
 // metered_task_count uses task_usage row existence, not token totals, so a
 // provider-reported zero stays distinct from a run that reported nothing.
 //
-// No date bucketing, so no @tz — but @since is the viewer's local
+// No date bucketing, so no @tz - but @since is the viewer's local
 // start-of-day for the EXACT N-day window (parseExactSinceParamInTZ), so the
 // "last N days" window lines up with the per-agent cost card and the daily
 // charts the client trims to the same span; passed straight through without
 // re-truncation.
 func (q *Queries) ListDashboardAgentRunTime(ctx context.Context, arg ListDashboardAgentRunTimeParams) ([]ListDashboardAgentRunTimeRow, error) {
-	rows, err := q.db.Query(ctx, listDashboardAgentRunTime, arg.WorkspaceID, arg.Since, arg.ProjectID)
+	rows, err := q.db.QueryContext(ctx, listDashboardAgentRunTime, arg.WorkspaceID, arg.Since, arg.ProjectID)
 	if err != nil {
 		return nil, err
 	}
@@ -271,6 +276,9 @@ func (q *Queries) ListDashboardAgentRunTime(ctx context.Context, arg ListDashboa
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -285,40 +293,40 @@ SELECT
             THEN COALESCE(NULLIF(atq.failure_reason, ''), 'unclassified')
         ELSE ''
     END AS failure_reason,
-    COUNT(*)::int AS task_count
+    COUNT(*) AS task_count
 FROM agent_task_queue atq
 JOIN agent a ON a.id = atq.agent_id
 LEFT JOIN issue i ON i.id = atq.issue_id
-WHERE a.workspace_id = $1
+WHERE a.workspace_id = ?1
   AND atq.status IN ('completed', 'failed')
   AND atq.completed_at IS NOT NULL
-  AND atq.completed_at >= $2::timestamptz
-  AND ($3::uuid IS NULL OR i.project_id = $3)
+  AND atq.completed_at >= ?2
+  AND (?3 IS NULL OR i.project_id = ?3)
 GROUP BY atq.agent_id, 2
 ORDER BY atq.agent_id, 2
 `
 
 type ListDashboardFailuresByAgentParams struct {
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	Since       pgtype.Timestamptz `json:"since"`
-	ProjectID   pgtype.UUID        `json:"project_id"`
+	WorkspaceID string         `json:"workspace_id"`
+	Since       sql.NullString `json:"since"`
+	ProjectID   interface{}    `json:"project_id"`
 }
 
 type ListDashboardFailuresByAgentRow struct {
-	AgentID       pgtype.UUID `json:"agent_id"`
-	FailureReason string      `json:"failure_reason"`
-	TaskCount     int32       `json:"task_count"`
+	AgentID       string `json:"agent_id"`
+	FailureReason string `json:"failure_reason"`
+	TaskCount     int64  `json:"task_count"`
 }
 
-// Per-(agent, failure_reason) terminal-task counts — the "top offenders"
+// Per-(agent, failure_reason) terminal-task counts - the "top offenders"
 // half of the dashboard's errors breakdown. Same `failure_reason = ”`
 // succeeded-bucket convention as ListDashboardFailuresDaily, so the client
 // can rank agents by failure rate rather than raw count.
 //
-// No date bucketing, so no @tz — @since is the viewer's local
+// No date bucketing, so no @tz - @since is the viewer's local
 // start-of-day-(N) so the window lines up with the per-agent run-time card.
 func (q *Queries) ListDashboardFailuresByAgent(ctx context.Context, arg ListDashboardFailuresByAgentParams) ([]ListDashboardFailuresByAgentRow, error) {
-	rows, err := q.db.Query(ctx, listDashboardFailuresByAgent, arg.WorkspaceID, arg.Since, arg.ProjectID)
+	rows, err := q.db.QueryContext(ctx, listDashboardFailuresByAgent, arg.WorkspaceID, arg.Since, arg.ProjectID)
 	if err != nil {
 		return nil, err
 	}
@@ -331,6 +339,9 @@ func (q *Queries) ListDashboardFailuresByAgent(ctx context.Context, arg ListDash
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -339,36 +350,36 @@ func (q *Queries) ListDashboardFailuresByAgent(ctx context.Context, arg ListDash
 
 const listDashboardFailuresDaily = `-- name: ListDashboardFailuresDaily :many
 SELECT
-    DATE(atq.completed_at AT TIME ZONE $2::text) AS date,
+    CASE WHEN ?2 IS NOT NULL THEN date(atq.completed_at) END AS date,
     CASE
         WHEN atq.status = 'failed'
             THEN COALESCE(NULLIF(atq.failure_reason, ''), 'unclassified')
         ELSE ''
     END AS failure_reason,
-    COUNT(*)::int AS task_count
+    COUNT(*) AS task_count
 FROM agent_task_queue atq
 JOIN agent a ON a.id = atq.agent_id
 LEFT JOIN issue i ON i.id = atq.issue_id
-WHERE a.workspace_id = $1
+WHERE a.workspace_id = ?1
   AND atq.status IN ('completed', 'failed')
   AND atq.completed_at IS NOT NULL
-  AND atq.completed_at >= $3::timestamptz
-  AND ($4::uuid IS NULL OR i.project_id = $4)
+  AND atq.completed_at >= ?3
+  AND (?4 IS NULL OR i.project_id = ?4)
 GROUP BY 1, 2
 ORDER BY 1 DESC, 2
 `
 
 type ListDashboardFailuresDailyParams struct {
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	Tz          string             `json:"tz"`
-	Since       pgtype.Timestamptz `json:"since"`
-	ProjectID   pgtype.UUID        `json:"project_id"`
+	WorkspaceID string         `json:"workspace_id"`
+	Tz          interface{}    `json:"tz"`
+	Since       sql.NullString `json:"since"`
+	ProjectID   interface{}    `json:"project_id"`
 }
 
 type ListDashboardFailuresDailyRow struct {
-	Date          pgtype.Date `json:"date"`
+	Date          interface{} `json:"date"`
 	FailureReason string      `json:"failure_reason"`
-	TaskCount     int32       `json:"task_count"`
+	TaskCount     int64       `json:"task_count"`
 }
 
 // Daily per-(date, failure_reason) terminal-task counts for the workspace,
@@ -384,16 +395,16 @@ type ListDashboardFailuresDailyRow struct {
 // success. Cardinality is bounded by days x (21 reasons + 2), so the whole
 // window fits in one small payload.
 //
-// Unlike ListDashboardRunTimeDaily this does NOT require started_at — a task
+// Unlike ListDashboardRunTimeDaily this does NOT require started_at - a task
 // that expired in the queue (failure_reason='queued_expired') never started
 // but is unambiguously a failure, and dropping it would under-report exactly
 // the outage the Errors chart exists to surface. Every failure path sets
 // completed_at, so bucketing on it covers all of them.
 //
 // @since is already the viewer's local start-of-day-(N) (parseSinceParamInTZ)
-// — passed straight through, NOT re-truncated; see ListDashboardUsageDaily.
+// - passed straight through, NOT re-truncated; see ListDashboardUsageDaily.
 func (q *Queries) ListDashboardFailuresDaily(ctx context.Context, arg ListDashboardFailuresDailyParams) ([]ListDashboardFailuresDailyRow, error) {
-	rows, err := q.db.Query(ctx, listDashboardFailuresDaily,
+	rows, err := q.db.QueryContext(ctx, listDashboardFailuresDaily,
 		arg.WorkspaceID,
 		arg.Tz,
 		arg.Since,
@@ -411,6 +422,9 @@ func (q *Queries) ListDashboardFailuresDaily(ctx context.Context, arg ListDashbo
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -419,47 +433,47 @@ func (q *Queries) ListDashboardFailuresDaily(ctx context.Context, arg ListDashbo
 
 const listDashboardRunTimeDaily = `-- name: ListDashboardRunTimeDaily :many
 SELECT
-    DATE(atq.completed_at AT TIME ZONE $2::text) AS date,
+    CASE WHEN ?2 IS NOT NULL THEN date(atq.completed_at) END AS date,
     COALESCE(
-        SUM(EXTRACT(EPOCH FROM (atq.completed_at - atq.started_at)))::bigint,
+        SUM((((julianday(atq.completed_at) - julianday(atq.started_at)))*86400)),
         0
-    )::bigint AS total_seconds,
-    COUNT(*)::int AS task_count,
-    COUNT(*) FILTER (WHERE atq.status = 'failed')::int AS failed_count,
-    COUNT(*) FILTER (WHERE atq.status = 'cancelled')::int AS cancelled_count
+    ) AS total_seconds,
+    COUNT(*) AS task_count,
+    SUM(CASE WHEN atq.status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
+    SUM(CASE WHEN atq.status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_count
 FROM agent_task_queue atq
 JOIN agent a ON a.id = atq.agent_id
 LEFT JOIN issue i ON i.id = atq.issue_id
-WHERE a.workspace_id = $1
+WHERE a.workspace_id = ?1
   AND atq.status IN ('completed', 'failed', 'cancelled')
   AND atq.started_at IS NOT NULL
   AND atq.completed_at IS NOT NULL
-  AND atq.completed_at >= $3::timestamptz
-  AND ($4::uuid IS NULL OR i.project_id = $4)
-GROUP BY DATE(atq.completed_at AT TIME ZONE $2::text)
-ORDER BY DATE(atq.completed_at AT TIME ZONE $2::text) DESC
+  AND atq.completed_at >= ?3
+  AND (?4 IS NULL OR i.project_id = ?4)
+GROUP BY CASE WHEN sqlc.arg('tz') IS NOT NULL THEN date(atq.completed_at) END
+ORDER BY CASE WHEN sqlc.arg('tz') IS NOT NULL THEN date(atq.completed_at) END DESC
 `
 
 type ListDashboardRunTimeDailyParams struct {
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	Tz          string             `json:"tz"`
-	Since       pgtype.Timestamptz `json:"since"`
-	ProjectID   pgtype.UUID        `json:"project_id"`
+	WorkspaceID string         `json:"workspace_id"`
+	Tz          interface{}    `json:"tz"`
+	Since       sql.NullString `json:"since"`
+	ProjectID   interface{}    `json:"project_id"`
 }
 
 type ListDashboardRunTimeDailyRow struct {
-	Date           pgtype.Date `json:"date"`
-	TotalSeconds   int64       `json:"total_seconds"`
-	TaskCount      int32       `json:"task_count"`
-	FailedCount    int32       `json:"failed_count"`
-	CancelledCount int32       `json:"cancelled_count"`
+	Date           interface{}     `json:"date"`
+	TotalSeconds   interface{}     `json:"total_seconds"`
+	TaskCount      int64           `json:"task_count"`
+	FailedCount    sql.NullFloat64 `json:"failed_count"`
+	CancelledCount sql.NullFloat64 `json:"cancelled_count"`
 }
 
 // Daily per-date run time + task counts for the workspace, optionally
 // scoped to a single project. Powers the workspace dashboard's "Time"
 // and "Tasks" metrics on the same toggle as Tokens / Cost. Bucketed by
 // completed_at (terminal time) sliced into calendar days under the
-// caller-supplied @tz — same Viewing-tz treatment as ListDashboardUsageDaily
+// caller-supplied @tz - same Viewing-tz treatment as ListDashboardUsageDaily
 // so the Time / Tasks tabs cut their day boundary identically to the
 // Cost / Tokens tabs (a viewer east of UTC would otherwise see the four
 // tabs disagree on a "1d" window). Only terminal tasks (completed, failed,
@@ -468,15 +482,15 @@ type ListDashboardRunTimeDailyRow struct {
 // 'cancelled' is in the filter because a run the user stopped mid-flight
 // burned real agent time and real tokens before the stop landed
 // (CancelAgentTask accepts 'running'). Excluding it zeroed that time while
-// the cost rollup — which has no status filter at all — kept charging for
+// the cost rollup - which has no status filter at all - kept charging for
 // it, so Time/Tasks and Cost/Tokens were summing different task populations
 // on the same page. The started_at guard keeps a run cancelled while still
 // queued out: it never occupied an agent.
 //
 // @since is already the viewer's local start-of-day-(N) (parseSinceParamInTZ)
-// — passed straight through, NOT re-truncated; see ListDashboardUsageDaily.
+// - passed straight through, NOT re-truncated; see ListDashboardUsageDaily.
 func (q *Queries) ListDashboardRunTimeDaily(ctx context.Context, arg ListDashboardRunTimeDailyParams) ([]ListDashboardRunTimeDailyRow, error) {
-	rows, err := q.db.Query(ctx, listDashboardRunTimeDaily,
+	rows, err := q.db.QueryContext(ctx, listDashboardRunTimeDaily,
 		arg.WorkspaceID,
 		arg.Tz,
 		arg.Since,
@@ -500,6 +514,9 @@ func (q *Queries) ListDashboardRunTimeDaily(ctx context.Context, arg ListDashboa
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -511,54 +528,54 @@ SELECT
     agent_id,
     LOWER(provider) AS provider,
     model,
-    SUM(input_tokens)::bigint        AS input_tokens,
-    SUM(output_tokens)::bigint       AS output_tokens,
-    SUM(cache_read_tokens)::bigint   AS cache_read_tokens,
-    SUM(cache_write_tokens)::bigint  AS cache_write_tokens,
-    SUM(cost_usd_ticks)::bigint                                          AS cost_usd_ticks,
-    SUM(COALESCE(uncosted_input_tokens, input_tokens))::bigint           AS uncosted_input_tokens,
-    SUM(COALESCE(uncosted_output_tokens, output_tokens))::bigint         AS uncosted_output_tokens,
-    SUM(COALESCE(uncosted_cache_read_tokens, cache_read_tokens))::bigint AS uncosted_cache_read_tokens,
-    SUM(COALESCE(uncosted_cache_write_tokens, cache_write_tokens))::bigint AS uncosted_cache_write_tokens,
-    SUM(task_count)::int             AS task_count
+    SUM(input_tokens)        AS input_tokens,
+    SUM(output_tokens)       AS output_tokens,
+    SUM(cache_read_tokens)   AS cache_read_tokens,
+    SUM(cache_write_tokens)  AS cache_write_tokens,
+    SUM(cost_usd_ticks)                                          AS cost_usd_ticks,
+    SUM(COALESCE(uncosted_input_tokens, input_tokens))           AS uncosted_input_tokens,
+    SUM(COALESCE(uncosted_output_tokens, output_tokens))         AS uncosted_output_tokens,
+    SUM(COALESCE(uncosted_cache_read_tokens, cache_read_tokens)) AS uncosted_cache_read_tokens,
+    SUM(COALESCE(uncosted_cache_write_tokens, cache_write_tokens)) AS uncosted_cache_write_tokens,
+    SUM(task_count)             AS task_count
 FROM task_usage_hourly
-WHERE workspace_id = $1
-  AND bucket_hour >= $2::timestamptz
-  AND ($3::uuid IS NULL OR project_id = $3)
+WHERE workspace_id = ?1
+  AND bucket_hour >= ?2
+  AND (?3 IS NULL OR project_id = ?3)
 GROUP BY agent_id, LOWER(provider), model
 ORDER BY agent_id, LOWER(provider), model
 `
 
 type ListDashboardUsageByAgentParams struct {
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	Since       pgtype.Timestamptz `json:"since"`
-	ProjectID   pgtype.UUID        `json:"project_id"`
+	WorkspaceID string      `json:"workspace_id"`
+	Since       string      `json:"since"`
+	ProjectID   interface{} `json:"project_id"`
 }
 
 type ListDashboardUsageByAgentRow struct {
-	AgentID                  pgtype.UUID `json:"agent_id"`
-	Provider                 string      `json:"provider"`
-	Model                    string      `json:"model"`
-	InputTokens              int64       `json:"input_tokens"`
-	OutputTokens             int64       `json:"output_tokens"`
-	CacheReadTokens          int64       `json:"cache_read_tokens"`
-	CacheWriteTokens         int64       `json:"cache_write_tokens"`
-	CostUsdTicks             int64       `json:"cost_usd_ticks"`
-	UncostedInputTokens      int64       `json:"uncosted_input_tokens"`
-	UncostedOutputTokens     int64       `json:"uncosted_output_tokens"`
-	UncostedCacheReadTokens  int64       `json:"uncosted_cache_read_tokens"`
-	UncostedCacheWriteTokens int64       `json:"uncosted_cache_write_tokens"`
-	TaskCount                int32       `json:"task_count"`
+	AgentID                  string          `json:"agent_id"`
+	Provider                 string          `json:"provider"`
+	Model                    string          `json:"model"`
+	InputTokens              sql.NullFloat64 `json:"input_tokens"`
+	OutputTokens             sql.NullFloat64 `json:"output_tokens"`
+	CacheReadTokens          sql.NullFloat64 `json:"cache_read_tokens"`
+	CacheWriteTokens         sql.NullFloat64 `json:"cache_write_tokens"`
+	CostUsdTicks             sql.NullFloat64 `json:"cost_usd_ticks"`
+	UncostedInputTokens      sql.NullFloat64 `json:"uncosted_input_tokens"`
+	UncostedOutputTokens     sql.NullFloat64 `json:"uncosted_output_tokens"`
+	UncostedCacheReadTokens  sql.NullFloat64 `json:"uncosted_cache_read_tokens"`
+	UncostedCacheWriteTokens sql.NullFloat64 `json:"uncosted_cache_write_tokens"`
+	TaskCount                sql.NullFloat64 `json:"task_count"`
 }
 
 // Per-(agent, provider, model) token aggregates from `task_usage_hourly`. No
-// date grouping in the result, so this query takes no `@tz` — the
+// date grouping in the result, so this query takes no `@tz` - the
 // @since cutoff is a raw timestamptz the Go layer has already computed
 // in the viewer's tz. Model dimension is preserved so the client can
 // compute cost from its per-model pricing table; the client folds rows
 // by agent for the "by agent" list on the dashboard.
 //
-// task_count is summed across hourly buckets — one task that spans
+// task_count is summed across hourly buckets - one task that spans
 // multiple hours lands in multiple buckets, so this over-counts by
 // hour the same way the daily version over-counted by day. The
 // frontend prefers `ListDashboardAgentRunTime` for the user-facing
@@ -566,7 +583,7 @@ type ListDashboardUsageByAgentRow struct {
 // provider is LOWER()-normalized so mixed-case historical rows merge with
 // new rows (see ListDashboardUsageDaily).
 func (q *Queries) ListDashboardUsageByAgent(ctx context.Context, arg ListDashboardUsageByAgentParams) ([]ListDashboardUsageByAgentRow, error) {
-	rows, err := q.db.Query(ctx, listDashboardUsageByAgent, arg.WorkspaceID, arg.Since, arg.ProjectID)
+	rows, err := q.db.QueryContext(ctx, listDashboardUsageByAgent, arg.WorkspaceID, arg.Since, arg.ProjectID)
 	if err != nil {
 		return nil, err
 	}
@@ -593,6 +610,9 @@ func (q *Queries) ListDashboardUsageByAgent(ctx context.Context, arg ListDashboa
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -601,48 +621,48 @@ func (q *Queries) ListDashboardUsageByAgent(ctx context.Context, arg ListDashboa
 
 const listDashboardUsageDaily = `-- name: ListDashboardUsageDaily :many
 SELECT
-    DATE(bucket_hour AT TIME ZONE $2::text) AS date,
+    CASE WHEN ?2 IS NOT NULL THEN date(bucket_hour) END AS date,
     LOWER(provider) AS provider,
     model,
-    SUM(input_tokens)::bigint        AS input_tokens,
-    SUM(output_tokens)::bigint       AS output_tokens,
-    SUM(cache_read_tokens)::bigint   AS cache_read_tokens,
-    SUM(cache_write_tokens)::bigint  AS cache_write_tokens,
-    SUM(cost_usd_ticks)::bigint                                          AS cost_usd_ticks,
-    SUM(COALESCE(uncosted_input_tokens, input_tokens))::bigint           AS uncosted_input_tokens,
-    SUM(COALESCE(uncosted_output_tokens, output_tokens))::bigint         AS uncosted_output_tokens,
-    SUM(COALESCE(uncosted_cache_read_tokens, cache_read_tokens))::bigint AS uncosted_cache_read_tokens,
-    SUM(COALESCE(uncosted_cache_write_tokens, cache_write_tokens))::bigint AS uncosted_cache_write_tokens,
-    SUM(task_count)::int             AS task_count
+    SUM(input_tokens)        AS input_tokens,
+    SUM(output_tokens)       AS output_tokens,
+    SUM(cache_read_tokens)   AS cache_read_tokens,
+    SUM(cache_write_tokens)  AS cache_write_tokens,
+    SUM(cost_usd_ticks)                                          AS cost_usd_ticks,
+    SUM(COALESCE(uncosted_input_tokens, input_tokens))           AS uncosted_input_tokens,
+    SUM(COALESCE(uncosted_output_tokens, output_tokens))         AS uncosted_output_tokens,
+    SUM(COALESCE(uncosted_cache_read_tokens, cache_read_tokens)) AS uncosted_cache_read_tokens,
+    SUM(COALESCE(uncosted_cache_write_tokens, cache_write_tokens)) AS uncosted_cache_write_tokens,
+    SUM(task_count)             AS task_count
 FROM task_usage_hourly
-WHERE workspace_id = $1
-  AND bucket_hour >= $3::timestamptz
-  AND ($4::uuid IS NULL OR project_id = $4)
-GROUP BY DATE(bucket_hour AT TIME ZONE $2::text), LOWER(provider), model
-ORDER BY DATE(bucket_hour AT TIME ZONE $2::text) DESC, LOWER(provider), model
+WHERE workspace_id = ?1
+  AND bucket_hour >= ?3
+  AND (?4 IS NULL OR project_id = ?4)
+GROUP BY CASE WHEN ?2 IS NOT NULL THEN date(bucket_hour) END, LOWER(provider), model
+ORDER BY CASE WHEN sqlc.arg('tz') IS NOT NULL THEN date(bucket_hour) END DESC, LOWER(provider), model
 `
 
 type ListDashboardUsageDailyParams struct {
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	Tz          string             `json:"tz"`
-	Since       pgtype.Timestamptz `json:"since"`
-	ProjectID   pgtype.UUID        `json:"project_id"`
+	WorkspaceID string      `json:"workspace_id"`
+	Tz          interface{} `json:"tz"`
+	Since       string      `json:"since"`
+	ProjectID   interface{} `json:"project_id"`
 }
 
 type ListDashboardUsageDailyRow struct {
-	Date                     pgtype.Date `json:"date"`
-	Provider                 string      `json:"provider"`
-	Model                    string      `json:"model"`
-	InputTokens              int64       `json:"input_tokens"`
-	OutputTokens             int64       `json:"output_tokens"`
-	CacheReadTokens          int64       `json:"cache_read_tokens"`
-	CacheWriteTokens         int64       `json:"cache_write_tokens"`
-	CostUsdTicks             int64       `json:"cost_usd_ticks"`
-	UncostedInputTokens      int64       `json:"uncosted_input_tokens"`
-	UncostedOutputTokens     int64       `json:"uncosted_output_tokens"`
-	UncostedCacheReadTokens  int64       `json:"uncosted_cache_read_tokens"`
-	UncostedCacheWriteTokens int64       `json:"uncosted_cache_write_tokens"`
-	TaskCount                int32       `json:"task_count"`
+	Date                     interface{}     `json:"date"`
+	Provider                 string          `json:"provider"`
+	Model                    string          `json:"model"`
+	InputTokens              sql.NullFloat64 `json:"input_tokens"`
+	OutputTokens             sql.NullFloat64 `json:"output_tokens"`
+	CacheReadTokens          sql.NullFloat64 `json:"cache_read_tokens"`
+	CacheWriteTokens         sql.NullFloat64 `json:"cache_write_tokens"`
+	CostUsdTicks             sql.NullFloat64 `json:"cost_usd_ticks"`
+	UncostedInputTokens      sql.NullFloat64 `json:"uncosted_input_tokens"`
+	UncostedOutputTokens     sql.NullFloat64 `json:"uncosted_output_tokens"`
+	UncostedCacheReadTokens  sql.NullFloat64 `json:"uncosted_cache_read_tokens"`
+	UncostedCacheWriteTokens sql.NullFloat64 `json:"uncosted_cache_write_tokens"`
+	TaskCount                sql.NullFloat64 `json:"task_count"`
 }
 
 // Daily per-(date, provider, model) token aggregates for the workspace, served
@@ -656,14 +676,14 @@ type ListDashboardUsageDailyRow struct {
 //
 // @since is already the viewer's local start-of-day-(N) as a UTC
 // instant (computed by parseSinceParamInTZ). It must NOT be re-truncated
-// with DATE_TRUNC here — DATE_TRUNC operates in the session tz and would
+// with DATE_TRUNC here - DATE_TRUNC operates in the session tz and would
 // snap the cutoff back to UTC midnight, dragging in an extra partial
 // local day for any non-UTC viewer.
 // provider is LOWER()-normalized so mixed-case historical rows (written
 // before the handler lowercased provider on write) merge with new rows
 // instead of forming a separate case-variant bucket.
 func (q *Queries) ListDashboardUsageDaily(ctx context.Context, arg ListDashboardUsageDailyParams) ([]ListDashboardUsageDailyRow, error) {
-	rows, err := q.db.Query(ctx, listDashboardUsageDaily,
+	rows, err := q.db.QueryContext(ctx, listDashboardUsageDaily,
 		arg.WorkspaceID,
 		arg.Tz,
 		arg.Since,
@@ -695,6 +715,9 @@ func (q *Queries) ListDashboardUsageDaily(ctx context.Context, arg ListDashboard
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -713,22 +736,22 @@ SELECT
     tu.cost_usd_ticks
 FROM task_usage tu
 JOIN agent_task_queue atq ON atq.id = tu.task_id
-WHERE atq.issue_id = $1
+WHERE atq.issue_id = ?1
 ORDER BY tu.task_id, tu.model
 `
 
 type ListIssueTaskUsageRow struct {
-	TaskID           pgtype.UUID `json:"task_id"`
-	Provider         string      `json:"provider"`
-	Model            string      `json:"model"`
-	InputTokens      int64       `json:"input_tokens"`
-	OutputTokens     int64       `json:"output_tokens"`
-	CacheReadTokens  int64       `json:"cache_read_tokens"`
-	CacheWriteTokens int64       `json:"cache_write_tokens"`
-	CostUsdTicks     pgtype.Int8 `json:"cost_usd_ticks"`
+	TaskID           string        `json:"task_id"`
+	Provider         string        `json:"provider"`
+	Model            string        `json:"model"`
+	InputTokens      int64         `json:"input_tokens"`
+	OutputTokens     int64         `json:"output_tokens"`
+	CacheReadTokens  int64         `json:"cache_read_tokens"`
+	CacheWriteTokens int64         `json:"cache_write_tokens"`
+	CostUsdTicks     sql.NullInt64 `json:"cost_usd_ticks"`
 }
 
-// Per-(task, provider, model) usage rows for every task on one issue — the
+// Per-(task, provider, model) usage rows for every task on one issue - the
 // per-run half of GetIssueUsageSummary's issue-wide total.
 //
 // The model dimension stays on the wire for the same reason the runtime and
@@ -740,8 +763,8 @@ type ListIssueTaskUsageRow struct {
 // Ordering is by task then model so the client can group by task_id in one
 // pass. Uses idx_agent_task_queue_issue_id (migration 035) + the task_usage
 // task_id index (migration 032).
-func (q *Queries) ListIssueTaskUsage(ctx context.Context, issueID pgtype.UUID) ([]ListIssueTaskUsageRow, error) {
-	rows, err := q.db.Query(ctx, listIssueTaskUsage, issueID)
+func (q *Queries) ListIssueTaskUsage(ctx context.Context, issueID sql.NullString) ([]ListIssueTaskUsageRow, error) {
+	rows, err := q.db.QueryContext(ctx, listIssueTaskUsage, issueID)
 	if err != nil {
 		return nil, err
 	}
@@ -763,6 +786,9 @@ func (q *Queries) ListIssueTaskUsage(ctx context.Context, issueID pgtype.UUID) (
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -771,7 +797,7 @@ func (q *Queries) ListIssueTaskUsage(ctx context.Context, issueID pgtype.UUID) (
 
 const upsertTaskUsage = `-- name: UpsertTaskUsage :exec
 INSERT INTO task_usage (task_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd_ticks, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, now())
 ON CONFLICT (task_id, provider, model)
 DO UPDATE SET
     input_tokens = EXCLUDED.input_tokens,
@@ -783,14 +809,14 @@ DO UPDATE SET
 `
 
 type UpsertTaskUsageParams struct {
-	TaskID           pgtype.UUID `json:"task_id"`
-	Provider         string      `json:"provider"`
-	Model            string      `json:"model"`
-	InputTokens      int64       `json:"input_tokens"`
-	OutputTokens     int64       `json:"output_tokens"`
-	CacheReadTokens  int64       `json:"cache_read_tokens"`
-	CacheWriteTokens int64       `json:"cache_write_tokens"`
-	CostUsdTicks     pgtype.Int8 `json:"cost_usd_ticks"`
+	TaskID           string        `json:"task_id"`
+	Provider         string        `json:"provider"`
+	Model            string        `json:"model"`
+	InputTokens      int64         `json:"input_tokens"`
+	OutputTokens     int64         `json:"output_tokens"`
+	CacheReadTokens  int64         `json:"cache_read_tokens"`
+	CacheWriteTokens int64         `json:"cache_write_tokens"`
+	CostUsdTicks     sql.NullInt64 `json:"cost_usd_ticks"`
 }
 
 // Bumps `updated_at` on INSERT and on conflict so the hourly-rollup worker
@@ -801,7 +827,7 @@ type UpsertTaskUsageParams struct {
 // when it reports none. It is overwritten like the token counters so a
 // corrected report replaces the previous figure rather than accumulating.
 func (q *Queries) UpsertTaskUsage(ctx context.Context, arg UpsertTaskUsageParams) error {
-	_, err := q.db.Exec(ctx, upsertTaskUsage,
+	_, err := q.db.ExecContext(ctx, upsertTaskUsage,
 		arg.TaskID,
 		arg.Provider,
 		arg.Model,

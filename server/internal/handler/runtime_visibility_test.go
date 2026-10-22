@@ -26,11 +26,11 @@ func TestCanUseRuntimeForAgent_Pure(t *testing.T) {
 	otherUserID := "22222222-2222-2222-2222-222222222222"
 
 	privateRT := db.AgentRuntime{
-		OwnerID:    util.MustParseUUID(ownerUserID),
+		OwnerID:    nullString(util.MustParseUUID(ownerUserID)),
 		Visibility: "private",
 	}
 	publicRT := db.AgentRuntime{
-		OwnerID:    util.MustParseUUID(ownerUserID),
+		OwnerID:    nullString(util.MustParseUUID(ownerUserID)),
 		Visibility: "public",
 	}
 	ownerlessPrivateRT := db.AgentRuntime{Visibility: "private"}
@@ -503,7 +503,7 @@ func TestCanSetRuntimeVisibility_Pure(t *testing.T) {
 	otherUserID := "22222222-2222-2222-2222-222222222222"
 
 	ownedRT := db.AgentRuntime{
-		OwnerID:    util.MustParseUUID(ownerUserID),
+		OwnerID:    nullString(util.MustParseUUID(ownerUserID)),
 		Visibility: "private",
 	}
 	ownerlessRT := db.AgentRuntime{Visibility: "private"}

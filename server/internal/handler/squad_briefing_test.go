@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -94,7 +93,7 @@ func seedSquadForBriefing(t *testing.T, leaderID string, name, instructions stri
 	return squad
 }
 
-func addAgentMember(t *testing.T, squadID pgtype.UUID, agentID, role string) {
+func addAgentMember(t *testing.T, squadID string, agentID, role string) {
 	t.Helper()
 	if _, err := testHandler.Queries.AddSquadMember(context.Background(), db.AddSquadMemberParams{
 		SquadID:    squadID,
@@ -106,7 +105,7 @@ func addAgentMember(t *testing.T, squadID pgtype.UUID, agentID, role string) {
 	}
 }
 
-func addHumanMember(t *testing.T, squadID pgtype.UUID, userID, role string) {
+func addHumanMember(t *testing.T, squadID string, userID, role string) {
 	t.Helper()
 	if _, err := testHandler.Queries.AddSquadMember(context.Background(), db.AddSquadMemberParams{
 		SquadID:    squadID,
@@ -505,4 +504,4 @@ func TestClaimTask_NonLeaderGetsNoBriefing(t *testing.T) {
 }
 
 // Avoid "imported and not used: pgtype" if helpers above are the only users.
-var _ pgtype.UUID
+var _ string

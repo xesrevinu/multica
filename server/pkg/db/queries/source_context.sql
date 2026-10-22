@@ -27,8 +27,7 @@ WHERE workspace_id = sqlc.arg(workspace_id)
 SELECT * FROM issue_source_context
 WHERE workspace_id = sqlc.arg(workspace_id)
   AND origin_task_id = sqlc.arg(origin_task_id)
-  AND state = 'pending'
-FOR UPDATE;
+  AND state = 'pending';
 
 -- name: AttachIssueSourceContext :one
 UPDATE issue_source_context
@@ -72,11 +71,10 @@ SELECT isc.*
 FROM issue_source_context isc
 JOIN agent_task_queue task ON task.id = isc.origin_task_id
 WHERE isc.state = 'pending'
-  AND isc.captured_at < now() - interval '30 days'
+  AND isc.captured_at < datetime('now', '-30 days')
   AND task.status IN ('completed', 'failed', 'cancelled')
 ORDER BY isc.captured_at, isc.id
-LIMIT sqlc.arg(row_limit)
-FOR UPDATE OF isc SKIP LOCKED;
+LIMIT sqlc.arg(row_limit);
 
 -- name: AbandonIssueSourceContext :execrows
 UPDATE issue_source_context
@@ -99,18 +97,14 @@ WHERE workspace_id = sqlc.arg(workspace_id)
   AND state = 'abandoned';
 
 -- name: RecordSourceContextObjectIntent :one
-WITH locked_workspace AS MATERIALIZED (
-    SELECT id
-    FROM workspace
-    WHERE id = sqlc.arg(workspace_id)
-    FOR KEY SHARE
-)
 INSERT INTO issue_source_context_object_intent (
     storage_key, workspace_id, source_context_id, attachment_id, object_url
 )
-SELECT sqlc.arg(storage_key), locked_workspace.id, sqlc.arg(source_context_id),
-       sqlc.arg(attachment_id), sqlc.arg(object_url)
-FROM locked_workspace
+SELECT sqlc.arg(storage_key) AS storage_key, w.id AS workspace_id,
+       sqlc.arg(source_context_id) AS source_context_id,
+       sqlc.arg(attachment_id) AS attachment_id, sqlc.arg(object_url) AS object_url
+FROM workspace w
+WHERE w.id = sqlc.arg(workspace_id)
 RETURNING *;
 
 -- name: RecordSourceContextDeletionObjectIntent :one
@@ -130,24 +124,23 @@ WHERE workspace_id = sqlc.arg(workspace_id)
 RETURNING storage_key;
 
 -- name: ClaimSourceContextObjectIntentForCleanup :one
-UPDATE issue_source_context_object_intent AS intent
-SET state = 'deleting',
-    lease_token = sqlc.arg(lease_token),
-    lease_expires_at = now() + interval '2 minutes'
-FROM (
-    SELECT candidate.storage_key
+WITH due AS (
+    SELECT candidate.storage_key AS storage_key
     FROM issue_source_context_object_intent candidate
     WHERE candidate.next_attempt_at <= now()
       AND (
-        (candidate.state = 'pending' AND candidate.created_at <= now() - interval '1 hour')
+        (candidate.state = 'pending' AND candidate.created_at <= datetime('now', '-1 hours'))
         OR (candidate.state = 'deleting' AND (candidate.lease_expires_at IS NULL OR candidate.lease_expires_at <= now()))
       )
     ORDER BY candidate.next_attempt_at, candidate.storage_key
     LIMIT 1
-    FOR UPDATE SKIP LOCKED
-) due
-WHERE intent.storage_key = due.storage_key
-RETURNING intent.*;
+)
+UPDATE issue_source_context_object_intent
+SET state = 'deleting',
+    lease_token = sqlc.arg(lease_token),
+    lease_expires_at = datetime('now', '+2 minutes')
+WHERE storage_key = (SELECT storage_key FROM due)
+RETURNING *;
 
 -- name: SourceContextObjectIntentIsReferenced :one
 SELECT EXISTS (
@@ -162,7 +155,7 @@ SELECT EXISTS (
 UPDATE issue_source_context_object_intent
 SET lease_token = NULL,
     lease_expires_at = NULL,
-    next_attempt_at = now() + interval '5 minutes',
+    next_attempt_at = datetime('now', '+5 minutes'),
     last_error = sqlc.arg(last_error)
 WHERE storage_key = sqlc.arg(storage_key)
   AND workspace_id = sqlc.arg(workspace_id)

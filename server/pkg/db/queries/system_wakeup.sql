@@ -12,18 +12,18 @@ RETURNING *;
 -- name: CustomizeSystemWakeup :one
 -- A person changed the rule on this issue; it stops following the workspace
 -- default. Turning it on clears a platform pause.
-UPDATE issue_wakeup SET enabled= @enabled,instruction= @instruction,customized_at=clock_timestamp(),
- paused_reason=CASE WHEN @enabled::bool THEN NULL ELSE paused_reason END,
- disabled_at=CASE WHEN @enabled::bool THEN NULL ELSE disabled_at END,
- updated_at=clock_timestamp()
+UPDATE issue_wakeup SET enabled= @enabled,instruction= @instruction,customized_at=now(),
+ paused_reason=CASE WHEN @enabled THEN NULL ELSE paused_reason END,
+ disabled_at=CASE WHEN @enabled THEN NULL ELSE disabled_at END,
+ updated_at=now()
 WHERE id= @id RETURNING *;
 
 -- name: ApplySystemWakeupDefault :many
 -- The workspace default changed. Rules nobody customized and the platform did
 -- not pause follow it.
-UPDATE issue_wakeup SET enabled= @enabled,updated_at=clock_timestamp()
+UPDATE issue_wakeup SET enabled= @enabled,updated_at=now()
 WHERE workspace_id= @workspace_id AND system_rule= @system_rule AND customized_at IS NULL
- AND paused_reason IS NULL AND enabled<> @enabled::bool
+ AND paused_reason IS NULL AND enabled<> @enabled
 RETURNING *;
 
 -- name: CountCustomizedSystemWakeups :one
@@ -34,7 +34,7 @@ WHERE w.workspace_id= @workspace_id AND w.system_rule= @system_rule AND w.custom
  AND NOT EXISTS(SELECT 1 FROM issue_status s WHERE s.workspace_id=i.workspace_id AND s.key=i.status AND s.category IN ('done','closed'));
 
 -- name: MergeWorkspaceSettings :exec
-UPDATE workspace SET settings=COALESCE(settings,'{}'::jsonb) || @patch::jsonb,updated_at=now() WHERE id= @id;
+UPDATE workspace SET settings=COALESCE(settings,'{}') || @patch,updated_at=now() WHERE id= @id;
 
 -- name: ListParentsWithoutSystemWakeup :many
 -- Open parents that predate their rule, for the one-time backfill.
@@ -47,15 +47,15 @@ LIMIT @page_limit;
 
 -- name: ListChildConditionWakeups :many
 -- Enabled rules on a parent whose condition reads its sub-issues.
-SELECT * FROM issue_wakeup WHERE issue_id= @issue_id AND enabled AND condition->>'type'='children_done'
+SELECT * FROM issue_wakeup WHERE issue_id= @issue_id AND enabled AND json_extract(condition, '$.type') = 'children_done'
 ORDER BY (system_rule IS NOT NULL),id;
 
 -- name: ClaimChildEvents :many
 -- Claim a parent's recorded sub-issue changes. A claim that was not finished
 -- within five minutes (a crashed or failed attempt) can be claimed again.
-UPDATE issue_child_event SET claimed_at=clock_timestamp()
+UPDATE issue_child_event SET claimed_at=now()
 WHERE parent_id= @parent_id AND processed_at IS NULL
- AND (claimed_at IS NULL OR claimed_at < clock_timestamp()-interval '5 minutes')
+ AND (claimed_at IS NULL OR claimed_at < datetime(now(), '-5 minutes'))
 RETURNING *;
 
 -- name: ListUnprocessedClosedChildren :many
@@ -63,18 +63,19 @@ RETURNING *;
 SELECT DISTINCT child_id FROM issue_child_event WHERE parent_id= @parent_id AND kind='closed' AND processed_at IS NULL;
 
 -- name: FinishChildEvents :exec
-UPDATE issue_child_event SET processed_at=clock_timestamp() WHERE id=ANY(@ids::uuid[]);
+UPDATE issue_child_event SET processed_at=now() WHERE id IN (SELECT value FROM json_each(@ids));
 
 -- name: ListStaleChildEventParents :many
 -- Parents whose changes were not processed right after their write.
 SELECT DISTINCT parent_id FROM issue_child_event
 WHERE processed_at IS NULL
- AND ((claimed_at IS NULL AND created_at < clock_timestamp()-interval '30 seconds') OR claimed_at < clock_timestamp()-interval '5 minutes')
+ AND ((claimed_at IS NULL AND created_at < datetime(now(), '-30 seconds')) OR claimed_at < datetime(now(), '-5 minutes'))
 LIMIT 50;
 
 -- name: DeleteProcessedChildEvents :execrows
-WITH batch AS MATERIALIZED (
- SELECT e.id FROM issue_child_event e WHERE e.processed_at < @cutoff
- ORDER BY e.processed_at LIMIT 1000 FOR UPDATE SKIP LOCKED
+WITH batch AS (
+ SELECT e.id AS id FROM issue_child_event e WHERE e.processed_at < @cutoff
+ ORDER BY e.processed_at LIMIT 1000
 )
-DELETE FROM issue_child_event d USING batch WHERE d.id=batch.id;
+DELETE FROM issue_child_event
+WHERE id IN (SELECT id FROM batch);

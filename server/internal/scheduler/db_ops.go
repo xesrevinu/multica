@@ -2,15 +2,13 @@ package scheduler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/pkg/dbid"
 )
 
@@ -25,15 +23,45 @@ var ErrLeaseLost = errors.New("scheduler: lease lost")
 // this package.
 var errTerminalIgnored = ErrLeaseLost
 
-// dbNow returns Postgres's notion of "now" as the canonical clock. The
-// scheduler uses DB time for every plan calculation and lease window so
-// instances with skewed clocks still agree on the same plan_time.
-func dbNow(ctx context.Context, pool *pgxpool.Pool) (time.Time, error) {
-	var t time.Time
-	if err := pool.QueryRow(ctx, "SELECT now()").Scan(&t); err != nil {
+func formatDBTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
+func parseDBTime(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t.UTC()
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t.UTC()
+	}
+	return time.Time{}
+}
+
+func parseDBID(s string) (uuid.UUID, error) {
+	if s == "" {
+		return uuid.Nil, fmt.Errorf("empty id")
+	}
+	return uuid.Parse(s)
+}
+
+// dbNow returns the database clock. now() is registered by sqliteutil and
+// returns UTC RFC3339Nano text.
+func dbNow(ctx context.Context, pool *sql.DB) (time.Time, error) {
+	var raw string
+	if err := pool.QueryRowContext(ctx, "SELECT now()").Scan(&raw); err != nil {
 		return time.Time{}, fmt.Errorf("scheduler: read db now: %w", err)
 	}
-	return t.UTC(), nil
+	t := parseDBTime(raw)
+	if t.IsZero() {
+		return time.Time{}, fmt.Errorf("scheduler: read db now: unparseable %q", raw)
+	}
+	return t, nil
 }
 
 // claim is the result of trying to acquire a plan. Only one of the
@@ -48,25 +76,15 @@ type claim struct {
 }
 
 // tryClaim attempts to acquire the lease for (job, scope, plan_time).
-// Returns Won=true on a fresh insert, Stole=true on a stale-steal or
-// retry-after-FAILED, and Conflicted=true if another runner owns the
-// plan, the row is already SUCCESS, the FAILED row is not yet
-// retry-eligible (next_retry_at in the future), or attempts are
-// exhausted. The caller treats every Conflicted outcome the same way
-// (no-op); the scheduler distinguishes them through audit-row metrics
-// rather than per-call return fields.
 func tryClaim(
 	ctx context.Context,
-	pool *pgxpool.Pool,
+	pool *sql.DB,
 	job *JobSpec,
 	scope Scope,
 	planTime time.Time,
 	dbTime time.Time,
 	runnerID string,
 ) (claim, error) {
-	// Fresh-insert path. ON CONFLICT DO NOTHING means losers do not
-	// touch the existing row — we follow up with the steal/retry path
-	// only if this insert was a conflict.
 	insertSQL := `
 		INSERT INTO sys_cron_executions (
 			job_name, scope_kind, scope_id, plan_time,
@@ -76,124 +94,131 @@ func tryClaim(
 			started_at, updated_at,
 			id
 		) VALUES (
-			$1, $2, $3, $4,
-			'RUNNING', 1, $5,
-			$6, gen_random_uuid(),
-			$7::timestamptz, $7::timestamptz + make_interval(secs => $8),
-			$7::timestamptz, $7::timestamptz,
-			COALESCE($9::uuid, gen_random_uuid())
+			?, ?, ?, ?,
+			'RUNNING', 1, ?,
+			?, gen_random_uuid(),
+			?, datetime(?, '+' || ? || ' seconds'),
+			?, ?,
+			COALESCE(NULLIF(?, ''), gen_random_uuid())
 		)
-		ON CONFLICT ON CONSTRAINT uq_sys_cron_execution DO NOTHING
+		ON CONFLICT (job_name, scope_kind, scope_id, plan_time) DO NOTHING
 		RETURNING id, lease_token, attempt
 	`
 	staleSecs := int64(job.StaleTimeout / time.Second)
 	if staleSecs <= 0 {
 		staleSecs = 1
 	}
+	dbText := formatDBTime(dbTime)
 
 	var c claim
-	err := pool.QueryRow(ctx, insertSQL,
-		job.Name, scope.Kind, scope.ID, planTime,
+	var idText, leaseText string
+	err := pool.QueryRowContext(ctx, insertSQL,
+		job.Name, scope.Kind, scope.ID, formatDBTime(planTime),
 		job.MaxAttempts,
 		runnerID,
-		dbTime, staleSecs,
-		// Execution rows are append-only and high-churn, so the id is a v7 for
-		// primary-key locality. lease_token stays gen_random_uuid(): it is a
-		// claim token, and it must not carry a guessable timestamp.
+		dbText, dbText, staleSecs,
+		dbText, dbText,
 		dbid.NewV7(),
-	).Scan(&c.ID, &c.LeaseToken, &c.Attempt)
+	).Scan(&idText, &leaseText, &c.Attempt)
 	if err == nil {
+		c.ID, err = parseDBID(idText)
+		if err != nil {
+			return claim{}, fmt.Errorf("scheduler: claim insert id: %w", err)
+		}
+		c.LeaseToken, err = parseDBID(leaseText)
+		if err != nil {
+			return claim{}, fmt.Errorf("scheduler: claim insert lease: %w", err)
+		}
 		c.Won = true
 		return c, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sql.ErrNoRows) {
 		return claim{}, fmt.Errorf("scheduler: claim insert: %w", err)
 	}
 
-	// Conflict path. Try retry-after-FAILED or stale-steal in a single
-	// statement. The WHERE clause encodes both branches; the choice is
-	// made server-side from the existing row.
 	stealSQL := `
 		UPDATE sys_cron_executions
 		   SET status        = 'RUNNING',
 		       attempt       = attempt + 1,
-		       runner_id     = $1,
+		       runner_id     = ?,
 		       lease_token   = gen_random_uuid(),
-		       heartbeat_at  = $2::timestamptz,
-		       stale_after   = $2::timestamptz + make_interval(secs => $3),
-		       started_at    = $2::timestamptz,
+		       heartbeat_at  = ?,
+		       stale_after   = datetime(?, '+' || ? || ' seconds'),
+		       started_at    = ?,
 		       finished_at   = NULL,
 		       duration_ms   = NULL,
 		       next_retry_at = NULL,
 		       error_code    = NULL,
 		       error_msg     = NULL,
-		       updated_at    = $2::timestamptz
-		 WHERE job_name   = $4
-		   AND scope_kind = $5
-		   AND scope_id   = $6
-		   AND plan_time  = $7
+		       updated_at    = ?
+		 WHERE job_name   = ?
+		   AND scope_kind = ?
+		   AND scope_id   = ?
+		   AND plan_time  = ?
 		   AND attempt < max_attempts
 		   AND (
-		        (status = 'FAILED' AND COALESCE(next_retry_at, $2::timestamptz) <= $2::timestamptz)
+		        (status = 'FAILED' AND COALESCE(next_retry_at, ?) <= ?)
 		        OR
-		        (status = 'RUNNING' AND stale_after < $2::timestamptz AND $8)
+		        (status = 'RUNNING' AND stale_after < ? AND ?)
 		   )
 		RETURNING id, lease_token, attempt
 	`
-	err = pool.QueryRow(ctx, stealSQL,
+	staleFlag := 0
+	if job.AllowStaleReentry {
+		staleFlag = 1
+	}
+	err = pool.QueryRowContext(ctx, stealSQL,
 		runnerID,
-		dbTime, staleSecs,
-		job.Name, scope.Kind, scope.ID, planTime,
-		job.AllowStaleReentry,
-	).Scan(&c.ID, &c.LeaseToken, &c.Attempt)
+		dbText, dbText, staleSecs, dbText, dbText,
+		job.Name, scope.Kind, scope.ID, formatDBTime(planTime),
+		dbText, dbText, dbText, staleFlag,
+	).Scan(&idText, &leaseText, &c.Attempt)
 	if err == nil {
+		c.ID, err = parseDBID(idText)
+		if err != nil {
+			return claim{}, fmt.Errorf("scheduler: claim steal id: %w", err)
+		}
+		c.LeaseToken, err = parseDBID(leaseText)
+		if err != nil {
+			return claim{}, fmt.Errorf("scheduler: claim steal lease: %w", err)
+		}
 		c.Stole = true
 		return c, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sql.ErrNoRows) {
 		return claim{}, fmt.Errorf("scheduler: claim steal: %w", err)
 	}
 
-	// No-row update — somebody else owns a fresh RUNNING lease, the
-	// row is already SUCCESS, the row is FAILED but not yet
-	// retry-eligible, or attempts are exhausted. The caller treats
-	// these no-op cases identically.
 	c.Conflicted = true
 	return c, nil
 }
 
-// markStaleAsFailed transitions a single stale RUNNING row to FAILED
-// when its job has AllowStaleReentry=false. Returns RowsAffected so the
-// sweeper can log how many rows were closed.
 func markStaleAsFailed(
 	ctx context.Context,
-	pool *pgxpool.Pool,
+	pool *sql.DB,
 	jobName string,
 	dbTime time.Time,
 ) (int64, error) {
-	tag, err := pool.Exec(ctx, `
+	tag, err := pool.ExecContext(ctx, `
 		UPDATE sys_cron_executions
 		   SET status      = 'FAILED',
-		       finished_at = $2,
+		       finished_at = ?,
 		       error_code  = 'stale_timeout',
 		       error_msg   = 'lease expired without heartbeat',
-		       updated_at  = $2
-		 WHERE job_name    = $1
+		       updated_at  = ?
+		 WHERE job_name    = ?
 		   AND status      = 'RUNNING'
-		   AND stale_after < $2
-	`, jobName, dbTime)
+		   AND stale_after < ?
+	`, formatDBTime(dbTime), formatDBTime(dbTime), jobName, formatDBTime(dbTime))
 	if err != nil {
 		return 0, fmt.Errorf("scheduler: mark stale failed: %w", err)
 	}
-	return tag.RowsAffected(), nil
+	return tag.RowsAffected()
 }
 
-// heartbeat extends stale_after for the runner that holds the lease.
-// Returns ErrLeaseLost if the row is no longer ours (stolen or already
-// finalised).
 func heartbeat(
 	ctx context.Context,
-	pool *pgxpool.Pool,
+	pool *sql.DB,
 	id, leaseToken uuid.UUID,
 	staleTimeout time.Duration,
 ) error {
@@ -201,29 +226,31 @@ func heartbeat(
 	if staleSecs <= 0 {
 		staleSecs = 1
 	}
-	tag, err := pool.Exec(ctx, `
+	tag, err := pool.ExecContext(ctx, `
 		UPDATE sys_cron_executions
 		   SET heartbeat_at = now(),
-		       stale_after  = now() + make_interval(secs => $3),
+		       stale_after  = datetime(now(), '+' || ? || ' seconds'),
 		       updated_at   = now()
-		 WHERE id          = $1
-		   AND lease_token = $2
+		 WHERE id          = ?
+		   AND lease_token = ?
 		   AND status      = 'RUNNING'
-	`, id, leaseToken, staleSecs)
+	`, staleSecs, id.String(), leaseToken.String())
 	if err != nil {
 		return fmt.Errorf("scheduler: heartbeat: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
+	n, err := tag.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
 		return ErrLeaseLost
 	}
 	return nil
 }
 
-// finishSuccess writes a terminal SUCCESS row. The lease_token guard
-// prevents an ex-lease-holder from overwriting a newer attempt's state.
 func finishSuccess(
 	ctx context.Context,
-	pool *pgxpool.Pool,
+	pool *sql.DB,
 	id, leaseToken uuid.UUID,
 	dbTime time.Time,
 	durationMs int64,
@@ -233,78 +260,80 @@ func finishSuccess(
 	if err != nil {
 		return err
 	}
-
-	tag, err := pool.Exec(ctx, `
+	when := formatDBTime(dbTime)
+	tag, err := pool.ExecContext(ctx, `
 		UPDATE sys_cron_executions
 		   SET status        = 'SUCCESS',
-		       finished_at   = $3,
-		       duration_ms   = $4,
-		       rows_affected = $5,
-		       result        = $6::jsonb,
+		       finished_at   = ?,
+		       duration_ms   = ?,
+		       rows_affected = ?,
+		       result        = ?,
 		       error_code    = NULL,
 		       error_msg     = NULL,
-		       updated_at    = $3
-		 WHERE id            = $1
-		   AND lease_token   = $2
+		       updated_at    = ?
+		 WHERE id            = ?
+		   AND lease_token   = ?
 		   AND status        = 'RUNNING'
-	`, id, leaseToken, dbTime, durationMs, res.RowsAffected, resultJSON)
+	`, when, durationMs, res.RowsAffected, resultJSON, when, id.String(), leaseToken.String())
 	if err != nil {
 		return fmt.Errorf("scheduler: finish success: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
+	n, err := tag.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
 		return errTerminalIgnored
 	}
 	return nil
 }
 
-// finishFailure writes a terminal FAILED row. nextRetryAt may be the
-// zero value if no retry is due (max_attempts reached).
 func finishFailure(
 	ctx context.Context,
-	pool *pgxpool.Pool,
+	pool *sql.DB,
 	id, leaseToken uuid.UUID,
 	dbTime time.Time,
 	durationMs int64,
 	errorCode, errorMsg string,
 	nextRetryAt time.Time,
 ) error {
-	var nextRetry pgtype.Timestamptz
+	var nextRetry sql.NullString
 	if !nextRetryAt.IsZero() {
-		nextRetry = pgtype.Timestamptz{Time: nextRetryAt, Valid: true}
+		nextRetry = sql.NullString{String: formatDBTime(nextRetryAt), Valid: true}
 	}
-
 	if errorCode == "" {
 		errorCode = "handler_error"
 	}
 	if len(errorMsg) > 4000 {
 		errorMsg = errorMsg[:4000]
 	}
-
-	tag, err := pool.Exec(ctx, `
+	when := formatDBTime(dbTime)
+	tag, err := pool.ExecContext(ctx, `
 		UPDATE sys_cron_executions
 		   SET status        = 'FAILED',
-		       finished_at   = $3,
-		       duration_ms   = $4,
-		       next_retry_at = $5,
-		       error_code    = $6,
-		       error_msg     = $7,
-		       updated_at    = $3
-		 WHERE id            = $1
-		   AND lease_token   = $2
+		       finished_at   = ?,
+		       duration_ms   = ?,
+		       next_retry_at = ?,
+		       error_code    = ?,
+		       error_msg     = ?,
+		       updated_at    = ?
+		 WHERE id            = ?
+		   AND lease_token   = ?
 		   AND status        = 'RUNNING'
-	`, id, leaseToken, dbTime, durationMs, nextRetry, errorCode, errorMsg)
+	`, when, durationMs, nextRetry, errorCode, errorMsg, when, id.String(), leaseToken.String())
 	if err != nil {
 		return fmt.Errorf("scheduler: finish failure: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
+	n, err := tag.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
 		return errTerminalIgnored
 	}
 	return nil
 }
 
-// encodeResult serialises a handler's small structured result to a
-// JSONB-ready string. Empty/nil maps encode as `{}` so the column
-// default is preserved if no result was set.
 func encodeResult(in map[string]any) (string, error) {
 	if len(in) == 0 {
 		return "{}", nil
@@ -313,41 +342,21 @@ func encodeResult(in map[string]any) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("scheduler: marshal result: %w", err)
 	}
-	// Defensive cap — keep result-row size predictable. Bigger
-	// payloads belong in structured logs.
 	if len(b) > 16*1024 {
 		return "", fmt.Errorf("scheduler: result payload too large (%d bytes); keep it small or use logs", len(b))
 	}
 	return string(b), nil
 }
 
-// LatestPlanInfo returns the latest known plan_time for (job, scope)
-// plus the fields the catch-up planner needs to decide whether the row
-// is still claimable at the same plan_time (FAILED-with-retry) or
-// finished and the next plan_time should advance past it.
-//
-// Exported so a JobSpec.PlansForScope hook can inspect the same view
-// the built-in Cadence planner uses — in particular Found / PlanTime
-// to know where to resume plan enumeration, and RetryEligible to keep
-// the cursor on a FAILED-with-retry plan_time.
 type LatestPlanInfo struct {
 	Found       bool
 	PlanTime    time.Time
 	Status      string
 	Attempt     int
 	MaxAttempts int
-	// NextRetryAt is zero (NULL in DB) when the row is not in a
-	// retry-eligible state, or when the next retry is due immediately
-	// (FAILED with no backoff configured).
 	NextRetryAt time.Time
 }
 
-// RetryEligible reports whether the latest stored row should still be
-// considered for the same plan_time on the next tick. True for FAILED
-// rows that have remaining attempts and whose next_retry_at has
-// passed; the every_plan planner uses this to keep the cursor on the
-// retry-eligible bucket so tryClaim's retry-from-FAILED branch can
-// fire.
 func (i LatestPlanInfo) RetryEligible(now time.Time) bool {
 	if !i.Found {
 		return false
@@ -359,8 +368,6 @@ func (i LatestPlanInfo) RetryEligible(now time.Time) bool {
 		return false
 	}
 	if i.NextRetryAt.IsZero() {
-		// COALESCE-style: NULL next_retry_at means "as soon as
-		// possible", which is right now.
 		return true
 	}
 	return !i.NextRetryAt.After(now)
@@ -368,35 +375,36 @@ func (i LatestPlanInfo) RetryEligible(now time.Time) bool {
 
 func latestPlan(
 	ctx context.Context,
-	pool *pgxpool.Pool,
+	pool *sql.DB,
 	jobName string,
 	scope Scope,
 ) (LatestPlanInfo, error) {
 	var info LatestPlanInfo
-	var nextRetry pgtype.Timestamptz
-	err := pool.QueryRow(ctx, `
+	var planText string
+	var nextRetry sql.NullString
+	err := pool.QueryRowContext(ctx, `
 		SELECT plan_time, status, attempt, max_attempts, next_retry_at
 		  FROM sys_cron_executions
-		 WHERE job_name   = $1
-		   AND scope_kind = $2
-		   AND scope_id   = $3
+		 WHERE job_name   = ?
+		   AND scope_kind = ?
+		   AND scope_id   = ?
 		 ORDER BY plan_time DESC
 		 LIMIT 1
 	`, jobName, scope.Kind, scope.ID).Scan(
-		&info.PlanTime, &info.Status,
+		&planText, &info.Status,
 		&info.Attempt, &info.MaxAttempts,
 		&nextRetry,
 	)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return info, nil
 		}
 		return info, fmt.Errorf("scheduler: read latest plan: %w", err)
 	}
 	info.Found = true
-	info.PlanTime = info.PlanTime.UTC()
+	info.PlanTime = parseDBTime(planText)
 	if nextRetry.Valid {
-		info.NextRetryAt = nextRetry.Time.UTC()
+		info.NextRetryAt = parseDBTime(nextRetry.String)
 	}
 	return info, nil
 }

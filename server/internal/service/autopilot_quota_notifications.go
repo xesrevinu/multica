@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,22 +10,19 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/inbox"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	"github.com/multica-ai/multica/server/pkg/dbid"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 const autopilotQuotaFirstRejectionNoticeKey = "rejection_first"
 
 type autopilotQuotaNoticeFacts struct {
-	WorkspaceID pgtype.UUID
-	AutopilotID pgtype.UUID
+	WorkspaceID string
+	AutopilotID string
 	Source      string
 	Used        int64
 	Reserved    int64
@@ -36,7 +34,7 @@ type autopilotQuotaNoticeFacts struct {
 func (s *AutopilotService) deliverAutopilotQuotaRejectionNotice(
 	ctx context.Context,
 	policy autopilotQuotaPolicy,
-	workspaceID pgtype.UUID,
+	workspaceID string,
 	source string,
 	params db.CreateAutopilotRunParams,
 ) {
@@ -60,26 +58,26 @@ func (s *AutopilotService) deliverAutopilotQuotaRejectionNotice(
 func (s *AutopilotService) createAutopilotQuotaRejectionNotice(
 	ctx context.Context,
 	policy autopilotQuotaPolicy,
-	workspaceID pgtype.UUID,
+	workspaceID string,
 	source string,
 	params db.CreateAutopilotRunParams,
 ) ([]db.InboxItem, error) {
-	tx, err := s.TxStarter.Begin(ctx)
+	tx, err := s.TxStarter.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin quota rejection notice: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	q := s.Queries.WithTx(tx)
 	period, err := q.EnsureAutopilotQuotaPeriod(ctx, db.EnsureAutopilotQuotaPeriodParams{
 		WorkspaceID: workspaceID,
-		PeriodStart: pgtype.Timestamptz{Time: policy.periodStart, Valid: true},
-		PeriodEnd:   pgtype.Timestamptz{Time: policy.periodEnd, Valid: true},
+		PeriodStart: nullTime(policy.periodStart, true).String,
+		PeriodEnd:   nullTime(policy.periodEnd, true).String,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("lock quota period for rejection notice: %w", err)
 	}
 	if period.RejectionNotifiedAt.Valid {
-		if err := tx.Commit(ctx); err != nil {
+		if err := tx.Commit(); err != nil {
 			return nil, fmt.Errorf("commit already-delivered quota rejection notice: %w", err)
 		}
 		return nil, nil
@@ -101,7 +99,7 @@ func (s *AutopilotService) createAutopilotQuotaRejectionNotice(
 	if len(items) == 0 {
 		// Keep the marker unset so a later rejection can notify a newly restored
 		// workspace owner or admin instead of silencing the entire period.
-		if err := tx.Commit(ctx); err != nil {
+		if err := tx.Commit(); err != nil {
 			return nil, fmt.Errorf("commit quota rejection notice without recipients: %w", err)
 		}
 		return nil, nil
@@ -113,7 +111,7 @@ func (s *AutopilotService) createAutopilotQuotaRejectionNotice(
 	}); err != nil {
 		return nil, fmt.Errorf("mark autopilot quota rejection notified: %w", err)
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit quota rejection notice: %w", err)
 	}
 	return items, nil
@@ -128,7 +126,7 @@ func (s *AutopilotService) createAutopilotQuotaInboxItems(
 	autopilot, err := q.GetAutopilot(ctx, facts.AutopilotID)
 	if err == nil {
 		autopilotTitle = autopilot.Title
-	} else if !errors.Is(err, pgx.ErrNoRows) {
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("load autopilot for quota notice: %w", err)
 	}
 	recipients, err := ListWorkspaceManagerNotificationRecipients(ctx, q, facts.WorkspaceID)
@@ -160,12 +158,12 @@ func (s *AutopilotService) createAutopilotQuotaInboxItems(
 	items := make([]db.InboxItem, 0, len(recipients))
 	for _, recipient := range recipients {
 		item, inserted, err := inbox.CreateIfEligible(ctx, q, db.CreateInboxItemParams{
-			ID: dbid.NewV7(), WorkspaceID: facts.WorkspaceID,
+			ID: nullString(newV7()), WorkspaceID: facts.WorkspaceID,
 			RecipientType: recipient.Type, RecipientID: recipient.ID,
-			Type: "autopilot_quota_exceeded", Severity: "attention", IssueID: pgtype.UUID{},
-			Title: "Autopilot run limit reached", Body: pgtype.Text{String: body, Valid: true},
-			ActorType: pgtype.Text{String: "system", Valid: true}, ActorID: pgtype.UUID{},
-			Details: details,
+			Type: "autopilot_quota_exceeded", Severity: "attention", IssueID: nullString(""),
+			Title: "Autopilot run limit reached", Body: sql.NullString{String: body, Valid: true},
+			ActorType: sql.NullString{String: "system", Valid: true}, ActorID: nullString(""),
+			Details: nullString(string(details)),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("create autopilot quota inbox item: %w", err)
@@ -191,10 +189,10 @@ func (s *AutopilotService) publishAutopilotQuotaInboxItems(items []db.InboxItem)
 				"recipient_type": item.RecipientType, "recipient_id": util.UUIDToString(item.RecipientID),
 				"type": item.Type, "severity": item.Severity, "issue_id": nil,
 				"issue_status": nil, "issue_priority": nil,
-				"title": item.Title, "body": util.TextToPtr(item.Body), "read": item.Read,
-				"archived": item.Archived, "created_at": util.TimestampToString(item.CreatedAt),
-				"actor_type": util.TextToPtr(item.ActorType), "actor_id": nil,
-				"details": json.RawMessage(item.Details),
+				"title": item.Title, "body": nullStringPtr(item.Body), "read": item.Read,
+				"archived": item.Archived, "created_at": timeString(item.CreatedAt),
+				"actor_type": nullStringPtr(item.ActorType), "actor_id": nil,
+				"details": json.RawMessage(item.Details.String),
 			}},
 		})
 	}

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/dispatch"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -163,15 +163,15 @@ func TestSendChatMessage_InvokeRevokedAfterSessionCreate(t *testing.T) {
 	}
 	// The attachment must remain unbound: neither claimed into the session nor
 	// linked to a message.
-	var boundSession, boundMessage pgtype.UUID
+	var boundSession, boundMessage string
 	if err := testPool.QueryRow(ctx, `SELECT chat_session_id, chat_message_id FROM attachment WHERE id = $1`, attachmentID).
 		Scan(&boundSession, &boundMessage); err != nil {
 		t.Fatalf("read attachment binding: %v", err)
 	}
-	if boundSession.Valid {
+	if boundSession != "" {
 		t.Errorf("blocked send set attachment chat_session_id = %s, want NULL", util.UUIDToString(boundSession))
 	}
-	if boundMessage.Valid {
+	if boundMessage != "" {
 		t.Errorf("blocked send set attachment chat_message_id = %s, want NULL", util.UUIDToString(boundMessage))
 	}
 }
@@ -203,12 +203,12 @@ func TestRerunIssue_PrivateHistoricalAgent(t *testing.T) {
 	// A historical task run by the private agent.
 	orig, err := testHandler.TaskService.EnqueueTaskForIssue(ctx, db.Issue{
 		ID:           util.MustParseUUID(issueID),
-		AssigneeID:   util.MustParseUUID(agentID),
+		AssigneeID:   nullString(util.MustParseUUID(agentID)),
 		Priority:     "medium",
 		CreatorType:  "member",
 		CreatorID:    util.MustParseUUID(ownerID),
 		WorkspaceID:  util.MustParseUUID(testWorkspaceID),
-		AssigneeType: pgtype.Text{String: "agent", Valid: true},
+		AssigneeType: sql.NullString{String: "agent", Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("enqueue original task: %v", err)

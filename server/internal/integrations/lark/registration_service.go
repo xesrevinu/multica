@@ -11,17 +11,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// pgUniqueViolation is the Postgres SQLSTATE for a unique-constraint violation.
-// A rebind upsert that trips the (channel_type, config->>'app_id') index after
-// the dead-owner reclaim ran means a LIVE owner still holds the slot.
-const pgUniqueViolation = "23505"
+// isUniqueViolation reports a SQLite unique-constraint failure. A rebind
+// upsert that trips the (channel_type, config->>'app_id') index after the
+// dead-owner reclaim ran means a LIVE owner still holds the slot.
+func isUniqueViolation(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
+}
 
 // RegistrationSessionStatus is the discriminated state a `begin`
 // session lives in. The HTTP status endpoint serializes the underlying
@@ -235,7 +235,7 @@ func (s *RegistrationService) SetEventBus(bus *events.Bus) {
 // refreshes its connection badge with no page reload. Covers fresh
 // installs and revoked→active re-installs alike — both ride the same
 // UpsertLarkInstallation write. Nil-safe.
-func (s *RegistrationService) publishInstalled(workspaceID, installationID pgtype.UUID) {
+func (s *RegistrationService) publishInstalled(workspaceID, installationID string) {
 	if s.bus == nil {
 		return
 	}
@@ -257,9 +257,9 @@ func (s *RegistrationService) publishInstalled(workspaceID, installationID pgtyp
 // and only the process running the goroutine has any use for it.
 type registrationSession struct {
 	id          string
-	workspaceID pgtype.UUID
-	agentID     pgtype.UUID
-	initiatorID pgtype.UUID
+	workspaceID string
+	agentID     string
+	initiatorID string
 
 	deviceCode string
 	domain     string
@@ -277,7 +277,7 @@ type registrationSession struct {
 
 // markSuccess records the terminal success and drops the goroutine's
 // working state.
-func (s *RegistrationService) markSuccess(sess *registrationSession, installationID pgtype.UUID) {
+func (s *RegistrationService) markSuccess(sess *registrationSession, installationID string) {
 	s.markTerminal(sess, InstallSessionOutcome{
 		Status:         RegistrationStatusSuccess,
 		InstallationID: installationID,
@@ -369,10 +369,10 @@ func (s *RegistrationService) forgetSession(id string) {
 type RegistrationSessionState struct {
 	ID             string
 	Status         RegistrationSessionStatus
-	InstallationID pgtype.UUID
+	InstallationID string
 	ErrorReason    string
 	ErrorMessage   string
-	InitiatorID    pgtype.UUID
+	InitiatorID    string
 }
 
 // BeginInstallParams is the trusted input from the handler — the
@@ -381,9 +381,9 @@ type RegistrationSessionState struct {
 // workspace owner/admin; agent belongs to the workspace). The service
 // re-checks agent↔workspace membership below as defense-in-depth.
 type BeginInstallParams struct {
-	WorkspaceID pgtype.UUID
-	AgentID     pgtype.UUID
-	InitiatorID pgtype.UUID
+	WorkspaceID string
+	AgentID     string
+	InitiatorID string
 	// Region picks which cloud's accounts host the device-flow begins
 	// against — Feishu (mainland, accounts.feishu.cn) or Lark
 	// (international, accounts.larksuite.com). The user picks this
@@ -416,7 +416,7 @@ type BeginInstallResult struct {
 // the device_code is server-side only (Lark would honor a poll from
 // anywhere if the device_code leaked, so we never echo it).
 func (s *RegistrationService) BeginInstall(ctx context.Context, p BeginInstallParams) (BeginInstallResult, error) {
-	if !p.WorkspaceID.Valid || !p.AgentID.Valid || !p.InitiatorID.Valid {
+	if p.WorkspaceID == "" || p.AgentID == "" || p.InitiatorID == "" {
 		return BeginInstallResult{}, errors.New("lark registration: workspace, agent, and initiator are required")
 	}
 	// Agent↔workspace pre-check — without this, a caller could open an
@@ -514,7 +514,7 @@ func (s *RegistrationService) BeginInstall(ctx context.Context, p BeginInstallPa
 // ErrRegistrationSessionNotFound is returned for unknown / expired /
 // GC'd sessions; the frontend treats it the same as an error reason
 // of "session_lost" — prompt the user to restart the install.
-func (s *RegistrationService) GetSession(ctx context.Context, workspaceID pgtype.UUID, sessionID string) (RegistrationSessionState, error) {
+func (s *RegistrationService) GetSession(ctx context.Context, workspaceID string, sessionID string) (RegistrationSessionState, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		return RegistrationSessionState{}, ErrRegistrationSessionNotFound
 	}
@@ -708,7 +708,7 @@ func (s *RegistrationService) finishSuccess(ctx context.Context, sess *registrat
 		s.markError(sess, RegistrationReasonInternalError, err.Error())
 		return
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	qtx := s.queries.WithTx(tx)
 
 	// If the same Feishu app (app_id) is held by a DEAD prior owner — a revoked
@@ -745,8 +745,7 @@ func (s *RegistrationService) finishSuccess(ctx context.Context, sess *registrat
 		// it — another agent in this workspace, an archived agent, or a different
 		// workspace — instead of leaking the raw Postgres error.
 		msg := err.Error()
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+		if isUniqueViolation(err) {
 			msg = s.liveOwnerConflictMessage(ctx, sess.workspaceID, res.ClientID)
 		}
 		s.markError(sess, RegistrationReasonInstallationConflict, msg)
@@ -765,7 +764,7 @@ func (s *RegistrationService) finishSuccess(ctx context.Context, sess *registrat
 		return
 	}
 
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		s.cfg.Logger.Error("lark registration: commit",
 			"session_id", sess.id, "err", err)
 		s.markError(sess, RegistrationReasonInternalError, err.Error())
@@ -790,7 +789,7 @@ func (s *RegistrationService) finishSuccess(ctx context.Context, sess *registrat
 // in the SAME workspace (#4810). Looked up on the base pool, not the aborted
 // upsert tx. If the slot turns out free (a concurrent disconnect between the
 // upsert and this read), a generic message is enough — the user can just retry.
-func (s *RegistrationService) liveOwnerConflictMessage(ctx context.Context, requestingWorkspaceID pgtype.UUID, appID string) string {
+func (s *RegistrationService) liveOwnerConflictMessage(ctx context.Context, requestingWorkspaceID string, appID string) string {
 	owner, err := s.queries.InstallationOwnerByAppID(ctx, appID)
 	if err != nil {
 		return "This Feishu app is already connected to another agent. Disconnect it there first, then connect it here."
@@ -837,7 +836,7 @@ func botNamePreset(agentName string) string {
 }
 
 // uuidString is the package-local UUID-to-string helper defined in
-// hub.go; redeclared `func uuidString(u pgtype.UUID) string` removed
+// hub.go; redeclared `func uuidString(u string) string` removed
 // to avoid the symbol collision.
 //
 // InstallationService.box is unexported but reachable from this file

@@ -2,11 +2,11 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
 )
@@ -37,7 +37,7 @@ func TestHotTableInsertsPersistUUIDv7(t *testing.T) {
 			Priority:    "none",
 			CreatorType: "member",
 			CreatorID:   parseUUID(testUserID),
-			Number:      maxNumber,
+			Number:      int64(maxNumber),
 		})
 		if err != nil {
 			t.Fatalf("CreateIssue: %v", err)
@@ -48,7 +48,7 @@ func TestHotTableInsertsPersistUUIDv7(t *testing.T) {
 
 	t.Run("comment", func(t *testing.T) {
 		created, err := q.CreateComment(ctx, db.CreateCommentParams{
-			ID:          dbid.NewV7(),
+			ID:          nullString(dbid.NewV7()),
 			IssueID:     parseUUID(issueID),
 			WorkspaceID: parseUUID(testWorkspaceID),
 			AuthorType:  "member",
@@ -67,11 +67,11 @@ func TestHotTableInsertsPersistUUIDv7(t *testing.T) {
 		created, err := q.CreateActivity(ctx, db.CreateActivityParams{
 			ID:          dbid.NewV7(),
 			WorkspaceID: parseUUID(testWorkspaceID),
-			IssueID:     parseUUID(issueID),
-			ActorType:   pgtype.Text{String: "member", Valid: true},
-			ActorID:     parseUUID(testUserID),
+			IssueID:     nullString(parseUUID(issueID)),
+			ActorType:   sql.NullString{String: "member", Valid: true},
+			ActorID:     nullString(parseUUID(testUserID)),
 			Action:      "uuidv7_test",
-			Details:     []byte(`{}`),
+			Details:     string([]byte(`{}`)),
 		})
 		if err != nil {
 			t.Fatalf("CreateActivity: %v", err)
@@ -82,15 +82,15 @@ func TestHotTableInsertsPersistUUIDv7(t *testing.T) {
 
 	t.Run("inbox_item", func(t *testing.T) {
 		created, err := q.CreateInboxItem(ctx, db.CreateInboxItemParams{
-			ID:            dbid.NewV7(),
+			ID:            nullString(dbid.NewV7()),
 			WorkspaceID:   parseUUID(testWorkspaceID),
 			RecipientType: "member",
 			RecipientID:   parseUUID(testUserID),
 			Type:          "issue_assigned",
 			Severity:      "info",
-			IssueID:       parseUUID(issueID),
+			IssueID:       nullString(parseUUID(issueID)),
 			Title:         "uuidv7 inbox item",
-			Details:       []byte(`{}`),
+			Details:       nullString(string([]byte(`{}`))),
 		})
 		if err != nil {
 			t.Fatalf("CreateInboxItem: %v", err)
@@ -128,10 +128,10 @@ func TestHotTableInsertsPersistUUIDv7(t *testing.T) {
 
 	t.Run("agent_task_queue_and_task_token", func(t *testing.T) {
 		task, err := q.CreateAgentTask(ctx, db.CreateAgentTaskParams{
-			ID:        dbid.NewV7(),
+			ID:        nullString(dbid.NewV7()),
 			AgentID:   parseUUID(agentID),
-			RuntimeID: parseUUID(runtimeID),
-			IssueID:   parseUUID(issueID),
+			RuntimeID: nullString(parseUUID(runtimeID)),
+			IssueID:   nullString(parseUUID(issueID)),
 			Priority:  1,
 		})
 		if err != nil {
@@ -147,7 +147,7 @@ func TestHotTableInsertsPersistUUIDv7(t *testing.T) {
 			AgentID:     parseUUID(agentID),
 			WorkspaceID: parseUUID(testWorkspaceID),
 			UserID:      parseUUID(testUserID),
-			ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
+			ExpiresAt:   time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano),
 		})
 		if err != nil {
 			t.Fatalf("CreateTaskToken: %v", err)
@@ -165,12 +165,12 @@ func TestHotTableInsertsPersistUUIDv7(t *testing.T) {
 			ChannelType:    "slack",
 			EventType:      "message",
 			DropReason:     "uuidv7_test",
-			ChannelEventID: pgtype.Text{String: eventID, Valid: true},
+			ChannelEventID: sql.NullString{String: eventID, Valid: true},
 		}); err != nil {
 			t.Fatalf("RecordChannelInboundDrop: %v", err)
 		}
 
-		var got pgtype.UUID
+		var got string
 		dbfx.QueryRow(t, `SELECT id FROM channel_inbound_audit WHERE channel_event_id = $1`, eventID).Scan(&got)
 		assertV7(t, "channel_inbound_audit.id", got)
 	})
@@ -186,32 +186,32 @@ func TestUnsetIDFallsBackToTheDatabaseDefault(t *testing.T) {
 	issueID := dbfx.Issue(t, "uuidv7 fallback issue")
 	created, err := testHandler.Queries.CreateActivity(ctx, db.CreateActivityParams{
 		WorkspaceID: parseUUID(testWorkspaceID),
-		IssueID:     parseUUID(issueID),
-		ActorType:   pgtype.Text{String: "member", Valid: true},
-		ActorID:     parseUUID(testUserID),
+		IssueID:     nullString(parseUUID(issueID)),
+		ActorType:   sql.NullString{String: "member", Valid: true},
+		ActorID:     nullString(parseUUID(testUserID)),
 		Action:      "uuidv7_fallback_test",
-		Details:     []byte(`{}`),
+		Details:     string([]byte(`{}`)),
 	})
 	if err != nil {
 		t.Fatalf("CreateActivity without an id: %v", err)
 	}
 	cleanupRow(t, "activity_log", created.ID)
 
-	if !created.ID.Valid {
+	if !(created.ID != "") {
 		t.Fatal("row was inserted without an id")
 	}
-	if v := uuid.UUID(created.ID.Bytes).Version(); v != 4 {
+	if v := uuid.MustParse(created.ID).Version(); v != 4 {
 		t.Fatalf("database default produced a v%d id, want v4", v)
 	}
 }
 
-func assertV7(t *testing.T, label string, id pgtype.UUID) {
+func assertV7(t *testing.T, label string, id string) {
 	t.Helper()
 
-	if !id.Valid {
+	if !(id != "") {
 		t.Fatalf("%s: no id returned", label)
 	}
-	parsed := uuid.UUID(id.Bytes)
+	parsed := uuid.MustParse(id)
 	if v := parsed.Version(); v != 7 {
 		t.Errorf("%s: stored id is v%d (%s), want v7", label, v, parsed)
 	}
@@ -220,7 +220,7 @@ func assertV7(t *testing.T, label string, id pgtype.UUID) {
 // cleanupRow deletes a row the query under test created. Fixtures registered
 // through testutil clean themselves up; rows created by the production query do
 // not, so they are registered by hand.
-func cleanupRow(t *testing.T, table string, id pgtype.UUID) {
+func cleanupRow(t *testing.T, table string, id string) {
 	t.Helper()
 
 	dbfx.Cleanup(t, `DELETE FROM `+table+` WHERE id = $1`, id)

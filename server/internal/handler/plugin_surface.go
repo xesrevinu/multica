@@ -176,7 +176,7 @@ func (h *Handler) GetPluginSurfaceLaunch(w http.ResponseWriter, r *http.Request)
 		writePluginError(w, err, "failed to load the Plugin")
 		return
 	}
-	if !installation.Enabled {
+	if installation.Enabled == 0 {
 		writeError(w, http.StatusForbidden, "this Plugin is disabled")
 		return
 	}
@@ -241,7 +241,7 @@ func (h *Handler) ServePluginSurface(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	installation, err := h.PluginService.InstallationForWorkspace(r.Context(), workspaceID, claims.InstallationID)
-	if err != nil || !installation.Enabled || util.UUIDToString(installation.PackageVersionID) != claims.VersionID {
+	if err != nil || installation.Enabled == 0 || util.UUIDToString(installation.PackageVersionID) != claims.VersionID {
 		http.NotFound(w, r)
 		return
 	}
@@ -251,7 +251,7 @@ func (h *Handler) ServePluginSurface(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var scopes []string
-	if err := json.Unmarshal(installation.GrantedScopes, &scopes); err != nil {
+	if err := json.Unmarshal([]byte(installation.GrantedScopes), &scopes); err != nil {
 		http.NotFound(w, r)
 		return
 	}

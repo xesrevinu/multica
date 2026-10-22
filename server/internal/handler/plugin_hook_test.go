@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/multica-ai/multica/server/internal/service"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/service"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/multica-ai/multica/server/internal/featureflags"

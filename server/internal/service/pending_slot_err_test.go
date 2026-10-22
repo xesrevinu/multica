@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"testing"
-
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // TestPendingSlotTakenErr_RecognizesBothShapes pins the two error shapes that can
@@ -25,12 +23,12 @@ func TestPendingSlotTakenErr_RecognizesBothShapes(t *testing.T) {
 	}{
 		{
 			name: "raw unique violation from the issue-assignee path",
-			err:  &pgconn.PgError{Code: "23505", ConstraintName: "idx_one_pending_task_per_issue_agent_v2"},
+			err:  fmt.Errorf("UNIQUE constraint failed: %s", "idx_one_pending_task_per_issue_agent_v2"),
 			want: true,
 		},
 		{
 			name: "legacy v1 index name during a rolling deploy",
-			err:  &pgconn.PgError{Code: "23505", ConstraintName: "idx_one_pending_task_per_issue_agent"},
+			err:  fmt.Errorf("UNIQUE constraint failed: %s", "idx_one_pending_task_per_issue_agent"),
 			want: true,
 		},
 		{
@@ -45,7 +43,7 @@ func TestPendingSlotTakenErr_RecognizesBothShapes(t *testing.T) {
 		},
 		{
 			name: "a different unique violation must not trigger a reclaim",
-			err:  &pgconn.PgError{Code: "23505", ConstraintName: "agent_workspace_name_unique"},
+			err:  fmt.Errorf("UNIQUE constraint failed: %s", "agent_workspace_name_unique"),
 			want: false,
 		},
 		{

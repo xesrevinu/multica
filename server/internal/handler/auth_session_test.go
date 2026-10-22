@@ -1,13 +1,13 @@
 package handler
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -18,8 +18,8 @@ func TestGetMeSessionFailures(t *testing.T) {
 		err        error
 		wantStatus int
 	}{
-		{"missing user", pgx.ErrNoRows, http.StatusUnauthorized},
-		{"wrapped missing user", fmt.Errorf("lookup: %w", pgx.ErrNoRows), http.StatusUnauthorized},
+		{"missing user", sql.ErrNoRows, http.StatusUnauthorized},
+		{"wrapped missing user", fmt.Errorf("lookup: %w", sql.ErrNoRows), http.StatusUnauthorized},
 		{"database unavailable", errors.New("connection refused"), http.StatusInternalServerError},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

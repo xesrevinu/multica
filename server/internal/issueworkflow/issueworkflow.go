@@ -26,9 +26,10 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
+
 	"github.com/multica-ai/multica/server/internal/issuestatus"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -172,7 +173,7 @@ type Step struct {
 
 // Definition is a decoded workflow.
 type Definition struct {
-	ID        pgtype.UUID
+	ID        string
 	Name      string
 	IsDefault bool
 	Steps     []Step
@@ -199,11 +200,11 @@ type storedStep struct {
 
 // Decode parses a stored workflow row.
 func Decode(row db.IssueWorkflow) (Definition, error) {
-	steps, err := DecodeSteps(row.Steps)
+	steps, err := DecodeSteps([]byte(row.Steps))
 	if err != nil {
 		return Definition{}, err
 	}
-	return Definition{ID: row.ID, Name: row.Name, IsDefault: row.IsDefault, Steps: steps}, nil
+	return Definition{ID: row.ID, Name: row.Name, IsDefault: row.IsDefault != 0, Steps: steps}, nil
 }
 
 // DecodeSteps parses a stored steps array, normalizing a missing handler to
@@ -450,16 +451,16 @@ func ValidateHandoff(s Step, def Definition) error {
 // Querier is the read surface workflow resolution needs.
 type Querier interface {
 	GetIssueWorkflow(ctx context.Context, arg db.GetIssueWorkflowParams) (db.IssueWorkflow, error)
-	GetDefaultIssueWorkflow(ctx context.Context, workspaceID pgtype.UUID) (db.IssueWorkflow, error)
+	GetDefaultIssueWorkflow(ctx context.Context, workspaceID string) (db.IssueWorkflow, error)
 	GetProjectInWorkspace(ctx context.Context, arg db.GetProjectInWorkspaceParams) (db.Project, error)
 }
 
 // DefaultFor loads the workspace Default workflow, or the built-in one when
 // the workspace has not stored its own yet.
-func DefaultFor(ctx context.Context, q Querier, workspaceID pgtype.UUID) (Definition, error) {
+func DefaultFor(ctx context.Context, q Querier, workspaceID string) (Definition, error) {
 	row, err := q.GetDefaultIssueWorkflow(ctx, workspaceID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return Definition{Name: DefaultName, IsDefault: true, Steps: stepsFor(BuiltInDefaultKeys())}, nil
 		}
 		return Definition{}, err
@@ -469,13 +470,13 @@ func DefaultFor(ctx context.Context, q Querier, workspaceID pgtype.UUID) (Defini
 
 // ForProject loads the workflow a project uses. def is nil only for an issue
 // outside any project.
-func ForProject(ctx context.Context, q Querier, workspaceID, projectID pgtype.UUID) (*Definition, db.Project, error) {
-	if !projectID.Valid {
+func ForProject(ctx context.Context, q Querier, workspaceID, projectID string) (*Definition, db.Project, error) {
+	if projectID == "" {
 		return nil, db.Project{}, nil
 	}
 	project, err := q.GetProjectInWorkspace(ctx, db.GetProjectInWorkspaceParams{ID: projectID, WorkspaceID: workspaceID})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, db.Project{}, nil
 		}
 		return nil, db.Project{}, err
@@ -491,12 +492,12 @@ func ForProjectRow(ctx context.Context, q Querier, project db.Project) (*Definit
 	var err error
 	if project.WorkflowID.Valid {
 		var row db.IssueWorkflow
-		row, err = q.GetIssueWorkflow(ctx, db.GetIssueWorkflowParams{ID: project.WorkflowID, WorkspaceID: project.WorkspaceID})
+		row, err = q.GetIssueWorkflow(ctx, db.GetIssueWorkflowParams{ID: project.WorkflowID.String, WorkspaceID: project.WorkspaceID})
 		if err == nil {
 			def, err = Decode(row)
 			return &def, err
 		}
-		if !errors.Is(err, pgx.ErrNoRows) {
+		if !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
 	}
@@ -510,26 +511,26 @@ func ForProjectRow(ctx context.Context, q Querier, project db.Project) (*Definit
 // ResolveHandler turns a step's handler into a concrete assignee for one
 // issue. ok is false when the step does not hand off, or when a relative
 // handler (project lead, creator) has nobody to resolve to.
-func ResolveHandler(step Step, project db.Project, issueCreatorType string, issueCreatorID pgtype.UUID) (assigneeType string, assigneeID pgtype.UUID, ok bool) {
+func ResolveHandler(step Step, project db.Project, issueCreatorType string, issueCreatorID string) (assigneeType string, assigneeID string, ok bool) {
 	switch step.Handler.Type {
 	case HandlerAgent, HandlerSquad, HandlerMember:
-		var id pgtype.UUID
-		if err := id.Scan(step.Handler.ID); err != nil || !id.Valid {
-			return "", pgtype.UUID{}, false
+		id, err := util.ParseUUID(step.Handler.ID)
+		if err != nil {
+			return "", "", false
 		}
 		return step.Handler.Type, id, true
 	case HandlerProjectLead:
 		if !project.LeadType.Valid || !project.LeadID.Valid {
-			return "", pgtype.UUID{}, false
+			return "", "", false
 		}
-		return project.LeadType.String, project.LeadID, true
+		return project.LeadType.String, project.LeadID.String, true
 	case HandlerCreator:
-		if issueCreatorType == "" || !issueCreatorID.Valid {
-			return "", pgtype.UUID{}, false
+		if issueCreatorType == "" || issueCreatorID == "" {
+			return "", "", false
 		}
 		return issueCreatorType, issueCreatorID, true
 	}
-	return "", pgtype.UUID{}, false
+	return "", "", false
 }
 
 // MoveTarget picks the status an issue keeps when it moves into a project

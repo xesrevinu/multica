@@ -7,26 +7,25 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const createPersonalAccessToken = `-- name: CreatePersonalAccessToken :one
 INSERT INTO personal_access_token (user_id, name, token_hash, token_prefix, expires_at)
-VALUES ($1, $2, $3, $4, $5)
+VALUES (?1, ?2, ?3, ?4, ?5)
 RETURNING id, user_id, name, token_hash, token_prefix, expires_at, last_used_at, revoked, created_at
 `
 
 type CreatePersonalAccessTokenParams struct {
-	UserID      pgtype.UUID        `json:"user_id"`
-	Name        string             `json:"name"`
-	TokenHash   string             `json:"token_hash"`
-	TokenPrefix string             `json:"token_prefix"`
-	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	UserID      string         `json:"user_id"`
+	Name        string         `json:"name"`
+	TokenHash   string         `json:"token_hash"`
+	TokenPrefix string         `json:"token_prefix"`
+	ExpiresAt   sql.NullString `json:"expires_at"`
 }
 
 func (q *Queries) CreatePersonalAccessToken(ctx context.Context, arg CreatePersonalAccessTokenParams) (PersonalAccessToken, error) {
-	row := q.db.QueryRow(ctx, createPersonalAccessToken,
+	row := q.db.QueryRowContext(ctx, createPersonalAccessToken,
 		arg.UserID,
 		arg.Name,
 		arg.TokenHash,
@@ -50,48 +49,48 @@ func (q *Queries) CreatePersonalAccessToken(ctx context.Context, arg CreatePerso
 
 const extendPersonalAccessTokenExpiry = `-- name: ExtendPersonalAccessTokenExpiry :one
 UPDATE personal_access_token
-SET expires_at = $1
-WHERE id = $2
+SET expires_at = ?1
+WHERE id = ?2
   AND revoked = FALSE
   AND expires_at IS NOT NULL
   AND expires_at > now()
-  AND expires_at <= $3
+  AND expires_at <= ?3
 RETURNING expires_at
 `
 
 type ExtendPersonalAccessTokenExpiryParams struct {
-	NewExpiresAt     pgtype.Timestamptz `json:"new_expires_at"`
-	ID               pgtype.UUID        `json:"id"`
-	RenewThresholdAt pgtype.Timestamptz `json:"renew_threshold_at"`
+	NewExpiresAt     sql.NullString `json:"new_expires_at"`
+	ID               string         `json:"id"`
+	RenewThresholdAt sql.NullString `json:"renew_threshold_at"`
 }
 
 // In-place renew: only bumps expires_at when the token is still valid
 // (not revoked, not already expired) AND the existing expires_at is
-// still inside the renewal threshold ($3, e.g. now + 7d). Phrasing the
-// CAS this way — "is the row still renewable?" rather than "is the
-// requested new expiry larger than the current one?" — makes concurrent
+// still inside the renewal threshold (arg3, e.g. now + 7d). Phrasing the
+// CAS this way - "is the row still renewable?" rather than "is the
+// requested new expiry larger than the current one?" - makes concurrent
 // renews idempotent: once writer A bumps expires_at past the threshold,
 // writer B's UPDATE matches zero rows (sqlc :one returns pgx.ErrNoRows,
 // which the caller treats as "already renewed"). A naive `expires_at <
-// $2` would still match because two callers race-computing
-// `$2 = now + 90d` produce strictly-different values and the second
-// one's $2 is always greater than the row A just wrote.
-func (q *Queries) ExtendPersonalAccessTokenExpiry(ctx context.Context, arg ExtendPersonalAccessTokenExpiryParams) (pgtype.Timestamptz, error) {
-	row := q.db.QueryRow(ctx, extendPersonalAccessTokenExpiry, arg.NewExpiresAt, arg.ID, arg.RenewThresholdAt)
-	var expires_at pgtype.Timestamptz
+// arg2` would still match because two callers race-computing
+// `arg2 = now + 90d` produce strictly-different values and the second
+// one's arg2 is always greater than the row A just wrote.
+func (q *Queries) ExtendPersonalAccessTokenExpiry(ctx context.Context, arg ExtendPersonalAccessTokenExpiryParams) (sql.NullString, error) {
+	row := q.db.QueryRowContext(ctx, extendPersonalAccessTokenExpiry, arg.NewExpiresAt, arg.ID, arg.RenewThresholdAt)
+	var expires_at sql.NullString
 	err := row.Scan(&expires_at)
 	return expires_at, err
 }
 
 const getPersonalAccessTokenByHash = `-- name: GetPersonalAccessTokenByHash :one
 SELECT id, user_id, name, token_hash, token_prefix, expires_at, last_used_at, revoked, created_at FROM personal_access_token
-WHERE token_hash = $1
+WHERE token_hash = ?1
   AND revoked = FALSE
   AND (expires_at IS NULL OR expires_at > now())
 `
 
 func (q *Queries) GetPersonalAccessTokenByHash(ctx context.Context, tokenHash string) (PersonalAccessToken, error) {
-	row := q.db.QueryRow(ctx, getPersonalAccessTokenByHash, tokenHash)
+	row := q.db.QueryRowContext(ctx, getPersonalAccessTokenByHash, tokenHash)
 	var i PersonalAccessToken
 	err := row.Scan(
 		&i.ID,
@@ -109,13 +108,13 @@ func (q *Queries) GetPersonalAccessTokenByHash(ctx context.Context, tokenHash st
 
 const listPersonalAccessTokensByUser = `-- name: ListPersonalAccessTokensByUser :many
 SELECT id, user_id, name, token_hash, token_prefix, expires_at, last_used_at, revoked, created_at FROM personal_access_token
-WHERE user_id = $1
+WHERE user_id = ?1
   AND revoked = FALSE
 ORDER BY created_at DESC
 `
 
-func (q *Queries) ListPersonalAccessTokensByUser(ctx context.Context, userID pgtype.UUID) ([]PersonalAccessToken, error) {
-	rows, err := q.db.Query(ctx, listPersonalAccessTokensByUser, userID)
+func (q *Queries) ListPersonalAccessTokensByUser(ctx context.Context, userID string) ([]PersonalAccessToken, error) {
+	rows, err := q.db.QueryContext(ctx, listPersonalAccessTokensByUser, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -138,6 +137,9 @@ func (q *Queries) ListPersonalAccessTokensByUser(ctx context.Context, userID pgt
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -147,17 +149,17 @@ func (q *Queries) ListPersonalAccessTokensByUser(ctx context.Context, userID pgt
 const revokePersonalAccessToken = `-- name: RevokePersonalAccessToken :one
 UPDATE personal_access_token
 SET revoked = TRUE
-WHERE id = $1 AND user_id = $2
+WHERE id = ?1 AND user_id = ?2
 RETURNING token_hash
 `
 
 type RevokePersonalAccessTokenParams struct {
-	ID     pgtype.UUID `json:"id"`
-	UserID pgtype.UUID `json:"user_id"`
+	ID     string `json:"id"`
+	UserID string `json:"user_id"`
 }
 
 func (q *Queries) RevokePersonalAccessToken(ctx context.Context, arg RevokePersonalAccessTokenParams) (string, error) {
-	row := q.db.QueryRow(ctx, revokePersonalAccessToken, arg.ID, arg.UserID)
+	row := q.db.QueryRowContext(ctx, revokePersonalAccessToken, arg.ID, arg.UserID)
 	var token_hash string
 	err := row.Scan(&token_hash)
 	return token_hash, err
@@ -166,10 +168,10 @@ func (q *Queries) RevokePersonalAccessToken(ctx context.Context, arg RevokePerso
 const updatePersonalAccessTokenLastUsed = `-- name: UpdatePersonalAccessTokenLastUsed :exec
 UPDATE personal_access_token
 SET last_used_at = now()
-WHERE id = $1
+WHERE id = ?1
 `
 
-func (q *Queries) UpdatePersonalAccessTokenLastUsed(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, updatePersonalAccessTokenLastUsed, id)
+func (q *Queries) UpdatePersonalAccessTokenLastUsed(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, updatePersonalAccessTokenLastUsed, id)
 	return err
 }

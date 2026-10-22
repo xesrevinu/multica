@@ -245,7 +245,7 @@ func TestLegacyV0438HandoffPayloadReachesTaskPrompt(t *testing.T) {
 		t.Fatalf("UpdateIssue with v0.4.38 handoff payload: %d %s", w.Code, w.Body.String())
 	}
 
-	tasks, err := testHandler.Queries.ListTasksByIssue(context.Background(), util.MustParseUUID(issue.ID))
+	tasks, err := testHandler.Queries.ListTasksByIssue(context.Background(), nullString(util.MustParseUUID(issue.ID)))
 	if err != nil {
 		t.Fatalf("ListTasksByIssue: %v", err)
 	}

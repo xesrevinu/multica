@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -18,8 +19,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/logger"
@@ -88,7 +87,7 @@ func (h *Handler) userToResponse(u db.User) UserResponse {
 	// nullable and some row comes back with no default applied.
 	q := u.OnboardingQuestionnaire
 	if len(q) == 0 {
-		q = []byte("{}")
+		q = string([]byte("{}"))
 	}
 	return UserResponse{
 		ID:                      uuidToString(u.ID),
@@ -361,7 +360,7 @@ func (h *Handler) SendCode(w http.ResponseWriter, r *http.Request) {
 
 	// Rate limit: max 1 code per 60 seconds per email
 	latest, err := h.Queries.GetLatestCodeByEmail(r.Context(), email)
-	if err == nil && time.Since(latest.CreatedAt.Time) < 60*time.Second {
+	if err == nil && time.Since(parseDBTime(latest.CreatedAt)) < 60*time.Second {
 		writeError(w, http.StatusTooManyRequests, "please wait before requesting another code")
 		return
 	}
@@ -375,7 +374,7 @@ func (h *Handler) SendCode(w http.ResponseWriter, r *http.Request) {
 	_, err = h.Queries.CreateVerificationCode(r.Context(), db.CreateVerificationCodeParams{
 		Email:     email,
 		Code:      code,
-		ExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(10 * time.Minute), Valid: true},
+		ExpiresAt: time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339Nano),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to store verification code")
@@ -487,7 +486,7 @@ func (h *Handler) GetMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user, err := h.Queries.GetUser(r.Context(), parseUUID(userID))
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		// The credential no longer identifies an existing user. Return the
 		// same terminal status as an expired token so clients can sign in again.
 		writeError(w, http.StatusUnauthorized, "user not found")
@@ -700,7 +699,7 @@ func (h *Handler) GoogleLogin(w http.ResponseWriter, r *http.Request) {
 		needsUpdate = true
 	}
 	if gUser.Picture != "" && !user.AvatarUrl.Valid {
-		newAvatar = pgtype.Text{String: gUser.Picture, Valid: true}
+		newAvatar = sql.NullString{String: gUser.Picture, Valid: true}
 		needsUpdate = true
 	}
 
@@ -812,7 +811,7 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		params.AvatarUrl = pgtype.Text{String: avatarURL, Valid: true}
+		params.AvatarUrl = sql.NullString{String: avatarURL, Valid: true}
 	}
 	if req.Language != nil {
 		lang := strings.TrimSpace(*req.Language)
@@ -820,7 +819,7 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "unsupported language")
 			return
 		}
-		params.Language = pgtype.Text{String: lang, Valid: true}
+		params.Language = sql.NullString{String: lang, Valid: true}
 	}
 	if req.ProfileDescription != nil {
 		// Count runes, not bytes: 2000 chars of Chinese must not be rejected
@@ -831,7 +830,7 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("profile_description exceeds %d characters", MaxProfileDescriptionLen))
 			return
 		}
-		params.ProfileDescription = pgtype.Text{String: desc, Valid: true}
+		params.ProfileDescription = sql.NullString{String: desc, Valid: true}
 	}
 
 	if req.Timezone != nil {
@@ -845,7 +844,7 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		params.Timezone = pgtype.Text{String: tz, Valid: true}
+		params.Timezone = sql.NullString{String: tz, Valid: true}
 	}
 
 	updatedUser, err := h.Queries.UpdateUser(r.Context(), params)

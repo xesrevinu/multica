@@ -2,6 +2,7 @@ package slack
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -9,8 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/slack-go/slack"
 
 	"github.com/multica-ai/multica/server/internal/events"
@@ -60,8 +59,8 @@ type reactionAPI interface {
 type typingState struct {
 	ChannelID      string
 	MessageTS      string
-	InstallationID pgtype.UUID
-	configSnapshot []byte
+	InstallationID string
+	configSnapshot string
 }
 
 // TypingIndicatorQueries is the narrow DB surface the manager needs to resolve
@@ -110,7 +109,7 @@ func NewTypingIndicatorManager(q TypingIndicatorQueries, decrypt Decrypter, logg
 // session. inst is the resolved installation row whose Config blob carries the
 // encrypted bot token. It is synchronous — the Router calls it in a detached,
 // time-bounded goroutine. Errors are logged and swallowed.
-func (m *TypingIndicatorManager) Add(ctx context.Context, inst db.ChannelInstallation, sessionID pgtype.UUID, channelID, messageTS string) {
+func (m *TypingIndicatorManager) Add(ctx context.Context, inst db.ChannelInstallation, sessionID string, channelID, messageTS string) {
 	if channelID == "" || messageTS == "" {
 		return
 	}
@@ -148,7 +147,7 @@ func (m *TypingIndicatorManager) Add(ctx context.Context, inst db.ChannelInstall
 // broadcast after that transaction commits. A binding lookup would miss, and
 // since the state has already been taken here, there would be nothing left to
 // clear from. Installation rows survive the session.
-func (m *TypingIndicatorManager) Clear(ctx context.Context, sessionID pgtype.UUID) {
+func (m *TypingIndicatorManager) Clear(ctx context.Context, sessionID string) {
 	key := util.UUIDToString(sessionID)
 	m.mu.Lock()
 	states := m.states[key]
@@ -189,7 +188,7 @@ func (m *TypingIndicatorManager) Clear(ctx context.Context, sessionID pgtype.UUI
 // apiForInstallation loads an installation row and turns its encrypted config
 // into a reaction client. The decrypted bot token exists only for the life of
 // this call.
-func (m *TypingIndicatorManager) apiForInstallation(ctx context.Context, id pgtype.UUID, snapshot []byte) (reactionAPI, error) {
+func (m *TypingIndicatorManager) apiForInstallation(ctx context.Context, id string, snapshot string) (reactionAPI, error) {
 	config := snapshot
 	inst, err := m.q.GetChannelInstallation(ctx, db.GetChannelInstallationParams{
 		ID:          id,
@@ -198,7 +197,7 @@ func (m *TypingIndicatorManager) apiForInstallation(ctx context.Context, id pgty
 	switch {
 	case err == nil:
 		config = inst.Config
-	case errors.Is(err, pgx.ErrNoRows) && len(snapshot) > 0:
+	case errors.Is(err, sql.ErrNoRows) && len(snapshot) > 0:
 		// The row is gone, which on this path means the runtime teardown
 		// deleted it in the transaction that cancelled these tasks. The
 		// reaction it added is still on the message and the snapshot is the
@@ -280,20 +279,20 @@ func (m *TypingIndicatorManager) handleEvent(e events.Event) {
 // envelope is the only place this function finds the id. The read stays
 // because it costs one type assertion and keeps a hand-built envelope that
 // fills only the map working.
-func chatSessionIDFromEvent(e events.Event) (pgtype.UUID, bool) {
+func chatSessionIDFromEvent(e events.Event) (string, bool) {
 	if e.ChatSessionID != "" {
-		if id, err := util.ParseUUID(e.ChatSessionID); err == nil && id.Valid {
+		if id, err := util.ParseUUID(e.ChatSessionID); err == nil && id != "" {
 			return id, true
 		}
 	}
 	if m, ok := e.Payload.(map[string]any); ok {
 		if s, _ := m["chat_session_id"].(string); s != "" {
-			if id, err := util.ParseUUID(s); err == nil && id.Valid {
+			if id, err := util.ParseUUID(s); err == nil && id != "" {
 				return id, true
 			}
 		}
 	}
-	return pgtype.UUID{}, false
+	return "", false
 }
 
 // isMessageTooOld reports whether a Slack message ts ("<seconds>.<micros>") is

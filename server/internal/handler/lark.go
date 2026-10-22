@@ -47,9 +47,9 @@ func larkInstallationToResponse(row lark.Installation) LarkInstallationResponse 
 		InstallerUserID: uuidToString(row.InstallerUserID),
 		Status:          row.Status,
 		Region:          row.Region,
-		InstalledAt:     row.InstalledAt.Time.UTC().Format(time.RFC3339),
-		CreatedAt:       row.CreatedAt.Time.UTC().Format(time.RFC3339),
-		UpdatedAt:       row.UpdatedAt.Time.UTC().Format(time.RFC3339),
+		InstalledAt:     parseDBTime(row.InstalledAt).UTC().Format(time.RFC3339),
+		CreatedAt:       parseDBTime(row.CreatedAt).UTC().Format(time.RFC3339),
+		UpdatedAt:       parseDBTime(row.UpdatedAt).UTC().Format(time.RFC3339),
 	}
 	if row.TenantKey.Valid {
 		tk := row.TenantKey.String
@@ -426,7 +426,7 @@ func (h *Handler) GetLarkInstallStatus(w http.ResponseWriter, r *http.Request) {
 		ErrorReason:  state.ErrorReason,
 		ErrorMessage: state.ErrorMessage,
 	}
-	if state.InstallationID.Valid {
+	if state.InstallationID != "" {
 		resp.InstallationID = uuidToString(state.InstallationID)
 		// The lark_installation:created event is published by the
 		// RegistrationService at the row-commit point (see

@@ -2,12 +2,12 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/issueworkflow"
 	"github.com/multica-ai/multica/server/internal/service"
@@ -46,7 +46,7 @@ type workflowHandoff struct {
 // move the issue from the step it works on. It returns the handoff that write
 // triggers, or nil.
 func (h *Handler) applyIssueWorkflow(ctx context.Context, prev db.Issue, params *db.UpdateIssueParams, statusExplicit, assigneeTouched, enterOnMove bool, run *db.AgentTaskQueue) (*workflowHandoff, error) {
-	def, project, err := issueworkflow.ForProject(ctx, h.Queries, prev.WorkspaceID, params.ProjectID)
+	def, project, err := issueworkflow.ForProject(ctx, h.Queries, prev.WorkspaceID, params.ProjectID.String)
 	if err != nil || def == nil {
 		return nil, err
 	}
@@ -55,7 +55,7 @@ func (h *Handler) applyIssueWorkflow(ctx context.Context, prev db.Issue, params 
 		target := issueworkflow.MoveTarget(*def, prev.Status, func(key string) string {
 			return issuestatus.Category(ctx, h.Queries, prev.WorkspaceID, key)
 		})
-		params.Status = pgtype.Text{String: target, Valid: true}
+		params.Status = sql.NullString{String: target, Valid: true}
 	}
 	if params.Status.Valid {
 		if err := issueworkflow.CheckStatus(def, params.Status.String); err != nil {
@@ -96,8 +96,8 @@ func (h *Handler) applyIssueWorkflow(ctx context.Context, prev db.Issue, params 
 	if !ok {
 		return nil, nil
 	}
-	params.AssigneeType = pgtype.Text{String: assigneeType, Valid: true}
-	params.AssigneeID = assigneeID
+	params.AssigneeType = sql.NullString{String: assigneeType, Valid: true}
+	params.AssigneeID = nullString(assigneeID)
 	return &workflowHandoff{def: *def, step: step, project: project}, nil
 }
 
@@ -108,7 +108,7 @@ func workflowHandoffPayload(issue db.Issue, hand *workflowHandoff, note string, 
 	out := map[string]string{
 		"workflow": hand.def.Name,
 		"to_type":  issue.AssigneeType.String,
-		"to_id":    uuidToString(issue.AssigneeID),
+		"to_id":    uuidToString(issue.AssigneeID.String),
 		"run":      strconv.FormatBool(runStarted),
 	}
 	if runStarted && note != "" {
@@ -155,7 +155,7 @@ func (h *Handler) agentRunOnIssue(r *http.Request, actorType string, issue db.Is
 		return nil
 	}
 	task, err := h.Queries.GetAgentTask(r.Context(), taskID)
-	if err != nil || task.IssueID != issue.ID {
+	if err != nil || !task.IssueID.Valid || task.IssueID.String != issue.ID {
 		return nil
 	}
 	return &task
@@ -174,10 +174,10 @@ func (h *Handler) handedToAgent(ctx context.Context, prev db.Issue, params db.Up
 	}
 	switch params.AssigneeType.String {
 	case "agent":
-		return uuidToString(params.AssigneeID)
+		return uuidToString(params.AssigneeID.String)
 	case "squad":
-		squad, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{ID: params.AssigneeID, WorkspaceID: prev.WorkspaceID})
-		if err == nil && squad.LeaderID.Valid {
+		squad, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{ID: params.AssigneeID.String, WorkspaceID: prev.WorkspaceID})
+		if err == nil && (squad.LeaderID != "") {
 			return uuidToString(squad.LeaderID)
 		}
 	}
@@ -192,7 +192,7 @@ func (h *Handler) advanceRunStep(ctx context.Context, run *db.AgentTaskQueue, pr
 	}
 	if err := h.Queries.SetTaskWorkflowStep(ctx, db.SetTaskWorkflowStepParams{
 		ID:           run.ID,
-		WorkflowStep: pgtype.Text{String: issue.Status, Valid: true},
+		WorkflowStep: sql.NullString{String: issue.Status, Valid: true},
 	}); err != nil {
 		slog.Warn("workflow: advance run step failed", "task_id", uuidToString(run.ID), "error", err)
 	}
@@ -209,8 +209,8 @@ func (h *Handler) stepMovedError(ctx context.Context, issue db.Issue, step strin
 		Current:         issue.Status,
 		CurrentName:     resolver.Name(ctx, h.Queries, issue.Status),
 	}
-	if last, err := h.Queries.GetLastIssueStatusChange(ctx, issue.ID); err == nil && last.ActorID.Valid {
-		out.MovedBy = h.actorDisplayName(ctx, issue.WorkspaceID, last.ActorType.String, last.ActorID)
+	if last, err := h.Queries.GetLastIssueStatusChange(ctx, nullString(issue.ID)); err == nil && last.ActorID.Valid {
+		out.MovedBy = h.actorDisplayName(ctx, issue.WorkspaceID, last.ActorType.String, last.ActorID.String)
 	}
 	return out
 }
@@ -253,7 +253,7 @@ func (h *Handler) workflowBriefInput(ctx context.Context, issue db.Issue, def is
 
 // actorDisplayName names an agent, squad or member for a brief. It falls back
 // to the actor type so a lookup failure never blocks a handoff.
-func (h *Handler) actorDisplayName(ctx context.Context, wsUUID pgtype.UUID, actorType string, id pgtype.UUID) string {
+func (h *Handler) actorDisplayName(ctx context.Context, wsUUID string, actorType string, id string) string {
 	switch actorType {
 	case "agent":
 		if agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: id, WorkspaceID: wsUUID}); err == nil {
@@ -311,14 +311,14 @@ func (h *Handler) assigneeActiveRuns(ctx context.Context, issue db.Issue) []db.A
 	if assigneeType != "agent" && assigneeType != "squad" {
 		return nil
 	}
-	tasks, err := h.Queries.ListActiveTasksByIssue(ctx, issue.ID)
+	tasks, err := h.Queries.ListActiveTasksByIssue(ctx, nullString(issue.ID))
 	if err != nil {
 		slog.Warn("workflow: list active tasks failed", "issue_id", uuidToString(issue.ID), "error", err)
 		return nil
 	}
 	var out []db.AgentTaskQueue
 	for _, task := range tasks {
-		if (assigneeType == "agent" && task.AgentID == issue.AssigneeID) ||
+		if (assigneeType == "agent" && issue.AssigneeID.Valid && task.AgentID == issue.AssigneeID.String) ||
 			(assigneeType == "squad" && task.SquadID == issue.AssigneeID) {
 			out = append(out, task)
 		}
@@ -332,7 +332,7 @@ func (h *Handler) assigneeActiveRuns(ctx context.Context, issue db.Issue) []db.A
 // step's instructions and commands; any other agent working on the issue
 // gets the observer brief, so it does not move a step it does not own.
 func (h *Handler) claimProjectWorkflow(ctx context.Context, issue db.Issue, task *db.AgentTaskQueue) *TaskProjectWorkflowData {
-	def, project, err := issueworkflow.ForProject(ctx, h.Queries, issue.WorkspaceID, issue.ProjectID)
+	def, project, err := issueworkflow.ForProject(ctx, h.Queries, issue.WorkspaceID, issue.ProjectID.String)
 	if err != nil {
 		slog.Warn("task claim: failed to load project workflow for brief injection",
 			"issue_id", uuidToString(issue.ID), "error", err)
@@ -345,7 +345,7 @@ func (h *Handler) claimProjectWorkflow(ctx context.Context, issue db.Issue, task
 	if !taskRunsForAssignee(issue, task) {
 		in.Observer = true
 		if issue.AssigneeType.Valid && issue.AssigneeID.Valid {
-			in.AssigneeName = h.actorDisplayName(ctx, issue.WorkspaceID, issue.AssigneeType.String, issue.AssigneeID)
+			in.AssigneeName = h.actorDisplayName(ctx, issue.WorkspaceID, issue.AssigneeType.String, issue.AssigneeID.String)
 		}
 	}
 	return &TaskProjectWorkflowData{Brief: issueworkflow.Brief(in)}
@@ -360,7 +360,7 @@ func taskRunsForAssignee(issue db.Issue, task *db.AgentTaskQueue) bool {
 	}
 	switch issue.AssigneeType.String {
 	case "agent":
-		return task.AgentID == issue.AssigneeID
+		return issue.AssigneeID.Valid && task.AgentID == issue.AssigneeID.String
 	case "squad":
 		return task.SquadID == issue.AssigneeID
 	}

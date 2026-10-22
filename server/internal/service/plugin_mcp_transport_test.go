@@ -41,10 +41,10 @@ func mcpInstallation(t *testing.T, approvals string) db.PluginInstallation {
 	return db.PluginInstallation{
 		ID:            testInstallationID(t),
 		WorkspaceID:   testInstallationID(t),
-		Enabled:       true,
-		Manifest:      []byte(mcpHookManifest),
-		GrantedScopes: []byte(`["issues:read","net:tools.example.com"]`),
-		McpApprovals:  []byte(approvals),
+		Enabled:       1,
+		Manifest:      string([]byte(mcpHookManifest)),
+		GrantedScopes: string([]byte(`["issues:read","net:tools.example.com"]`)),
+		McpApprovals:  string([]byte(approvals)),
 	}
 }
 
@@ -113,7 +113,7 @@ func TestApprovedMCPHooksKeepDistinctContributionKeys(t *testing.T) {
 	first.Transport.URL = "https://tools.example.com/first"
 	second.Transport.URL = "https://tools.example.com/second"
 	manifest.Contributes.Hooks = []plugincontract.Hook{first, second}
-	installation.Manifest, err = json.Marshal(manifest)
+	installation.Manifest, err = string(json.Marshal(manifest))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,9 +215,9 @@ func TestMCPConnectionRequiresTheAgentTrigger(t *testing.T) {
 		}]}
 	}`
 	installation := db.PluginInstallation{
-		ID: testInstallationID(t), Enabled: true,
-		Manifest:      []byte(manifest),
-		GrantedScopes: []byte(`["net:tools.example.com"]`),
+		ID: testInstallationID(t), Enabled: 1,
+		Manifest:      string([]byte(manifest)),
+		GrantedScopes: string([]byte(`["net:tools.example.com"]`)),
 	}
 	parsed, err := ParseInstallationManifest(installation)
 	if err != nil {
@@ -228,7 +228,7 @@ func TestMCPConnectionRequiresTheAgentTrigger(t *testing.T) {
 	}
 
 	// Even with its tools approved, it is not offered to an agent.
-	installation.McpApprovals = []byte(`{"toolbox":{"tools":[{"name":"search"}]}}`)
+	installation.McpApprovals = string([]byte(`{"toolbox":{"tools":[{"name":"search"}]}}`))
 	if connections := mcpConnectionsFor(installation); len(connections) != 0 {
 		t.Fatalf("a manual-only hook produced %d connections, want none", len(connections))
 	}

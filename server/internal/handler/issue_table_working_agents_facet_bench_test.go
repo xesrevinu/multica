@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/testutil"
 )
 
@@ -43,9 +42,9 @@ func seedWorkingAgentsFacetBenchmark(tb testutil.TB, agentCount, runningCount in
 	tb.Helper()
 	workspaceID := dbfx.Workspace(tb, "working facet benchmark", fmt.Sprintf("working-facet-bench-%d", time.Now().UnixNano()))
 	dbfx.Member(tb, workspaceID, testUserID, "owner")
-	fx := testutil.New(testPool, workspaceID, testUserID)
+	fx := testutil.New(testSQLite, workspaceID, testUserID)
 	projectID := fx.Project(tb, "working facet benchmark")
-	ids := make([]pgtype.UUID, 0, agentCount)
+	ids := make([]string, 0, agentCount)
 	want := map[string]int64{}
 	for n := range agentCount {
 		id := fx.Agent(tb, fmt.Sprintf("working facet benchmark %d", n), "")

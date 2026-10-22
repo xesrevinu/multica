@@ -2,14 +2,13 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/entitlement"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -77,11 +76,11 @@ func validAutopilotExecutionSource(source string) bool {
 	}
 }
 
-func (s *AutopilotService) quotaPolicy(ctx context.Context, workspaceID pgtype.UUID) (autopilotQuotaPolicy, bool) {
-	if s.Entitlements == nil || !workspaceID.Valid {
+func (s *AutopilotService) quotaPolicy(ctx context.Context, workspaceID string) (autopilotQuotaPolicy, bool) {
+	if s.Entitlements == nil || (workspaceID == "") {
 		return autopilotQuotaPolicy{}, false
 	}
-	decision := s.Entitlements.Gate(ctx, uuid.UUID(workspaceID.Bytes), entitlement.GateAutopilotRuns)
+	decision := s.Entitlements.Gate(ctx, uuid.MustParse(workspaceID), entitlement.GateAutopilotRuns)
 	gate := decision.Gate
 	if gate.Action == entitlement.ActionOff {
 		return autopilotQuotaPolicy{}, false
@@ -110,7 +109,7 @@ func (s *AutopilotService) quotaPolicy(ctx context.Context, workspaceID pgtype.U
 // self-hosted deployment never touches the quota tables.
 func (s *AutopilotService) createAutopilotRunWithQuota(
 	ctx context.Context,
-	workspaceID pgtype.UUID,
+	workspaceID string,
 	source, idempotencyKey string,
 	params db.CreateAutopilotRunParams,
 ) (db.AutopilotRun, bool, error) {
@@ -123,16 +122,16 @@ func (s *AutopilotService) createAutopilotRunWithQuota(
 		return run, false, err
 	}
 
-	tx, err := s.TxStarter.Begin(ctx)
+	tx, err := s.TxStarter.BeginTx(ctx, nil)
 	if err != nil {
 		return db.AutopilotRun{}, false, fmt.Errorf("begin quota admission: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	qtx := s.Queries.WithTx(tx)
 	periodArgs := db.EnsureAutopilotQuotaPeriodParams{
 		WorkspaceID: workspaceID,
-		PeriodStart: pgtype.Timestamptz{Time: policy.periodStart, Valid: true},
-		PeriodEnd:   pgtype.Timestamptz{Time: policy.periodEnd, Valid: true},
+		PeriodStart: nullTime(policy.periodStart, true).String,
+		PeriodEnd:   nullTime(policy.periodEnd, true).String,
 	}
 	period, err := qtx.EnsureAutopilotQuotaPeriod(ctx, periodArgs)
 	if err != nil {
@@ -146,8 +145,8 @@ func (s *AutopilotService) createAutopilotRunWithQuota(
 		IdempotencyKey: idempotencyKey,
 	})
 	if err == nil {
-		run, runErr := qtx.GetAutopilotRunByQuotaReservation(ctx, existing.ID)
-		if errors.Is(runErr, pgx.ErrNoRows) && existing.State == "reserved" {
+		run, runErr := qtx.GetAutopilotRunByQuotaReservation(ctx, nullString(existing.ID))
+		if errors.Is(runErr, sql.ErrNoRows) && existing.State == "reserved" {
 			// The reservation/run insert normally commits atomically. Recover a
 			// manually removed or otherwise orphaned reserved row so the stable
 			// idempotency key does not wedge every retry for the whole period.
@@ -155,31 +154,31 @@ func (s *AutopilotService) createAutopilotRunWithQuota(
 				return db.AutopilotRun{}, false, fmt.Errorf("release orphaned idempotency reservation: %w", releaseErr)
 			}
 			period.ReservedCount--
-			err = pgx.ErrNoRows // continue through the normal fresh-reservation path
+			err = sql.ErrNoRows // continue through the normal fresh-reservation path
 		} else if runErr != nil {
 			return db.AutopilotRun{}, false, fmt.Errorf("load idempotent quota run: %w", runErr)
 		} else {
-			if err := tx.Commit(ctx); err != nil {
+			if err := tx.Commit(); err != nil {
 				return db.AutopilotRun{}, false, fmt.Errorf("commit idempotent quota admission: %w", err)
 			}
 			s.recordAutopilotQuotaDecision(policy.action, source, "reused")
 			return run, true, nil
 		}
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sql.ErrNoRows) {
 		return db.AutopilotRun{}, false, fmt.Errorf("lookup quota reservation: %w", err)
 	}
 
 	wouldBlock := period.UsedCount+period.ReservedCount >= policy.limit
 	if wouldBlock && policy.action == entitlement.ActionEnforce {
 		period, err = qtx.IncrementAutopilotQuotaBlocked(ctx, db.IncrementAutopilotQuotaBlockedParams{
-			Source: source, WorkspaceID: workspaceID,
+			Source: nullString(source), WorkspaceID: workspaceID,
 			PeriodStart: periodArgs.PeriodStart, PeriodEnd: periodArgs.PeriodEnd,
 		})
 		if err != nil {
 			return db.AutopilotRun{}, false, fmt.Errorf("record blocked quota admission: %w", err)
 		}
-		if err := tx.Commit(ctx); err != nil {
+		if err := tx.Commit(); err != nil {
 			return db.AutopilotRun{}, false, fmt.Errorf("commit blocked quota admission: %w", err)
 		}
 		// Inbox delivery is presentation-only. It runs after the admission
@@ -207,12 +206,12 @@ func (s *AutopilotService) createAutopilotRunWithQuota(
 	}); err != nil {
 		return db.AutopilotRun{}, false, fmt.Errorf("increment reserved quota: %w", err)
 	}
-	params.QuotaReservationID = reservation.ID
+	params.QuotaReservationID = nullString(reservation.ID)
 	run, err := qtx.CreateAutopilotRun(ctx, params)
 	if err != nil {
 		return db.AutopilotRun{}, false, fmt.Errorf("create quota-linked run: %w", err)
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return db.AutopilotRun{}, false, fmt.Errorf("commit quota admission: %w", err)
 	}
 	result := "admitted"
@@ -229,8 +228,8 @@ func (s *AutopilotService) recordAutopilotQuotaDecision(action entitlement.Actio
 	}
 }
 
-func settleAutopilotQuota(ctx context.Context, q *db.Queries, reservationID pgtype.UUID, consume bool) (bool, error) {
-	if !reservationID.Valid {
+func settleAutopilotQuota(ctx context.Context, q *db.Queries, reservationID string, consume bool) (bool, error) {
+	if reservationID == "" {
 		return false, nil
 	}
 	var err error
@@ -239,7 +238,7 @@ func settleAutopilotQuota(ctx context.Context, q *db.Queries, reservationID pgty
 	} else {
 		_, err = q.ReleaseAutopilotQuotaReservation(ctx, reservationID)
 	}
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil // terminal replay: reservation already finalized
 	}
 	return err == nil, err
@@ -252,7 +251,7 @@ func (s *AutopilotService) completeAutopilotRun(ctx context.Context, params db.U
 		RunID:          params.ID,
 		Consume:        true,
 	})
-	return autopilotRunFromTerminalRow(row), err
+	return row, err
 }
 
 func (s *AutopilotService) failAutopilotRun(ctx context.Context, params db.UpdateAutopilotRunFailedParams) (db.AutopilotRun, error) {
@@ -262,7 +261,7 @@ func (s *AutopilotService) failAutopilotRun(ctx context.Context, params db.Updat
 		ReasonCode:     params.ReasonCode,
 		RunID:          params.ID,
 	})
-	return autopilotRunFromTerminalRow(row), err
+	return row, err
 }
 
 func (s *AutopilotService) skipAutopilotRun(ctx context.Context, params db.UpdateAutopilotRunSkippedParams) (db.AutopilotRun, error) {
@@ -272,19 +271,7 @@ func (s *AutopilotService) skipAutopilotRun(ctx context.Context, params db.Updat
 		ReasonCode:     params.ReasonCode,
 		RunID:          params.ID,
 	})
-	return autopilotRunFromTerminalRow(row), err
-}
-
-func autopilotRunFromTerminalRow(row db.UpdateAutopilotRunTerminalWithQuotaRow) db.AutopilotRun {
-	return db.AutopilotRun{
-		ID: row.ID, AutopilotID: row.AutopilotID, TriggerID: row.TriggerID,
-		Source: row.Source, Status: row.Status, IssueID: row.IssueID, TaskID: row.TaskID,
-		TriggeredAt: row.TriggeredAt, CompletedAt: row.CompletedAt,
-		FailureReason: row.FailureReason, TriggerPayload: row.TriggerPayload,
-		Result: row.Result, CreatedAt: row.CreatedAt, SquadID: row.SquadID,
-		PlannedAt: row.PlannedAt, WebhookDeliveryID: row.WebhookDeliveryID,
-		QuotaReservationID: row.QuotaReservationID, ReasonCode: row.ReasonCode,
-	}
+	return row, err
 }
 
 func (s *AutopilotService) recoverPartialAutopilotRun(ctx context.Context, run db.AutopilotRun) (bool, error) {
@@ -294,22 +281,22 @@ func (s *AutopilotService) recoverPartialAutopilotRun(ctx context.Context, run d
 
 // FailAutopilotRunsByIssue keeps create_issue consumption immutable while
 // releasing any still-reserved run_only slots before deletion clears issue_id.
-func (s *AutopilotService) FailAutopilotRunsByIssue(ctx context.Context, issueID pgtype.UUID) error {
-	_, err := s.Queries.FailAutopilotRunsByIssue(ctx, issueID)
+func (s *AutopilotService) FailAutopilotRunsByIssue(ctx context.Context, issueID string) error {
+	_, err := s.Queries.FailAutopilotRunsByIssue(ctx, nullString(issueID))
 	return err
 }
 
-func (s *AutopilotService) AutopilotQuotaUsage(ctx context.Context, workspaceID pgtype.UUID) (AutopilotQuotaUsage, error) {
+func (s *AutopilotService) AutopilotQuotaUsage(ctx context.Context, workspaceID string) (AutopilotQuotaUsage, error) {
 	policy, enabled := s.quotaPolicy(ctx, workspaceID)
 	if !enabled {
 		return AutopilotQuotaUsage{Enabled: false}, nil
 	}
 	period, err := s.Queries.GetAutopilotQuotaPeriod(ctx, db.GetAutopilotQuotaPeriodParams{
 		WorkspaceID: workspaceID,
-		PeriodStart: pgtype.Timestamptz{Time: policy.periodStart, Valid: true},
-		PeriodEnd:   pgtype.Timestamptz{Time: policy.periodEnd, Valid: true},
+		PeriodStart: nullTime(policy.periodStart, true).String,
+		PeriodEnd:   nullTime(policy.periodEnd, true).String,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		period.UsedCount = 0
 		period.ReservedCount = 0
 	} else if err != nil {
@@ -317,7 +304,7 @@ func (s *AutopilotService) AutopilotQuotaUsage(ctx context.Context, workspaceID 
 	}
 	blockedCounts := make(map[string]int64)
 	if len(period.BlockedCounts) > 0 {
-		if err := json.Unmarshal(period.BlockedCounts, &blockedCounts); err != nil {
+		if err := json.Unmarshal([]byte(period.BlockedCounts), &blockedCounts); err != nil {
 			return AutopilotQuotaUsage{}, fmt.Errorf("decode autopilot quota blocked counts: %w", err)
 		}
 		if blockedCounts == nil {
@@ -355,18 +342,18 @@ func (s *AutopilotService) ReconcileAutopilotQuotaReservations(
 		return 0, nil
 	}
 	reservations, err := s.Queries.ListRecoverableAutopilotQuotaReservations(ctx, db.ListRecoverableAutopilotQuotaReservationsParams{
-		TerminalCreatedBefore: pgtype.Timestamptz{Time: terminalCreatedBefore.UTC(), Valid: true},
-		PartialCreatedBefore:  pgtype.Timestamptz{Time: partialCreatedBefore.UTC(), Valid: true},
-		RowLimit:              limit,
+		TerminalCreatedBefore: nullTime(terminalCreatedBefore.UTC(), true).String,
+		PartialCreatedBefore:  nullTime(partialCreatedBefore.UTC(), true).String,
+		RowLimit:              int64(limit),
 	})
 	if err != nil {
 		return 0, fmt.Errorf("list recoverable quota reservations: %w", err)
 	}
 	settled := 0
 	for _, reservation := range reservations {
-		run, runErr := s.Queries.GetAutopilotRunByQuotaReservation(ctx, reservation.ID)
+		run, runErr := s.Queries.GetAutopilotRunByQuotaReservation(ctx, nullString(reservation.ID))
 		switch {
-		case errors.Is(runErr, pgx.ErrNoRows):
+		case errors.Is(runErr, sql.ErrNoRows):
 			changed, err := settleAutopilotQuota(ctx, s.Queries, reservation.ID, false)
 			if err != nil {
 				return settled, fmt.Errorf("release orphan quota reservation: %w", err)

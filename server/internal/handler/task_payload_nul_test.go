@@ -256,7 +256,7 @@ func TestPostgresRejectsUnsanitizedTaskPayloads(t *testing.T) {
 		}
 		if _, err := testHandler.Queries.CompleteAgentTask(ctx, db.CompleteAgentTaskParams{
 			ID:     util.MustParseUUID(taskID),
-			Result: raw,
+			Result: nullString(string(raw)),
 		}); err == nil {
 			t.Fatal("PostgreSQL accepted a JSONB payload containing a NUL escape")
 		}
@@ -282,7 +282,7 @@ func TestPostgresRejectsUnsanitizedTaskPayloads(t *testing.T) {
 			TaskID: util.MustParseUUID(taskID),
 			Seq:    99,
 			Type:   "tool_use",
-			Input:  raw,
+			Input:  nullString(string(raw)),
 		}); err == nil {
 			t.Fatal("PostgreSQL accepted nested JSONB containing a NUL escape")
 		}

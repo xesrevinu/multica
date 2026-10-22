@@ -2,8 +2,8 @@ package lark
 
 import (
 	"context"
+	"database/sql"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -33,13 +33,13 @@ func (l *dbAuditLogger) RecordDrop(ctx context.Context, p AuditDropParams) error
 	})
 }
 
-// textIfNonEmpty returns a Valid pgtype.Text for non-empty strings and
-// a NULL pgtype.Text otherwise. Avoids storing literal empty strings
+// textIfNonEmpty returns a Valid sql.NullString for non-empty strings and
+// a NULL sql.NullString otherwise. Avoids storing literal empty strings
 // in the audit table, which would mask the difference between "the
 // event lacked this field" and "the field was deliberately empty".
-func textIfNonEmpty(s string) pgtype.Text {
+func textIfNonEmpty(s string) sql.NullString {
 	if s == "" {
-		return pgtype.Text{}
+		return sql.NullString{}
 	}
-	return pgtype.Text{String: s, Valid: true}
+	return sql.NullString{String: s, Valid: true}
 }

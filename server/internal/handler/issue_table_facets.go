@@ -1,7 +1,7 @@
 package handler
 
 import (
-	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,8 +10,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -140,7 +138,7 @@ func (h *Handler) issueTableBaseFacetQuery(
 FROM issue i
 WHERE %s
 GROUP BY GROUPING SETS (%s)`, strings.Join(markerCases, " "), strings.Join(valueCases, " "), base.where, strings.Join(groupingSets, ", "))
-	rows, err := h.DB.Query(r.Context(), query, base.args...)
+	rows, err := h.DB.QueryContext(r.Context(), query, base.args...)
 	if err != nil {
 		slog.Warn("ListIssueTableFacets batch query failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeIssueTableQueryFailure(w, r, "failed to list table facets")
@@ -247,7 +245,7 @@ GROUP BY r.agent_id`, len(compiled.args)+1, compiled.where)
 			WorkspaceID: compiled.workspaceID,
 		})
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+			if errors.Is(err, sql.ErrNoRows) {
 				writeIssueTableUnsupportedGroup(w, "property_not_found", "The faceted property no longer exists.")
 				return response, false
 			}
@@ -288,7 +286,7 @@ GROUP BY r.agent_id`, len(compiled.args)+1, compiled.where)
 		return response, false
 	}
 
-	rows, err := h.DB.Query(r.Context(), query, compiled.args...)
+	rows, err := h.DB.QueryContext(r.Context(), query, compiled.args...)
 	if err != nil {
 		slog.Warn("ListIssueTableFacets query failed", append(logger.RequestAttrs(r), "facet", issueTableFacetIdentity(facet), "error", err)...)
 		writeIssueTableQueryFailure(w, r, "failed to list table facets")
@@ -321,8 +319,8 @@ GROUP BY r.agent_id`, len(compiled.args)+1, compiled.where)
 func (h *Handler) issueTableWorkingAgentIDs(
 	w http.ResponseWriter,
 	r *http.Request,
-	workspaceUUID pgtype.UUID,
-) ([]pgtype.UUID, bool) {
+	workspaceUUID string,
+) ([]string, bool) {
 	workspaceID := util.UUIDToString(workspaceUUID)
 	member, ok := h.workspaceMember(w, r, workspaceID)
 	if !ok {
@@ -339,7 +337,7 @@ func (h *Handler) issueTableWorkingAgentIDs(
 		writeIssueTableQueryFailure(w, r, "failed to resolve agent access")
 		return nil, false
 	}
-	ids := make([]pgtype.UUID, 0, len(agents))
+	ids := make([]string, 0, len(agents))
 	for _, agent := range agents {
 		if actorType == "member" && !memberAllowedToViewAgent(agent, targetsByAgent[uuidToString(agent.ID)], actorID, member.Role) {
 			continue
@@ -373,7 +371,7 @@ func (h *Handler) ListIssueTableFacets(w http.ResponseWriter, r *http.Request) {
 	committed := false
 	defer func() {
 		if !committed {
-			_ = tx.Rollback(context.Background())
+			_ = tx.Rollback()
 		}
 	}()
 	h = snapshot
@@ -427,7 +425,7 @@ func (h *Handler) ListIssueTableFacets(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if includeTotal && !totalResolved {
-		if err := h.DB.QueryRow(r.Context(), fmt.Sprintf("SELECT COUNT(*)::bigint FROM issue i WHERE %s", base.where), base.args...).Scan(&total); err != nil {
+		if err := h.DB.QueryRowContext(r.Context(), fmt.Sprintf("SELECT COUNT(*)::bigint FROM issue i WHERE %s", base.where), base.args...).Scan(&total); err != nil {
 			slog.Warn("ListIssueTableFacets total failed", append(logger.RequestAttrs(r), "error", err)...)
 			writeIssueTableQueryFailure(w, r, "failed to count table facets")
 			return
@@ -446,7 +444,7 @@ func (h *Handler) ListIssueTableFacets(w http.ResponseWriter, r *http.Request) {
 		Total:            total,
 		Facets:           responses,
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		slog.Warn("ListIssueTableFacets snapshot commit failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeIssueTableQueryFailure(w, r, "failed to finish table query")
 		return

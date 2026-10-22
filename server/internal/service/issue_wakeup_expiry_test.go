@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -34,7 +33,7 @@ func TestIssueWakeupExpiryValidation(t *testing.T) {
 	}
 	in := WakeupInput{Kind: "event", ExpiresInSeconds: 3600}
 	at, seconds, err := s.Expiry(&in, now)
-	if err != nil || !at.Time.Equal(now.Add(time.Hour)) || seconds.Int64 != 3600 || in.OnTimeout != "end" {
+	if err != nil || !asTime(at).Equal(now.Add(time.Hour)) || seconds.Int64 != 3600 || in.OnTimeout != "end" {
 		t.Fatalf("relative wait: %v %v %v %q", at, seconds, err, in.OnTimeout)
 	}
 	in = WakeupInput{Kind: "every"}
@@ -58,7 +57,7 @@ func TestIssueWakeupTimeoutWakesOnceAndEnds(t *testing.T) {
 		t.Fatal("dispatched before the deadline")
 	}
 	f.Exec(t, "UPDATE issue_wakeup SET expires_at=now()-interval '1 second' WHERE id=$1", w.ID)
-	ready, err := f.q.ListDueWakeups(ctx, db.ListDueWakeupsParams{WorkspaceIds: []pgtype.UUID{parseTestUUID(t, f.WorkspaceID)}, SkipIds: []pgtype.UUID{}, RowLimit: 100})
+	ready, err := f.q.ListDueWakeups(ctx, db.ListDueWakeupsParams{WorkspaceIds: []string{parseTestUUID(t, f.WorkspaceID)}, SkipIds: []string{}, RowLimit: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,14 +71,14 @@ func TestIssueWakeupTimeoutWakesOnceAndEnds(t *testing.T) {
 	wakeDispatch(t, s, w)
 	wakeDispatch(t, s, w)
 	var note string
-	if err = f.Pool.QueryRow(ctx, "SELECT handoff_note FROM agent_task_queue WHERE context->>'wakeup_id'=$1", util.UUIDToString(w.ID)).Scan(&note); err != nil {
+	if err = f.Pool.QueryRowContext(ctx, "SELECT handoff_note FROM agent_task_queue WHERE context->>'wakeup_id'=$1", util.UUIDToString(w.ID)).Scan(&note); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(note, "wakeup.timeout") {
 		t.Fatalf("timeout fact missing from the prompt: %s", note)
 	}
 	got, _ := f.q.GetIssueWakeup(ctx, db.GetIssueWakeupParams{ID: w.ID, WorkspaceID: w.WorkspaceID})
-	if got.Enabled || !got.TimedOutAt.Valid || got.DisabledAt.Valid {
+	if (got.Enabled != 0) || !got.TimedOutAt.Valid || got.DisabledAt.Valid {
 		t.Fatalf("timed-out rule state: %+v", got)
 	}
 	// Later events do not reach a timed-out rule.
@@ -90,11 +89,11 @@ func TestIssueWakeupTimeoutWakesOnceAndEnds(t *testing.T) {
 
 	// Enabling again restarts the relative wait from now.
 	f.Exec(t, "UPDATE agent_task_queue SET status='completed',completed_at=now() WHERE context->>'wakeup_id'=$1", util.UUIDToString(w.ID))
-	again, err := s.Enable(ctx, issue, parseTestUUID(t, f.UserID), pgtype.UUID{}, w.ID, WakeupEnableInput{Revision: got.Revision, Rearm: true})
+	again, err := s.Enable(ctx, issue, parseTestUUID(t, f.UserID), "", w.ID, WakeupEnableInput{Revision: got.Revision, Rearm: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !again.Enabled || again.TimedOutAt.Valid || !again.ExpiresAt.Time.After(time.Now().Add(59*time.Minute)) {
+	if (again.Enabled == 0) || again.TimedOutAt.Valid || !asTime(again.ExpiresAt).After(time.Now().Add(59*time.Minute)) {
 		t.Fatalf("rearm kept the old deadline: %+v", again)
 	}
 }
@@ -117,7 +116,7 @@ func TestIssueWakeupTimeoutEndsQuietly(t *testing.T) {
 				t.Fatal("on_timeout=end must not start a run")
 			}
 			got, _ := f.q.GetIssueWakeup(ctx, db.GetIssueWakeupParams{ID: w.ID, WorkspaceID: w.WorkspaceID})
-			if got.Enabled || !got.TimedOutAt.Valid || got.NextFireAt.Valid {
+			if (got.Enabled != 0) || !got.TimedOutAt.Valid || got.NextFireAt.Valid {
 				t.Fatalf("rule did not end: %+v", got)
 			}
 		})
@@ -137,7 +136,7 @@ func TestIssueWakeupPastAbsoluteDeadlineCannotBeEnabled(t *testing.T) {
 	f.Exec(t, "UPDATE issue_wakeup SET expires_at=now()-interval '1 second' WHERE id=$1", w.ID)
 	wakeDispatch(t, s, w)
 	got, _ := f.q.GetIssueWakeup(ctx, db.GetIssueWakeupParams{ID: w.ID, WorkspaceID: w.WorkspaceID})
-	if _, err := s.Enable(ctx, issue, parseTestUUID(t, f.UserID), pgtype.UUID{}, w.ID, WakeupEnableInput{Revision: got.Revision}); !errors.Is(err, ErrWakeupInput) {
+	if _, err := s.Enable(ctx, issue, parseTestUUID(t, f.UserID), "", w.ID, WakeupEnableInput{Revision: got.Revision}); !errors.Is(err, ErrWakeupInput) {
 		t.Fatalf("re-enabled past its deadline: %v", err)
 	}
 }

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,7 +11,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/channelmedia"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -19,7 +19,7 @@ func TestMergeIssueChannelMediaDescriptionProtectsLegacyClient(t *testing.T) {
 	const id = "22222222-2222-4222-8222-222222222222"
 	block := channelmedia.Block(id, "diagram.png", true)
 	current := channelmedia.Append("Original", block)
-	attachmentID := pgtype.UUID{Bytes: uuid.MustParse(id), Valid: true}
+	attachmentID := uuid.MustParse(id).String()
 
 	got := mergeIssueChannelMediaDescription(current, "Original with local edit", nil, []db.Attachment{{
 		ID: attachmentID, Filename: "diagram.png", ContentType: "image/png",
@@ -33,7 +33,7 @@ func TestMergeIssueChannelMediaDescriptionProtectsLegacyClient(t *testing.T) {
 func TestMergeIssueChannelMediaDescriptionAllowsKnownMediaDeletion(t *testing.T) {
 	const id = "33333333-3333-4333-8333-333333333333"
 	current := channelmedia.Append("Original", channelmedia.Block(id, "diagram.png", true))
-	attachmentID := pgtype.UUID{Bytes: uuid.MustParse(id), Valid: true}
+	attachmentID := uuid.MustParse(id).String()
 
 	got := mergeIssueChannelMediaDescription(current, "Original without image", &current, []db.Attachment{{
 		ID: attachmentID, Filename: "diagram.png", ContentType: "image/png",
@@ -46,7 +46,7 @@ func TestMergeIssueChannelMediaDescriptionAllowsKnownMediaDeletion(t *testing.T)
 func TestMergeIssueChannelMediaDescriptionRestoresMarkerForRetainedLink(t *testing.T) {
 	const id = "55555555-5555-4555-8555-555555555555"
 	current := channelmedia.Append("Original", channelmedia.Block(id, "diagram.png", true))
-	attachmentID := pgtype.UUID{Bytes: uuid.MustParse(id), Valid: true}
+	attachmentID := uuid.MustParse(id).String()
 	incoming := channelmedia.Append("Local edit", "![]("+channelmedia.DownloadPath(id)+")")
 
 	got := mergeIssueChannelMediaDescription(current, incoming, &current, []db.Attachment{{
@@ -68,15 +68,15 @@ func TestMergeIssueChannelMediaDescriptionDoesNotResurrectDeletedAttachment(t *t
 }
 
 func TestRefreshUntouchedNullableIssueParamsKeepsValidatedAssigneePair(t *testing.T) {
-	oldID := pgtype.UUID{Bytes: uuid.MustParse("77777777-7777-4777-8777-777777777777"), Valid: true}
-	concurrentID := pgtype.UUID{Bytes: uuid.MustParse("88888888-8888-4888-8888-888888888888"), Valid: true}
+	oldID := uuid.MustParse("77777777-7777-4777-8777-777777777777").String()
+	concurrentID := uuid.MustParse("88888888-8888-4888-8888-888888888888").String()
 	params := db.UpdateIssueParams{
-		AssigneeType: pgtype.Text{String: "member", Valid: true},
-		AssigneeID:   oldID,
+		AssigneeType: sql.NullString{String: "member", Valid: true},
+		AssigneeID:   nullString(oldID),
 	}
 	current := db.Issue{
-		AssigneeType: pgtype.Text{String: "agent", Valid: true},
-		AssigneeID:   concurrentID,
+		AssigneeType: sql.NullString{String: "agent", Valid: true},
+		AssigneeID:   nullString(concurrentID),
 	}
 
 	refreshUntouchedNullableIssueParams(&params, current, map[string]json.RawMessage{
@@ -233,7 +233,7 @@ func TestDescriptionUpdateLockSerializesLaterChannelMediaAppend(t *testing.T) {
 		t.Skip("requires test database")
 	}
 	ctx := context.Background()
-	var issueID pgtype.UUID
+	var issueID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO issue (
 			workspace_id, title, description, status, priority,
@@ -247,14 +247,14 @@ func TestDescriptionUpdateLockSerializesLaterChannelMediaAppend(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
 	})
-	workspaceID := pgtype.UUID{Bytes: uuid.MustParse(testWorkspaceID), Valid: true}
+	workspaceID := uuid.MustParse(testWorkspaceID).String()
 
 	descriptionTx, err := testPool.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin description transaction: %v", err)
 	}
 	defer descriptionTx.Rollback(ctx)
-	if _, err := db.New(testPool).WithTx(descriptionTx).LockIssueForDescriptionUpdate(ctx, db.LockIssueForDescriptionUpdateParams{
+	if _, err := db.New(testSQLite).WithTx(descriptionTx).LockIssueForDescriptionUpdate(ctx, db.LockIssueForDescriptionUpdateParams{
 		ID: issueID, WorkspaceID: workspaceID,
 	}); err != nil {
 		t.Fatalf("lock issue for description update: %v", err)
@@ -274,7 +274,7 @@ func TestDescriptionUpdateLockSerializesLaterChannelMediaAppend(t *testing.T) {
 	}
 	bindResult := make(chan error, 1)
 	go func() {
-		_, lockErr := db.New(testPool).WithTx(bindTx).LockIssueForChannelMediaBind(context.Background(), db.LockIssueForChannelMediaBindParams{
+		_, lockErr := db.New(testSQLite).WithTx(bindTx).LockIssueForChannelMediaBind(context.Background(), db.LockIssueForChannelMediaBindParams{
 			ID: issueID, WorkspaceID: workspaceID,
 		})
 		bindResult <- lockErr
@@ -307,8 +307,8 @@ func TestDescriptionUpdateLockSerializesLaterChannelMediaAppend(t *testing.T) {
 
 	const attachmentID = "44444444-4444-4444-8444-444444444444"
 	block := channelmedia.Block(attachmentID, "diagram.png", true)
-	if _, err := db.New(testPool).WithTx(bindTx).MaterializeIssueChannelMediaMarkdown(ctx, db.MaterializeIssueChannelMediaMarkdownParams{
-		ID: issueID, WorkspaceID: workspaceID, Markdown: pgtype.Text{String: block, Valid: true},
+	if _, err := db.New(testSQLite).WithTx(bindTx).MaterializeIssueChannelMediaMarkdown(ctx, db.MaterializeIssueChannelMediaMarkdownParams{
+		ID: issueID, WorkspaceID: workspaceID, Markdown: sql.NullString{String: block, Valid: true},
 	}); err != nil {
 		t.Fatalf("append channel media after description commit: %v", err)
 	}

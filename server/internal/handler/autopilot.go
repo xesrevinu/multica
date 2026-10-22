@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,8 +16,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/service"
@@ -224,7 +223,7 @@ func (h *Handler) triggerToResponse(t db.AutopilotTrigger) AutopilotTriggerRespo
 		ID:             uuidToString(t.ID),
 		AutopilotID:    uuidToString(t.AutopilotID),
 		Kind:           t.Kind,
-		Enabled:        t.Enabled,
+		Enabled:        int64ToBool(t.Enabled),
 		CronExpression: textToPtr(t.CronExpression),
 		Timezone:       textToPtr(t.Timezone),
 		NextRunAt:      timestampToPtr(t.NextRunAt),
@@ -251,9 +250,9 @@ func (h *Handler) triggerToResponse(t db.AutopilotTrigger) AutopilotTriggerRespo
 			hint := signingSecretHint(t.SigningSecret.String)
 			resp.SigningSecretHint = &hint
 		}
-		if len(t.EventFilters) > 0 {
+		if t.EventFilters.Valid && t.EventFilters.String != "" {
 			var filters []WebhookEventFilter
-			if err := json.Unmarshal(t.EventFilters, &filters); err == nil {
+			if err := json.Unmarshal([]byte(t.EventFilters.String), &filters); err == nil {
 				resp.EventFilters = filters
 			}
 			// On unmarshal error we deliberately drop the field instead of
@@ -318,12 +317,12 @@ func webhookPathForToken(token string) string {
 
 func runToResponse(r db.AutopilotRun) AutopilotRunResponse {
 	var payload any
-	if r.TriggerPayload != nil {
-		json.Unmarshal(r.TriggerPayload, &payload)
+	if r.TriggerPayload.Valid {
+		json.Unmarshal([]byte(r.TriggerPayload.String), &payload)
 	}
 	var result any
-	if r.Result != nil {
-		json.Unmarshal(r.Result, &result)
+	if r.Result.Valid {
+		json.Unmarshal([]byte(r.Result.String), &result)
 	}
 	return AutopilotRunResponse{
 		ID:             uuidToString(r.ID),
@@ -439,9 +438,9 @@ type UpdateAutopilotTriggerRequest struct {
 func (h *Handler) ListAutopilots(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
 
-	var statusFilter pgtype.Text
+	var statusFilter sql.NullString
 	if s := r.URL.Query().Get("status"); s != "" {
-		statusFilter = pgtype.Text{String: s, Valid: true}
+		statusFilter = sql.NullString{String: s, Valid: true}
 	}
 
 	autopilots, err := h.Queries.ListAutopilots(r.Context(), db.ListAutopilotsParams{
@@ -476,7 +475,7 @@ func (h *Handler) ListAutopilots(w http.ResponseWriter, r *http.Request) {
 	// one (MUL-6680). The batch keys off the primary key's leading column, so
 	// this costs one indexed query per page, not one per row.
 	subsByAutopilot := map[string][]db.AutopilotSubscriber{}
-	autopilotIDs := make([]pgtype.UUID, 0, len(autopilots))
+	autopilotIDs := make([]string, 0, len(autopilots))
 	for _, row := range autopilots {
 		autopilotIDs = append(autopilotIDs, row.Autopilot.ID)
 	}
@@ -502,13 +501,12 @@ func (h *Handler) ListAutopilots(w http.ResponseWriter, r *http.Request) {
 	resp := make([]AutopilotResponse, len(autopilots))
 	for i, row := range autopilots {
 		r := autopilotToResponse(row.Autopilot, subsByAutopilot[uuidToString(row.Autopilot.ID)])
-		r.TriggerKinds = row.TriggerKinds
-		if row.NextRunAt.Valid {
-			r.NextRunAt = timestampToPtr(row.NextRunAt)
+		r.TriggerKinds = sqliteIfaceStrings(row.TriggerKinds)
+		if nextRun, ok := sqliteIfaceString(row.NextRunAt); ok && nextRun != "" {
+			r.NextRunAt = timestampToPtr(sql.NullString{String: nextRun, Valid: true})
 		}
-		if row.LastRunStatus != "" {
-			s := row.LastRunStatus
-			r.LastRunStatus = &s
+		if status, ok := sqliteIfaceString(row.LastRunStatus); ok && status != "" {
+			r.LastRunStatus = &status
 		}
 		if callerErr == nil {
 			_, isCollaborator := collabSet[uuidToString(row.Autopilot.ID)]
@@ -875,12 +873,12 @@ func (h *Handler) CreateAutopilot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create autopilot")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	// This must be the first lock family in the transaction. Member revocation
@@ -910,7 +908,7 @@ func (h *Handler) CreateAutopilot(w http.ResponseWriter, r *http.Request) {
 		CreatedByID:        actor.UserID,
 		Description:        ptrToText(req.Description),
 		IssueTitleTemplate: ptrToText(req.IssueTitleTemplate),
-		ProjectID:          projectID,
+		ProjectID:          nullString(projectID),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create autopilot")
@@ -935,7 +933,7 @@ func (h *Handler) CreateAutopilot(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create autopilot")
 		return
 	}
@@ -957,7 +955,7 @@ func (h *Handler) CreateAutopilot(w http.ResponseWriter, r *http.Request) {
 }
 
 type autopilotSubscriberCandidate struct {
-	UserID     pgtype.UUID
+	UserID     string
 	InputIndex int
 }
 
@@ -1002,18 +1000,15 @@ func (h *Handler) lockAndValidateAutopilotSubscribers(
 	r *http.Request,
 	qtx *db.Queries,
 	subscribers []autopilotSubscriberCandidate,
-	workspaceID pgtype.UUID,
+	workspaceID string,
 ) bool {
 	ordered := append([]autopilotSubscriberCandidate(nil), subscribers...)
 	sort.Slice(ordered, func(i, j int) bool {
 		return uuidToString(ordered[i].UserID) < uuidToString(ordered[j].UserID)
 	})
 
-	for _, subscriber := range ordered {
-		if err := qtx.LockSubscriberWrites(r.Context(), db.LockSubscriberWritesParams{
-			WorkspaceID: workspaceID,
-			UserID:      subscriber.UserID,
-		}); err != nil {
+	for range ordered {
+		if err := qtx.LockSubscriberWrites(r.Context()); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to validate autopilot subscribers")
 			return false
 		}
@@ -1023,7 +1018,7 @@ func (h *Handler) lockAndValidateAutopilotSubscribers(
 			UserID:      subscriber.UserID,
 			WorkspaceID: workspaceID,
 		}); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+			if errors.Is(err, sql.ErrNoRows) {
 				writeError(w, http.StatusBadRequest, fmt.Sprintf(
 					"subscribers[%d] is not a member of this workspace", subscriber.InputIndex,
 				))
@@ -1068,18 +1063,18 @@ func (h *Handler) UpdateAutopilot(w http.ResponseWriter, r *http.Request) {
 	params := db.UpdateAutopilotParams{
 		ID:                 prev.ID,
 		Description:        prev.Description,
-		AssigneeID:         prev.AssigneeID,
+		AssigneeID:         nullString(prev.AssigneeID),
 		IssueTitleTemplate: prev.IssueTitleTemplate,
 		ProjectID:          prev.ProjectID,
 	}
 	if req.Title != nil {
-		params.Title = pgtype.Text{String: *req.Title, Valid: true}
+		params.Title = sql.NullString{String: *req.Title, Valid: true}
 	}
 	if req.Status != nil {
-		params.Status = pgtype.Text{String: *req.Status, Valid: true}
+		params.Status = sql.NullString{String: *req.Status, Valid: true}
 	}
 	if req.ExecutionMode != nil {
-		params.ExecutionMode = pgtype.Text{String: *req.ExecutionMode, Valid: true}
+		params.ExecutionMode = sql.NullString{String: *req.ExecutionMode, Valid: true}
 	}
 	if _, ok := rawFields["description"]; ok {
 		params.Description = ptrToText(req.Description)
@@ -1098,7 +1093,7 @@ func (h *Handler) UpdateAutopilot(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		params.ProjectID = projectID
+		params.ProjectID = nullString(projectID)
 	}
 	// assignee_type and assignee_id are validated as a pair: switching
 	// between agent and squad without supplying a new id would leave the
@@ -1136,10 +1131,10 @@ func (h *Handler) UpdateAutopilot(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if typeSent {
-			params.AssigneeType = pgtype.Text{String: nextType, Valid: true}
+			params.AssigneeType = sql.NullString{String: nextType, Valid: true}
 		}
 		if idSent {
-			params.AssigneeID = nextID
+			params.AssigneeID = nullString(nextID)
 		}
 	}
 
@@ -1158,12 +1153,12 @@ func (h *Handler) UpdateAutopilot(w http.ResponseWriter, r *http.Request) {
 		subscribers = validated
 	}
 
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update autopilot")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	// Lock subscriber identities before assignment and autopilot rows. This is
@@ -1194,7 +1189,7 @@ func (h *Handler) UpdateAutopilot(w http.ResponseWriter, r *http.Request) {
 		ID:          prev.ID,
 		WorkspaceID: prev.WorkspaceID,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "autopilot not found")
 		return
 	}
@@ -1202,8 +1197,8 @@ func (h *Handler) UpdateAutopilot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to update autopilot")
 		return
 	}
-	if lockedPrev.UpdatedAt.Valid != prev.UpdatedAt.Valid ||
-		(lockedPrev.UpdatedAt.Valid && !lockedPrev.UpdatedAt.Time.Equal(prev.UpdatedAt.Time)) {
+	if (lockedPrev.UpdatedAt != "") != (prev.UpdatedAt != "") ||
+		((lockedPrev.UpdatedAt != "") && !parseDBTime(lockedPrev.UpdatedAt).Equal(parseDBTime(prev.UpdatedAt))) {
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"error": "the autopilot changed while it was being edited; reload and try again.",
 			"code":  "autopilot_update_conflict",
@@ -1235,8 +1230,8 @@ func (h *Handler) UpdateAutopilot(w http.ResponseWriter, r *http.Request) {
 		// stay accountable to, that trigger's created_by, which no edit rewrites.
 		if err := qtx.SetAutopilotTriggerPublishersByAutopilot(r.Context(), db.SetAutopilotTriggerPublishersByAutopilotParams{
 			AutopilotID:     autopilot.ID,
-			PublishedByType: pgtype.Text{String: "member", Valid: true},
-			PublishedByID:   actor.UserID,
+			PublishedByType: sql.NullString{String: "member", Valid: true},
+			PublishedByID:   nullString(actor.UserID),
 		}); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to update autopilot")
 			return
@@ -1260,7 +1255,7 @@ func (h *Handler) UpdateAutopilot(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update autopilot")
 		return
 	}
@@ -1309,7 +1304,7 @@ func autopilotRuleSubstantiveChange(prev, next db.Autopilot) bool {
 // publish (MUL-4302 §3.4). Thin handler wrapper over service.RecordAutopilotRuleVersion
 // (shared with the failure monitor); callers pass their tx-scoped Queries so the
 // version is atomic with the autopilot write.
-func (h *Handler) recordAutopilotRuleVersion(ctx context.Context, q *db.Queries, ap db.Autopilot, publishedByType string, publishedByID pgtype.UUID) error {
+func (h *Handler) recordAutopilotRuleVersion(ctx context.Context, q *db.Queries, ap db.Autopilot, publishedByType string, publishedByID string) error {
 	return service.RecordAutopilotRuleVersion(ctx, q, ap, publishedByType, publishedByID)
 }
 
@@ -1317,21 +1312,21 @@ func (h *Handler) parseAutopilotProjectID(
 	w http.ResponseWriter,
 	r *http.Request,
 	raw *string,
-	workspaceID pgtype.UUID,
-) (pgtype.UUID, bool) {
+	workspaceID string,
+) (string, bool) {
 	if raw == nil || *raw == "" {
-		return pgtype.UUID{}, true
+		return "", true
 	}
 	projectID, ok := parseUUIDOrBadRequest(w, *raw, "project_id")
 	if !ok {
-		return pgtype.UUID{}, false
+		return "", false
 	}
 	if _, err := h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{
 		ID:          projectID,
 		WorkspaceID: workspaceID,
 	}); err != nil {
 		writeError(w, http.StatusBadRequest, "project_id must reference a project in this workspace")
-		return pgtype.UUID{}, false
+		return "", false
 	}
 	return projectID, true
 }
@@ -1368,12 +1363,12 @@ func (h *Handler) DeleteAutopilot(w http.ResponseWriter, r *http.Request) {
 	// deliveries, subscribers, and collaborators as execution history.
 	// Archiving is a substantive status change (MUL-4302 §3.4), so republish the
 	// rule version with this member as publisher, atomically with the archive.
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete autopilot")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	if err := qtx.ArchiveAutopilot(r.Context(), idUUID); err != nil {
@@ -1385,7 +1380,7 @@ func (h *Handler) DeleteAutopilot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete autopilot")
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete autopilot")
 		return
 	}
@@ -1400,7 +1395,7 @@ type AutopilotCollaboratorRequest struct {
 	UserID string `json:"user_id"`
 }
 
-func (h *Handler) writeAutopilotCollaborators(w http.ResponseWriter, r *http.Request, autopilotID pgtype.UUID, status int) {
+func (h *Handler) writeAutopilotCollaborators(w http.ResponseWriter, r *http.Request, autopilotID string, status int) {
 	collaborators, err := h.Queries.ListAutopilotCollaborators(r.Context(), autopilotID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load collaborators")
@@ -1604,10 +1599,10 @@ func (h *Handler) CreateAutopilotTrigger(w http.ResponseWriter, r *http.Request)
 	// kind-specific normalization. Webhook triggers ignore cron/timezone/
 	// next_run_at — they're fired on demand.
 	var (
-		nextRunAt    pgtype.Timestamptz
-		cronText     pgtype.Text
-		tzText       pgtype.Text
-		webhookToken pgtype.Text
+		nextRunAt    string
+		cronText     sql.NullString
+		tzText       sql.NullString
+		webhookToken sql.NullString
 	)
 	switch req.Kind {
 	case "schedule":
@@ -1622,7 +1617,7 @@ func (h *Handler) CreateAutopilotTrigger(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		nextRunAt = pgtype.Timestamptz{Time: t, Valid: true}
+		nextRunAt = t.UTC().Format(time.RFC3339Nano)
 	case "webhook":
 		// Mint the token BEFORE the INSERT so the row never exists in a
 		// half-written kind=webhook + webhook_token=NULL state. If the
@@ -1650,21 +1645,21 @@ func (h *Handler) CreateAutopilotTrigger(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Schedule create: write the trigger and republish the rule version atomically.
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create trigger")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	trigger, err := qtx.CreateAutopilotTrigger(r.Context(), db.CreateAutopilotTriggerParams{
 		AutopilotID:    ap.ID,
 		Kind:           req.Kind,
-		Enabled:        true,
+		Enabled:        1,
 		CronExpression: cronText,
 		Timezone:       tzText,
-		NextRunAt:      nextRunAt,
+		NextRunAt:      nullString(nextRunAt),
 		Label:          ptrToText(req.Label),
 		WebhookToken:   webhookToken,
 		// published_by records who is currently responsible for this trigger's
@@ -1672,12 +1667,12 @@ func (h *Handler) CreateAutopilotTrigger(w http.ResponseWriter, r *http.Request)
 		// edits it (MUL-4302). Since MUL-6951 it no longer decides anything about a
 		// run — neither authorization nor the task's accountable human — so an edit
 		// moves this column alone.
-		PublishedByType: pgtype.Text{String: "member", Valid: publisherID.Valid},
-		PublishedByID:   publisherID,
+		PublishedByType: sql.NullString{String: "member", Valid: (publisherID != "")},
+		PublishedByID:   nullString(publisherID),
 		// created_by is the AUTHORIZATION principal and is immutable: the run acts
 		// as this member forever, so no edit may move it (MUL-6951).
-		CreatedByType: pgtype.Text{String: "member", Valid: publisherID.Valid},
-		CreatedByID:   publisherID,
+		CreatedByType: sql.NullString{String: "member", Valid: (publisherID != "")},
+		CreatedByID:   nullString(publisherID),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create trigger")
@@ -1687,7 +1682,7 @@ func (h *Handler) CreateAutopilotTrigger(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "failed to create trigger")
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create trigger")
 		return
 	}
@@ -1716,10 +1711,10 @@ func (h *Handler) CreateAutopilotTrigger(w http.ResponseWriter, r *http.Request)
 func (h *Handler) createWebhookTriggerWithMintedToken(
 	r *http.Request,
 	ap db.Autopilot,
-	label pgtype.Text,
+	label sql.NullString,
 	provider string,
 	eventFilters []byte,
-	publisherID pgtype.UUID,
+	publisherID string,
 ) (db.AutopilotTrigger, error) {
 	ctx := r.Context()
 	for attempt := 0; attempt < 3; attempt++ {
@@ -1727,7 +1722,7 @@ func (h *Handler) createWebhookTriggerWithMintedToken(
 		if err != nil {
 			return db.AutopilotTrigger{}, err
 		}
-		tx, err := h.TxStarter.Begin(ctx)
+		tx, err := h.TxStarter.BeginTx(ctx, nil)
 		if err != nil {
 			return db.AutopilotTrigger{}, err
 		}
@@ -1735,33 +1730,33 @@ func (h *Handler) createWebhookTriggerWithMintedToken(
 		trigger, err := qtx.CreateAutopilotTrigger(ctx, db.CreateAutopilotTriggerParams{
 			AutopilotID:  ap.ID,
 			Kind:         "webhook",
-			Enabled:      true,
+			Enabled:      1,
 			Label:        label,
-			WebhookToken: pgtype.Text{String: token, Valid: true},
-			Provider:     pgtype.Text{String: provider, Valid: provider != ""},
-			EventFilters: eventFilters,
+			WebhookToken: sql.NullString{String: token, Valid: true},
+			Provider:     sql.NullString{String: provider, Valid: provider != ""},
+			EventFilters: nullString(string(eventFilters)),
 			// published_by records CONFIG responsibility only: seeded to the creator,
 			// re-stamped to a later substantive editor (MUL-4302). It has no bearing
 			// on the runs this trigger fires (MUL-6951).
-			PublishedByType: pgtype.Text{String: "member", Valid: publisherID.Valid},
-			PublishedByID:   publisherID,
+			PublishedByType: sql.NullString{String: "member", Valid: (publisherID != "")},
+			PublishedByID:   nullString(publisherID),
 			// Immutable authorization principal — see the schedule path above
 			// (MUL-6951).
-			CreatedByType: pgtype.Text{String: "member", Valid: publisherID.Valid},
-			CreatedByID:   publisherID,
+			CreatedByType: sql.NullString{String: "member", Valid: (publisherID != "")},
+			CreatedByID:   nullString(publisherID),
 		})
 		if err != nil {
-			tx.Rollback(ctx)
+			tx.Rollback()
 			if isUniqueViolation(err) {
 				continue // token collision: retry with a fresh token
 			}
 			return db.AutopilotTrigger{}, err
 		}
 		if err := h.recordAutopilotRuleVersion(ctx, qtx, ap, "member", publisherID); err != nil {
-			tx.Rollback(ctx)
+			tx.Rollback()
 			return db.AutopilotTrigger{}, err
 		}
-		if err := tx.Commit(ctx); err != nil {
+		if err := tx.Commit(); err != nil {
 			return db.AutopilotTrigger{}, err
 		}
 		return trigger, nil
@@ -1802,7 +1797,7 @@ func (h *Handler) validateAutopilotAssigneeForSave(
 	r *http.Request,
 	q *db.Queries,
 	assigneeType string,
-	assigneeID, workspaceID pgtype.UUID,
+	assigneeID, workspaceID string,
 	requireRuntime bool,
 ) bool {
 	switch assigneeType {
@@ -1927,10 +1922,10 @@ func (h *Handler) UpdateAutopilotTrigger(w http.ResponseWriter, r *http.Request)
 		Label:          prev.Label,
 	}
 	if req.Enabled != nil {
-		params.Enabled = pgtype.Bool{Bool: *req.Enabled, Valid: true}
+		params.Enabled = sql.NullInt64{Int64: boolToInt64(*req.Enabled), Valid: true}
 	}
 	if req.CronExpression != nil {
-		params.CronExpression = pgtype.Text{String: *req.CronExpression, Valid: true}
+		params.CronExpression = sql.NullString{String: *req.CronExpression, Valid: true}
 	}
 	if req.Timezone != nil {
 		if *req.Timezone != "" {
@@ -1939,10 +1934,10 @@ func (h *Handler) UpdateAutopilotTrigger(w http.ResponseWriter, r *http.Request)
 				return
 			}
 		}
-		params.Timezone = pgtype.Text{String: *req.Timezone, Valid: true}
+		params.Timezone = sql.NullString{String: *req.Timezone, Valid: true}
 	}
 	if req.Label != nil {
-		params.Label = pgtype.Text{String: *req.Label, Valid: true}
+		params.Label = sql.NullString{String: *req.Label, Valid: true}
 	}
 	// Tri-state PATCH for event_filters. A nil pointer (field omitted or
 	// JSON null) leaves the existing row untouched — params.EventFilters
@@ -1964,7 +1959,7 @@ func (h *Handler) UpdateAutopilotTrigger(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusInternalServerError, "failed to encode event_filters")
 			return
 		}
-		params.EventFilters = encoded
+		params.EventFilters = nullString(string(encoded))
 	}
 
 	// Recompute next_run_at if cron or timezone changed.
@@ -1985,17 +1980,17 @@ func (h *Handler) UpdateAutopilotTrigger(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		params.NextRunAt = pgtype.Timestamptz{Time: t, Valid: true}
+		params.NextRunAt = nullString(t.UTC().Format(time.RFC3339Nano))
 	}
 
 	userID := uuidToString(actor.UserID)
 
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update trigger")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	trigger, err := qtx.UpdateAutopilotTrigger(r.Context(), params)
@@ -2014,7 +2009,7 @@ func (h *Handler) UpdateAutopilotTrigger(w http.ResponseWriter, r *http.Request)
 	triggerSubstantiveChange := prev.Enabled != trigger.Enabled ||
 		prev.CronExpression != trigger.CronExpression ||
 		prev.Timezone != trigger.Timezone ||
-		!bytes.Equal(prev.EventFilters, trigger.EventFilters)
+		!bytes.Equal([]byte(prev.EventFilters.String), []byte(trigger.EventFilters.String))
 	if triggerSubstantiveChange {
 		if err := h.recordAutopilotRuleVersion(r.Context(), qtx, ap, "member", actor.UserID); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to update trigger")
@@ -2025,14 +2020,14 @@ func (h *Handler) UpdateAutopilotTrigger(w http.ResponseWriter, r *http.Request)
 		// the per-firing-trigger granularity the autopilot-scoped rule_version can't give.
 		if err := qtx.SetAutopilotTriggerPublisher(r.Context(), db.SetAutopilotTriggerPublisherParams{
 			ID:              trigger.ID,
-			PublishedByType: pgtype.Text{String: "member", Valid: true},
-			PublishedByID:   actor.UserID,
+			PublishedByType: sql.NullString{String: "member", Valid: true},
+			PublishedByID:   nullString(actor.UserID),
 		}); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to update trigger")
 			return
 		}
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update trigger")
 		return
 	}
@@ -2087,12 +2082,12 @@ func (h *Handler) DeleteAutopilotTrigger(w http.ResponseWriter, r *http.Request)
 	// Removing a trigger changes what fires — a substantive publish (MUL-4302 §3.4).
 	// Republish the rule version with this member as publisher, atomically with the
 	// delete.
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete trigger")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	if err := qtx.DeleteAutopilotTrigger(r.Context(), triggerUUID); err != nil {
@@ -2103,7 +2098,7 @@ func (h *Handler) DeleteAutopilotTrigger(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "failed to delete trigger")
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete trigger")
 		return
 	}
@@ -2156,7 +2151,7 @@ func (h *Handler) RotateAutopilotTriggerWebhookToken(w http.ResponseWriter, r *h
 		}
 		rotated, err = h.Queries.RotateAutopilotTriggerWebhookToken(r.Context(), db.RotateAutopilotTriggerWebhookTokenParams{
 			ID:           triggerUUID,
-			WebhookToken: pgtype.Text{String: token, Valid: true},
+			WebhookToken: sql.NullString{String: token, Valid: true},
 		})
 		if err == nil {
 			break
@@ -2231,7 +2226,7 @@ func (h *Handler) SetAutopilotTriggerSigningSecret(w http.ResponseWriter, r *htt
 
 	param := db.SetAutopilotTriggerSigningSecretParams{ID: triggerUUID}
 	if secret != "" {
-		param.SigningSecret = pgtype.Text{String: secret, Valid: true}
+		param.SigningSecret = sql.NullString{String: secret, Valid: true}
 	}
 	updated, err := h.Queries.SetAutopilotTriggerSigningSecret(r.Context(), param)
 	if err != nil {
@@ -2280,8 +2275,8 @@ func (h *Handler) ListAutopilotRuns(w http.ResponseWriter, r *http.Request) {
 
 	runs, err := h.Queries.ListAutopilotRuns(r.Context(), db.ListAutopilotRunsParams{
 		AutopilotID: autopilot.ID,
-		Limit:       limit,
-		Offset:      offset,
+		Limit:       int64(limit),
+		Offset:      int64(offset),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list runs")
@@ -2347,17 +2342,17 @@ func (h *Handler) GetAutopilotRun(w http.ResponseWriter, r *http.Request) {
 // The refusals keep their own codes: FormatError collapses every other 403 into
 // generic "no access" copy, and these two are the ones an operator can act on —
 // the CLI branches on them by code, never on the English sentence (#8078).
-func (h *Handler) requireAutopilotTriggerInvoker(w http.ResponseWriter, r *http.Request, ap db.Autopilot, workspaceID string) (pgtype.UUID, bool) {
+func (h *Handler) requireAutopilotTriggerInvoker(w http.ResponseWriter, r *http.Request, ap db.Autopilot, workspaceID string) (string, bool) {
 	member, ok := h.requireAutopilotActingMember(w, r, workspaceID, autopilotTriggerRefusal)
 	if !ok {
-		return pgtype.UUID{}, false
+		return "", false
 	}
 	if !h.memberCanWriteAutopilot(r.Context(), ap, member) {
 		// Deliberately the same sentence and code whether the ordering human is
 		// a non-member or simply lacks the grant: a caller must not be able to
 		// probe workspace membership through this endpoint.
 		writeErrorCode(w, http.StatusForbidden, autopilotTriggerRefusal.forbiddenCode, autopilotTriggerRefusal.forbiddenMsg)
-		return pgtype.UUID{}, false
+		return "", false
 	}
 	return member.UserID, true
 }
@@ -2392,7 +2387,7 @@ func (h *Handler) TriggerAutopilot(w http.ResponseWriter, r *http.Request) {
 	if idempotencyKey == "" {
 		idempotencyKey = service.NewRequestIdempotencyKey()
 	}
-	run, reasonCode, err := h.AutopilotService.DispatchAutopilotManualWithKey(r.Context(), autopilot, pgtype.UUID{}, nil, invokerUserID, idempotencyKey)
+	run, reasonCode, err := h.AutopilotService.DispatchAutopilotManualWithKey(r.Context(), autopilot, "", nil, invokerUserID, idempotencyKey)
 	if err != nil {
 		var quotaErr *service.AutopilotQuotaExceededError
 		if errors.As(err, &quotaErr) {

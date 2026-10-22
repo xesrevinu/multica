@@ -24,12 +24,11 @@ package lark
 // both sources interchangeable.
 
 import (
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
-
-	"github.com/jackc/pgx/v5/pgtype"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -40,65 +39,65 @@ import (
 // (AppID, AppSecretEncrypted, TenantKey, BotOpenID, BotUnionID, Region) come
 // from the JSONB config; the rest are flat columns.
 type Installation struct {
-	ID                 pgtype.UUID
-	WorkspaceID        pgtype.UUID
-	AgentID            pgtype.UUID
+	ID                 string
+	WorkspaceID        string
+	AgentID            string
 	AppID              string
 	AppSecretEncrypted []byte
-	TenantKey          pgtype.Text
+	TenantKey          sql.NullString
 	BotOpenID          string
-	InstallerUserID    pgtype.UUID
+	InstallerUserID    string
 	Status             string
-	WsLeaseToken       pgtype.Text
-	WsLeaseExpiresAt   pgtype.Timestamptz
-	InstalledAt        pgtype.Timestamptz
-	CreatedAt          pgtype.Timestamptz
-	UpdatedAt          pgtype.Timestamptz
-	BotUnionID         pgtype.Text
+	WsLeaseToken       sql.NullString
+	WsLeaseExpiresAt   sql.NullString
+	InstalledAt        string
+	CreatedAt          string
+	UpdatedAt          string
+	BotUnionID         sql.NullString
 	Region             string
 }
 
 // UserBinding is the flat view of a channel_user_binding row. ChannelUserID is
 // the feishu open_id; UnionID (secondary identity) lives in the JSONB config.
 type UserBinding struct {
-	ID             pgtype.UUID
-	WorkspaceID    pgtype.UUID
-	MulticaUserID  pgtype.UUID
-	InstallationID pgtype.UUID
+	ID             string
+	WorkspaceID    string
+	MulticaUserID  string
+	InstallationID string
 	ChannelUserID  string
-	UnionID        pgtype.Text
-	BoundAt        pgtype.Timestamptz
+	UnionID        sql.NullString
+	BoundAt        string
 }
 
 // ChatSessionBinding is the flat view of a channel_chat_session_binding row.
 type ChatSessionBinding struct {
-	ID             pgtype.UUID
-	ChatSessionID  pgtype.UUID
-	InstallationID pgtype.UUID
+	ID             string
+	ChatSessionID  string
+	InstallationID string
 	ChannelChatID  string
 	ChatType       string
 	// Config carries the real chat id (larkBindingConfig) when ChannelChatID
 	// is a composite "chat:thread" topic-isolation key; "{}" otherwise.
-	Config        []byte
-	CreatedAt     pgtype.Timestamptz
-	LastMessageID pgtype.Text
-	LastThreadID  pgtype.Text
+	Config        string
+	CreatedAt     string
+	LastMessageID sql.NullString
+	LastThreadID  sql.NullString
 	// LastSenderID is the channel-native id (open_id) of whoever sent the
 	// trigger LastMessageID refers to — the account an outbound reply
 	// @-mentions. Frozen per task via channel_task_delivery, never re-derived
 	// from the Multica member: one member can hold several open_ids on one
 	// installation, so a member-keyed lookup could name the wrong account.
-	LastSenderID pgtype.Text
+	LastSenderID sql.NullString
 }
 
 // InboundMessageDedup is the flat view of a channel_inbound_message_dedup row.
 // Every field is a flat column (no JSON), so this mirrors the channel row 1:1.
 type InboundMessageDedup struct {
-	InstallationID pgtype.UUID
+	InstallationID string
 	MessageID      string
-	ReceivedAt     pgtype.Timestamptz
-	ProcessedAt    pgtype.Timestamptz
-	ClaimToken     pgtype.UUID
+	ReceivedAt     string
+	ProcessedAt    sql.NullString
+	ClaimToken     string
 }
 
 // BindingTokenRow is the flat view of a channel_binding_token row. ChannelUserID
@@ -107,24 +106,24 @@ type InboundMessageDedup struct {
 // raw-token shape returned to the caller.)
 type BindingTokenRow struct {
 	TokenHash      string
-	WorkspaceID    pgtype.UUID
-	InstallationID pgtype.UUID
+	WorkspaceID    string
+	InstallationID string
 	ChannelUserID  string
-	ExpiresAt      pgtype.Timestamptz
-	ConsumedAt     pgtype.Timestamptz
-	CreatedAt      pgtype.Timestamptz
+	ExpiresAt      string
+	ConsumedAt     sql.NullString
+	CreatedAt      string
 }
 
 // OutboundCardMessage is the flat view of a channel_outbound_card_message row.
 type OutboundCardMessage struct {
-	ID                   pgtype.UUID
-	ChatSessionID        pgtype.UUID
-	TaskID               pgtype.UUID
+	ID                   string
+	ChatSessionID        string
+	TaskID               string
 	ChannelChatID        string
 	ChannelCardMessageID string
 	Status               string
-	LastPatchedAt        pgtype.Timestamptz
-	CreatedAt            pgtype.Timestamptz
+	LastPatchedAt        sql.NullString
+	CreatedAt            string
 }
 
 // feishuInstallConfig is the JSON shape of channel_installation.config for the
@@ -149,8 +148,8 @@ type feishuBindingConfig struct {
 // config) into the flat Installation domain struct.
 func installationFromRow(row db.ChannelInstallation) (Installation, error) {
 	var cfg feishuInstallConfig
-	if len(row.Config) > 0 {
-		if err := json.Unmarshal(row.Config, &cfg); err != nil {
+	if row.Config != "" {
+		if err := json.Unmarshal([]byte(row.Config), &cfg); err != nil {
 			return Installation{}, fmt.Errorf("decode installation config: %w", err)
 		}
 	}
@@ -180,7 +179,7 @@ func installationFromRow(row db.ChannelInstallation) (Installation, error) {
 
 // encodeInstallConfig builds the channel_installation.config JSONB from the
 // feishu fields of an Installation. The secret is emitted as unwrapped base64.
-func encodeInstallConfig(inst Installation) ([]byte, error) {
+func encodeInstallConfig(inst Installation) (string, error) {
 	cfg := feishuInstallConfig{
 		AppID:      inst.AppID,
 		TenantKey:  inst.TenantKey.String,
@@ -191,14 +190,18 @@ func encodeInstallConfig(inst Installation) ([]byte, error) {
 	if len(inst.AppSecretEncrypted) > 0 {
 		cfg.AppSecretEncrypted = base64.StdEncoding.EncodeToString(inst.AppSecretEncrypted)
 	}
-	return json.Marshal(cfg)
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 // userBindingFromRow decodes a channel_user_binding row into UserBinding.
 func userBindingFromRow(row db.ChannelUserBinding) (UserBinding, error) {
 	var cfg feishuBindingConfig
-	if len(row.Config) > 0 {
-		if err := json.Unmarshal(row.Config, &cfg); err != nil {
+	if row.Config != "" {
+		if err := json.Unmarshal([]byte(row.Config), &cfg); err != nil {
 			return UserBinding{}, fmt.Errorf("decode user binding config: %w", err)
 		}
 	}
@@ -217,8 +220,12 @@ func userBindingFromRow(row db.ChannelUserBinding) (UserBinding, error) {
 // Returns the JSON null-stripped (an absent union_id is "{}"), so the
 // upsert's `config || jsonb_strip_nulls(EXCLUDED.config)` merge never clobbers
 // a previously-captured union_id with this write.
-func encodeBindingConfig(b UserBinding) ([]byte, error) {
-	return json.Marshal(feishuBindingConfig{UnionID: b.UnionID.String})
+func encodeBindingConfig(b UserBinding) (string, error) {
+	raw, err := json.Marshal(feishuBindingConfig{UnionID: b.UnionID.String})
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 // chatSessionBindingFromRow copies a channel_chat_session_binding row into the
@@ -269,7 +276,7 @@ func outboundCardFromRow(row db.ChannelOutboundCardMessage) OutboundCardMessage 
 	return OutboundCardMessage{
 		ID:                   row.ID,
 		ChatSessionID:        row.ChatSessionID,
-		TaskID:               row.TaskID,
+		TaskID:               row.TaskID.String,
 		ChannelChatID:        row.ChannelChatID,
 		ChannelCardMessageID: row.ChannelCardMessageID,
 		Status:               row.Status,

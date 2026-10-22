@@ -27,7 +27,7 @@ func (s *Service) hPRList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, code, "not_found", msg)
 		return
 	}
-	rows, err := s.opt.Pool.Query(r.Context(), `SELECT g.pr_number, g.title, g.state, g.html_url, COALESCE(g.branch,''), g.repo_owner||'/'||g.repo_name,
+	rows, err := s.opt.Pool.QueryContext(r.Context(), `SELECT g.pr_number, g.title, g.state, g.html_url, COALESCE(g.branch,''), g.repo_owner||'/'||g.repo_name,
 		COALESCE(g.author_login,''), g.merged_at, g.pr_updated_at
 		FROM issue_pull_request ip JOIN github_pull_request g ON g.id=ip.pull_request_id
 		WHERE ip.issue_id=$1 AND g.workspace_id=$2 ORDER BY g.pr_updated_at DESC LIMIT 50`, v.ID, wsID(r))

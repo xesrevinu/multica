@@ -2,11 +2,11 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sync/atomic"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -178,8 +178,8 @@ func TestAutopilotDispatch_TriggerCreatorOwningTheAgentIsAdmittedAndStamped(t *t
 		t.Fatalf("dispatch was refused (%q), want admitted: the trigger creator owns the agent", run.FailureReason.String)
 	}
 
-	var originator, accountable pgtype.UUID
-	var source pgtype.Text
+	var originator, accountable string
+	var source sql.NullString
 	fx.QueryRow(t, `
 		SELECT originator_user_id, accountable_user_id, originator_source
 		FROM agent_task_queue WHERE autopilot_run_id = $1`, run.ID).Scan(&originator, &accountable, &source)
@@ -217,7 +217,7 @@ func TestResolveAutopilotTriggerPrincipal_FailsClosed(t *testing.T) {
 		// a human. It must not be promoted to an authorization principal — that is
 		// the rule_owner guess, and guessing is what fails closed now.
 		triggerID := util.MustParseUUID(fx.trigger(t, autopilotID, nil, nil))
-		if got := ResolveAutopilotTriggerPrincipal(ctx, fx.q, triggerID, apUUID, wsUUID); got.Valid {
+		if got := ResolveAutopilotTriggerPrincipal(ctx, fx.q, triggerID, apUUID, wsUUID); got != "" {
 			t.Fatalf("legacy trigger resolved %q; must fail closed", util.UUIDToString(got))
 		}
 	})
@@ -226,7 +226,7 @@ func TestResolveAutopilotTriggerPrincipal_FailsClosed(t *testing.T) {
 		otherAutopilotID, _ := fx.autopilotWithTrigger(t, agentID, creatorID, creatorID)
 		triggerID := util.MustParseUUID(fx.trigger(t, autopilotID, "member", creatorID))
 		got := ResolveAutopilotTriggerPrincipal(ctx, fx.q, triggerID, util.MustParseUUID(otherAutopilotID), wsUUID)
-		if got.Valid {
+		if got != "" {
 			t.Fatalf("cross-autopilot trigger resolved %q; the binding check did not run", util.UUIDToString(got))
 		}
 	})
@@ -241,11 +241,11 @@ func TestResolveAutopilotTriggerPrincipal_FailsClosed(t *testing.T) {
 		fx.Member(t, otherWorkspaceID, creatorID, "owner")
 
 		triggerID := util.MustParseUUID(fx.trigger(t, autopilotID, "member", creatorID))
-		if got := ResolveAutopilotTriggerPrincipal(ctx, fx.q, triggerID, apUUID, wsUUID); !got.Valid {
+		if got := ResolveAutopilotTriggerPrincipal(ctx, fx.q, triggerID, apUUID, wsUUID); got == "" {
 			t.Fatal("precondition: the trigger must resolve in its own workspace")
 		}
 		got := ResolveAutopilotTriggerPrincipal(ctx, fx.q, triggerID, apUUID, util.MustParseUUID(otherWorkspaceID))
-		if got.Valid {
+		if got != "" {
 			t.Fatalf("a foreign workspace resolved %q; the autopilot is not bound to it", util.UUIDToString(got))
 		}
 	})
@@ -253,11 +253,11 @@ func TestResolveAutopilotTriggerPrincipal_FailsClosed(t *testing.T) {
 	t.Run("creator removed from the workspace resolves nobody", func(t *testing.T) {
 		removed := fx.member(t, "principal-removed")
 		triggerID := util.MustParseUUID(fx.trigger(t, autopilotID, "member", removed))
-		if got := ResolveAutopilotTriggerPrincipal(ctx, fx.q, triggerID, apUUID, wsUUID); !got.Valid {
+		if got := ResolveAutopilotTriggerPrincipal(ctx, fx.q, triggerID, apUUID, wsUUID); got == "" {
 			t.Fatal("precondition: an in-workspace creator must resolve")
 		}
 		fx.Exec(t, `DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`, fx.WorkspaceID, removed)
-		if got := ResolveAutopilotTriggerPrincipal(ctx, fx.q, triggerID, apUUID, wsUUID); got.Valid {
+		if got := ResolveAutopilotTriggerPrincipal(ctx, fx.q, triggerID, apUUID, wsUUID); got != "" {
 			t.Fatalf("removed member still resolved %q; membership must be re-checked per dispatch", util.UUIDToString(got))
 		}
 	})

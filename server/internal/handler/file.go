@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -16,8 +17,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/storage"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -171,7 +170,7 @@ func (h *Handler) attachmentToResponse(a db.Attachment, mode attachmentURLMode) 
 		MarkdownURL:  h.buildMarkdownURL(a, id),
 		ContentType:  a.ContentType,
 		SizeBytes:    a.SizeBytes,
-		CreatedAt:    a.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00"),
+		CreatedAt:    parseDBTime(a.CreatedAt).Format("2006-01-02T15:04:05Z07:00"),
 	}
 	// Only CloudFront mode overrides the stable path here; the presign and proxy
 	// modes already leave DownloadURL as the stable path and resolve it at
@@ -180,19 +179,19 @@ func (h *Handler) attachmentToResponse(a db.Attachment, mode attachmentURLMode) 
 		resp.DownloadURL = h.CFSigner.SignedURL(a.Url, time.Now().Add(h.attachmentDownloadURLTTL()))
 	}
 	if a.IssueID.Valid {
-		s := uuidToString(a.IssueID)
+		s := uuidToString(a.IssueID.String)
 		resp.IssueID = &s
 	}
 	if a.CommentID.Valid {
-		s := uuidToString(a.CommentID)
+		s := uuidToString(a.CommentID.String)
 		resp.CommentID = &s
 	}
 	if a.ChatSessionID.Valid {
-		s := uuidToString(a.ChatSessionID)
+		s := uuidToString(a.ChatSessionID.String)
 		resp.ChatSessionID = &s
 	}
 	if a.ChatMessageID.Valid {
-		s := uuidToString(a.ChatMessageID)
+		s := uuidToString(a.ChatMessageID.String)
 		resp.ChatMessageID = &s
 	}
 	return resp
@@ -324,13 +323,13 @@ func (h *Handler) attachmentDownloadURLTTL() time.Duration {
 }
 
 // groupAttachments loads attachments for multiple comments and groups them by comment ID.
-func (h *Handler) groupAttachments(r *http.Request, commentIDs []pgtype.UUID) map[string][]AttachmentResponse {
+func (h *Handler) groupAttachments(r *http.Request, commentIDs []string) map[string][]AttachmentResponse {
 	if len(commentIDs) == 0 {
 		return nil
 	}
 	workspaceID := h.resolveWorkspaceID(r)
 	attachments, err := h.Queries.ListAttachmentsByCommentIDs(r.Context(), db.ListAttachmentsByCommentIDsParams{
-		Column1:     commentIDs,
+		JsonEach:    jsonText(commentIDs),
 		WorkspaceID: parseUUID(workspaceID),
 	})
 	if err != nil {
@@ -340,7 +339,7 @@ func (h *Handler) groupAttachments(r *http.Request, commentIDs []pgtype.UUID) ma
 	mode := attachmentURLModeFromRequest(r)
 	grouped := make(map[string][]AttachmentResponse, len(commentIDs))
 	for _, a := range attachments {
-		cid := uuidToString(a.CommentID)
+		cid := uuidToString(a.CommentID.String)
 		grouped[cid] = append(grouped[cid], h.attachmentToResponse(a, mode))
 	}
 	return grouped
@@ -350,12 +349,12 @@ func (h *Handler) groupAttachments(r *http.Request, commentIDs []pgtype.UUID) ma
 // and groups them by chat_message_id. Mirrors groupAttachments — used so the
 // chat message list can surface attachment metadata to the UI bubble (file
 // cards, click-through download) without an N+1 query per message.
-func (h *Handler) groupChatMessageAttachments(ctx context.Context, workspaceID string, messageIDs []pgtype.UUID) map[string][]AttachmentResponse {
+func (h *Handler) groupChatMessageAttachments(ctx context.Context, workspaceID string, messageIDs []string) map[string][]AttachmentResponse {
 	if len(messageIDs) == 0 {
 		return nil
 	}
 	attachments, err := h.Queries.ListAttachmentsByChatMessageIDs(ctx, db.ListAttachmentsByChatMessageIDsParams{
-		Column1:     messageIDs,
+		JsonEach:    jsonText(messageIDs),
 		WorkspaceID: parseUUID(workspaceID),
 	})
 	if err != nil {
@@ -364,7 +363,7 @@ func (h *Handler) groupChatMessageAttachments(ctx context.Context, workspaceID s
 	}
 	grouped := make(map[string][]AttachmentResponse, len(messageIDs))
 	for _, a := range attachments {
-		mid := uuidToString(a.ChatMessageID)
+		mid := uuidToString(a.ChatMessageID.String)
 		grouped[mid] = append(grouped[mid], h.attachmentToResponse(a, attachmentURLModeSigned))
 	}
 	return grouped
@@ -450,7 +449,7 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 		uploaderType, uploaderID := h.resolveActor(r, userID, workspaceID)
 
 		params := db.CreateAttachmentParams{
-			ID:           pgtype.UUID{Bytes: id, Valid: true},
+			ID:           id.String(),
 			WorkspaceID:  parseUUID(workspaceID),
 			UploaderType: uploaderType,
 			UploaderID:   parseUUID(uploaderID),
@@ -472,7 +471,7 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusForbidden, "invalid issue_id")
 				return
 			}
-			params.IssueID = issue.ID
+			params.IssueID = nullString(issue.ID)
 		}
 		if commentID := r.FormValue("comment_id"); commentID != "" {
 			commentUUID, ok := parseUUIDOrBadRequest(w, commentID, "comment_id")
@@ -485,7 +484,7 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusForbidden, "invalid comment_id")
 				return
 			}
-			params.CommentID = comment.ID
+			params.CommentID = nullString(comment.ID)
 		}
 		if chatSessionID := r.FormValue("chat_session_id"); chatSessionID != "" {
 			// Require the member-visible Chat projection as well as private-agent
@@ -495,7 +494,7 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			params.ChatSessionID = session.ID
+			params.ChatSessionID = nullString(session.ID)
 		}
 		// task_id upload: an agent producing an image/file for its chat reply.
 		// The row is tagged with the producing task and its chat session so
@@ -547,7 +546,7 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusBadRequest, "task_id upload requires a chat task")
 				return
 			}
-			params.TaskID = task.ID
+			params.TaskID = nullString(task.ID)
 			// Bind the session too so reads (groupChatMessageAttachments) and
 			// GC classify the row consistently before it gains a message id.
 			params.ChatSessionID = task.ChatSessionID
@@ -566,12 +565,12 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 			// A comment attachment is written under the comment's lock, so a
 			// delete that commits while the object uploaded cannot leave it on
 			// a tombstone. A refused upload takes its stored object with it.
-			err = h.withLiveCommentLock(r.Context(), params.CommentID, params.WorkspaceID, func(qtx *db.Queries) error {
+			err = h.withLiveCommentLock(r.Context(), params.CommentID.String, params.WorkspaceID, func(qtx *db.Queries) error {
 				var createErr error
 				att, createErr = qtx.CreateAttachment(r.Context(), params)
 				return createErr
 			})
-			if errors.Is(err, pgx.ErrNoRows) {
+			if errors.Is(err, sql.ErrNoRows) {
 				h.deleteS3Objects(r.Context(), []string{link})
 				writeError(w, http.StatusForbidden, "invalid comment_id")
 				return
@@ -586,20 +585,22 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 			// S3 upload succeeded but DB record failed — still return the link
 			// so the file is usable. Log the error for investigation.
 		} else {
-			if att.IssueRevision > 0 && att.IssueID.Valid {
+			issueRevision := sqliteIfaceInt64(att.Coalesce)
+			commentRevision := sqliteIfaceInt64(att.Coalesce_2)
+			if issueRevision > 0 && att.IssueID.Valid {
 				h.publish(protocol.EventIssueAttachmentsChanged, workspaceID, uploaderType, uploaderID, map[string]any{
-					"issue_id":       uuidToString(att.IssueID),
-					"issue_revision": att.IssueRevision,
+					"issue_id":       uuidToString(att.IssueID.String),
+					"issue_revision": issueRevision,
 				})
 			}
-			if att.CommentRevision > 0 && att.CommentID.Valid {
+			if commentRevision > 0 && att.CommentID.Valid {
 				if comment, loadErr := h.Queries.GetCommentInWorkspace(r.Context(), db.GetCommentInWorkspaceParams{
-					ID:          att.CommentID,
+					ID:          att.CommentID.String,
 					WorkspaceID: att.WorkspaceID,
 				}); loadErr == nil {
 					commentID := uuidToString(comment.ID)
-					reactions := h.groupReactions(r, []pgtype.UUID{comment.ID})
-					attachments := h.groupAttachments(r, []pgtype.UUID{comment.ID})
+					reactions := h.groupReactions(r, []string{comment.ID})
+					attachments := h.groupAttachments(r, []string{comment.ID})
 					h.publish(protocol.EventCommentUpdated, workspaceID, uploaderType, uploaderID, map[string]any{
 						"comment": commentToResponse(comment, reactions[commentID], attachments[commentID]),
 					})
@@ -641,7 +642,7 @@ func (h *Handler) ListAttachments(w http.ResponseWriter, r *http.Request) {
 	}
 
 	attachments, err := h.Queries.ListAttachmentsByIssue(r.Context(), db.ListAttachmentsByIssueParams{
-		IssueID:     issue.ID,
+		IssueID:     nullString(issue.ID),
 		WorkspaceID: issue.WorkspaceID,
 	})
 	if err != nil {
@@ -1469,7 +1470,7 @@ func (h *Handler) DeleteAttachment(w http.ResponseWriter, r *http.Request) {
 		deleted, deleteErr = qtx.DeleteAttachment(r.Context(), deleteParams)
 		return deleteErr
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		// The attachment is gone — with its comment, with its issue, or on its
 		// own — while this waited for the owner lock.
 		writeError(w, http.StatusNotFound, "attachment not found")
@@ -1480,20 +1481,20 @@ func (h *Handler) DeleteAttachment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete attachment")
 		return
 	}
-	if deleted.Changed && att.IssueID.Valid {
+	if deleted.Column1 != 0 && att.IssueID.Valid {
 		h.publish(protocol.EventIssueAttachmentsChanged, workspaceID, "member", userID, map[string]any{
-			"issue_id":       uuidToString(att.IssueID),
-			"issue_revision": deleted.IssueRevision,
+			"issue_id":       uuidToString(att.IssueID.String),
+			"issue_revision": sqliteIfaceInt64(deleted.Coalesce),
 		})
 	}
-	if deleted.Changed && att.CommentID.Valid {
+	if deleted.Column1 != 0 && att.CommentID.Valid {
 		if comment, loadErr := h.Queries.GetCommentInWorkspace(r.Context(), db.GetCommentInWorkspaceParams{
-			ID:          att.CommentID,
+			ID:          att.CommentID.String,
 			WorkspaceID: att.WorkspaceID,
 		}); loadErr == nil {
 			commentID := uuidToString(comment.ID)
-			reactions := h.groupReactions(r, []pgtype.UUID{comment.ID})
-			attachments := h.groupAttachments(r, []pgtype.UUID{comment.ID})
+			reactions := h.groupReactions(r, []string{comment.ID})
+			attachments := h.groupAttachments(r, []string{comment.ID})
 			h.publish(protocol.EventCommentUpdated, workspaceID, "member", userID, map[string]any{
 				"comment": commentToResponse(comment, reactions[commentID], attachments[commentID]),
 			})
@@ -1509,9 +1510,9 @@ func (h *Handler) DeleteAttachment(w http.ResponseWriter, r *http.Request) {
 // linkAttachmentsByIssueIDs links unbound attachments to an issue. A caller
 // that did not already advance the issue revision can ask this visible change
 // to advance it exactly once.
-func (h *Handler) linkAttachmentsByIssueIDs(ctx context.Context, issueID, workspaceID pgtype.UUID, ids []pgtype.UUID, bumpRevision bool) (db.LinkAttachmentsToIssueRow, error) {
+func (h *Handler) linkAttachmentsByIssueIDs(ctx context.Context, issueID, workspaceID string, ids []string, bumpRevision bool) (db.LinkAttachmentsToIssueRow, error) {
 	return h.Queries.LinkAttachmentsToIssue(ctx, db.LinkAttachmentsToIssueParams{
-		IssueID:       issueID,
+		IssueID:       nullString(issueID),
 		WorkspaceID:   workspaceID,
 		AttachmentIds: ids,
 		BumpRevision:  bumpRevision,
@@ -1534,7 +1535,7 @@ const attachmentOwnerLockAttempts = 3
 //
 // The row is re-read under those locks, so a link that committed while this
 // waited is seen before the write; an attachment that gained an owner is
-// retried with that owner locked. Returns pgx.ErrNoRows when the attachment,
+// retried with that owner locked. Returns sql.ErrNoRows when the attachment,
 // or the comment owning it, is gone.
 func (h *Handler) withAttachmentOwnerLock(ctx context.Context, att db.Attachment, write func(*db.Queries) error) error {
 	for attempt := 0; ; attempt++ {
@@ -1559,21 +1560,21 @@ func (h *Handler) attachmentOwnerLockAttempt(ctx context.Context, att db.Attachm
 	if err != nil {
 		return db.Attachment{}, err
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 	if att.IssueID.Valid {
 		// A missing issue is not an error here: its cascade took the attachment
-		// with it, which the re-read below reports as pgx.ErrNoRows.
+		// with it, which the re-read below reports as sql.ErrNoRows.
 		if _, err := qtx.LockIssueForAttachmentWrite(ctx, db.LockIssueForAttachmentWriteParams{
-			ID:          att.IssueID,
+			ID:          att.IssueID.String,
 			WorkspaceID: att.WorkspaceID,
-		}); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		}); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return db.Attachment{}, err
 		}
 	}
 	if att.CommentID.Valid {
 		if _, err := qtx.LockLiveComment(ctx, db.LockLiveCommentParams{
-			ID:          att.CommentID,
+			ID:          att.CommentID.String,
 			WorkspaceID: att.WorkspaceID,
 		}); err != nil {
 			return db.Attachment{}, err
@@ -1596,7 +1597,7 @@ func (h *Handler) attachmentOwnerLockAttempt(ctx context.Context, att db.Attachm
 	if err := write(qtx); err != nil {
 		return db.Attachment{}, err
 	}
-	return fresh, tx.Commit(ctx)
+	return fresh, tx.Commit()
 }
 
 // deleteS3Object removes a single file from S3 by its CDN URL.

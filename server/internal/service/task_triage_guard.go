@@ -2,12 +2,11 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -81,13 +80,13 @@ var ErrRerunSourceIsTriage = errors.New("the source task is a triage run, which 
 // A missing issue is not in Triage: the enqueue proceeds and fails (or not) on
 // its own terms. A read error refuses, because a run that cannot be shown to be
 // allowed must not start.
-func guardIssueNotInTriage(ctx context.Context, q *db.Queries, issueID pgtype.UUID, origin RunOrigin) error {
-	if origin == OriginNamed || !issueID.Valid {
+func guardIssueNotInTriage(ctx context.Context, q *db.Queries, issueID string, origin RunOrigin) error {
+	if origin == OriginNamed || (issueID == "") {
 		return nil
 	}
 	state, err := q.GetIssueTriageState(ctx, issueID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
 		return fmt.Errorf("triage guard: load issue triage state: %w", err)
@@ -112,11 +111,11 @@ const TriageContextType = "triage"
 // a manual rerun's session from the named source task, which no query-level
 // exclusion can reach.
 func IsTriageTask(t db.AgentTaskQueue) bool {
-	if len(t.Context) == 0 {
+	if len(t.Context.String) == 0 {
 		return false
 	}
 	var payload struct {
 		Type string `json:"type"`
 	}
-	return json.Unmarshal(t.Context, &payload) == nil && payload.Type == TriageContextType
+	return json.Unmarshal([]byte(t.Context.String), &payload) == nil && payload.Type == TriageContextType
 }

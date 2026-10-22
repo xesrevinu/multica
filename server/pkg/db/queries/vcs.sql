@@ -4,12 +4,12 @@
 
 -- name: ListVCSConnectionsByWorkspace :many
 SELECT * FROM vcs_connection
-WHERE workspace_id = $1
+WHERE workspace_id = ?1
 ORDER BY created_at ASC;
 
 -- name: GetVCSConnectionByID :one
 SELECT * FROM vcs_connection
-WHERE id = $1;
+WHERE id = ?1;
 
 -- name: UpsertVCSConnection :one
 -- Reconnecting the same instance rotates the stored token/secret, provider,
@@ -18,7 +18,7 @@ INSERT INTO vcs_connection (
     workspace_id, provider, instance_url, account_login,
     access_token_encrypted, webhook_secret_encrypted, connected_by_id
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, sqlc.narg('connected_by_id')
+    ?1, ?2, ?3, ?4, ?5, ?6, sqlc.narg('connected_by_id')
 )
 ON CONFLICT (workspace_id, instance_url) DO UPDATE SET
     provider                 = EXCLUDED.provider,
@@ -32,33 +32,44 @@ RETURNING *;
 -- name: DeleteVCSConnection :exec
 -- These tables carry no FKs, so the cascade that once removed the connection's
 -- mirrored PRs, their issue links, and CI statuses is gone (migration 213). Do
--- that cleanup explicitly here, in one statement so it commits or rolls back
--- atomically with the connection row. The target CTE also scopes every child
--- delete to a connection that actually belongs to the workspace, so a wrong
--- workspace_id is a no-op rather than deleting another tenant's child rows.
-WITH target AS (
-    SELECT vcs_connection.id FROM vcs_connection WHERE vcs_connection.id = $1 AND vcs_connection.workspace_id = $2
-),
-cleared_links AS (
-    DELETE FROM issue_vcs_pull_request
-    WHERE pull_request_id IN (
-        SELECT vcs_pull_request.id FROM vcs_pull_request
-        WHERE vcs_pull_request.connection_id IN (SELECT target.id FROM target)
-    )
-),
-cleared_statuses AS (
-    DELETE FROM vcs_commit_status WHERE connection_id IN (SELECT target.id FROM target)
-),
-cleared_prs AS (
-    DELETE FROM vcs_pull_request WHERE connection_id IN (SELECT target.id FROM target)
-)
-DELETE FROM vcs_connection WHERE vcs_connection.id = $1 AND vcs_connection.workspace_id = $2;
+-- that cleanup explicitly here. The child deletes are scoped to a connection
+-- that belongs to the workspace, so a wrong workspace_id is a no-op.
+-- Order: DeleteVCSConnection_Step2, DeleteVCSConnection_Step3,
+-- DeleteVCSConnection_Step4, then DeleteVCSConnection.
+DELETE FROM vcs_connection WHERE id = ?1 AND workspace_id = ?2;
+
+-- name: DeleteVCSConnection_Step2 :exec
+DELETE FROM issue_vcs_pull_request
+WHERE pull_request_id IN (
+    SELECT vcs_pull_request.id FROM vcs_pull_request
+    WHERE vcs_pull_request.connection_id = ?1
+      AND EXISTS (
+          SELECT 1 FROM vcs_connection
+          WHERE vcs_connection.id = ?1 AND vcs_connection.workspace_id = ?2
+      )
+);
+
+-- name: DeleteVCSConnection_Step3 :exec
+DELETE FROM vcs_commit_status
+WHERE connection_id = ?1
+  AND EXISTS (
+      SELECT 1 FROM vcs_connection
+      WHERE vcs_connection.id = ?1 AND vcs_connection.workspace_id = ?2
+  );
+
+-- name: DeleteVCSConnection_Step4 :exec
+DELETE FROM vcs_pull_request
+WHERE connection_id = ?1
+  AND EXISTS (
+      SELECT 1 FROM vcs_connection
+      WHERE vcs_connection.id = ?1 AND vcs_connection.workspace_id = ?2
+  );
 
 -- name: RotateVCSConnectionWebhookSecret :one
 UPDATE vcs_connection
-SET webhook_secret_encrypted = $3,
+SET webhook_secret_encrypted = ?3,
     updated_at = now()
-WHERE id = $1 AND workspace_id = $2
+WHERE id = ?1 AND workspace_id = ?2
 RETURNING *;
 
 -- =====================
@@ -71,17 +82,17 @@ RETURNING *;
 -- mutable column is applied only when the incoming event is at least as new as
 -- the stored row; a stale event keeps the existing values. The row is still
 -- touched (and thus RETURNED) either way, so callers always get the current PR
--- — the webhook needs pr.id to link the issue even on a stale redelivery.
+-- - the webhook needs pr.id to link the issue even on a stale redelivery.
 INSERT INTO vcs_pull_request (
     workspace_id, connection_id, provider, repo_owner, repo_name, pr_number,
     title, state, html_url, branch, author_login, author_avatar_url,
     merged_at, closed_at, pr_created_at, pr_updated_at,
     additions, deletions, changed_files, head_sha
 ) VALUES (
-    $1, $2, $3, $4, $5, $6,
-    $7, $8, $9, sqlc.narg('branch'), sqlc.narg('author_login'), sqlc.narg('author_avatar_url'),
-    sqlc.narg('merged_at'), sqlc.narg('closed_at'), $10, $11,
-    $12, $13, $14, $15
+    ?1, ?2, ?3, ?4, ?5, ?6,
+    ?7, ?8, ?9, sqlc.narg('branch'), sqlc.narg('author_login'), sqlc.narg('author_avatar_url'),
+    sqlc.narg('merged_at'), sqlc.narg('closed_at'), ?10, ?11,
+    ?12, ?13, ?14, ?15
 )
 ON CONFLICT (connection_id, repo_owner, repo_name, pr_number) DO UPDATE SET
     workspace_id      = CASE WHEN EXCLUDED.pr_updated_at >= vcs_pull_request.pr_updated_at THEN EXCLUDED.workspace_id      ELSE vcs_pull_request.workspace_id      END,
@@ -111,10 +122,10 @@ RETURNING *;
 WITH checks AS (
     SELECT
         pr.id AS pr_id,
-        COUNT(*)::bigint AS total,
-        SUM(CASE WHEN cs.state = 'failed'  THEN 1 ELSE 0 END)::bigint AS failed,
-        SUM(CASE WHEN cs.state = 'passed'  THEN 1 ELSE 0 END)::bigint AS passed,
-        SUM(CASE WHEN cs.state = 'pending' THEN 1 ELSE 0 END)::bigint AS pending
+        COUNT(*) AS total,
+        SUM(CASE WHEN cs.state = 'failed'  THEN 1 ELSE 0 END) AS failed,
+        SUM(CASE WHEN cs.state = 'passed'  THEN 1 ELSE 0 END) AS passed,
+        SUM(CASE WHEN cs.state = 'pending' THEN 1 ELSE 0 END) AS pending
     FROM vcs_pull_request pr
     JOIN issue_vcs_pull_request ipr ON ipr.pull_request_id = pr.id
     JOIN vcs_commit_status cs
@@ -126,11 +137,11 @@ WITH checks AS (
 )
 SELECT
     pr.*,
-    COALESCE(ipr.linked_by_type, 'system')::text AS linked_by_type,
-    COALESCE(c.total, 0)::bigint   AS checks_total,
-    COALESCE(c.passed, 0)::bigint  AS checks_passed,
-    COALESCE(c.failed, 0)::bigint  AS checks_failed,
-    COALESCE(c.pending, 0)::bigint AS checks_pending
+    COALESCE(ipr.linked_by_type, 'system') AS linked_by_type,
+    COALESCE(c.total, 0)   AS checks_total,
+    COALESCE(c.passed, 0)  AS checks_passed,
+    COALESCE(c.failed, 0)  AS checks_failed,
+    COALESCE(c.pending, 0) AS checks_pending
 FROM vcs_pull_request pr
 JOIN issue_vcs_pull_request ipr ON ipr.pull_request_id = pr.id
 LEFT JOIN checks c ON c.pr_id = pr.id
@@ -148,7 +159,7 @@ ORDER BY pr.pr_created_at DESC;
 INSERT INTO vcs_commit_status (
     connection_id, sha, context, state, target_url, description, updated_at
 ) VALUES (
-    $1, $2, $3, $4, sqlc.narg('target_url'), sqlc.narg('description'), $5
+    ?1, ?2, ?3, ?4, sqlc.narg('target_url'), sqlc.narg('description'), ?5
 )
 ON CONFLICT (connection_id, sha, context) DO UPDATE SET
     state       = EXCLUDED.state,
@@ -163,10 +174,10 @@ WHERE EXCLUDED.updated_at >= vcs_commit_status.updated_at;
 SELECT DISTINCT ipr.issue_id
 FROM vcs_pull_request pr
 JOIN issue_vcs_pull_request ipr ON ipr.pull_request_id = pr.id
-WHERE pr.connection_id = $1 AND pr.head_sha = $2 AND pr.head_sha <> '';
+WHERE pr.connection_id = ?1 AND pr.head_sha = ?2 AND pr.head_sha <> '';
 
 -- =====================
--- Issue ↔ VCS PR link
+-- Issue   VCS PR link
 -- =====================
 
 -- name: LinkIssueToVCSPullRequest :execrows
@@ -174,7 +185,7 @@ WHERE pr.connection_id = $1 AND pr.head_sha = $2 AND pr.head_sha <> '';
 INSERT INTO issue_vcs_pull_request (
     issue_id, pull_request_id, linked_by_type, linked_by_id
 ) VALUES (
-    $1, $2, 'system', NULL
+    ?1, ?2, 'system', NULL
 )
 ON CONFLICT (issue_id, pull_request_id) DO NOTHING;
 
@@ -182,39 +193,39 @@ ON CONFLICT (issue_id, pull_request_id) DO NOTHING;
 INSERT INTO issue_vcs_pull_request (
     issue_id, pull_request_id, linked_by_type, linked_by_id
 ) VALUES (
-    $1, $2, 'member', sqlc.narg('linked_by_id')
+    ?1, ?2, 'member', sqlc.narg('linked_by_id')
 )
 ON CONFLICT (issue_id, pull_request_id) DO UPDATE SET
     linked_by_type = 'member',
     linked_by_id = EXCLUDED.linked_by_id
-WHERE issue_vcs_pull_request.linked_by_type IS DISTINCT FROM 'member';
+WHERE issue_vcs_pull_request.linked_by_type IS NULL OR issue_vcs_pull_request.linked_by_type <> 'member';
 
 -- name: ListIssueIDsForVCSPullRequest :many
 SELECT issue_id FROM issue_vcs_pull_request
-WHERE pull_request_id = $1;
+WHERE pull_request_id = ?1;
 
 -- name: ListAutoLinkedIssueIDsForVCSPullRequest :many
 SELECT issue_id FROM issue_vcs_pull_request
-WHERE pull_request_id = $1
+WHERE pull_request_id = ?1
   AND COALESCE(linked_by_type, 'system') <> 'member';
 
 -- name: UnlinkIssueFromVCSPullRequest :execrows
 DELETE FROM issue_vcs_pull_request
-WHERE issue_id = $1 AND pull_request_id = $2;
+WHERE issue_id = ?1 AND pull_request_id = ?2;
 
 -- name: GetVCSPullRequestByKey :one
 -- The stored row before a webhook upsert, so the handler can tell a merge
 -- transition apart from a later event on an already-merged PR.
 SELECT * FROM vcs_pull_request
-WHERE connection_id = $1 AND repo_owner = $2 AND repo_name = $3 AND pr_number = $4;
+WHERE connection_id = ?1 AND repo_owner = ?2 AND repo_name = ?3 AND pr_number = ?4;
 
 -- name: GetVCSPullRequestInWorkspace :one
 SELECT * FROM vcs_pull_request
-WHERE id = $1 AND workspace_id = $2;
+WHERE id = ?1 AND workspace_id = ?2;
 
 -- name: FindVCSPullRequestByURL :one
 SELECT * FROM vcs_pull_request
-WHERE workspace_id = $1
-  AND lower(rtrim(html_url, '/')) = lower(sqlc.arg('html_url')::text)
+WHERE workspace_id = ?1
+  AND lower(rtrim(html_url, '/')) = lower(sqlc.arg('html_url'))
 ORDER BY pr_updated_at DESC
 LIMIT 1;

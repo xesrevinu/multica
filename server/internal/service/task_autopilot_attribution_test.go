@@ -2,12 +2,11 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/attribution"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -51,14 +50,14 @@ func TestEnqueueTaskForIssueAutopilotPreservesTriggerOwnerAfterRunCloses(t *test
 			if stored.OriginatorSource.String != string(attribution.SourceTriggerOwner) {
 				t.Errorf("source = %q, want trigger_owner", stored.OriginatorSource.String)
 			}
-			if got := util.UUIDToString(stored.OriginatorUserID); got != triggerOwner {
+			if got := util.UUIDToString(stored.OriginatorUserID.String); got != triggerOwner {
 				t.Errorf("originator = %q, want trigger creator %q", got, triggerOwner)
 			}
-			if got := util.UUIDToString(stored.AccountableUserID); got != triggerOwner {
+			if got := util.UUIDToString(stored.AccountableUserID.String); got != triggerOwner {
 				t.Errorf("accountable = %q, want trigger creator %q", got, triggerOwner)
 			}
 			if status == "completed" || status == "failed" || status == "skipped" {
-				if _, err := fx.q.GetAutopilotRunByIssue(ctx, issue.ID); !errors.Is(err, pgx.ErrNoRows) {
+				if _, err := fx.q.GetAutopilotRunByIssue(ctx, nullString(issue.ID)); !errors.Is(err, sql.ErrNoRows) {
 					t.Errorf("active-run lookup must exclude %s runs, got %v", status, err)
 				}
 			}
@@ -94,27 +93,27 @@ func TestAutopilotIssueAttributionUsesLatestMatchingRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := fx.svc.TaskSvc.attributionForIssueTask(ctx, issue, pgtype.UUID{}, attribution.SourceCommentSource, pgtype.UUID{})
-	if got.Source != attribution.SourceTriggerOwner || util.UUIDToString(got.UserID) != triggerOwner {
+	got := fx.svc.TaskSvc.attributionForIssueTask(ctx, issue, "", attribution.SourceCommentSource, "")
+	if got.Source != attribution.SourceTriggerOwner || util.UUIDToString(got.UserID.String) != triggerOwner {
 		t.Fatalf("attribution = %+v, want latest matching trigger owner %s", got, triggerOwner)
 	}
 	otherWorkspaceID := fx.Workspace(t, "foreign attribution workspace", "foreign-attribution-workspace")
 	_, err = fx.q.GetLatestAutopilotRunForIssueAttribution(ctx, db.GetLatestAutopilotRunForIssueAttributionParams{
-		IssueID: issue.ID, AutopilotID: issue.OriginID, WorkspaceID: util.MustParseUUID(otherWorkspaceID),
+		IssueID: nullString(issue.ID), AutopilotID: issue.OriginID.String, WorkspaceID: util.MustParseUUID(otherWorkspaceID),
 	})
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("foreign workspace lookup = %v, want no rows", err)
 	}
 	fx.Exec(t, `DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`, fx.WorkspaceID, triggerOwner)
-	got = fx.svc.TaskSvc.attributionForIssueTask(ctx, issue, pgtype.UUID{}, attribution.SourceCommentSource, pgtype.UUID{})
+	got = fx.svc.TaskSvc.attributionForIssueTask(ctx, issue, "", attribution.SourceCommentSource, "")
 	if got.UserID.Valid {
 		t.Fatalf("removed trigger creator still authorizes handoff: %+v", got)
 	}
 	_, err = fx.q.GetLatestAutopilotRunForIssueAttribution(ctx, db.GetLatestAutopilotRunForIssueAttributionParams{
-		IssueID: util.MustParseUUID(fx.Issue(t, "unlinked issue")), AutopilotID: issue.OriginID,
+		IssueID: nullString(util.MustParseUUID(fx.Issue(t, "unlinked issue"))), AutopilotID: issue.OriginID.String,
 		WorkspaceID: issue.WorkspaceID,
 	})
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("unlinked issue lookup = %v, want no rows", err)
 	}
 }

@@ -3,7 +3,7 @@ package service
 import (
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -14,8 +14,8 @@ func TestRetryEligibleExcludesTriageRuns(t *testing.T) {
 		return db.AgentTaskQueue{
 			Attempt:     1,
 			MaxAttempts: 2,
-			IssueID:     pgtype.UUID{Bytes: [16]byte{1}, Valid: true},
-			Context:     []byte(context),
+			IssueID:     nullString(uuid.UUID([16]byte{1}).String()),
+			Context:     nullString(string([]byte(context))),
 		}
 	}
 	cases := map[string]struct {

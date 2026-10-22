@@ -68,12 +68,12 @@ type Decrypter func(ciphertext []byte) (plaintext []byte, err error)
 // decodeCredentials parses the per-installation config blob and decrypts the
 // stored bot token. It is the single place the Telegram config JSON is
 // interpreted.
-func decodeCredentials(raw json.RawMessage, decrypt Decrypter) (credentials, error) {
-	if len(raw) == 0 {
+func decodeCredentials(raw string, decrypt Decrypter) (credentials, error) {
+	if raw == "" {
 		return credentials{}, errors.New("telegram: empty installation config")
 	}
 	var cfg installConfig
-	if err := json.Unmarshal(raw, &cfg); err != nil {
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 		return credentials{}, fmt.Errorf("decode telegram installation config: %w", err)
 	}
 	token, err := decryptToken(cfg.BotTokenEncrypted, decrypt)

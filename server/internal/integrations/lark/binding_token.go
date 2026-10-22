@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
+
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -29,8 +29,8 @@ type BindingToken struct {
 // successful redemption. The redemption path uses these fields to
 // write the lark_user_binding row.
 type RedeemedBindingToken struct {
-	WorkspaceID    pgtype.UUID
-	InstallationID pgtype.UUID
+	WorkspaceID    string
+	InstallationID string
 	LarkOpenID     OpenID
 }
 
@@ -55,10 +55,10 @@ type InstallerBinder interface {
 // InstallerBindParams carries the inputs InstallerBinder needs. Kept
 // as a struct so adding union_id (Phase 2) does not break callers.
 type InstallerBindParams struct {
-	WorkspaceID    pgtype.UUID
-	InstallationID pgtype.UUID
-	MulticaUserID  pgtype.UUID // the installer's Multica account
-	LarkOpenID     OpenID      // the installer's per-installation open_id
+	WorkspaceID    string
+	InstallationID string
+	MulticaUserID  string // the installer's Multica account
+	LarkOpenID     OpenID // the installer's per-installation open_id
 }
 
 // BindingTokenService mints and redeems binding tokens for the
@@ -96,7 +96,7 @@ func NewBindingTokenServiceWithClock(queries *db.Queries, tx TxStarter, now func
 // to the intended recipient — Lark DMs are encrypted in transit by
 // the platform — and never logged. Mint is the only function in this
 // package that produces a raw token; subsequent reads are by hash.
-func (s *BindingTokenService) Mint(ctx context.Context, workspaceID, installationID pgtype.UUID, openID OpenID) (BindingToken, error) {
+func (s *BindingTokenService) Mint(ctx context.Context, workspaceID, installationID string, openID OpenID) (BindingToken, error) {
 	raw, err := randomToken(32)
 	if err != nil {
 		return BindingToken{}, fmt.Errorf("generate token: %w", err)
@@ -104,17 +104,16 @@ func (s *BindingTokenService) Mint(ctx context.Context, workspaceID, installatio
 	hash := hashToken(raw)
 	expiresAt := s.now().Add(BindingTokenTTL)
 
-	row, err := s.queries.CreateLarkBindingToken(ctx, CreateBindingTokenParams{
+	if _, err := s.queries.CreateLarkBindingToken(ctx, CreateBindingTokenParams{
 		TokenHash:      hash,
 		WorkspaceID:    workspaceID,
 		InstallationID: installationID,
 		ChannelUserID:  string(openID),
-		ExpiresAt:      pgtype.Timestamptz{Time: expiresAt, Valid: true},
-	})
-	if err != nil {
+		ExpiresAt:      expiresAt,
+	}); err != nil {
 		return BindingToken{}, fmt.Errorf("persist token: %w", err)
 	}
-	return BindingToken{Raw: raw, ExpiresAt: row.ExpiresAt.Time}, nil
+	return BindingToken{Raw: raw, ExpiresAt: expiresAt}, nil
 }
 
 // RedeemAndBind atomically consumes a raw token and writes the
@@ -143,7 +142,7 @@ func (s *BindingTokenService) Mint(ctx context.Context, workspaceID, installatio
 // On the happy path the consume + bind commit together: a successful
 // return guarantees both the consumed_at write and the binding row
 // landed; a returned error guarantees neither did.
-func (s *BindingTokenService) RedeemAndBind(ctx context.Context, raw string, multicaUserID pgtype.UUID) (RedeemedBindingToken, error) {
+func (s *BindingTokenService) RedeemAndBind(ctx context.Context, raw string, multicaUserID string) (RedeemedBindingToken, error) {
 	if s.tx == nil {
 		return RedeemedBindingToken{}, errors.New("lark: BindingTokenService missing TxStarter")
 	}
@@ -151,12 +150,12 @@ func (s *BindingTokenService) RedeemAndBind(ctx context.Context, raw string, mul
 	if err != nil {
 		return RedeemedBindingToken{}, fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	qtx := s.queries.WithTx(tx)
 
 	row, err := qtx.ConsumeLarkBindingToken(ctx, hashToken(raw))
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return RedeemedBindingToken{}, ErrBindingTokenInvalid
 		}
 		return RedeemedBindingToken{}, fmt.Errorf("consume token: %w", err)
@@ -182,17 +181,17 @@ func (s *BindingTokenService) RedeemAndBind(ctx context.Context, raw string, mul
 		ChannelUserID:  row.ChannelUserID,
 	})
 	if err != nil {
-		// pgx.ErrNoRows here means the conflict row exists but its
+		// sql.ErrNoRows here means the conflict row exists but its
 		// multica_user_id differs from ours, so the WHERE clause on
 		// the ON CONFLICT DO UPDATE rejected the rebind. See the
 		// comment on CreateChannelUserBinding in queries/channel.sql.
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return RedeemedBindingToken{}, ErrBindingAlreadyAssigned
 		}
 		return RedeemedBindingToken{}, fmt.Errorf("create binding: %w", err)
 	}
 
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return RedeemedBindingToken{}, fmt.Errorf("commit: %w", err)
 	}
 	return RedeemedBindingToken{
@@ -256,7 +255,7 @@ func (s *BindingTokenService) BindInstallerTx(ctx context.Context, qtx *ChannelS
 		ChannelUserID:  string(p.LarkOpenID),
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return ErrBindingAlreadyAssigned
 		}
 		return fmt.Errorf("bind installer: %w", err)

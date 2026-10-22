@@ -6,7 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
+
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -174,9 +175,8 @@ func TestNextStatusFallsBackToTheNextColumn(t *testing.T) {
 }
 
 func TestResolveHandler(t *testing.T) {
-	var lead pgtype.UUID
-	_ = lead.Scan(testAgentID)
-	project := db.Project{LeadType: pgtype.Text{String: "member", Valid: true}, LeadID: lead}
+	lead := testAgentID
+	project := db.Project{LeadType: sql.NullString{String: "member", Valid: true}, LeadID: sql.NullString{String: lead, Valid: true}}
 	creator := lead
 
 	def := devDefinition()

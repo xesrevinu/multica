@@ -2,13 +2,13 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/taskfailure"
 )
@@ -102,12 +102,12 @@ func TestCompleteTask_ContextExhaustionFromOlderDaemonIsRecordedAsFailed(t *test
 	// the reporter's manual workaround — archiving the transcript on disk.
 	got, err := testHandler.Queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
 		AgentID: parseUUID(agentID),
-		IssueID: parseUUID(issueID),
+		IssueID: nullString(parseUUID(issueID)),
 	})
 	if err == nil && got.SessionID.Valid && got.SessionID.String == "sess-saturated-6402" {
 		t.Fatal("the saturated session is still offered as the resume pointer")
 	}
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("GetLastTaskSession: %v", err)
 	}
 
@@ -214,7 +214,7 @@ func TestCompleteTask_RealAnswerStillCompletes(t *testing.T) {
 			// And the healthy session stays available to the next task.
 			got, err := testHandler.Queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
 				AgentID: parseUUID(agentID),
-				IssueID: parseUUID(issueID),
+				IssueID: nullString(parseUUID(issueID)),
 			})
 			if err != nil {
 				t.Fatalf("GetLastTaskSession: %v", err)

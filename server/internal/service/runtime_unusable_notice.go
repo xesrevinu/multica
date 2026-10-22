@@ -4,11 +4,9 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	"github.com/multica-ai/multica/server/pkg/dbid"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -24,20 +22,20 @@ import (
 // failure here is logged rather than returned.
 func (s *IssueService) noteRuntimeUnusable(ctx context.Context, issue db.Issue, verdict AgentVerdict) {
 	name := ""
-	if agent, err := s.Queries.GetAgent(ctx, issue.AssigneeID); err == nil {
+	if agent, err := s.Queries.GetAgent(ctx, issue.AssigneeID.String); err == nil {
 		name = agent.Name
 	}
 	// author_type='system', author_id=zero UUID. The zero UUID is a valid 16
 	// byte value and the column is NOT NULL; clients branch on author_type.
 	created, err := s.Queries.CreateComment(ctx, db.CreateCommentParams{
-		ID:          dbid.NewV7(),
+		ID:          nullString(newV7()),
 		IssueID:     issue.ID,
 		WorkspaceID: issue.WorkspaceID,
 		AuthorType:  "system",
-		AuthorID:    pgtype.UUID{Valid: true},
+		AuthorID:    "00000000-0000-4000-8000-000000000001",
 		Content:     RuntimeUnusableNotice(name, verdict),
 		Type:        "system",
-		ParentID:    pgtype.UUID{Valid: false},
+		ParentID:    nullString(""),
 	})
 	if err != nil {
 		slog.Warn("runtime unusable notice: create system comment failed",
@@ -63,7 +61,7 @@ func (s *IssueService) noteRuntimeUnusable(ctx context.Context, issue db.Issue, 
 				"revision":    comment.Revision,
 			},
 			"issue_title":    issue.Title,
-			"issue_revision": created.IssueRevision,
+			"issue_revision": issue.Revision,
 		},
 	})
 }

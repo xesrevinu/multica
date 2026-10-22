@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -220,7 +221,7 @@ func TestWorkerReplyReconcileBoundaries(t *testing.T) {
 				}
 				var response CommentResponse
 				h := *testHandler
-				registration := &workerReplyRegistrationDB{DBTX: testPool}
+				registration := &workerReplyRegistrationDB{DBTX: testSQLite}
 				if mode == "registration_failure" {
 					registration.err = errors.New("injected worker reply registration failure")
 				}
@@ -246,7 +247,7 @@ func TestWorkerReplyReconcileBoundaries(t *testing.T) {
 				t.Fatal(err)
 			}
 			comments, err := testHandler.Queries.ListReconcilableCommentsForIssueSince(ctx, db.ListReconcilableCommentsForIssueSinceParams{
-				IssueID: task.IssueID, CommentThreadID: task.CommentThreadID, Since: task.CreatedAt,
+				IssueID: task.IssueID.String, CommentThreadID: task.CommentThreadID, Since: task.CreatedAt,
 				PlannedCommentIds: task.CoalescedCommentIds,
 			})
 			if err != nil {
@@ -318,7 +319,7 @@ func TestWorkerReplyRegistrationLosesCompletionRace(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := tx.Rollback(context.Background()); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
 			t.Error(err)
 		}
 	}()
@@ -335,7 +336,7 @@ func TestWorkerReplyRegistrationLosesCompletionRace(t *testing.T) {
 	var registrationErr error
 	go func() {
 		_, registrationErr = db.New(conn).RegisterPlannedCommentForActiveTask(ctx, db.RegisterPlannedCommentForActiveTaskParams{
-			IssueID: parseUUID(issueID), AgentID: parseUUID(agentID), CommentID: parseUUID(replyID),
+			IssueID: nullString(parseUUID(issueID)), AgentID: parseUUID(agentID), CommentID: parseUUID(replyID),
 		})
 		close(done)
 	}()
@@ -360,7 +361,7 @@ func TestWorkerReplyRegistrationLosesCompletionRace(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-done
-	if !errors.Is(registrationErr, pgx.ErrNoRows) {
+	if !errors.Is(registrationErr, sql.ErrNoRows) {
 		t.Fatalf("registration after completion = %v, want no rows", registrationErr)
 	}
 	task, err := testHandler.Queries.GetAgentTask(ctx, parseUUID(taskID))

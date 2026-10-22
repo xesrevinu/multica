@@ -50,9 +50,7 @@ func (f skillFileBatchFailDBTX) QueryRow(ctx context.Context, sql string, args .
 func newSkillFileReadFailureHandler(t *testing.T) *Handler {
 	t.Helper()
 	return New(
-		db.New(skillFileBatchFailDBTX{inner: testPool}),
-		testPool,
-		testHandler.Hub,
+		db.New(skillFileBatchFailDBTX{inner: testSQLite}), sqlDBBeginner{DB: testSQLite}, testHandler.Hub,
 		testHandler.Bus,
 		testHandler.EmailService,
 		nil,

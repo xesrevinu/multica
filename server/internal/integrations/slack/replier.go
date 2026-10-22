@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/slack-go/slack"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
@@ -41,7 +40,7 @@ const (
 // bindingMinter is the binding-token surface the replier needs.
 // *BindingTokenService satisfies it.
 type bindingMinter interface {
-	Mint(ctx context.Context, workspaceID, installationID pgtype.UUID, slackUserID string) (BindingToken, error)
+	Mint(ctx context.Context, workspaceID, installationID string, slackUserID string) (BindingToken, error)
 }
 
 type controlAckLedger interface {
@@ -144,7 +143,7 @@ func (r *OutboundReplier) Reply(ctx context.Context, inst engine.ResolvedInstall
 	case engine.OutcomeIngested:
 		// Only an /issue product result warrants an immediate reply; a plain
 		// chat message stays silent (the agent's own reply lands via ChatDone).
-		if res.IssueID.Valid {
+		if res.IssueID != "" {
 			text := issueCreatedText(res)
 			if res.IssueDuplicate {
 				text = issueDuplicateText(res)
@@ -167,7 +166,7 @@ func (r *OutboundReplier) postResult(ctx context.Context, inst engine.ResolvedIn
 		return fmt.Errorf("decode credentials: %w", err)
 	}
 	kind := "control_ack"
-	if res.Outcome == engine.OutcomeIngested && res.IssueID.Valid {
+	if res.Outcome == engine.OutcomeIngested && res.IssueID != "" {
 		kind = "issue_ack"
 	}
 	sent, err := r.newSender(creds).SendWithMetadata(ctx, channel.OutboundMessage{
@@ -176,7 +175,7 @@ func (r *OutboundReplier) postResult(ctx context.Context, inst engine.ResolvedIn
 	if err != nil {
 		return fmt.Errorf("post slack reply: %w", err)
 	}
-	if r.ledger == nil || !res.ChannelBindingID.Valid {
+	if r.ledger == nil || res.ChannelBindingID == "" {
 		return nil
 	}
 	ids := sent.MessageIDs

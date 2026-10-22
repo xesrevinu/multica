@@ -2,13 +2,13 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -211,14 +211,14 @@ func TestArchiveMikaIsRejected(t *testing.T) {
 // TestSystemInstructionsFor_OnlySystemAgents guards the blast radius: an
 // ordinary agent's payload must be byte-identical to before this feature.
 func TestSystemInstructionsFor_OnlySystemAgents(t *testing.T) {
-	mika := db.Agent{SystemKey: pgtype.Text{String: service.MikaSystemKey, Valid: true}}
+	mika := db.Agent{SystemKey: sql.NullString{String: service.MikaSystemKey, Valid: true}}
 	if systemInstructionsFor(mika) == "" {
 		t.Fatal("Mika should expose the product prompt")
 	}
 	for _, ordinary := range []db.Agent{
 		{},
-		{SystemKey: pgtype.Text{String: "", Valid: true}},
-		{SystemKey: pgtype.Text{String: "agent_builder:abc", Valid: true}},
+		{SystemKey: sql.NullString{String: "", Valid: true}},
+		{SystemKey: sql.NullString{String: "agent_builder:abc", Valid: true}},
 	} {
 		if got := systemInstructionsFor(ordinary); got != "" {
 			t.Fatalf("non-Mika agent must expose no system instructions, got %q", got)

@@ -71,14 +71,11 @@ func TestSubtreeUnsubscribe_LosesToConcurrentRevoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin revoke tx: %v", err)
 	}
-	defer revokeTx.Rollback(context.Background())
+	defer revokeTx.Rollback(ctx)
 	holderPID := holderBackendPID(t, ctx, revokeTx)
 	rq := testHandler.Queries.WithTx(revokeTx)
 
-	if err := rq.LockSubscriberWrites(ctx, db.LockSubscriberWritesParams{
-		WorkspaceID: parseUUID(testWorkspaceID),
-		UserID:      parseUUID(userID),
-	}); err != nil {
+	if err := rq.LockSubscriberWrites(ctx); err != nil {
 		t.Fatalf("revoke lock: %v", err)
 	}
 	if err := rq.DeleteSubscriptionsByMember(ctx, db.DeleteSubscriptionsByMemberParams{
@@ -118,7 +115,7 @@ func TestSubtreeUnsubscribe_LosesToConcurrentRevoke(t *testing.T) {
 		}
 	}
 
-	if err := revokeTx.Commit(context.Background()); err != nil {
+	if err := revokeTx.Commit(ctx); err != nil {
 		t.Fatalf("commit revoke: %v", err)
 	}
 

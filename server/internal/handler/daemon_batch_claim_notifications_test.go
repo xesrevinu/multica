@@ -16,79 +16,21 @@ import (
 
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/gorilla/websocket"
-	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/middleware"
-	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
-	"github.com/redis/go-redis/v9"
 )
 
-// Exercise the production notifier/relay. XADD honors the actual context the
-// relay supplies, including its independent two-second timeout.
-type stalledWakeupRedis struct {
-	redis.UniversalClient
+type countingRelayPublisher struct {
 	calls atomic.Int64
 }
 
-func (r *stalledWakeupRedis) XAdd(ctx context.Context, _ *redis.XAddArgs) *redis.StringCmd {
-	r.calls.Add(1)
-	<-ctx.Done()
-	cmd := redis.NewStringCmd(ctx)
-	cmd.SetErr(ctx.Err())
-	return cmd
-}
-
-type stalledClaimCache struct {
-	redis.UniversalClient
-	calls atomic.Int64
-}
-
-func (r *stalledClaimCache) ZRem(ctx context.Context, _ string, _ ...any) *redis.IntCmd {
-	r.calls.Add(1)
-	<-ctx.Done()
-	cmd := redis.NewIntCmd(ctx)
-	cmd.SetErr(ctx.Err())
-	return cmd
-}
-
-func (r *stalledClaimCache) Pipeline() redis.Pipeliner { return &stalledClaimPipeline{cache: r} }
-
-type stalledClaimPipeline struct {
-	redis.Pipeliner
-	cache *stalledClaimCache
-}
-
-func (p *stalledClaimPipeline) Incr(ctx context.Context, _ string) *redis.IntCmd {
-	return redis.NewIntCmd(ctx)
-}
-
-func (p *stalledClaimPipeline) Expire(ctx context.Context, _ string, _ time.Duration) *redis.BoolCmd {
-	return redis.NewBoolCmd(ctx)
-}
-
-func (p *stalledClaimPipeline) Exec(ctx context.Context) ([]redis.Cmder, error) {
-	p.cache.calls.Add(1)
-	<-ctx.Done()
-	return nil, ctx.Err()
-}
-
-type claimRecoveryCacheDB struct {
-	db.DBTX
-	tasks *service.TaskService
-	cache *stalledClaimCache
-}
-
-func (d *claimRecoveryCacheDB) QueryRow(ctx context.Context, query string, args ...any) pgx.Row {
-	// Only stall recovery caches, not the preceding ordinary claim operations.
-	if ctx.Err() == nil && strings.Contains(query, "-- name: RequeueAgentTaskAfterClaimFailure :one") {
-		d.tasks.EmptyClaim = service.NewEmptyClaimCache(d.cache)
-		d.tasks.ReclaimCheck = service.NewReclaimCheckCache(d.cache)
-	}
-	return d.DBTX.QueryRow(ctx, query, args...)
+func (c *countingRelayPublisher) PublishWithID(string, string, string, []byte, string) error {
+	c.calls.Add(1)
+	return nil
 }
 
 func TestClaimTasksByRuntime_HTTPFollowupDoesNotWaitForRecovery(t *testing.T) {
@@ -113,9 +55,9 @@ func TestClaimTasksByRuntime_HTTPFollowupDoesNotWaitForRecovery(t *testing.T) {
 		<-eventRelease
 	})
 	h := *testHandler
-	h.TaskService = service.NewTaskService(testHandler.Queries, testPool, testHandler.TaskService.Hub, bus)
+	h.TaskService = service.NewTaskService(testHandler.Queries, testSQLite, testHandler.TaskService.Hub, bus)
 	firstHandler := h
-	firstHandler.Queries = db.New(&slowBatchClaimDB{DBTX: testPool, failingAgent: parseUUID(agentB)})
+	firstHandler.Queries = db.New(&slowBatchClaimDB{DBTX: testSQLite, failingAgent: parseUUID(agentB)})
 	var requests atomic.Int64
 	firstCompleted := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -222,10 +164,9 @@ func TestClaimTasksByRuntime_ResponsePrecedesRecoveryNotifications(t *testing.T)
 			taskB := seedQueuedIssueTask(t, ctx, agentB, runtimeID, issueB)
 			dbfx.Exec(t, `UPDATE agent_task_queue SET priority = 100 WHERE id = $1`, taskA)
 			h := *testHandler
-			h.Queries = db.New(&slowBatchClaimDB{DBTX: testPool, failingAgent: parseUUID(agentB)})
+			h.Queries = db.New(&slowBatchClaimDB{DBTX: testSQLite, failingAgent: parseUUID(agentB)})
 			hub := daemonws.NewHub()
-			rdb := &stalledWakeupRedis{}
-			relay := realtime.NewShardedStreamRelay(testHandler.TaskService.Hub, rdb, rdb, realtime.DefaultShardedStreamRelayConfig())
+			relay := &countingRelayPublisher{}
 			bus := events.New()
 			eventEntered, eventRelease := make(chan struct{}), make(chan struct{})
 			releaseEvent := sync.OnceFunc(func() { close(eventRelease) })
@@ -233,9 +174,7 @@ func TestClaimTasksByRuntime_ResponsePrecedesRecoveryNotifications(t *testing.T)
 				close(eventEntered)
 				<-eventRelease
 			})
-			h.TaskService = service.NewTaskService(testHandler.Queries, testPool, testHandler.TaskService.Hub, bus, daemonws.NewRelayNotifier(hub, relay))
-			cache := &stalledClaimCache{}
-			h.TaskService.Queries = db.New(&claimRecoveryCacheDB{DBTX: testPool, tasks: h.TaskService, cache: cache})
+			h.TaskService = service.NewTaskService(testHandler.Queries, testSQLite, testHandler.TaskService.Hub, bus, daemonws.NewRelayNotifier(hub, relay))
 			completed := make(chan struct{})
 			hub.SetRPCHandler(func(ctx context.Context, identity daemonws.ClientIdentity, method string, body json.RawMessage) (int, json.RawMessage, error) {
 				status, response, err := h.DaemonRPCHandler(ctx, identity, method, body)
@@ -325,8 +264,8 @@ func TestClaimTasksByRuntime_ResponsePrecedesRecoveryNotifications(t *testing.T)
 			if len(response.Tasks) != 1 || response.Tasks[0].ID != taskA || response.Tasks[0].AuthToken == "" {
 				t.Fatalf("successful payload missing: %+v", response)
 			}
-			if cache.calls.Load() != 2 || rdb.calls.Load() != 1 {
-				t.Fatalf("recovery skipped side effects: cache=%d wakeup=%d", cache.calls.Load(), rdb.calls.Load())
+			if relay.calls.Load() != 1 {
+				t.Fatalf("recovery skipped wakeup publish: %d", relay.calls.Load())
 			}
 			for _, task := range []struct{ id, status string }{{taskA, "dispatched"}, {taskB, "queued"}} {
 				row, err := testHandler.Queries.GetAgentTask(ctx, parseUUID(task.id))

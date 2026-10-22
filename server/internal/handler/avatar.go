@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/storage"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -270,12 +269,12 @@ func attachmentIsBound(att db.Attachment) bool {
 
 // attachmentIDFromStorageKey recovers the attachment id UploadFile embedded in
 // the object filename (`<prefix>/<uuid><ext>`).
-func attachmentIDFromStorageKey(key string) (pgtype.UUID, bool) {
+func attachmentIDFromStorageKey(key string) (string, bool) {
 	base := path.Base(key)
 	stem := strings.TrimSuffix(base, path.Ext(base))
 	id, err := util.ParseUUID(stem)
 	if err != nil {
-		return pgtype.UUID{}, false
+		return "", false
 	}
 	return id, true
 }

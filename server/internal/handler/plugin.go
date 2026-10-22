@@ -107,11 +107,11 @@ func (h *Handler) pluginInstallationPayload(ctx context.Context, installation db
 
 	config := map[string]any{}
 	if len(installation.Config) > 0 {
-		_ = json.Unmarshal(installation.Config, &config)
+		_ = json.Unmarshal([]byte(installation.Config), &config)
 	}
 	var granted []string
 	if len(installation.GrantedScopes) > 0 {
-		_ = json.Unmarshal(installation.GrantedScopes, &granted)
+		_ = json.Unmarshal([]byte(installation.GrantedScopes), &granted)
 	}
 	if granted == nil {
 		granted = []string{}
@@ -141,7 +141,7 @@ func (h *Handler) pluginInstallationPayload(ctx context.Context, installation db
 				Timezone: schedule.Timezone,
 			}
 			if schedule.NextRunAt.Valid {
-				response.Schedule.NextRunAt = schedule.NextRunAt.Time.UTC().Format(timeFormatRFC3339)
+				response.Schedule.NextRunAt = parseDBTime(schedule.NextRunAt.String).UTC().Format(timeFormatRFC3339)
 			}
 		}
 		hooks = append(hooks, response)
@@ -162,7 +162,7 @@ func (h *Handler) pluginInstallationPayload(ctx context.Context, installation db
 		Description:       manifest.Description,
 		Version:           installation.Version,
 		PackageVersionID:  uuidToString(installation.PackageVersionID),
-		Enabled:           installation.Enabled,
+		Enabled:           int64ToBool(installation.Enabled),
 		GrantedScopes:     granted,
 		ConfigSchema:      service.ConfigFieldsForManifest(manifest),
 		Config:            config,
@@ -170,8 +170,8 @@ func (h *Handler) pluginInstallationPayload(ctx context.Context, installation db
 		Surfaces:          surfaces,
 		Hooks:             hooks,
 		Resources:         resources,
-		CreatedAt:         installation.CreatedAt.Time.UTC().Format(timeFormatRFC3339),
-		UpdatedAt:         installation.UpdatedAt.Time.UTC().Format(timeFormatRFC3339),
+		CreatedAt:         parseDBTime(installation.CreatedAt).UTC().Format(timeFormatRFC3339),
+		UpdatedAt:         parseDBTime(installation.UpdatedAt).UTC().Format(timeFormatRFC3339),
 	}, nil
 }
 

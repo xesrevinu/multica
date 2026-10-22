@@ -59,7 +59,7 @@ func TestGetTaskStatus_DoesNotResolveSourceWorkspace(t *testing.T) {
 			taskID := dbfx.Task(t, agentID, testutil.Cols{
 				"runtime_id": runtimeID, "status": "running", "started_at": testutil.Raw("now()"), tc.column: tc.id,
 			})
-			fault := &lookupFaultPool{DBTX: testPool, query: tc.query}
+			fault := &lookupFaultPool{DBTX: testSQLite, query: tc.query}
 			h := &Handler{Queries: db.New(fault), TaskService: &service.TaskService{Queries: db.New(fault)}}
 			req := newDaemonTokenRequest(http.MethodGet, "/api/daemon/tasks/"+taskID+"/status", nil, testWorkspaceID, "test-daemon")
 			req = withURLParam(req, "taskId", taskID)
@@ -176,7 +176,7 @@ func TestResolveTaskWorkspaceIDChecked_SeparatesAbsenceFromFailure(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		svc := &service.TaskService{Queries: db.New(&lookupFaultPool{DBTX: testPool, query: "GetIssue"})}
+		svc := &service.TaskService{Queries: db.New(&lookupFaultPool{DBTX: testSQLite, query: "GetIssue"})}
 		got, err := svc.ResolveTaskWorkspaceIDChecked(ctx, task)
 		if got != "" || err == nil {
 			t.Fatalf("workspace=%q err=%v, want \"\" / error", got, err)

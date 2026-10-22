@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -9,9 +10,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/multica-ai/multica/server/internal/migrations"
 )
@@ -21,13 +19,14 @@ import (
 // versions rather than checking a single "latest" row, so a missing
 // out-of-order migration (numbered below an already-applied later one) is
 // detected instead of being masked by the later version's presence.
-const readinessQuery = `SELECT COUNT(*) FROM schema_migrations WHERE version = ANY($1)`
+// The argument is a JSON array consumed by json_each.
+const readinessQuery = `SELECT COUNT(*) FROM schema_migrations WHERE version IN (SELECT value FROM json_each(?1))`
 
 const readinessCacheTTL = 3 * time.Second
 
 type readinessDB interface {
-	Ping(ctx context.Context) error
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	PingContext(ctx context.Context) error
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 type serverHealth struct {
@@ -70,7 +69,7 @@ type readinessChecks struct {
 	Migrations string `json:"migrations"`
 }
 
-func newServerHealth(pool *pgxpool.Pool) *serverHealth {
+func newServerHealth(pool *sql.DB) *serverHealth {
 	requiredMigrations, err := migrations.AllVersions()
 	return &serverHealth{
 		db:                 pool,
@@ -149,7 +148,7 @@ func (h *serverHealth) computeReadiness(parent context.Context) (readinessRespon
 	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 	defer cancel()
 
-	if err := h.db.Ping(ctx); err != nil {
+	if err := h.db.PingContext(ctx); err != nil {
 		resp.Status = "not_ready"
 		resp.Checks.DB = "error"
 		resp.Checks.Migrations = "unknown"
@@ -162,8 +161,14 @@ func (h *serverHealth) computeReadiness(parent context.Context) (readinessRespon
 		return resp, http.StatusServiceUnavailable
 	}
 
+	versions, err := json.Marshal(h.requiredMigrations)
+	if err != nil {
+		resp.Status = "not_ready"
+		resp.Checks.Migrations = "error"
+		return resp, http.StatusServiceUnavailable
+	}
 	var appliedCount int
-	if err := h.db.QueryRow(ctx, readinessQuery, h.requiredMigrations).Scan(&appliedCount); err != nil {
+	if err := h.db.QueryRowContext(ctx, readinessQuery, string(versions)).Scan(&appliedCount); err != nil {
 		resp.Status = "not_ready"
 		resp.Checks.Migrations = "error"
 		return resp, http.StatusServiceUnavailable

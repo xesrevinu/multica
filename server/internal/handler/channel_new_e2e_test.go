@@ -2,13 +2,11 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
@@ -121,7 +119,7 @@ func TestChannelChatCommandE2ERotatesRouteAndFreezesTaskDelivery(t *testing.T) {
 
 	ctx := context.Background()
 	agentID, runtimeID, _ := createRuntimeGuardAgent(t, ctx)
-	queries := db.New(testPool)
+	queries := db.New(testSQLite)
 	channelType := channel.Type("slack")
 	bindingKey := "chat-route-" + t.Name()
 
@@ -143,8 +141,8 @@ func TestChannelChatCommandE2ERotatesRouteAndFreezesTaskDelivery(t *testing.T) {
 	})
 
 	installation := engine.ResolvedInstallation{
-		ID: util.MustParseUUID(installationID), WorkspaceID: util.MustParseUUID(testWorkspaceID),
-		AgentID: util.MustParseUUID(agentID), InstallerUserID: util.MustParseUUID(testUserID), Active: true,
+		ID: toPGUUID(util.MustParseUUID(installationID)), WorkspaceID: toPGUUID(util.MustParseUUID(testWorkspaceID)),
+		AgentID: toPGUUID(util.MustParseUUID(agentID)), InstallerUserID: toPGUUID(util.MustParseUUID(testUserID)), Active: true,
 	}
 	chatSession := engine.NewChatSession(queries, testPool, channelType, engine.SessionTitles{
 		Direct: "Channel E2E conversation", Group: "Channel E2E group", Fallback: "Channel E2E conversation",
@@ -163,7 +161,7 @@ func TestChannelChatCommandE2ERotatesRouteAndFreezesTaskDelivery(t *testing.T) {
 	})
 
 	oldSessionID, err := binder.EnsureSession(ctx, engine.EnsureSessionParams{
-		Installation: installation, Sender: util.MustParseUUID(testUserID),
+		Installation: installation, Sender: toPGUUID(util.MustParseUUID(testUserID)),
 		Message: channel.InboundMessage{Source: channel.Source{
 			ChannelType: channelType, ChatID: bindingKey, ChatType: channel.ChatTypeP2P,
 		}},
@@ -259,7 +257,7 @@ func TestChannelChatCommandE2ERotatesRouteAndFreezesTaskDelivery(t *testing.T) {
 	}
 
 	var newTitle string
-	var newProviderSession, newWorkDir pgtype.Text
+	var newProviderSession, newWorkDir sql.NullString
 	var explicitlyCreated bool
 	if err := testPool.QueryRow(ctx, `
 		SELECT title, session_id, work_dir, explicitly_created_at IS NOT NULL
@@ -387,7 +385,7 @@ func TestChannelChatCommandE2ERotatesRouteAndFreezesTaskDelivery(t *testing.T) {
 	`, installationID, bindingKey).Scan(&attachmentSessionID); err != nil {
 		t.Fatalf("load attachment-only Chat: %v", err)
 	}
-	var attachmentID pgtype.UUID
+	var attachmentID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO attachment (
 			workspace_id, chat_session_id, uploader_type, uploader_id,
@@ -402,7 +400,7 @@ func TestChannelChatCommandE2ERotatesRouteAndFreezesTaskDelivery(t *testing.T) {
 		t.Fatalf("load attachment-only Chat session: %v", err)
 	}
 	attachmentSend, err := testHandler.TaskService.SendDirectChatMessage(
-		ctx, attachmentSession, agent, util.MustParseUUID(testUserID), "", []pgtype.UUID{attachmentID},
+		ctx, attachmentSession, agent, util.MustParseUUID(testUserID), "", []string{attachmentID},
 		"member", util.MustParseUUID(testUserID),
 	)
 	if err != nil {
@@ -424,7 +422,7 @@ func TestChannelChatStaleTaskPreparationLeavesRouteAndChatUntouched(t *testing.T
 
 	ctx := context.Background()
 	agentID, _, _ := createRuntimeGuardAgent(t, ctx)
-	queries := db.New(testPool)
+	queries := db.New(testSQLite)
 	bindingKey := "chat-atomic-" + t.Name()
 	var installationID string
 	if err := testPool.QueryRow(ctx, `
@@ -443,8 +441,8 @@ func TestChannelChatStaleTaskPreparationLeavesRouteAndChatUntouched(t *testing.T
 
 	sessions := engine.NewChatSession(queries, testPool, channel.Type("slack"), engine.SessionTitles{})
 	oldSessionID, err := sessions.EnsureSession(ctx, engine.EnsureSessionInput{
-		WorkspaceID: util.MustParseUUID(testWorkspaceID), AgentID: util.MustParseUUID(agentID),
-		InstallationID: util.MustParseUUID(installationID), Sender: util.MustParseUUID(testUserID),
+		WorkspaceID: toPGUUID(util.MustParseUUID(testWorkspaceID)), AgentID: toPGUUID(util.MustParseUUID(agentID)),
+		InstallationID: toPGUUID(util.MustParseUUID(installationID)), Sender: toPGUUID(util.MustParseUUID(testUserID)),
 		BindingKey: bindingKey, ChatType: channel.ChatTypeP2P,
 	})
 	if err != nil {
@@ -464,13 +462,13 @@ func TestChannelChatStaleTaskPreparationLeavesRouteAndChatUntouched(t *testing.T
 	}
 	_, err = sessions.StartSession(ctx, engine.StartSessionInput{
 		EnsureSessionInput: engine.EnsureSessionInput{
-			WorkspaceID: util.MustParseUUID(testWorkspaceID), AgentID: util.MustParseUUID(agentID),
-			InstallationID: util.MustParseUUID(installationID), Sender: util.MustParseUUID(testUserID),
+			WorkspaceID: toPGUUID(util.MustParseUUID(testWorkspaceID)), AgentID: toPGUUID(util.MustParseUUID(agentID)),
+			InstallationID: toPGUUID(util.MustParseUUID(installationID)), Sender: toPGUUID(util.MustParseUUID(testUserID)),
 			BindingKey: bindingKey, ChatType: channel.ChatTypeP2P,
 		},
-		Initiator: util.MustParseUUID(testUserID),
+		Initiator: toPGUUID(util.MustParseUUID(testUserID)),
 		Body:      "new topic", MessageID: "message-new-topic", PersistMessage: true,
-		BeforeCommit: func(ctx context.Context, tx pgx.Tx, session db.ChatSession) error {
+		BeforeCommit: func(ctx context.Context, tx *sql.Tx, session db.ChatSession) error {
 			_, enqueueErr := testHandler.TaskService.EnqueuePreparedChannelChatTaskInTx(
 				ctx, tx, session, util.MustParseUUID(testUserID), false, 1, prepared,
 			)
@@ -497,7 +495,7 @@ func TestChannelChatStaleTaskPreparationLeavesRouteAndChatUntouched(t *testing.T
 	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE agent_id = $1`, agentID).Scan(&taskCount); err != nil {
 		t.Fatalf("count tasks after start: %v", err)
 	}
-	if currentSessionID != util.UUIDToString(oldSessionID) || revision != 1 || afterCount != beforeCount || taskCount != 0 {
+	if currentSessionID != util.UUIDToString(fromPGUUID(oldSessionID)) || revision != 1 || afterCount != beforeCount || taskCount != 0 {
 		t.Fatalf("partial commit: current=%s revision=%d chats=%d/%d tasks=%d", currentSessionID, revision, afterCount, beforeCount, taskCount)
 	}
 }
@@ -509,7 +507,7 @@ func TestSlackNativeNewCommandCreatesMessageTaskAndDeliveryAtomically(t *testing
 
 	ctx := context.Background()
 	agentID, _, _ := createRuntimeGuardAgent(t, ctx)
-	queries := db.New(testPool)
+	queries := db.New(testSQLite)
 	var installationID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO channel_installation (
@@ -527,12 +525,12 @@ func TestSlackNativeNewCommandCreatesMessageTaskAndDeliveryAtomically(t *testing
 	})
 
 	installation := engine.ResolvedInstallation{
-		ID: util.MustParseUUID(installationID), WorkspaceID: util.MustParseUUID(testWorkspaceID),
-		AgentID: util.MustParseUUID(agentID), InstallerUserID: util.MustParseUUID(testUserID), Active: true,
+		ID: toPGUUID(util.MustParseUUID(installationID)), WorkspaceID: toPGUUID(util.MustParseUUID(testWorkspaceID)),
+		AgentID: toPGUUID(util.MustParseUUID(agentID)), InstallerUserID: toPGUUID(util.MustParseUUID(testUserID)), Active: true,
 	}
 	sessions := engine.NewChatSession(queries, testPool, channel.Type("slack"), engine.SessionTitles{})
 	starter := slackintegration.NewSlackDMControlStarter(queries, testPool, testHandler.TaskService, testHandler)
-	if err := starter.StartSlackDMChat(ctx, installation, util.MustParseUUID(testUserID), slackapi.SlashCommand{
+	if err := starter.StartSlackDMChat(ctx, installation, toPGUUID(util.MustParseUUID(testUserID)), slackapi.SlashCommand{
 		ChannelID: "D-native-chat", Text: "investigate native command",
 	}, "envelope-native-chat"); err != nil {
 		t.Fatalf("StartSlackDMChat: %v", err)
@@ -576,7 +574,7 @@ func TestSlackNativeNewCommandCreatesMessageTaskAndDeliveryAtomically(t *testing
 		wg.Add(1)
 		go func(id string) {
 			defer wg.Done()
-			errs <- starter.StartSlackDMChat(ctx, installation, util.MustParseUUID(testUserID), slackapi.SlashCommand{
+			errs <- starter.StartSlackDMChat(ctx, installation, toPGUUID(util.MustParseUUID(testUserID)), slackapi.SlashCommand{
 				ChannelID: "D-native-chat",
 			}, id)
 		}(envelopeID)
@@ -603,7 +601,7 @@ func TestSlackNativeNewCommandCreatesMessageTaskAndDeliveryAtomically(t *testing
 		t.Fatalf("concurrent /new generations: max=%d count=%d active=%d", finalRevision, generations, activeRoutes)
 	}
 	if _, err := sessions.AppendUserMessage(ctx, engine.AppendInput{
-		SessionID: util.MustParseUUID(finalSessionID), Sender: util.MustParseUUID(testUserID),
+		SessionID: toPGUUID(util.MustParseUUID(finalSessionID)), Sender: toPGUUID(util.MustParseUUID(testUserID)),
 		Body: "first public message", MessageID: "1700000000.000001",
 	}); err != nil {
 		t.Fatalf("append first message after native /new: %v", err)
@@ -642,7 +640,7 @@ func TestSlackNativeClearCommandKeepsChatAndAdvancesContextAtomically(t *testing
 
 	ctx := context.Background()
 	agentID, _, _ := createRuntimeGuardAgent(t, ctx)
-	queries := db.New(testPool)
+	queries := db.New(testSQLite)
 	var installationID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO channel_installation (
@@ -660,11 +658,11 @@ func TestSlackNativeClearCommandKeepsChatAndAdvancesContextAtomically(t *testing
 	})
 
 	installation := engine.ResolvedInstallation{
-		ID: util.MustParseUUID(installationID), WorkspaceID: util.MustParseUUID(testWorkspaceID),
-		AgentID: util.MustParseUUID(agentID), InstallerUserID: util.MustParseUUID(testUserID), Active: true,
+		ID: toPGUUID(util.MustParseUUID(installationID)), WorkspaceID: toPGUUID(util.MustParseUUID(testWorkspaceID)),
+		AgentID: toPGUUID(util.MustParseUUID(agentID)), InstallerUserID: toPGUUID(util.MustParseUUID(testUserID)), Active: true,
 	}
 	starter := slackintegration.NewSlackDMControlStarter(queries, testPool, testHandler.TaskService, testHandler)
-	if err := starter.ClearSlackDMContext(ctx, installation, util.MustParseUUID(testUserID), slackapi.SlashCommand{
+	if err := starter.ClearSlackDMContext(ctx, installation, toPGUUID(util.MustParseUUID(testUserID)), slackapi.SlashCommand{
 		ChannelID: "D-native-clear", Text: "/issue investigate native clear",
 	}, "envelope-native-clear-message"); err != nil {
 		t.Fatalf("ClearSlackDMContext with message: %v", err)
@@ -710,7 +708,7 @@ func TestSlackNativeClearCommandKeepsChatAndAdvancesContextAtomically(t *testing
 		t.Fatalf("native /clear first-turn title = %q, want the literal command body", title)
 	}
 
-	if err := starter.ClearSlackDMContext(ctx, installation, util.MustParseUUID(testUserID), slackapi.SlashCommand{
+	if err := starter.ClearSlackDMContext(ctx, installation, toPGUUID(util.MustParseUUID(testUserID)), slackapi.SlashCommand{
 		ChannelID: "D-native-clear",
 	}, "envelope-native-clear-bare"); err != nil {
 		t.Fatalf("bare ClearSlackDMContext: %v", err)
@@ -757,7 +755,7 @@ func runChannelClearCommandE2E(t *testing.T, channelType channel.Type, text, com
 
 	ctx := context.Background()
 	agentID, runtimeID, daemonID := createRuntimeGuardAgent(t, ctx)
-	queries := db.New(testPool)
+	queries := db.New(testSQLite)
 
 	var installationID string
 	if err := testPool.QueryRow(ctx, `
@@ -778,10 +776,10 @@ func runChannelClearCommandE2E(t *testing.T, channelType channel.Type, text, com
 	})
 
 	installation := engine.ResolvedInstallation{
-		ID:              util.MustParseUUID(installationID),
-		WorkspaceID:     util.MustParseUUID(testWorkspaceID),
-		AgentID:         util.MustParseUUID(agentID),
-		InstallerUserID: util.MustParseUUID(testUserID),
+		ID:              toPGUUID(util.MustParseUUID(installationID)),
+		WorkspaceID:     toPGUUID(util.MustParseUUID(testWorkspaceID)),
+		AgentID:         toPGUUID(util.MustParseUUID(agentID)),
+		InstallerUserID: toPGUUID(util.MustParseUUID(testUserID)),
 		Active:          true,
 	}
 	chatSession := engine.NewChatSession(queries, testPool, channelType, engine.SessionTitles{
@@ -796,7 +794,7 @@ func runChannelClearCommandE2E(t *testing.T, channelType channel.Type, text, com
 	// claim while retaining the durable chat transcript.
 	sessionID, err := binder.EnsureSession(ctx, engine.EnsureSessionParams{
 		Installation: installation,
-		Sender:       util.MustParseUUID(testUserID),
+		Sender:       toPGUUID(util.MustParseUUID(testUserID)),
 		Message: channel.InboundMessage{Source: channel.Source{
 			ChannelType: channelType,
 			ChatID:      t.Name(),
@@ -974,29 +972,29 @@ func (r channelNewE2EInstallationResolver) ResolveInstallation(context.Context, 
 }
 
 type channelNewE2EIdentityResolver struct {
-	userID pgtype.UUID
+	userID string
 }
 
 func (r channelNewE2EIdentityResolver) ResolveSender(context.Context, engine.ResolvedInstallation, channel.InboundMessage) (engine.ResolvedIdentity, error) {
-	return engine.ResolvedIdentity{UserID: r.userID}, nil
+	return engine.ResolvedIdentity{UserID: toPGUUID(r.userID)}, nil
 }
 
 type channelNewE2EDeduper struct {
 	queries *db.Queries
 }
 
-func (d channelNewE2EDeduper) Claim(ctx context.Context, installationID pgtype.UUID, messageID string) (pgtype.UUID, error) {
+func (d channelNewE2EDeduper) Claim(ctx context.Context, installationID string, messageID string) (string, error) {
 	claim, err := d.queries.ClaimChannelInboundDedup(ctx, db.ClaimChannelInboundDedupParams{
 		InstallationID: installationID,
 		MessageID:      messageID,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return pgtype.UUID{}, engine.ErrDuplicate
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", engine.ErrDuplicate
 	}
 	return claim.ClaimToken, err
 }
 
-func (d channelNewE2EDeduper) Mark(ctx context.Context, installationID pgtype.UUID, messageID string, claimToken pgtype.UUID) error {
+func (d channelNewE2EDeduper) Mark(ctx context.Context, installationID string, messageID string, claimToken string) error {
 	_, err := d.queries.MarkChannelInboundDedupProcessed(ctx, db.MarkChannelInboundDedupProcessedParams{
 		InstallationID: installationID,
 		MessageID:      messageID,
@@ -1005,7 +1003,7 @@ func (d channelNewE2EDeduper) Mark(ctx context.Context, installationID pgtype.UU
 	return err
 }
 
-func (d channelNewE2EDeduper) Release(ctx context.Context, installationID pgtype.UUID, messageID string, claimToken pgtype.UUID) error {
+func (d channelNewE2EDeduper) Release(ctx context.Context, installationID string, messageID string, claimToken string) error {
 	_, err := d.queries.ReleaseChannelInboundDedup(ctx, db.ReleaseChannelInboundDedupParams{
 		InstallationID: installationID,
 		MessageID:      messageID,
@@ -1018,15 +1016,15 @@ type channelNewE2ESessionBinder struct {
 	session *engine.ChatSession
 }
 
-func (b *channelNewE2ESessionBinder) EnsureSession(ctx context.Context, p engine.EnsureSessionParams) (pgtype.UUID, error) {
-	return b.session.EnsureSession(ctx, engine.EnsureSessionInput{
+func (b *channelNewE2ESessionBinder) EnsureSession(ctx context.Context, p engine.EnsureSessionParams) (string, error) {
+	return fromPGUUID(b.session.EnsureSession(ctx, engine.EnsureSessionInput{
 		WorkspaceID:    p.Installation.WorkspaceID,
 		AgentID:        p.Installation.AgentID,
 		InstallationID: p.Installation.ID,
 		Sender:         p.Sender,
 		BindingKey:     p.Message.Source.ChatID,
 		ChatType:       p.Message.Source.ChatType,
-	})
+	}))
 }
 
 func (b *channelNewE2ESessionBinder) StartSession(ctx context.Context, p engine.StartSessionParams) (engine.StartSessionResult, error) {
@@ -1050,9 +1048,9 @@ func (b *channelNewE2ESessionBinder) StartSession(ctx context.Context, p engine.
 }
 
 func (b *channelNewE2ESessionBinder) MarkPendingFresh(
-	ctx context.Context, sessionID pgtype.UUID, messageID string,
+	ctx context.Context, sessionID string, messageID string,
 ) error {
-	return b.session.MarkPendingFresh(ctx, sessionID, messageID)
+	return b.session.MarkPendingFresh(ctx, toPGUUID(sessionID), messageID)
 }
 
 func (b *channelNewE2ESessionBinder) AppendMessage(ctx context.Context, p engine.AppendParams) (engine.AppendResult, error) {
@@ -1083,6 +1081,6 @@ func (b *channelNewE2ESessionBinder) BindMedia(ctx context.Context, p engine.Bin
 
 type channelNewE2EAuditor struct{}
 
-func (channelNewE2EAuditor) RecordDrop(context.Context, pgtype.UUID, channel.InboundMessage, engine.DropReason) error {
+func (channelNewE2EAuditor) RecordDrop(context.Context, string, channel.InboundMessage, engine.DropReason) error {
 	return nil
 }

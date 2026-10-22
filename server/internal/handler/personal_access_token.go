@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -8,8 +9,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/auth"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -79,12 +78,10 @@ func (h *Handler) CreatePersonalAccessToken(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	var expiresAt pgtype.Timestamptz
+	var expiresAt string
 	if req.ExpiresInDays != nil && *req.ExpiresInDays > 0 {
-		expiresAt = pgtype.Timestamptz{
-			Time:  time.Now().Add(time.Duration(*req.ExpiresInDays) * 24 * time.Hour),
-			Valid: true,
-		}
+		expiresAt = time.Now().Add(time.Duration(*req.ExpiresInDays) * 24 * time.Hour).UTC().Format(time.RFC3339Nano)
+
 	}
 
 	prefix := rawToken
@@ -97,7 +94,7 @@ func (h *Handler) CreatePersonalAccessToken(w http.ResponseWriter, r *http.Reque
 		Name:        req.Name,
 		TokenHash:   auth.HashToken(rawToken),
 		TokenPrefix: prefix,
-		ExpiresAt:   expiresAt,
+		ExpiresAt:   nullString(expiresAt),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create token")
@@ -180,7 +177,7 @@ func (h *Handler) RenewCurrentPersonalAccessToken(w http.ResponseWriter, r *http
 		// the middleware's cache hit and this DB read. Surface a 401 so the
 		// daemon's 401 branch fires the same "please re-login" message it
 		// would for any other auth failure, instead of a generic 500.
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusUnauthorized, "token is no longer valid")
 			return
 		}
@@ -206,33 +203,35 @@ func (h *Handler) RenewCurrentPersonalAccessToken(w http.ResponseWriter, r *http
 	}
 
 	now := time.Now()
-	remaining := pat.ExpiresAt.Time.Sub(now)
+	remaining := parseDBTime(pat.ExpiresAt.String).Sub(now)
 	if remaining > PATRenewThreshold {
 		writeJSON(w, http.StatusOK, RenewPATResponse{
-			ExpiresAt: timestampToString(pat.ExpiresAt),
+			ExpiresAt: timestampToString(pat.ExpiresAt.String),
 			Renewed:   false,
 		})
 		return
 	}
 
-	newExpiresAt := pgtype.Timestamptz{Time: now.Add(PATRenewExtension), Valid: true}
-	// Pass the renewal threshold as the CAS predicate: only update if the
-	// row's existing expires_at is still inside this window. After the
-	// first writer succeeds the row sits at now+90d, which is well past
-	// now+7d, so any concurrent renewer hits the WHERE and sees ErrNoRows.
-	renewThreshold := pgtype.Timestamptz{Time: now.Add(PATRenewThreshold), Valid: true}
+	newExpiresAt := now.Add(PATRenewExtension).UTC().Format(time.
+		// Pass the renewal threshold as the CAS predicate: only update if the
+		// row's existing expires_at is still inside this window. After the
+		// first writer succeeds the row sits at now+90d, which is well past
+		// now+7d, so any concurrent renewer hits the WHERE and sees ErrNoRows.
+		RFC3339Nano)
+
+	renewThreshold := now.Add(PATRenewThreshold).UTC().Format(time.RFC3339Nano)
 	updated, err := h.Queries.ExtendPersonalAccessTokenExpiry(r.Context(), db.ExtendPersonalAccessTokenExpiryParams{
 		ID:               pat.ID,
-		NewExpiresAt:     newExpiresAt,
-		RenewThresholdAt: renewThreshold,
+		NewExpiresAt:     nullString(newExpiresAt),
+		RenewThresholdAt: nullString(renewThreshold),
 	})
 	switch {
 	case err == nil:
 		writeJSON(w, http.StatusOK, RenewPATResponse{
-			ExpiresAt: timestampToString(updated),
+			ExpiresAt: timestampToString(updated.String),
 			Renewed:   true,
 		})
-	case errors.Is(err, pgx.ErrNoRows):
+	case errors.Is(err, sql.ErrNoRows):
 		// A concurrent renew (or revoke) won the race. Re-read the current
 		// row and report what's there now — the daemon's only correctness
 		// guarantee is "after a successful call, expires_at is fresh enough
@@ -244,7 +243,7 @@ func (h *Handler) RenewCurrentPersonalAccessToken(w http.ResponseWriter, r *http
 			return
 		}
 		writeJSON(w, http.StatusOK, RenewPATResponse{
-			ExpiresAt: timestampToString(current.ExpiresAt),
+			ExpiresAt: timestampToString(current.ExpiresAt.String),
 			Renewed:   false,
 		})
 	default:
@@ -272,7 +271,7 @@ func (h *Handler) RevokePersonalAccessToken(w http.ResponseWriter, r *http.Reque
 		// Drop the cache entry immediately so the revocation takes effect
 		// before the TTL would otherwise expire the cached lookup.
 		h.PATCache.Invalidate(r.Context(), hash)
-	case errors.Is(err, pgx.ErrNoRows):
+	case errors.Is(err, sql.ErrNoRows):
 		// Token doesn't exist or doesn't belong to this user. Preserve the
 		// pre-existing idempotent 204 behavior — no cache entry to clear.
 	default:

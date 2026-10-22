@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -224,14 +223,11 @@ func TestAutopilotSubscriberSave_LosesToConcurrentRevoke(t *testing.T) {
 			if err != nil {
 				t.Fatalf("begin revoke tx: %v", err)
 			}
-			defer revokeTx.Rollback(context.Background())
+			defer revokeTx.Rollback(ctx)
 			holderPID := holderBackendPID(t, ctx, revokeTx)
 			qtx := testHandler.Queries.WithTx(revokeTx)
 
-			if err := qtx.LockSubscriberWrites(ctx, db.LockSubscriberWritesParams{
-				WorkspaceID: parseUUID(testWorkspaceID),
-				UserID:      parseUUID(targetUserID),
-			}); err != nil {
+			if err := qtx.LockSubscriberWrites(ctx); err != nil {
 				t.Fatalf("revoke lock: %v", err)
 			}
 			if err := qtx.DeleteAutopilotSubscribersByMember(ctx, db.DeleteAutopilotSubscribersByMemberParams{
@@ -269,7 +265,7 @@ func TestAutopilotSubscriberSave_LosesToConcurrentRevoke(t *testing.T) {
 				}
 			}
 
-			if err := revokeTx.Commit(context.Background()); err != nil {
+			if err := revokeTx.Commit(ctx); err != nil {
 				t.Fatalf("commit revoke: %v", err)
 			}
 
@@ -635,19 +631,19 @@ func TestAutopilotDispatchFansOutSubscribersToIssue(t *testing.T) {
 	}
 	autopilotID = autopilot.ID
 
-	queries := db.New(testPool)
+	queries := db.New(testSQLite)
 	ap, err := queries.GetAutopilot(ctx, parseUUID(autopilotID))
 	if err != nil {
 		t.Fatalf("GetAutopilot: %v", err)
 	}
-	run, _, err := testHandler.AutopilotService.DispatchAutopilotManual(ctx, ap, pgtype.UUID{}, nil, parseUUID(testUserID))
+	run, _, err := testHandler.AutopilotService.DispatchAutopilotManual(ctx, ap, "", nil, parseUUID(testUserID))
 	if err != nil {
 		t.Fatalf("DispatchAutopilot: %v", err)
 	}
 	if run == nil || !run.IssueID.Valid {
 		t.Fatalf("dispatch run = %+v, want linked issue", run)
 	}
-	issueID = uuidToString(run.IssueID)
+	issueID = uuidToString(run.IssueID.String)
 
 	var subscriberReason string
 	if err := testPool.QueryRow(ctx, `
@@ -708,19 +704,19 @@ func TestAutopilotDispatchNotifiesSubscribersOnCreate(t *testing.T) {
 	}
 	autopilotID = autopilot.ID
 
-	queries := db.New(testPool)
+	queries := db.New(testSQLite)
 	ap, err := queries.GetAutopilot(ctx, parseUUID(autopilotID))
 	if err != nil {
 		t.Fatalf("GetAutopilot: %v", err)
 	}
-	run, _, err := testHandler.AutopilotService.DispatchAutopilotManual(ctx, ap, pgtype.UUID{}, nil, parseUUID(testUserID))
+	run, _, err := testHandler.AutopilotService.DispatchAutopilotManual(ctx, ap, "", nil, parseUUID(testUserID))
 	if err != nil {
 		t.Fatalf("DispatchAutopilot: %v", err)
 	}
 	if run == nil || !run.IssueID.Valid {
 		t.Fatalf("dispatch run = %+v, want linked issue", run)
 	}
-	issueID = uuidToString(run.IssueID)
+	issueID = uuidToString(run.IssueID.String)
 
 	var inboxCount int
 	var inboxType, inboxTitle string
@@ -790,19 +786,19 @@ func TestAutopilotDispatchSkipsInboxWhenNoSubscribers(t *testing.T) {
 	}
 	autopilotID = autopilot.ID
 
-	queries := db.New(testPool)
+	queries := db.New(testSQLite)
 	ap, err := queries.GetAutopilot(ctx, parseUUID(autopilotID))
 	if err != nil {
 		t.Fatalf("GetAutopilot: %v", err)
 	}
-	run, _, err := testHandler.AutopilotService.DispatchAutopilotManual(ctx, ap, pgtype.UUID{}, nil, parseUUID(testUserID))
+	run, _, err := testHandler.AutopilotService.DispatchAutopilotManual(ctx, ap, "", nil, parseUUID(testUserID))
 	if err != nil {
 		t.Fatalf("DispatchAutopilot: %v", err)
 	}
 	if run == nil || !run.IssueID.Valid {
 		t.Fatalf("dispatch run = %+v, want linked issue", run)
 	}
-	issueID = uuidToString(run.IssueID)
+	issueID = uuidToString(run.IssueID.String)
 
 	var inboxCount int
 	if err := testPool.QueryRow(ctx, `

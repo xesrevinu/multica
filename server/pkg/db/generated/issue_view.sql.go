@@ -7,22 +7,21 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const countIssueViewsByOwner = `-- name: CountIssueViewsByOwner :one
 SELECT COUNT(*) FROM issue_view
-WHERE workspace_id = $1 AND owner_id = $2
+WHERE workspace_id = ?1 AND owner_id = ?2
 `
 
 type CountIssueViewsByOwnerParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	OwnerID     pgtype.UUID `json:"owner_id"`
+	WorkspaceID string `json:"workspace_id"`
+	OwnerID     string `json:"owner_id"`
 }
 
 func (q *Queries) CountIssueViewsByOwner(ctx context.Context, arg CountIssueViewsByOwnerParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countIssueViewsByOwner, arg.WorkspaceID, arg.OwnerID)
+	row := q.db.QueryRowContext(ctx, countIssueViewsByOwner, arg.WorkspaceID, arg.OwnerID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -33,25 +32,25 @@ INSERT INTO issue_view (
     workspace_id, owner_id, name, scope_type, scope_id, scope_variant,
     visibility, definition_version, query, display
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-RETURNING id, workspace_id, owner_id, name, scope_type, scope_id, scope_variant, visibility, definition_version, query, display, revision, created_at, updated_at
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+RETURNING id, workspace_id, owner_id, name, scope_type, scope_id, scope_variant, visibility, definition_version, "query", display, revision, created_at, updated_at
 `
 
 type CreateIssueViewParams struct {
-	WorkspaceID       pgtype.UUID `json:"workspace_id"`
-	OwnerID           pgtype.UUID `json:"owner_id"`
-	Name              string      `json:"name"`
-	ScopeType         string      `json:"scope_type"`
-	ScopeID           pgtype.UUID `json:"scope_id"`
-	ScopeVariant      pgtype.Text `json:"scope_variant"`
-	Visibility        string      `json:"visibility"`
-	DefinitionVersion int32       `json:"definition_version"`
-	Query             []byte      `json:"query"`
-	Display           []byte      `json:"display"`
+	WorkspaceID       string         `json:"workspace_id"`
+	OwnerID           string         `json:"owner_id"`
+	Name              string         `json:"name"`
+	ScopeType         string         `json:"scope_type"`
+	ScopeID           sql.NullString `json:"scope_id"`
+	ScopeVariant      sql.NullString `json:"scope_variant"`
+	Visibility        string         `json:"visibility"`
+	DefinitionVersion int64          `json:"definition_version"`
+	Query             string         `json:"query"`
+	Display           string         `json:"display"`
 }
 
 func (q *Queries) CreateIssueView(ctx context.Context, arg CreateIssueViewParams) (IssueView, error) {
-	row := q.db.QueryRow(ctx, createIssueView,
+	row := q.db.QueryRowContext(ctx, createIssueView,
 		arg.WorkspaceID,
 		arg.OwnerID,
 		arg.Name,
@@ -84,115 +83,129 @@ func (q *Queries) CreateIssueView(ctx context.Context, arg CreateIssueViewParams
 }
 
 const deleteIssueView = `-- name: DeleteIssueView :one
-WITH deleted AS (
-    DELETE FROM issue_view
-    WHERE issue_view.id = $1 AND issue_view.workspace_id = $2
-    RETURNING issue_view.id
-),
-swept_pins AS (
-    DELETE FROM pinned_item
-    WHERE pinned_item.item_type = 'view'
-      AND pinned_item.workspace_id = $2
-      AND pinned_item.item_id IN (SELECT deleted.id FROM deleted)
-)
-SELECT deleted.id FROM deleted
+DELETE FROM issue_view
+WHERE id = ?1 AND workspace_id = ?2
+RETURNING id
 `
 
 type DeleteIssueViewParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
-// Every view delete sweeps its sidebar pins in the same statement: a pin
-// whose view is gone is invisible in the UI (view pins never auto-unpin)
-// and would otherwise be unremovable forever.
-func (q *Queries) DeleteIssueView(ctx context.Context, arg DeleteIssueViewParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, deleteIssueView, arg.ID, arg.WorkspaceID)
-	var id pgtype.UUID
+// Pin rows are removed by DeleteIssueView_Step2. SQLite cannot delete both
+// tables in one statement.
+func (q *Queries) DeleteIssueView(ctx context.Context, arg DeleteIssueViewParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, deleteIssueView, arg.ID, arg.WorkspaceID)
+	var id string
 	err := row.Scan(&id)
 	return id, err
 }
 
 const deleteIssueViewPreferencesByUser = `-- name: DeleteIssueViewPreferencesByUser :exec
 DELETE FROM issue_view_preference
-WHERE workspace_id = $1 AND user_id = $2
+WHERE workspace_id = ?1 AND user_id = ?2
 `
 
 type DeleteIssueViewPreferencesByUserParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	UserID      pgtype.UUID `json:"user_id"`
+	WorkspaceID string `json:"workspace_id"`
+	UserID      string `json:"user_id"`
 }
 
 func (q *Queries) DeleteIssueViewPreferencesByUser(ctx context.Context, arg DeleteIssueViewPreferencesByUserParams) error {
-	_, err := q.db.Exec(ctx, deleteIssueViewPreferencesByUser, arg.WorkspaceID, arg.UserID)
+	_, err := q.db.ExecContext(ctx, deleteIssueViewPreferencesByUser, arg.WorkspaceID, arg.UserID)
+	return err
+}
+
+const deleteIssueView_Step2 = `-- name: DeleteIssueView_Step2 :exec
+DELETE FROM pinned_item
+WHERE item_type = 'view'
+  AND pinned_item.workspace_id = ?2
+  AND item_id = ?1
+`
+
+type DeleteIssueView_Step2Params struct {
+	ItemID      string `json:"item_id"`
+	WorkspaceID string `json:"workspace_id"`
+}
+
+func (q *Queries) DeleteIssueView_Step2(ctx context.Context, arg DeleteIssueView_Step2Params) error {
+	_, err := q.db.ExecContext(ctx, deleteIssueView_Step2, arg.ItemID, arg.WorkspaceID)
 	return err
 }
 
 const deleteIssueViewsByProjectScope = `-- name: DeleteIssueViewsByProjectScope :exec
-WITH deleted AS (
-    DELETE FROM issue_view
-    WHERE issue_view.workspace_id = $1 AND issue_view.scope_type = 'project' AND issue_view.scope_id = $2
-    RETURNING issue_view.id
-)
-DELETE FROM pinned_item
-WHERE pinned_item.item_type = 'view'
-  AND pinned_item.workspace_id = $1
-  AND pinned_item.item_id IN (SELECT deleted.id FROM deleted)
+DELETE FROM issue_view
+WHERE workspace_id = ?1 AND scope_type = 'project' AND scope_id = ?2
 `
 
 type DeleteIssueViewsByProjectScopeParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	ScopeID     pgtype.UUID `json:"scope_id"`
+	WorkspaceID string         `json:"workspace_id"`
+	ScopeID     sql.NullString `json:"scope_id"`
 }
 
-// Project deletion cleanup: called inside DeleteProject's application
-// transaction so project views never outlive their surface. Their sidebar
-// pins fall in the same statement (see DeleteIssueView).
 func (q *Queries) DeleteIssueViewsByProjectScope(ctx context.Context, arg DeleteIssueViewsByProjectScopeParams) error {
-	_, err := q.db.Exec(ctx, deleteIssueViewsByProjectScope, arg.WorkspaceID, arg.ScopeID)
+	_, err := q.db.ExecContext(ctx, deleteIssueViewsByProjectScope, arg.WorkspaceID, arg.ScopeID)
+	return err
+}
+
+const deleteIssueViewsByProjectScope_Step2 = `-- name: DeleteIssueViewsByProjectScope_Step2 :exec
+DELETE FROM pinned_item
+WHERE item_type = 'view'
+  AND pinned_item.workspace_id = ?1
+  AND item_id NOT IN (
+      SELECT id FROM issue_view WHERE issue_view.workspace_id = ?1
+  )
+`
+
+func (q *Queries) DeleteIssueViewsByProjectScope_Step2(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteIssueViewsByProjectScope_Step2, workspaceID)
 	return err
 }
 
 const deletePrivateIssueViewsByOwner = `-- name: DeletePrivateIssueViewsByOwner :exec
-WITH deleted AS (
-    DELETE FROM issue_view
-    WHERE issue_view.workspace_id = $1 AND issue_view.owner_id = $2 AND issue_view.visibility = 'private'
-    RETURNING issue_view.id
-)
-DELETE FROM pinned_item
-WHERE pinned_item.item_type = 'view'
-  AND pinned_item.workspace_id = $1
-  AND pinned_item.item_id IN (SELECT deleted.id FROM deleted)
+DELETE FROM issue_view
+WHERE workspace_id = ?1 AND owner_id = ?2 AND visibility = 'private'
 `
 
 type DeletePrivateIssueViewsByOwnerParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	OwnerID     pgtype.UUID `json:"owner_id"`
+	WorkspaceID string `json:"workspace_id"`
+	OwnerID     string `json:"owner_id"`
 }
 
-// Member removal: a departed member's private views are unreachable by every
-// remaining member while still consuming their quota — same rule as private
-// quick actions. Shared views are workspace furniture and survive. Pins on
-// the deleted views fall in the same statement (see DeleteIssueView).
 func (q *Queries) DeletePrivateIssueViewsByOwner(ctx context.Context, arg DeletePrivateIssueViewsByOwnerParams) error {
-	_, err := q.db.Exec(ctx, deletePrivateIssueViewsByOwner, arg.WorkspaceID, arg.OwnerID)
+	_, err := q.db.ExecContext(ctx, deletePrivateIssueViewsByOwner, arg.WorkspaceID, arg.OwnerID)
+	return err
+}
+
+const deletePrivateIssueViewsByOwner_Step2 = `-- name: DeletePrivateIssueViewsByOwner_Step2 :exec
+DELETE FROM pinned_item
+WHERE item_type = 'view'
+  AND pinned_item.workspace_id = ?1
+  AND item_id NOT IN (
+      SELECT id FROM issue_view WHERE issue_view.workspace_id = ?1
+  )
+`
+
+func (q *Queries) DeletePrivateIssueViewsByOwner_Step2(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deletePrivateIssueViewsByOwner_Step2, workspaceID)
 	return err
 }
 
 const getIssueView = `-- name: GetIssueView :one
-SELECT id, workspace_id, owner_id, name, scope_type, scope_id, scope_variant, visibility, definition_version, query, display, revision, created_at, updated_at FROM issue_view
-WHERE id = $1 AND workspace_id = $2
+SELECT id, workspace_id, owner_id, name, scope_type, scope_id, scope_variant, visibility, definition_version, "query", display, revision, created_at, updated_at FROM issue_view
+WHERE id = ?1 AND workspace_id = ?2
 `
 
 type GetIssueViewParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // Defense-in-depth: workspace_id is a SQL-layer tenant guard. Authorization
 // (owner vs shared) happens in the handler so unauthorized reads 404.
 func (q *Queries) GetIssueView(ctx context.Context, arg GetIssueViewParams) (IssueView, error) {
-	row := q.db.QueryRow(ctx, getIssueView, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, getIssueView, arg.ID, arg.WorkspaceID)
 	var i IssueView
 	err := row.Scan(
 		&i.ID,
@@ -214,20 +227,20 @@ func (q *Queries) GetIssueView(ctx context.Context, arg GetIssueViewParams) (Iss
 }
 
 const listIssueViewsForUser = `-- name: ListIssueViewsForUser :many
-SELECT id, workspace_id, owner_id, name, scope_type, scope_id, scope_variant, visibility, definition_version, query, display, revision, created_at, updated_at FROM issue_view
-WHERE workspace_id = $1
-  AND scope_type = $2
-  AND scope_id IS NOT DISTINCT FROM $4::uuid
-  AND (owner_id = $3 OR visibility = 'workspace')
+SELECT id, workspace_id, owner_id, name, scope_type, scope_id, scope_variant, visibility, definition_version, "query", display, revision, created_at, updated_at FROM issue_view
+WHERE workspace_id = ?1
+  AND scope_type = ?2
+  AND scope_id IS ?4
+  AND (owner_id = ?3 OR visibility = 'workspace')
 ORDER BY created_at ASC
 LIMIT 200
 `
 
 type ListIssueViewsForUserParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	ScopeType   string      `json:"scope_type"`
-	OwnerID     pgtype.UUID `json:"owner_id"`
-	ScopeID     pgtype.UUID `json:"scope_id"`
+	WorkspaceID string         `json:"workspace_id"`
+	ScopeType   string         `json:"scope_type"`
+	OwnerID     string         `json:"owner_id"`
+	ScopeID     sql.NullString `json:"scope_id"`
 }
 
 // One surface's selector list: the caller's own views plus workspace-shared
@@ -237,7 +250,7 @@ type ListIssueViewsForUserParams struct {
 // every row carries full query/display JSON. The create quota keeps real
 // data far below it; the LIMIT is the abuse backstop.
 func (q *Queries) ListIssueViewsForUser(ctx context.Context, arg ListIssueViewsForUserParams) ([]IssueView, error) {
-	rows, err := q.db.Query(ctx, listIssueViewsForUser,
+	rows, err := q.db.QueryContext(ctx, listIssueViewsForUser,
 		arg.WorkspaceID,
 		arg.ScopeType,
 		arg.OwnerID,
@@ -270,6 +283,9 @@ func (q *Queries) ListIssueViewsForUser(ctx context.Context, arg ListIssueViewsF
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -278,33 +294,33 @@ func (q *Queries) ListIssueViewsForUser(ctx context.Context, arg ListIssueViewsF
 
 const updateIssueView = `-- name: UpdateIssueView :one
 UPDATE issue_view SET
-    name = $3,
-    visibility = $4,
-    scope_variant = $5,
-    query = $6,
-    display = $7,
+    name = ?3,
+    visibility = ?4,
+    scope_variant = ?5,
+    query = ?6,
+    display = ?7,
     revision = revision + 1,
     updated_at = now()
-WHERE id = $1 AND workspace_id = $2 AND revision = $8
-RETURNING id, workspace_id, owner_id, name, scope_type, scope_id, scope_variant, visibility, definition_version, query, display, revision, created_at, updated_at
+WHERE id = ?1 AND workspace_id = ?2 AND revision = ?8
+RETURNING id, workspace_id, owner_id, name, scope_type, scope_id, scope_variant, visibility, definition_version, "query", display, revision, created_at, updated_at
 `
 
 type UpdateIssueViewParams struct {
-	ID           pgtype.UUID `json:"id"`
-	WorkspaceID  pgtype.UUID `json:"workspace_id"`
-	Name         string      `json:"name"`
-	Visibility   string      `json:"visibility"`
-	ScopeVariant pgtype.Text `json:"scope_variant"`
-	Query        []byte      `json:"query"`
-	Display      []byte      `json:"display"`
-	Revision     int32       `json:"revision"`
+	ID           string         `json:"id"`
+	WorkspaceID  string         `json:"workspace_id"`
+	Name         string         `json:"name"`
+	Visibility   string         `json:"visibility"`
+	ScopeVariant sql.NullString `json:"scope_variant"`
+	Query        string         `json:"query"`
+	Display      string         `json:"display"`
+	Revision     int64          `json:"revision"`
 }
 
 // Optimistic concurrency: the row only updates when the caller's revision
 // matches; zero rows back means either a stale revision (409) or a vanished
-// view (404) — the handler re-reads to tell them apart.
+// view (404) - the handler re-reads to tell them apart.
 func (q *Queries) UpdateIssueView(ctx context.Context, arg UpdateIssueViewParams) (IssueView, error) {
-	row := q.db.QueryRow(ctx, updateIssueView,
+	row := q.db.QueryRowContext(ctx, updateIssueView,
 		arg.ID,
 		arg.WorkspaceID,
 		arg.Name,

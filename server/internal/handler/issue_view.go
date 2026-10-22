@@ -1,13 +1,12 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -38,21 +37,21 @@ var (
 // input under the given scope_type, or ok=false when the pairing is
 // invalid. Workspace and project variants are optional assignee-type
 // narrowing (NULL = the unrestricted All tab); my variants are required.
-func validateIssueViewVariant(scopeType string, variant *string) (pgtype.Text, bool) {
+func validateIssueViewVariant(scopeType string, variant *string) (sql.NullString, bool) {
 	switch scopeType {
 	case "my":
 		if variant == nil || !contains(validIssueViewMyVariants, *variant) {
-			return pgtype.Text{}, false
+			return sql.NullString{}, false
 		}
-		return pgtype.Text{String: *variant, Valid: true}, true
+		return sql.NullString{String: *variant, Valid: true}, true
 	default: // workspace, project
 		if variant == nil || *variant == "" || *variant == "all" {
-			return pgtype.Text{}, true
+			return sql.NullString{}, true
 		}
 		if !contains(validIssueViewWorkspaceVariants, *variant) {
-			return pgtype.Text{}, false
+			return sql.NullString{}, false
 		}
-		return pgtype.Text{String: *variant, Valid: true}, true
+		return sql.NullString{String: *variant, Valid: true}, true
 	}
 }
 
@@ -83,10 +82,10 @@ func issueViewToResponse(v db.IssueView) IssueViewResponse {
 		ScopeID:           uuidToPtr(v.ScopeID),
 		ScopeVariant:      textToPtr(v.ScopeVariant),
 		Visibility:        v.Visibility,
-		DefinitionVersion: v.DefinitionVersion,
+		DefinitionVersion: int32(v.DefinitionVersion),
 		Query:             json.RawMessage(v.Query),
 		Display:           json.RawMessage(v.Display),
-		Revision:          v.Revision,
+		Revision:          int32(v.Revision),
 		CreatedAt:         timestampToString(v.CreatedAt),
 		UpdatedAt:         timestampToString(v.UpdatedAt),
 	}
@@ -95,7 +94,7 @@ func issueViewToResponse(v db.IssueView) IssueViewResponse {
 // canReadIssueView: owner always; workspace-shared views for any member.
 // (My-scope views are constrained to private by the DB CHECK, so they only
 // ever match the owner branch.)
-func canReadIssueView(v db.IssueView, userID pgtype.UUID) bool {
+func canReadIssueView(v db.IssueView, userID string) bool {
 	return v.OwnerID == userID || v.Visibility == "workspace"
 }
 
@@ -183,7 +182,7 @@ func (h *Handler) CreateIssueView(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid scope_variant for this scope_type")
 		return
 	}
-	var scopeID pgtype.UUID
+	var scopeID string
 	switch req.ScopeType {
 	case "project":
 		if req.ScopeID == nil {
@@ -213,12 +212,12 @@ func (h *Handler) CreateIssueView(w http.ResponseWriter, r *http.Request) {
 		OwnerID:           parseUUID(userID),
 		Name:              req.Name,
 		ScopeType:         req.ScopeType,
-		ScopeID:           scopeID,
+		ScopeID:           nullString(scopeID),
 		ScopeVariant:      scopeVariant,
 		Visibility:        req.Visibility,
-		DefinitionVersion: req.DefinitionVersion,
-		Query:             req.Query,
-		Display:           req.Display,
+		DefinitionVersion: int64(req.DefinitionVersion),
+		Query:             string(req.Query),
+		Display:           string(req.Display),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create view")
@@ -242,7 +241,7 @@ func (h *Handler) ListIssueViews(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid scope_type")
 		return
 	}
-	var scopeID pgtype.UUID
+	var scopeID string
 	if raw := r.URL.Query().Get("scope_id"); raw != "" {
 		id, ok := parseUUIDOrBadRequest(w, raw, "scope_id")
 		if !ok {
@@ -255,7 +254,7 @@ func (h *Handler) ListIssueViews(w http.ResponseWriter, r *http.Request) {
 		WorkspaceID: wsUUID,
 		ScopeType:   scopeType,
 		OwnerID:     parseUUID(userID),
-		ScopeID:     scopeID,
+		ScopeID:     nullString(scopeID),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list views")
@@ -271,21 +270,21 @@ func (h *Handler) ListIssueViews(w http.ResponseWriter, r *http.Request) {
 // loadIssueViewForUser resolves the id, enforces workspace scoping, and
 // applies read authorization. Unauthorized and missing are both 404 so a
 // private view's existence never leaks.
-func (h *Handler) loadIssueViewForUser(w http.ResponseWriter, r *http.Request, userID string) (db.IssueView, pgtype.UUID, bool) {
+func (h *Handler) loadIssueViewForUser(w http.ResponseWriter, r *http.Request, userID string) (db.IssueView, string, bool) {
 	wsUUID, ok := parseUUIDOrBadRequest(w, h.resolveWorkspaceID(r), "workspace id")
 	if !ok {
-		return db.IssueView{}, pgtype.UUID{}, false
+		return db.IssueView{}, "", false
 	}
 	idUUID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "view id")
 	if !ok {
-		return db.IssueView{}, pgtype.UUID{}, false
+		return db.IssueView{}, "", false
 	}
 	view, err := h.Queries.GetIssueView(r.Context(), db.GetIssueViewParams{
 		ID: idUUID, WorkspaceID: wsUUID,
 	})
 	if err != nil || !canReadIssueView(view, parseUUID(userID)) {
 		writeError(w, http.StatusNotFound, "view not found")
-		return db.IssueView{}, pgtype.UUID{}, false
+		return db.IssueView{}, "", false
 	}
 	return view, wsUUID, true
 }
@@ -409,12 +408,12 @@ func (h *Handler) UpdateIssueView(w http.ResponseWriter, r *http.Request) {
 		Name:         name,
 		Visibility:   visibility,
 		ScopeVariant: scopeVariant,
-		Query:        query,
-		Display:      display,
-		Revision:     req.ExpectedRevision,
+		Query:        string(query),
+		Display:      string(display),
+		Revision:     int64(req.ExpectedRevision),
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			// The row exists (we just loaded it) — zero rows means the
 			// revision moved underneath the caller.
 			writeError(w, http.StatusConflict, "view was modified by someone else")

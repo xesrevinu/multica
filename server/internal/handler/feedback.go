@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/logger"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
@@ -122,7 +121,7 @@ func (h *Handler) CreateFeedback(w http.ResponseWriter, r *http.Request) {
 		metaBytes = []byte("{}")
 	}
 
-	var workspaceID pgtype.UUID
+	var workspaceID string
 	if req.WorkspaceID != nil && *req.WorkspaceID != "" {
 		ws, ok := parseUUIDOrBadRequest(w, *req.WorkspaceID, "workspace_id")
 		if !ok {
@@ -134,8 +133,8 @@ func (h *Handler) CreateFeedback(w http.ResponseWriter, r *http.Request) {
 	fb, err := h.Queries.CreateFeedback(r.Context(), db.CreateFeedbackParams{
 		UserID:      parseUUID(userID),
 		Message:     message,
-		Metadata:    metaBytes,
-		WorkspaceID: workspaceID,
+		Metadata:    string(metaBytes),
+		WorkspaceID: nullString(workspaceID),
 	})
 	if err != nil {
 		slog.Warn("create feedback failed", append(logger.RequestAttrs(r), "error", err)...)
@@ -152,7 +151,7 @@ func (h *Handler) CreateFeedback(w http.ResponseWriter, r *http.Request) {
 
 	obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.FeedbackSubmitted(
 		userID,
-		uuidToString(fb.WorkspaceID),
+		uuidToString(fb.WorkspaceID.String),
 		kind,
 		len(message),
 		feedbackImageRegex.MatchString(message),

@@ -2,16 +2,14 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	"github.com/multica-ai/multica/server/pkg/dbid"
 )
 
 // sourceContextCleanupTestLock serializes every cleanup-oracle test against the
@@ -23,7 +21,7 @@ const sourceContextCleanupTestLock = int64(0x53434f4e54455854)
 // unlocking and handing it back to the shared pool: closing the connection
 // always releases a session-level advisory lock, whereas an unlock that failed
 // on a pooled session would block every later taker of the key.
-func lockSourceContextCleanupTests(t *testing.T, pool *pgxpool.Pool) {
+func lockSourceContextCleanupTests(t *testing.T, pool *sql.DB) {
 	t.Helper()
 	pooled, err := pool.Acquire(context.Background())
 	if err != nil {
@@ -31,7 +29,7 @@ func lockSourceContextCleanupTests(t *testing.T, pool *pgxpool.Pool) {
 	}
 	conn := pooled.Hijack()
 	t.Cleanup(func() { _ = conn.Close(context.Background()) })
-	if _, err := conn.Exec(context.Background(), `SELECT pg_advisory_lock($1)`, sourceContextCleanupTestLock); err != nil {
+	if _, err := conn.ExecContext(context.Background(), `SELECT pg_advisory_lock($1)`, sourceContextCleanupTestLock); err != nil {
 		t.Fatalf("lock source-context cleanup tests: %v", err)
 	}
 }
@@ -82,17 +80,17 @@ func TestCleanupSourceContextObjectIntentsBoundsAttemptsNotSuccesses(t *testing.
 	// The whole fixture lives in a rolled-back transaction: the sweeper is
 	// global, so seeding due rows outside one would let a developer server (or
 	// the next test) claim them mid-assertion.
-	tx, err := pool.Begin(ctx)
+	tx, err := pool.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatalf("begin isolated intent batch: %v", err)
 	}
-	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `LOCK TABLE issue_source_context_object_intent IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `LOCK TABLE issue_source_context_object_intent IN SHARE ROW EXCLUSIVE MODE`); err != nil {
 		t.Fatalf("lock object intent table: %v", err)
 	}
 	// Park any pre-existing due row so the claim order below is exactly the
 	// three intents this test seeds.
-	if _, err := tx.Exec(ctx, `
+	if _, err := tx.ExecContext(ctx, `
 		UPDATE issue_source_context_object_intent
 		SET next_attempt_at = now() + interval '1 hour'
 		WHERE next_attempt_at <= now()
@@ -103,17 +101,17 @@ func TestCleanupSourceContextObjectIntentsBoundsAttemptsNotSuccesses(t *testing.
 	qtx := db.New(pool).WithTx(tx)
 	keys := make([]string, 0, 3)
 	for _, name := range []string{"a", "b", "c"} {
-		attachmentID := dbid.NewV7()
+		attachmentID := newV7()
 		key := "source-context-budget/" + name + "-" + util.UUIDToString(attachmentID)
 		keys = append(keys, key)
 		if _, err := qtx.RecordSourceContextObjectIntent(ctx, db.RecordSourceContextObjectIntentParams{
-			StorageKey: key, WorkspaceID: workspaceUUID, SourceContextID: dbid.NewV7(),
+			StorageKey: key, WorkspaceID: workspaceUUID, SourceContextID: newV7(),
 			AttachmentID: attachmentID, ObjectUrl: "https://objects.example/" + key,
 		}); err != nil {
 			t.Fatalf("record intent %s: %v", name, err)
 		}
 	}
-	if _, err := tx.Exec(ctx, `
+	if _, err := tx.ExecContext(ctx, `
 		UPDATE issue_source_context_object_intent
 		SET created_at = now() - interval '2 hours', next_attempt_at = '-infinity'::timestamptz
 		WHERE storage_key = ANY($1::text[])
@@ -140,7 +138,7 @@ func TestCleanupSourceContextObjectIntentsBoundsAttemptsNotSuccesses(t *testing.
 	}
 
 	var due int
-	if err := tx.QueryRow(ctx, `
+	if err := tx.QueryRowContext(ctx, `
 		SELECT count(*) FROM issue_source_context_object_intent
 		WHERE storage_key = ANY($1::text[]) AND next_attempt_at <= now()
 	`, keys).Scan(&due); err != nil {
@@ -164,11 +162,11 @@ func TestCleanupAbandonedSourceContextsStopsWhenTheRoundBudgetEnds(t *testing.T)
 	userUUID := util.MustParseUUID(userID)
 	sourceIssueUUID := util.MustParseUUID(sourceIssueID)
 
-	contextIDs := make([]pgtype.UUID, 0, 2)
+	contextIDs := make([]string, 0, 2)
 	for i, age := range []string{"120 days", "119 days"} {
-		contextID := dbid.NewV7()
+		contextID := newV7()
 		contextIDs = append(contextIDs, contextID)
-		if _, err := pool.Exec(ctx, `
+		if _, err := pool.ExecContext(ctx, `
 			INSERT INTO issue_source_context (
 				id, workspace_id, source_issue_id, anchor_comment_id, captured_by_user_id,
 				snapshot_version, snapshot, capture_digest, state, captured_at
@@ -177,7 +175,7 @@ func TestCleanupAbandonedSourceContextsStopsWhenTheRoundBudgetEnds(t *testing.T)
 		`, contextID, workspaceUUID, sourceIssueUUID, userUUID, age); err != nil {
 			t.Fatalf("insert abandoned context %d: %v", i, err)
 		}
-		if _, err := pool.Exec(ctx, `
+		if _, err := pool.ExecContext(ctx, `
 			INSERT INTO attachment (
 				id, workspace_id, source_context_id, uploader_type, uploader_id,
 				filename, url, content_type, size_bytes
@@ -188,8 +186,8 @@ func TestCleanupAbandonedSourceContextsStopsWhenTheRoundBudgetEnds(t *testing.T)
 		}
 	}
 	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM attachment WHERE source_context_id = ANY($1::uuid[])`, contextIDs)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM issue_source_context WHERE id = ANY($1::uuid[])`, contextIDs)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM attachment WHERE source_context_id = ANY($1::uuid[])`, contextIDs)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM issue_source_context WHERE id = ANY($1::uuid[])`, contextIDs)
 	})
 
 	roundCtx, cancelRound := context.WithCancel(ctx)
@@ -213,7 +211,7 @@ func TestCleanupAbandonedSourceContextsStopsWhenTheRoundBudgetEnds(t *testing.T)
 	}
 
 	var surviving int
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		SELECT count(*) FROM issue_source_context WHERE id = ANY($1::uuid[]) AND state = 'abandoned'
 	`, contextIDs).Scan(&surviving); err != nil {
 		t.Fatalf("count surviving abandoned captures: %v", err)

@@ -21,7 +21,7 @@ func TestCanManageAgentEnv_Pure(t *testing.T) {
 	ownerUserID := "11111111-1111-1111-1111-111111111111"
 	otherUserID := "22222222-2222-2222-2222-222222222222"
 
-	owned := db.Agent{OwnerID: util.MustParseUUID(ownerUserID)}
+	owned := db.Agent{OwnerID: nullString(util.MustParseUUID(ownerUserID))}
 	orphaned := db.Agent{} // owner_id IS NULL
 
 	cases := []struct {
@@ -45,7 +45,7 @@ func TestCanManageAgentEnv_Pure(t *testing.T) {
 			member := db.Member{UserID: util.MustParseUUID(tc.userID), Role: tc.role}
 			if got := canManageAgentEnv(tc.agent, member); got != tc.want {
 				t.Fatalf("canManageAgentEnv(owner=%q, user=%s, role=%s) = %v; want %v",
-					uuidToString(tc.agent.OwnerID), tc.userID, tc.role, got, tc.want)
+					uuidToString(tc.agent.OwnerID.String), tc.userID, tc.role, got, tc.want)
 			}
 		})
 	}

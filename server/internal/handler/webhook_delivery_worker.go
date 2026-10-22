@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,8 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/tracing"
 
@@ -113,7 +112,7 @@ func (w *WebhookDeliveryWorker) WaitWithTimeout(timeout time.Duration) bool {
 
 func (w *WebhookDeliveryWorker) ProcessNext(ctx context.Context) (bool, error) {
 	delivery, err := w.h.Queries.ClaimQueuedWebhookDelivery(ctx)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
@@ -134,7 +133,7 @@ func (w *WebhookDeliveryWorker) ProcessNext(ctx context.Context) (bool, error) {
 			_, err := w.h.Queries.DeferClaimedWebhookDelivery(ctx, db.DeferClaimedWebhookDeliveryParams{
 				ID:          delivery.ID,
 				LeaseToken:  delivery.LeaseToken,
-				AvailableAt: pgtype.Timestamptz{Time: time.Now().Add(retryAfter), Valid: true},
+				AvailableAt: time.Now().Add(retryAfter).UTC().Format(time.RFC3339Nano),
 			})
 			_, err = handleWebhookLeaseMutation("defer", delivery, err)
 			return true, err
@@ -151,19 +150,19 @@ func (w *WebhookDeliveryWorker) ProcessNext(ctx context.Context) (bool, error) {
 	}
 	if uuidToString(trigger.AutopilotID) != uuidToString(delivery.AutopilotID) ||
 		uuidToString(autopilot.WorkspaceID) != uuidToString(delivery.WorkspaceID) {
-		return true, w.complete(ctx, delivery, deliveryStatusFailed, pgtype.UUID{}, "delivery ownership mismatch")
+		return true, w.complete(ctx, delivery, deliveryStatusFailed, "", "delivery ownership mismatch")
 	}
 
-	headers := headersFromSelected(delivery.SelectedHeaders)
+	headers := headersFromSelected([]byte(delivery.SelectedHeaders))
 	if delivery.ContentType.Valid {
 		headers.Set("Content-Type", delivery.ContentType.String)
 	}
 	envelope, err := normalizeWebhookPayload(delivery.RawBody, headers)
 	if err != nil {
-		return true, w.complete(ctx, delivery, deliveryStatusFailed, pgtype.UUID{}, "normalize stored body: "+err.Error())
+		return true, w.complete(ctx, delivery, deliveryStatusFailed, "", "normalize stored body: "+err.Error())
 	}
-	if delivery.ReceivedAt.Valid {
-		envelope.Request.ReceivedAt = delivery.ReceivedAt.Time.UTC().Format(time.RFC3339)
+	if delivery.ReceivedAt != "" {
+		envelope.Request.ReceivedAt = parseDBTime(delivery.ReceivedAt).UTC().Format(time.RFC3339)
 	}
 	payload, err := json.Marshal(envelope)
 	if err != nil {
@@ -174,35 +173,32 @@ func (w *WebhookDeliveryWorker) ProcessNext(ctx context.Context) (bool, error) {
 	// skipped, that decision is durable. Re-check mutable trigger/autopilot
 	// state only for deliveries recovered from the pre-admission crash window;
 	// otherwise a pause immediately after the response could strand the run.
-	_, admissionErr := w.h.Queries.GetAutopilotRunByWebhookDelivery(ctx, delivery.ID)
+	_, admissionErr := w.h.Queries.GetAutopilotRunByWebhookDelivery(ctx, nullString(delivery.ID))
 	hasAdmittedRun := admissionErr == nil
-	if admissionErr != nil && !errors.Is(admissionErr, pgx.ErrNoRows) {
+	if admissionErr != nil && !errors.Is(admissionErr, sql.ErrNoRows) {
 		return true, w.retryOrFail(ctx, delivery, fmt.Errorf("load admitted run: %w", admissionErr))
 	}
 	if !hasAdmittedRun {
 		switch {
-		case !trigger.Enabled:
-			return true, w.complete(ctx, delivery, deliveryStatusIgnored, pgtype.UUID{}, "trigger_disabled")
+		case trigger.Enabled == 0:
+			return true, w.complete(ctx, delivery, deliveryStatusIgnored, "", "trigger_disabled")
 		case autopilot.Status == "archived":
-			return true, w.complete(ctx, delivery, deliveryStatusIgnored, pgtype.UUID{}, "autopilot_archived")
+			return true, w.complete(ctx, delivery, deliveryStatusIgnored, "", "autopilot_archived")
 		case autopilot.Status != "active":
-			return true, w.complete(ctx, delivery, deliveryStatusIgnored, pgtype.UUID{}, "autopilot_paused")
-		case !webhookEventAllowedByTriggerScope(trigger.EventFilters, envelope):
-			return true, w.complete(ctx, delivery, deliveryStatusIgnored, pgtype.UUID{}, "event_filtered")
+			return true, w.complete(ctx, delivery, deliveryStatusIgnored, "", "autopilot_paused")
+		case !webhookEventAllowedByTriggerScope([]byte(trigger.EventFilters.String), envelope):
+			return true, w.complete(ctx, delivery, deliveryStatusIgnored, "", "event_filtered")
 		}
 	}
 
 	run, dispatchErr := w.h.AutopilotService.DispatchAutopilotForWebhookDelivery(
 		ctx,
-		autopilot,
-		trigger.ID,
-		payload,
-		delivery.ID,
+		autopilot, trigger.ID, payload, delivery.ID,
 	)
 	if dispatchErr != nil {
 		var quotaErr *service.AutopilotQuotaExceededError
 		if errors.As(dispatchErr, &quotaErr) {
-			return true, w.complete(ctx, delivery, deliveryStatusIgnored, pgtype.UUID{}, quotaErr.Error(), "quota_exceeded")
+			return true, w.complete(ctx, delivery, deliveryStatusIgnored, "", quotaErr.Error(), "quota_exceeded")
 		}
 		if run != nil {
 			return true, w.complete(ctx, delivery, deliveryStatusFailed, run.ID, dispatchErr.Error())
@@ -231,7 +227,7 @@ func (w *WebhookDeliveryWorker) complete(
 	ctx context.Context,
 	delivery db.WebhookDelivery,
 	status string,
-	runID pgtype.UUID,
+	runID string,
 	reason string,
 	reasonCode ...string,
 ) error {
@@ -239,13 +235,13 @@ func (w *WebhookDeliveryWorker) complete(
 		ID:             delivery.ID,
 		LeaseToken:     delivery.LeaseToken,
 		Status:         status,
-		AutopilotRunID: runID,
+		AutopilotRunID: nullString(runID),
 	}
 	if reason != "" {
-		params.Error = pgtype.Text{String: reason, Valid: true}
+		params.Error = sql.NullString{String: reason, Valid: true}
 	}
 	if len(reasonCode) > 0 && reasonCode[0] != "" {
-		params.ReasonCode = pgtype.Text{String: reasonCode[0], Valid: true}
+		params.ReasonCode = sql.NullString{String: reasonCode[0], Valid: true}
 	}
 	_, err := w.h.Queries.CompleteClaimedWebhookDelivery(ctx, params)
 	lost, err := handleWebhookLeaseMutation("complete", delivery, err)
@@ -261,14 +257,14 @@ func (w *WebhookDeliveryWorker) complete(
 
 func (w *WebhookDeliveryWorker) retryOrFail(ctx context.Context, delivery db.WebhookDelivery, cause error) error {
 	if delivery.DispatchAttempts+1 >= webhookWorkerMaxAttempts {
-		return w.complete(ctx, delivery, deliveryStatusFailed, pgtype.UUID{}, cause.Error())
+		return w.complete(ctx, delivery, deliveryStatusFailed, "", cause.Error())
 	}
 	backoff := time.Second * time.Duration(1<<min(delivery.DispatchAttempts, 6))
 	_, err := w.h.Queries.RetryClaimedWebhookDelivery(ctx, db.RetryClaimedWebhookDeliveryParams{
 		ID:          delivery.ID,
 		LeaseToken:  delivery.LeaseToken,
-		AvailableAt: pgtype.Timestamptz{Time: time.Now().Add(backoff), Valid: true},
-		Error:       pgtype.Text{String: cause.Error(), Valid: true},
+		AvailableAt: time.Now().Add(backoff).UTC().Format(time.RFC3339Nano),
+		Error:       sql.NullString{String: cause.Error(), Valid: true},
 	})
 	lost, mutationErr := handleWebhookLeaseMutation("retry", delivery, err)
 	if mutationErr != nil {
@@ -294,7 +290,7 @@ func handleWebhookLeaseMutation(operation string, delivery db.WebhookDelivery, e
 	if err == nil {
 		return false, nil
 	}
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		slog.Debug("webhook worker: lease ownership changed",
 			"operation", operation,
 			"delivery_id", uuidToString(delivery.ID),

@@ -9,10 +9,25 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	redismock "github.com/go-redis/redismock/v9"
-	"github.com/redis/go-redis/v9"
 )
+
+func attachRealtimeTestClient(hub *Hub, scopeType, scopeID string) *Client {
+	client := &Client{
+		send:          make(chan []byte, 2),
+		workspaceID:   "workspace-1",
+		userID:        "user-1",
+		subscriptions: map[scopeKey]bool{},
+	}
+	key := sk(scopeType, scopeID)
+	client.subscriptions[key] = true
+
+	hub.mu.Lock()
+	hub.clients[client] = true
+	hub.rooms[key] = map[*Client]bool{client: true}
+	hub.mu.Unlock()
+
+	return client
+}
 
 func removalFrame(workspaceID, userID string) []byte {
 	raw, _ := json.Marshal(map[string]any{
@@ -97,59 +112,6 @@ func TestMembershipRemovalWithOnlyPeersSkipsRevalidationAndDeduplicates(t *testi
 	close(hub.memberRemovals)
 	if queries.Load() != 0 || len(peer.send) != 1 {
 		t.Fatalf("peer-only removal issued %d queries and sent %d notifications", queries.Load(), len(peer.send))
-	}
-}
-
-func TestMembershipRemovalLookupDoesNotBlockShardWithSubscribers(t *testing.T) {
-	hub := NewHub()
-	target := &Client{hub: hub, userID: testUserID, workspaceID: testWorkspaceID, send: make(chan []byte, 4)}
-	hub.registerClient(target)
-	other := attachRealtimeTestClient(hub, ScopeWorkspace, "other-workspace")
-	other.workspaceID = "other-workspace"
-	entered, release := make(chan struct{}, 1), make(chan struct{})
-	hub.SetMembershipChecker(membershipFunc(func(context.Context, string, string) (bool, error) {
-		entered <- struct{}{}
-		<-release
-		return false, nil
-	}))
-	rdb, mock := redismock.NewClientMock()
-	t.Cleanup(func() { _ = rdb.Close() })
-	relay := NewShardedStreamRelay(hub, rdb, rdb, ShardedStreamRelayConfig{Shards: 1, ReadCount: 2, ReadBlock: time.Millisecond})
-	stream, lastID := ShardedStreamKey(0), "0-0"
-	mock.ExpectXRead(&redis.XReadArgs{Streams: []string{stream, lastID}, Count: relay.config.ReadCount, Block: relay.config.ReadBlock}).SetVal([]redis.XStream{{
-		Stream: stream, Messages: []redis.XMessage{
-			{ID: "1-0", Values: envelopeRedisValues(envelope{Scope: ScopeWorkspace, ScopeID: testWorkspaceID, PayloadJSON: string(removalFrame(testWorkspaceID, testUserID))})},
-			{ID: "2-0", Values: envelopeRedisValues(envelope{Scope: ScopeWorkspace, ScopeID: other.workspaceID, PayloadJSON: `{"type":"issue:updated"}`})},
-		},
-	}})
-	finished := make(chan struct{})
-	go func() { relay.readShardOnce(context.Background(), 0, stream, &lastID); close(finished) }()
-	t.Cleanup(func() {
-		close(release)
-		<-finished
-		waitFor(t, "removal completion", func() bool { return hub.memberRemovalPending.Load() == 0 })
-		close(hub.memberRemovals)
-		hub.removeClient(other)
-	})
-	select {
-	case <-entered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("removal lookup did not start")
-	}
-	select {
-	case raw := <-other.send:
-		if string(raw) != `{"type":"issue:updated"}` {
-			t.Fatalf("unexpected unrelated event: %s", raw)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("subscribed workspace removal blocked unrelated shard traffic")
-	}
-	<-finished
-	if lastID != "2-0" || target.stopped.Load() {
-		t.Fatal("reader did not advance independently of the pending lookup")
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
 	}
 }
 

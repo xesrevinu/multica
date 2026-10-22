@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/testutil"
 )
 
@@ -15,7 +14,7 @@ func TestPendingRecoveryConvertedTerminalHistoryDoesNotStarveAnotherWorkspace(t 
 	historyRows.Insert(t, "issue_status", testutil.Cols{
 		"workspace_id": history.workspaceID, "key": "legacy_closed", "name": "Closed", "category": "closed", "color": "#123456",
 	})
-	signal := func(f *delegatedFailureFixture, svc *TaskService) pgtype.UUID {
+	signal := func(f *delegatedFailureFixture, svc *TaskService) string {
 		t.Helper()
 		failed := f.insertWorkerTask(t, "failed", "comment", 1, 2)
 		rows := testutil.New(f.pool, f.workspaceID, f.userID)

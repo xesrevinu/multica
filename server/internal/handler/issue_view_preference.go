@@ -1,12 +1,10 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -20,8 +18,8 @@ import (
 // id, my scope the user id, project scope the project id (validated).
 func (h *Handler) resolvePreferenceScope(
 	w http.ResponseWriter, r *http.Request,
-	wsUUID pgtype.UUID, userID string, scopeType, rawScopeID string,
-) (pgtype.UUID, bool) {
+	wsUUID string, userID string, scopeType, rawScopeID string,
+) (string, bool) {
 	switch scopeType {
 	case "workspace":
 		return wsUUID, true
@@ -30,22 +28,22 @@ func (h *Handler) resolvePreferenceScope(
 	case "project":
 		if rawScopeID == "" {
 			writeError(w, http.StatusBadRequest, "scope_id is required for project scope")
-			return pgtype.UUID{}, false
+			return "", false
 		}
 		projUUID, ok := parseUUIDOrBadRequest(w, rawScopeID, "scope_id")
 		if !ok {
-			return pgtype.UUID{}, false
+			return "", false
 		}
 		if _, err := h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{
 			ID: projUUID, WorkspaceID: wsUUID,
 		}); err != nil {
 			writeError(w, http.StatusNotFound, "project not found")
-			return pgtype.UUID{}, false
+			return "", false
 		}
 		return projUUID, true
 	default:
 		writeError(w, http.StatusBadRequest, "invalid scope_type")
-		return pgtype.UUID{}, false
+		return "", false
 	}
 }
 
@@ -78,11 +76,11 @@ func (h *Handler) GetIssueViewPreference(w http.ResponseWriter, r *http.Request)
 		ScopeID:     scopeID,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			// No row yet — an empty document, not an error.
 			writeJSON(w, http.StatusOK, IssueViewPreferenceResponse{
 				ScopeType: scopeType,
-				ScopeID:   uuidToPtr(scopeID),
+				ScopeID:   uuidToPtr(nullString(scopeID)),
 				Prefs:     json.RawMessage("{}"),
 			})
 			return
@@ -92,7 +90,7 @@ func (h *Handler) GetIssueViewPreference(w http.ResponseWriter, r *http.Request)
 	}
 	writeJSON(w, http.StatusOK, IssueViewPreferenceResponse{
 		ScopeType: pref.ScopeType,
-		ScopeID:   uuidToPtr(pref.ScopeID),
+		ScopeID:   uuidToPtr(nullString(pref.ScopeID)),
 		Prefs:     json.RawMessage(pref.Prefs),
 		UpdatedAt: timestampToString(pref.UpdatedAt),
 	})
@@ -140,7 +138,7 @@ func (h *Handler) PutIssueViewPreference(w http.ResponseWriter, r *http.Request)
 		UserID:      parseUUID(userID),
 		ScopeType:   req.ScopeType,
 		ScopeID:     scopeID,
-		Prefs:       req.Prefs,
+		Prefs:       string(req.Prefs),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save preference")
@@ -148,7 +146,7 @@ func (h *Handler) PutIssueViewPreference(w http.ResponseWriter, r *http.Request)
 	}
 	writeJSON(w, http.StatusOK, IssueViewPreferenceResponse{
 		ScopeType: pref.ScopeType,
-		ScopeID:   uuidToPtr(pref.ScopeID),
+		ScopeID:   uuidToPtr(nullString(pref.ScopeID)),
 		Prefs:     json.RawMessage(pref.Prefs),
 		UpdatedAt: timestampToString(pref.UpdatedAt),
 	})

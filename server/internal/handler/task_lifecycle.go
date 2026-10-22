@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -8,8 +9,6 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -85,10 +84,10 @@ func (h *Handler) PinTaskSession(w http.ResponseWriter, r *http.Request) {
 
 	params := db.UpdateAgentTaskSessionParams{ID: parseUUID(taskID)}
 	if req.SessionID != "" {
-		params.SessionID = pgtype.Text{String: req.SessionID, Valid: true}
+		params.SessionID = sql.NullString{String: req.SessionID, Valid: true}
 	}
 	if req.WorkDir != "" {
-		params.WorkDir = pgtype.Text{String: req.WorkDir, Valid: true}
+		params.WorkDir = sql.NullString{String: req.WorkDir, Valid: true}
 	}
 	// The pin can arrive after the user has already cancelled the run — it is
 	// asynchronous, and for Codex it waits for the rollout to reach the store.
@@ -105,16 +104,16 @@ func (h *Handler) PinTaskSession(w http.ResponseWriter, r *http.Request) {
 	// comes first for the same reason it does in CancelTaskWithResult —
 	// chat_session -> agent_task_queue is the global order, and ErrNoRows simply
 	// means there is no session to lock or advance.
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		slog.Warn("pin-session failed to start tx", "task_id", taskID, "error", err)
 		writeError(w, http.StatusInternalServerError, "pin session failed")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
-	if _, err := qtx.LockChatSessionForTask(r.Context(), params.ID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	if _, err := qtx.LockChatSessionForTask(r.Context(), params.ID); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		slog.Warn("pin-session failed to lock chat session", "task_id", taskID, "error", err)
 		writeError(w, http.StatusInternalServerError, "pin session failed")
 		return
@@ -132,7 +131,7 @@ func (h *Handler) PinTaskSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "pin session failed")
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		slog.Warn("pin-session commit failed", "task_id", taskID, "error", err)
 		writeError(w, http.StatusInternalServerError, "pin session failed")
 		return
@@ -183,7 +182,7 @@ func (h *Handler) RerunIssue(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var sourceTaskID pgtype.UUID
+	var sourceTaskID string
 	if req.TaskID != "" {
 		parsed, ok := parseUUIDOrBadRequest(w, req.TaskID, "task_id")
 		if !ok {
@@ -212,7 +211,7 @@ func (h *Handler) RerunIssue(w http.ResponseWriter, r *http.Request) {
 		return h.canInvokeAgent(r.Context(), agent, actorType, actorID, originatorUserID, workspaceID)
 	}
 
-	task, err := h.TaskService.RerunIssue(r.Context(), issue.ID, sourceTaskID, pgtype.UUID{}, actorUserID, canInvoke)
+	task, err := h.TaskService.RerunIssue(r.Context(), issue.ID, sourceTaskID, "", actorUserID, canInvoke)
 	if errors.Is(err, service.ErrRerunInvokeNotAllowed) {
 		h.writeDispatchBlocked(w, http.StatusForbidden, ReasonInvocationNotAllowed)
 		return
@@ -289,15 +288,15 @@ func (h *Handler) RetrySourceContextQuickCreate(w http.ResponseWriter, r *http.R
 // fights. An issue an agent already owns (meta "owner") is not an epic even
 // with follow-up children. "" = rerun allowed.
 func (h *Handler) orchestratedEpicRerunRefusal(r *http.Request, issue db.Issue) string {
-	if h.Orchestrator == nil || !issue.ProjectID.Valid || !h.Orchestrator.Owns(uuidToString(issue.ProjectID)) {
+	if h.Orchestrator == nil || !issue.ProjectID.Valid || !h.Orchestrator.Owns(uuidToString(issue.ProjectID.String)) {
 		return ""
 	}
 	var meta map[string]any
-	_ = json.Unmarshal(issue.Metadata, &meta)
+	_ = json.Unmarshal([]byte(issue.Metadata), &meta)
 	if owner, _ := meta["owner"].(string); owner != "" {
 		return ""
 	}
-	children, err := h.Queries.ListChildIssues(r.Context(), issue.ID)
+	children, err := h.Queries.ListChildIssues(r.Context(), nullString(issue.ID))
 	if err != nil || len(children) == 0 {
 		return ""
 	}

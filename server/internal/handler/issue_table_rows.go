@@ -1,7 +1,7 @@
 package handler
 
 import (
-	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -130,7 +129,7 @@ func (sort resolvedIssueTableSort) cursorPredicate(w http.ResponseWriter, cursor
 func (h *Handler) issueTableOrderBy(
 	w http.ResponseWriter,
 	r *http.Request,
-	workspaceID pgtype.UUID,
+	workspaceID string,
 	sortRequest issueTableSortRequest,
 	addArg func(any) string,
 ) (resolvedIssueTableSort, bool) {
@@ -251,7 +250,7 @@ func (h *Handler) ListIssueTableRows(w http.ResponseWriter, r *http.Request) {
 	committed := false
 	defer func() {
 		if !committed {
-			_ = tx.Rollback(context.Background())
+			_ = tx.Rollback()
 		}
 	}()
 	h = snapshot
@@ -398,7 +397,7 @@ SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
 	FROM page i
 	ORDER BY %s`, cte, childCountExpr, resolvedSort.orderBy())
 
-	rows, err := h.DB.Query(r.Context(), query, args...)
+	rows, err := h.DB.QueryContext(r.Context(), query, args...)
 	if err != nil {
 		slog.Warn("ListIssueTableRows query failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeIssueTableQueryFailure(w, r, "failed to list table rows")
@@ -409,7 +408,7 @@ SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
 	type scannedRow struct {
 		issue      db.ListIssuesRow
 		childCount int64
-		sortKey    pgtype.Text
+		sortKey    sql.NullString
 	}
 	scanned := make([]scannedRow, 0, limit+1)
 	for rows.Next() {
@@ -458,7 +457,7 @@ SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
 	// must not pay for a full-membership COUNT.
 	var total int64
 	if cursor == nil && request.Group.Kind == "none" && request.ParentID == nil {
-		if err := h.DB.QueryRow(r.Context(), fmt.Sprintf("SELECT COUNT(*)::bigint FROM issue i WHERE %s", compiled.where), compiled.args...).Scan(&total); err != nil {
+		if err := h.DB.QueryRowContext(r.Context(), fmt.Sprintf("SELECT COUNT(*)::bigint FROM issue i WHERE %s", compiled.where), compiled.args...).Scan(&total); err != nil {
 			slog.Warn("ListIssueTableRows total count failed", append(logger.RequestAttrs(r), "error", err)...)
 			writeIssueTableQueryFailure(w, r, "failed to count table rows")
 			return
@@ -482,7 +481,7 @@ SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
 			BranchIdentity:   branchIdentity,
 			SortValue:        sortValue,
 			SortIsNull:       !last.sortKey.Valid,
-			RowCreatedAt:     last.issue.CreatedAt.Time.UTC().Format(time.RFC3339Nano),
+			RowCreatedAt:     parseDBTime(last.issue.CreatedAt).UTC().Format(time.RFC3339Nano),
 			RowID:            util.UUIDToString(last.issue.ID),
 		})
 	}
@@ -492,7 +491,7 @@ SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
 	// transaction after any statement error, so running getIssuePrefix or
 	// labelsByIssue inside the snapshot would turn their intentionally tolerated
 	// failures into a fatal Commit error for the entire page.
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		slog.Warn("ListIssueTableRows snapshot commit failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeIssueTableQueryFailure(w, r, "failed to finish table query")
 		return
@@ -500,11 +499,11 @@ SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
 	committed = true
 
 	prefix := baseHandler.getIssuePrefix(r.Context(), compiled.workspaceID)
-	issueIDs := make([]pgtype.UUID, len(scanned))
-	var originals []pgtype.UUID
+	issueIDs := make([]string, len(scanned))
+	var originals []string
 	for index, row := range scanned {
 		issueIDs[index] = row.issue.ID
-		originals = appendDuplicateOriginal(originals, row.issue.Status, row.issue.DuplicateOfIssueID)
+		originals = appendDuplicateOriginal(originals, row.issue.Status, row.issue.DuplicateOfIssueID.String)
 	}
 	labelsByIssue := baseHandler.labelsByIssue(r.Context(), compiled.workspaceID, issueIDs)
 	// One Resolver and one originals read for the page — see

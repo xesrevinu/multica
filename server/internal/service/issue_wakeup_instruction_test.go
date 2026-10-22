@@ -2,13 +2,13 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/util"
 )
 
@@ -57,7 +57,7 @@ func TestIssueWakeupInstructionPreservesStateAndPendingEvents(t *testing.T) {
 			if kind == "event" {
 				wakeDispatch(t, s, after)
 				var note string
-				if err = f.Pool.QueryRow(ctx, "SELECT handoff_note FROM agent_task_queue WHERE issue_id=$1 AND context->>'wakeup_id'=$2", issue, util.UUIDToString(w.ID)).Scan(&note); err != nil {
+				if err = f.Pool.QueryRowContext(ctx, "SELECT handoff_note FROM agent_task_queue WHERE issue_id=$1 AND context->>'wakeup_id'=$2", issue, util.UUIDToString(w.ID)).Scan(&note); err != nil {
 					t.Fatal(err)
 				}
 				if !strings.Contains(note, "new instructions") {
@@ -76,7 +76,7 @@ func TestIssueWakeupInstructionPreservesStateAndPendingEvents(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if off.Enabled || !off.DisabledAt.Valid || off.NextFireAt != after.NextFireAt {
+			if (off.Enabled != 0) || !off.DisabledAt.Valid || off.NextFireAt != after.NextFireAt {
 				t.Fatal("edit rearmed disabled rule")
 			}
 		})
@@ -95,7 +95,7 @@ func TestIssueWakeupInstructionPreservesQueuedRunAndChecksScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	var note string
-	if err := f.Pool.QueryRow(ctx, "SELECT handoff_note FROM agent_task_queue WHERE issue_id=$1 AND context->>'wakeup_id'=$2", issue, util.UUIDToString(w.ID)).Scan(&note); err != nil {
+	if err := f.Pool.QueryRowContext(ctx, "SELECT handoff_note FROM agent_task_queue WHERE issue_id=$1 AND context->>'wakeup_id'=$2", issue, util.UUIDToString(w.ID)).Scan(&note); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(note, "queued instruction") || strings.Contains(note, "future instruction") {
@@ -105,12 +105,12 @@ func TestIssueWakeupInstructionPreservesQueuedRunAndChecksScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if current.Enabled || current.Revision != w.Revision {
+	if (current.Enabled != 0) || current.Revision != w.Revision {
 		t.Fatal("edit rearmed consumed rule")
 	}
 	in.ExpectedInstruction = in.Instruction
 	other := f.Issue(t, "other issue")
-	if err = s.EditInstruction(ctx, parseTestUUID(t, other), w.ID, owner, in); !errors.Is(err, pgx.ErrNoRows) {
+	if err = s.EditInstruction(ctx, parseTestUUID(t, other), w.ID, owner, in); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("cross issue: %v", err)
 	}
 	outsider := f.User(t, "outsider", "edit-outsider@multica.test")

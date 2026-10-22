@@ -4,14 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -49,8 +47,8 @@ type BindingToken struct {
 
 // RedeemedBindingToken is returned after a successful redemption.
 type RedeemedBindingToken struct {
-	WorkspaceID    pgtype.UUID
-	InstallationID pgtype.UUID
+	WorkspaceID    string
+	InstallationID string
 	SlackUserID    string
 }
 
@@ -72,7 +70,7 @@ func NewBindingTokenService(q *db.Queries, tx engine.TxStarter) *BindingTokenSer
 // Mint creates a single-use binding token for (installation, slackUserID) and
 // returns the raw secret + expiry. The raw value must be delivered over Slack
 // (encrypted in transit by the platform) and never logged.
-func (s *BindingTokenService) Mint(ctx context.Context, workspaceID, installationID pgtype.UUID, slackUserID string) (BindingToken, error) {
+func (s *BindingTokenService) Mint(ctx context.Context, workspaceID, installationID string, slackUserID string) (BindingToken, error) {
 	raw, err := randomBindingToken(32)
 	if err != nil {
 		return BindingToken{}, fmt.Errorf("generate token: %w", err)
@@ -84,7 +82,7 @@ func (s *BindingTokenService) Mint(ctx context.Context, workspaceID, installatio
 		InstallationID: installationID,
 		ChannelType:    string(TypeSlack),
 		ChannelUserID:  slackUserID,
-		ExpiresAt:      pgtype.Timestamptz{Time: expiresAt, Valid: true},
+		ExpiresAt:      expiresAt,
 	}); err != nil {
 		return BindingToken{}, fmt.Errorf("persist token: %w", err)
 	}
@@ -94,7 +92,7 @@ func (s *BindingTokenService) Mint(ctx context.Context, workspaceID, installatio
 // RedeemAndBind atomically consumes a raw token and binds the Slack user id to
 // multicaUserID (taken from the session, never from the token). Returns
 // ErrBindingTokenInvalid / ErrBindingAlreadyAssigned / ErrBindingNotWorkspaceMember.
-func (s *BindingTokenService) RedeemAndBind(ctx context.Context, raw string, multicaUserID pgtype.UUID) (RedeemedBindingToken, error) {
+func (s *BindingTokenService) RedeemAndBind(ctx context.Context, raw string, multicaUserID string) (RedeemedBindingToken, error) {
 	if s.tx == nil {
 		return RedeemedBindingToken{}, errors.New("slack: BindingTokenService missing TxStarter")
 	}
@@ -102,12 +100,12 @@ func (s *BindingTokenService) RedeemAndBind(ctx context.Context, raw string, mul
 	if err != nil {
 		return RedeemedBindingToken{}, fmt.Errorf("begin tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { _ = tx.Rollback() }()
 	qtx := s.q.WithTx(tx)
 
 	row, err := qtx.ConsumeChannelBindingToken(ctx, hashBindingToken(raw))
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return RedeemedBindingToken{}, ErrBindingTokenInvalid
 		}
 		return RedeemedBindingToken{}, fmt.Errorf("consume token: %w", err)
@@ -119,7 +117,7 @@ func (s *BindingTokenService) RedeemAndBind(ctx context.Context, raw string, mul
 		UserID:      multicaUserID,
 		WorkspaceID: row.WorkspaceID,
 	}); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return RedeemedBindingToken{}, ErrBindingNotWorkspaceMember
 		}
 		return RedeemedBindingToken{}, fmt.Errorf("check membership: %w", err)
@@ -131,17 +129,17 @@ func (s *BindingTokenService) RedeemAndBind(ctx context.Context, raw string, mul
 		InstallationID: row.InstallationID,
 		ChannelType:    string(TypeSlack),
 		ChannelUserID:  row.ChannelUserID,
-		Config:         []byte(`{}`),
+		Config:         `{}`,
 	}); err != nil {
-		// pgx.ErrNoRows means the existing binding points at a different user —
+		// sql.ErrNoRows means the existing binding points at a different user —
 		// the ON CONFLICT DO UPDATE WHERE multica_user_id=… gating rejected it.
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return RedeemedBindingToken{}, ErrBindingAlreadyAssigned
 		}
 		return RedeemedBindingToken{}, fmt.Errorf("create binding: %w", err)
 	}
 
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return RedeemedBindingToken{}, fmt.Errorf("commit: %w", err)
 	}
 	return RedeemedBindingToken{

@@ -286,14 +286,12 @@ func TestCloudPATVerifier_TrimsTrailingSlash(t *testing.T) {
 // next call must not increment the request counter — that's the entire
 // point of the cache layer (one Fleet hit per cloudPATCacheTTL window
 // per token, regardless of request rate).
-func TestCloudPATVerifier_CacheHitSkipsHTTP(t *testing.T) {
-	rdb := newRedisTestClient(t)
-
+func TestCloudPATVerifier_DoesNotCachePositiveResult(t *testing.T) {
 	var calls int32
 	srv := newFleetServer(t, fleetServerOpts{recordReqs: &calls})
 	defer srv.Close()
 
-	v := NewCloudPATVerifier(CloudPATVerifierConfig{FleetBaseURL: srv.URL, Redis: rdb})
+	v := NewCloudPATVerifier(CloudPATVerifierConfig{FleetBaseURL: srv.URL})
 
 	first, err := v.Verify(context.Background(), "mcn_repeat", nil)
 	if err != nil {
@@ -308,10 +306,10 @@ func TestCloudPATVerifier_CacheHitSkipsHTTP(t *testing.T) {
 		t.Fatalf("second Verify failed: %v", err)
 	}
 	if second != first {
-		t.Fatalf("cache returned different identity: first=%+v second=%+v", first, second)
+		t.Fatalf("second verify diverged: first=%+v second=%+v", first, second)
 	}
-	if got := atomic.LoadInt32(&calls); got != 1 {
-		t.Fatalf("expected 1 fleet call, got %d", got)
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Fatalf("expected 2 fleet calls with caching disabled, got %d", got)
 	}
 }
 
@@ -321,8 +319,6 @@ func TestCloudPATVerifier_CacheHitSkipsHTTP(t *testing.T) {
 // reconciliation, owner_id updated, etc.) needs to start working again
 // without waiting for a TTL window.
 func TestCloudPATVerifier_NegativesNotCached(t *testing.T) {
-	rdb := newRedisTestClient(t)
-
 	var calls int32
 	srv := newFleetServer(t, fleetServerOpts{
 		body:       `{"valid":false,"reason":"token_revoked"}`,
@@ -330,7 +326,7 @@ func TestCloudPATVerifier_NegativesNotCached(t *testing.T) {
 	})
 	defer srv.Close()
 
-	v := NewCloudPATVerifier(CloudPATVerifierConfig{FleetBaseURL: srv.URL, Redis: rdb})
+	v := NewCloudPATVerifier(CloudPATVerifierConfig{FleetBaseURL: srv.URL})
 
 	_, err := v.Verify(context.Background(), "mcn_revoked", nil)
 	if !errors.Is(err, ErrCloudPATInvalid) {
@@ -345,7 +341,6 @@ func TestCloudPATVerifier_NegativesNotCached(t *testing.T) {
 	}
 }
 
-
 // TestCloudPATVerifier_LookupRejectsUnknownOwner pins the new
 // owner-existence guard. Cloud says the token is valid, but the
 // caller's lookup says the owner_id does not exist locally — the
@@ -353,13 +348,11 @@ func TestCloudPATVerifier_NegativesNotCached(t *testing.T) {
 // cache the result, so a freshly-created user can authenticate
 // immediately on the next call without waiting for a TTL.
 func TestCloudPATVerifier_LookupRejectsUnknownOwner(t *testing.T) {
-	rdb := newRedisTestClient(t)
-
 	var calls int32
 	srv := newFleetServer(t, fleetServerOpts{recordReqs: &calls})
 	defer srv.Close()
 
-	v := NewCloudPATVerifier(CloudPATVerifierConfig{FleetBaseURL: srv.URL, Redis: rdb})
+	v := NewCloudPATVerifier(CloudPATVerifierConfig{FleetBaseURL: srv.URL})
 
 	lookup := func(_ context.Context, ownerID string) (bool, error) {
 		// Cloud's stub returns this fixed owner_id; assert we receive
@@ -431,14 +424,12 @@ func TestCloudPATVerifier_LookupErrorMapsToUnavailable(t *testing.T) {
 // + locally-existing owner_id IS cached: the second Verify must not
 // hit Fleet OR the lookup. This is the happy-path symmetry to the
 // previous two tests.
-func TestCloudPATVerifier_LookupSuccessIsCached(t *testing.T) {
-	rdb := newRedisTestClient(t)
-
+func TestCloudPATVerifier_LookupSuccessIsNotCached(t *testing.T) {
 	var fleetCalls int32
 	srv := newFleetServer(t, fleetServerOpts{recordReqs: &fleetCalls})
 	defer srv.Close()
 
-	v := NewCloudPATVerifier(CloudPATVerifierConfig{FleetBaseURL: srv.URL, Redis: rdb})
+	v := NewCloudPATVerifier(CloudPATVerifierConfig{FleetBaseURL: srv.URL})
 
 	var lookupCalls int32
 	lookup := func(_ context.Context, _ string) (bool, error) {
@@ -452,10 +443,10 @@ func TestCloudPATVerifier_LookupSuccessIsCached(t *testing.T) {
 	if _, err := v.Verify(context.Background(), "mcn_cacheable", lookup); err != nil {
 		t.Fatalf("second Verify failed: %v", err)
 	}
-	if got := atomic.LoadInt32(&fleetCalls); got != 1 {
-		t.Fatalf("expected 1 fleet call (second hits cache), got %d", got)
+	if got := atomic.LoadInt32(&fleetCalls); got != 2 {
+		t.Fatalf("expected 2 fleet calls with caching disabled, got %d", got)
 	}
-	if got := atomic.LoadInt32(&lookupCalls); got != 1 {
-		t.Fatalf("expected 1 lookup call (second hits cache), got %d", got)
+	if got := atomic.LoadInt32(&lookupCalls); got != 2 {
+		t.Fatalf("expected 2 lookup calls with caching disabled, got %d", got)
 	}
 }

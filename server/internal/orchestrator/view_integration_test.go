@@ -31,7 +31,7 @@ func TestIntegrationIssueViewsAndMemberActions(t *testing.T) {
 	childID, _ := f.issue("child")
 	f.exec(`UPDATE issue SET parent_issue_id=$2, status='done' WHERE id=$1`, childID, orchID)
 	var prID string
-	if err := f.pool.QueryRow(f.ctx, `INSERT INTO github_pull_request (workspace_id, installation_id, repo_owner, repo_name, pr_number, title, state, html_url, branch, head_sha, pr_created_at, pr_updated_at, additions, deletions)
+	if err := f.pool.QueryRowContext(f.ctx, `INSERT INTO github_pull_request (workspace_id, installation_id, repo_owner, repo_name, pr_number, title, state, html_url, branch, head_sha, pr_created_at, pr_updated_at, additions, deletions)
 		VALUES ($1, 1, 'o', 'r', 9, 'pr', 'open', 'https://x/9', 'agent/x', 'abc', now(), now(), 5, 2) RETURNING id::text`, f.ws).Scan(&prID); err != nil {
 		t.Fatal(err)
 	}

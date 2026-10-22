@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/testutil"
 )
@@ -40,7 +39,7 @@ func TestIssueCloseStopsWakeupsInApplication(t *testing.T) {
 			issue := dbfx.Issue(t, "wake close "+tc.name)
 			dbfx.Cleanup(t, "DELETE FROM issue_wakeup WHERE issue_id=$1", issue)
 			dbfx.Cleanup(t, "DELETE FROM agent_task_queue WHERE issue_id=$1", issue)
-			w, err := svc.Create(ctx, parseUUID(issue), parseUUID(testUserID), pgtype.UUID{}, service.WakeupInput{AgentID: agent, Kind: "at", AfterSeconds: 600, Instruction: "check"})
+			w, err := svc.Create(ctx, parseUUID(issue), parseUUID(testUserID), "", service.WakeupInput{AgentID: agent, Kind: "at", AfterSeconds: 600, Instruction: "check"})
 			if err != nil {
 				t.Fatal(err)
 			}

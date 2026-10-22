@@ -2,14 +2,12 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/attribution"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
@@ -20,7 +18,7 @@ import (
 
 func TestPendingDelegatedFailureSweepDoesNotStarveOtherWorkspaces(t *testing.T) {
 	ctx := context.Background()
-	var paused []pgtype.UUID
+	var paused []string
 	for _, status := range []string{issuestatus.Cancelled, issuestatus.Backlog} {
 		f, svc := seedDelegatedFailureFixture(t)
 		fx := dbfx.New(f.pool, f.workspaceID, f.userID)
@@ -49,7 +47,7 @@ func TestPendingDelegatedFailureSweepDoesNotStarveOtherWorkspaces(t *testing.T) 
 		t.Fatalf("recovery behind 100 paused signals = %+v, %v; want one scan and replay", result, err)
 	}
 	if covered, err := svc.Queries.HasTaskCoveringDelegatedFailureComment(ctx, db.HasTaskCoveringDelegatedFailureCommentParams{
-		IssueID: target.issue.ID, AgentID: target.agent.ID, CommentID: target.comment.ID,
+		IssueID: nullString(target.issue.ID), AgentID: target.agent.ID, CommentID: nullString(target.comment.ID),
 	}); err != nil || !covered {
 		t.Fatalf("executable recovery has a task = %v, %v; want true", covered, err)
 	}
@@ -163,11 +161,11 @@ func TestDelegatedFailureRecoveryRechecksStatusAndResumes(t *testing.T) {
 			// Change the issue after selection, before the same dispatch entry
 			// point used by the sweeper and completion reconciliation runs.
 			fx.Exec(t, `UPDATE issue SET status = $2 WHERE id = $1`, f.issueID, status)
-			if err := svc.DispatchDelegatedFailureRecoveryComment(ctx, pending[0], pgtype.UUID{}); err != nil {
+			if err := svc.DispatchDelegatedFailureRecoveryComment(ctx, pending[0], ""); err != nil {
 				t.Fatal(err)
 			}
 			var count int
-			if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue
+			if err := f.pool.QueryRowContext(ctx, `SELECT count(*) FROM agent_task_queue
 				WHERE trigger_evidence_kind = 'delegated_failure' AND trigger_evidence_ref_id = $1`, failedID).Scan(&count); err != nil {
 				t.Fatal(err)
 			}
@@ -190,11 +188,11 @@ type recoveryCatalogErrorDB struct {
 	err error
 }
 
-func (d recoveryCatalogErrorDB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	if strings.Contains(sql, "FROM issue_status") {
-		return recoveryCatalogErrorRow{d.err}
+func (d recoveryCatalogErrorDB) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	if strings.Contains(query, "FROM issue_status") {
+		return errQueryRow()
 	}
-	return d.DBTX.QueryRow(ctx, sql, args...)
+	return d.DBTX.QueryRowContext(ctx, query, args...)
 }
 
 type recoveryCatalogErrorRow struct{ err error }
@@ -223,7 +221,7 @@ func TestDelegatedFailureRecoveryPreservesSignalWhenStatusUnavailable(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
-			wantErr := error(pgx.ErrNoRows)
+			wantErr := error(sql.ErrNoRows)
 			if readError {
 				createStatus()
 				wantErr = errors.New("catalog temporarily unavailable")
@@ -235,13 +233,13 @@ func TestDelegatedFailureRecoveryPreservesSignalWhenStatusUnavailable(t *testing
 				t.Errorf("initial recovery: handled=%v err=%v; want handled and %v", handled, err, wantErr)
 			}
 			comment, err := queries.GetDelegatedFailureRecoveryComment(ctx, db.GetDelegatedFailureRecoveryCommentParams{
-				IssueID: util.MustParseUUID(f.issueID), WorkspaceID: util.MustParseUUID(f.workspaceID), SourceTaskID: failedID,
+				IssueID: util.MustParseUUID(f.issueID), WorkspaceID: util.MustParseUUID(f.workspaceID), SourceTaskID: nullString(failedID),
 			})
 			if err != nil {
 				t.Fatalf("recovery signal must survive status resolution failure: %v", err)
 			}
 			var count int
-			if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue
+			if err := f.pool.QueryRowContext(ctx, `SELECT count(*) FROM agent_task_queue
 				WHERE trigger_evidence_kind = 'delegated_failure' AND trigger_evidence_ref_id = $1`, failedID).Scan(&count); err != nil {
 				t.Fatal(err)
 			}
@@ -279,7 +277,7 @@ func TestDelegatedFailureRecoveryPreservesSignalWhenStatusUnavailable(t *testing
 				}
 				// Sweep totals include other workspaces. Each signal must have
 				// exactly one recovery task, including after the second sweep.
-				for _, sourceID := range []pgtype.UUID{failedID, otherFailedID} {
+				for _, sourceID := range []string{failedID, otherFailedID} {
 					fx.QueryRow(t, `SELECT count(*) FROM agent_task_queue
 						WHERE trigger_evidence_kind = 'delegated_failure' AND trigger_evidence_ref_id = $1`, sourceID).Scan(&count)
 					if count != 1 {
@@ -293,7 +291,7 @@ func TestDelegatedFailureRecoveryPreservesSignalWhenStatusUnavailable(t *testing
 }
 
 type delegatedFailureFixture struct {
-	pool          *pgxpool.Pool
+	pool          *sql.DB
 	workspaceID   string
 	userID        string
 	issueID       string
@@ -310,16 +308,16 @@ func seedDelegatedFailureFixture(t *testing.T) (*delegatedFailureFixture, *TaskS
 	pool := newResolveOriginatorPool(t)
 	ctx := context.Background()
 	workspaceID, userID, coordinatorID, issueID := seedAttributionFixture(t, pool)
-	if _, err := pool.Exec(ctx, `UPDATE issue SET status = 'in_progress' WHERE id = $1`, issueID); err != nil {
+	if _, err := pool.ExecContext(ctx, `UPDATE issue SET status = 'in_progress' WHERE id = $1`, issueID); err != nil {
 		t.Fatalf("activate source issue: %v", err)
 	}
 
 	var runtimeID string
-	if err := pool.QueryRow(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, coordinatorID).Scan(&runtimeID); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, coordinatorID).Scan(&runtimeID); err != nil {
 		t.Fatalf("load runtime: %v", err)
 	}
 	var workerID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, runtime_mode, runtime_config, runtime_id, visibility,
 			max_concurrent_tasks, owner_id, instructions, custom_env, custom_args
@@ -329,7 +327,7 @@ func seedDelegatedFailureFixture(t *testing.T) (*delegatedFailureFixture, *TaskS
 		t.Fatalf("seed worker: %v", err)
 	}
 	var workerIssueID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO issue (
 			workspace_id, title, creator_type, creator_id, assignee_type, assignee_id,
 			priority, parent_issue_id, number
@@ -340,7 +338,7 @@ func seedDelegatedFailureFixture(t *testing.T) (*delegatedFailureFixture, *TaskS
 	}
 
 	var sourceTriggerID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO comment (workspace_id, issue_id, author_type, author_id, content)
 		VALUES ($1, $2, 'member', $3, 'coordinate delegated work')
 		RETURNING id`, workspaceID, issueID, userID).Scan(&sourceTriggerID); err != nil {
@@ -348,7 +346,7 @@ func seedDelegatedFailureFixture(t *testing.T) (*delegatedFailureFixture, *TaskS
 	}
 
 	var sourceTaskID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO agent_task_queue (
 			agent_id, runtime_id, issue_id, status, priority,
 			trigger_comment_id, originator_user_id, accountable_user_id, originator_source
@@ -372,10 +370,10 @@ func seedDelegatedFailureFixture(t *testing.T) (*delegatedFailureFixture, *TaskS
 	}, NewTaskService(db.New(pool), pool, nil, events.New())
 }
 
-func (f *delegatedFailureFixture) insertWorkerTask(t *testing.T, status, evidenceKind string, attempt, maxAttempts int32) pgtype.UUID {
+func (f *delegatedFailureFixture) insertWorkerTask(t *testing.T, status, evidenceKind string, attempt, maxAttempts int32) string {
 	t.Helper()
-	var taskID pgtype.UUID
-	if err := f.pool.QueryRow(context.Background(), `
+	var taskID string
+	if err := f.pool.QueryRowContext(context.Background(), `
 		INSERT INTO agent_task_queue (
 			agent_id, runtime_id, issue_id, status, priority, attempt, max_attempts,
 			originator_user_id, accountable_user_id, originator_source,
@@ -401,7 +399,7 @@ func TestFailTaskFinalDelegatedFailureWakesCoordinatorOnce(t *testing.T) {
 
 	var recoveryCount int
 	var recoveryAgent, recoveryIssue, evidenceRef, delegatedFrom string
-	if err := f.pool.QueryRow(ctx, `
+	if err := f.pool.QueryRowContext(ctx, `
 		SELECT count(*), COALESCE(max(agent_id::text), ''), COALESCE(max(issue_id::text), ''),
 		       COALESCE(max(trigger_evidence_ref_id::text), ''), COALESCE(max(delegated_from_task_id::text), '')
 		FROM agent_task_queue
@@ -419,7 +417,7 @@ func TestFailTaskFinalDelegatedFailureWakesCoordinatorOnce(t *testing.T) {
 		t.Fatalf("recovery lineage = evidence %s delegated_from %s, want failed task %s", evidenceRef, delegatedFrom, util.UUIDToString(failedID))
 	}
 	var retryCount int
-	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE parent_task_id = $1`, failedID).Scan(&retryCount); err != nil {
+	if err := f.pool.QueryRowContext(ctx, `SELECT count(*) FROM agent_task_queue WHERE parent_task_id = $1`, failedID).Scan(&retryCount); err != nil {
 		t.Fatalf("count process-failure retries: %v", err)
 	}
 	if retryCount != 0 {
@@ -428,7 +426,7 @@ func TestFailTaskFinalDelegatedFailureWakesCoordinatorOnce(t *testing.T) {
 
 	var commentCount int
 	var content, parentID string
-	if err := f.pool.QueryRow(ctx, `
+	if err := f.pool.QueryRowContext(ctx, `
 		SELECT count(*), COALESCE(max(content), ''), COALESCE(max(parent_id::text), '') FROM comment
 		WHERE issue_id = $1 AND author_type = 'system' AND type = 'progress_update' AND source_task_id = $2`, f.issueID, failedID).
 		Scan(&commentCount, &content, &parentID); err != nil {
@@ -444,7 +442,7 @@ func TestFailTaskFinalDelegatedFailureWakesCoordinatorOnce(t *testing.T) {
 		t.Fatalf("recovery comment did not redact error: %q", content)
 	}
 	var failedIssueComments int
-	if err := f.pool.QueryRow(ctx, `
+	if err := f.pool.QueryRowContext(ctx, `
 		SELECT count(*) FROM comment
 		WHERE issue_id = $1 AND type = 'system' AND source_task_id = $2`, f.workerIssue, failedID).Scan(&failedIssueComments); err != nil {
 		t.Fatalf("count failed-issue comments: %v", err)
@@ -458,13 +456,13 @@ func TestFailTaskFinalDelegatedFailureWakesCoordinatorOnce(t *testing.T) {
 	if handled, err := svc.recoverDelegatedTaskFailure(ctx, *failed); err != nil || !handled {
 		t.Fatalf("repeat recovery = handled %v err %v, want handled without error", handled, err)
 	}
-	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM comment WHERE issue_id = $1 AND type = 'progress_update' AND source_task_id = $2`, f.issueID, failedID).Scan(&commentCount); err != nil {
+	if err := f.pool.QueryRowContext(ctx, `SELECT count(*) FROM comment WHERE issue_id = $1 AND type = 'progress_update' AND source_task_id = $2`, f.issueID, failedID).Scan(&commentCount); err != nil {
 		t.Fatalf("recount recovery comments: %v", err)
 	}
 	if commentCount != 1 {
 		t.Fatalf("replayed recovery comment count = %d, want 1", commentCount)
 	}
-	if _, err := f.pool.Exec(ctx, `
+	if _, err := f.pool.ExecContext(ctx, `
 		UPDATE agent_task_queue
 		SET status = 'failed', completed_at = now(), failure_reason = 'agent_error.process_failure',
 		    delivered_comment_ids = ARRAY[(
@@ -478,7 +476,7 @@ func TestFailTaskFinalDelegatedFailureWakesCoordinatorOnce(t *testing.T) {
 	if handled, err := svc.recoverDelegatedTaskFailure(ctx, *failed); err != nil || !handled {
 		t.Fatalf("recovery after terminal recovery task = handled %v err %v", handled, err)
 	}
-	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE trigger_evidence_kind = 'delegated_failure' AND trigger_evidence_ref_id = $1`, failedID).Scan(&recoveryCount); err != nil {
+	if err := f.pool.QueryRowContext(ctx, `SELECT count(*) FROM agent_task_queue WHERE trigger_evidence_kind = 'delegated_failure' AND trigger_evidence_ref_id = $1`, failedID).Scan(&recoveryCount); err != nil {
 		t.Fatalf("recount recovery tasks: %v", err)
 	}
 	if recoveryCount != 1 {
@@ -490,7 +488,7 @@ func TestPendingDelegatedFailureSweepRepairsCommittedCommentWithoutTask(t *testi
 	f, svc := seedDelegatedFailureFixture(t)
 	ctx := context.Background()
 	failedID := f.insertWorkerTask(t, "failed", "comment", 1, 2)
-	if _, err := f.pool.Exec(ctx, `
+	if _, err := f.pool.ExecContext(ctx, `
 		UPDATE agent_task_queue
 		SET failure_reason = 'agent_error.process_failure', error = 'worker exited', completed_at = now()
 		WHERE id = $1`, failedID); err != nil {
@@ -510,7 +508,7 @@ func TestPendingDelegatedFailureSweepRepairsCommittedCommentWithoutTask(t *testi
 		t.Fatalf("ensure recovery comment = target %v created %v err %v", target != nil, created, err)
 	}
 	var tasksBefore int
-	if err := f.pool.QueryRow(ctx, `
+	if err := f.pool.QueryRowContext(ctx, `
 		SELECT count(*) FROM agent_task_queue
 		WHERE trigger_evidence_kind = 'delegated_failure' AND trigger_evidence_ref_id = $1`, failedID).Scan(&tasksBefore); err != nil {
 		t.Fatalf("count recovery tasks before sweep: %v", err)
@@ -524,10 +522,10 @@ func TestPendingDelegatedFailureSweepRepairsCommittedCommentWithoutTask(t *testi
 		t.Fatalf("RecoverPendingDelegatedFailures = %+v, %v; want one replay, nil", result, err)
 	}
 	var comments, tasks int
-	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM comment WHERE type = 'progress_update' AND source_task_id = $1`, failedID).Scan(&comments); err != nil {
+	if err := f.pool.QueryRowContext(ctx, `SELECT count(*) FROM comment WHERE type = 'progress_update' AND source_task_id = $1`, failedID).Scan(&comments); err != nil {
 		t.Fatalf("count recovery comments: %v", err)
 	}
-	if err := f.pool.QueryRow(ctx, `
+	if err := f.pool.QueryRowContext(ctx, `
 		SELECT count(*) FROM agent_task_queue
 		WHERE trigger_evidence_kind = 'delegated_failure' AND trigger_evidence_ref_id = $1`, failedID).Scan(&tasks); err != nil {
 		t.Fatalf("count recovery tasks after sweep: %v", err)
@@ -544,7 +542,7 @@ func TestPendingDelegatedFailureSweepSkipsCustomTerminalSourceIssue(t *testing.T
 	f, svc := seedDelegatedFailureFixture(t)
 	ctx := context.Background()
 	failedID := f.insertWorkerTask(t, "failed", "comment", 1, 2)
-	if _, err := f.pool.Exec(ctx, `
+	if _, err := f.pool.ExecContext(ctx, `
 		UPDATE agent_task_queue
 		SET failure_reason = 'agent_error.process_failure', error = 'worker exited', completed_at = now()
 		WHERE id = $1`, failedID); err != nil {
@@ -555,14 +553,14 @@ func TestPendingDelegatedFailureSweepSkipsCustomTerminalSourceIssue(t *testing.T
 	}
 
 	const customDone = "recovery_verified"
-	if _, err := f.pool.Exec(ctx, `
+	if _, err := f.pool.ExecContext(ctx, `
 		INSERT INTO issue_status (
 			workspace_id, key, name, description, category, color, is_system, position
 		) VALUES ($1, $2, 'Recovery verified', '', 'done', '#22c55e', false, 1)`,
 		f.workspaceID, customDone); err != nil {
 		t.Fatalf("insert custom done status: %v", err)
 	}
-	if _, err := f.pool.Exec(ctx, `UPDATE issue SET status = $2 WHERE id = $1`, f.issueID, customDone); err != nil {
+	if _, err := f.pool.ExecContext(ctx, `UPDATE issue SET status = $2 WHERE id = $1`, f.issueID, customDone); err != nil {
 		t.Fatalf("move source issue to custom done status: %v", err)
 	}
 
@@ -570,7 +568,7 @@ func TestPendingDelegatedFailureSweepSkipsCustomTerminalSourceIssue(t *testing.T
 		t.Fatalf("terminal-source recovery sweep = %+v, %v; want zero result, nil", result, err)
 	}
 	var recoveryTasks int
-	if err := f.pool.QueryRow(ctx, `
+	if err := f.pool.QueryRowContext(ctx, `
 		SELECT count(*) FROM agent_task_queue
 		WHERE trigger_evidence_kind = 'delegated_failure' AND trigger_evidence_ref_id = $1`, failedID).Scan(&recoveryTasks); err != nil {
 		t.Fatalf("count recovery tasks: %v", err)
@@ -632,7 +630,7 @@ func TestPendingDelegatedFailureSweepPrefiltersUnresumableSourceIssues(t *testin
 						}
 					}
 					if tc.customCategory != "" {
-						if _, err := f.pool.Exec(ctx, `
+						if _, err := f.pool.ExecContext(ctx, `
 							INSERT INTO issue_status (
 								workspace_id, key, name, description, category, color, is_system, position
 							) VALUES ($1, $2, 'Shelved', '', $3, '#6b7280', false, 1)`,
@@ -642,7 +640,7 @@ func TestPendingDelegatedFailureSweepPrefiltersUnresumableSourceIssues(t *testin
 					}
 
 					failedID := f.insertWorkerTask(t, "failed", "comment", 1, 2)
-					if _, err := f.pool.Exec(ctx, `
+					if _, err := f.pool.ExecContext(ctx, `
 						UPDATE agent_task_queue
 						SET failure_reason = 'agent_error.process_failure', error = 'worker exited', completed_at = now()
 						WHERE id = $1`, failedID); err != nil {
@@ -654,7 +652,7 @@ func TestPendingDelegatedFailureSweepPrefiltersUnresumableSourceIssues(t *testin
 					if err != nil || target == nil || !created {
 						t.Fatalf("ensure recovery comment = target %v created %v err %v", target != nil, created, err)
 					}
-					if _, err := f.pool.Exec(ctx, `UPDATE issue SET status = $2 WHERE id = $1`, f.issueID, tc.status); err != nil {
+					if _, err := f.pool.ExecContext(ctx, `UPDATE issue SET status = $2 WHERE id = $1`, f.issueID, tc.status); err != nil {
 						t.Fatalf("move source issue to %q: %v", tc.status, err)
 					}
 
@@ -688,7 +686,7 @@ func TestPendingDelegatedFailureSweepRequeuesTerminalUndeliveredTask(t *testing.
 			f, svc := seedDelegatedFailureFixture(t)
 			ctx := context.Background()
 			failedID := f.insertWorkerTask(t, "failed", "comment", 1, 2)
-			if _, err := f.pool.Exec(ctx, `
+			if _, err := f.pool.ExecContext(ctx, `
 				UPDATE agent_task_queue
 				SET failure_reason = 'agent_error.process_failure', error = 'worker exited', completed_at = now()
 				WHERE id = $1`, failedID); err != nil {
@@ -702,8 +700,8 @@ func TestPendingDelegatedFailureSweepRequeuesTerminalUndeliveredTask(t *testing.
 				t.Fatalf("initial recovery = handled %v err %v", handled, err)
 			}
 
-			var firstRecoveryID pgtype.UUID
-			if err := f.pool.QueryRow(ctx, `
+			var firstRecoveryID string
+			if err := f.pool.QueryRowContext(ctx, `
 				SELECT id FROM agent_task_queue
 				WHERE trigger_evidence_kind = 'delegated_failure' AND trigger_evidence_ref_id = $1`, failedID).Scan(&firstRecoveryID); err != nil {
 				t.Fatalf("load first recovery task: %v", err)
@@ -712,7 +710,7 @@ func TestPendingDelegatedFailureSweepRequeuesTerminalUndeliveredTask(t *testing.
 				if _, err := svc.CancelTask(ctx, firstRecoveryID); err != nil {
 					t.Fatalf("server-cancel recovery before delivery: %v", err)
 				}
-			} else if _, err := f.pool.Exec(ctx, `
+			} else if _, err := f.pool.ExecContext(ctx, `
 				UPDATE agent_task_queue
 				SET status = $2, completed_at = now(), delivered_comment_ids = '{}'
 				WHERE id = $1`, firstRecoveryID, terminalStatus); err != nil {
@@ -724,7 +722,7 @@ func TestPendingDelegatedFailureSweepRequeuesTerminalUndeliveredTask(t *testing.
 				t.Fatalf("RecoverPendingDelegatedFailures = %+v, %v; want one replay, nil", result, err)
 			}
 			var active, total int
-			if err := f.pool.QueryRow(ctx, `
+			if err := f.pool.QueryRowContext(ctx, `
 				SELECT count(*) FILTER (WHERE status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')),
 				       count(*)
 				FROM agent_task_queue
@@ -745,7 +743,7 @@ func TestUserCancelledDelegatedFailureRecoveryStaysCancelled(t *testing.T) {
 	f, svc := seedDelegatedFailureFixture(t)
 	ctx := context.Background()
 	failedID := f.insertWorkerTask(t, "failed", "comment", 1, 2)
-	if _, err := f.pool.Exec(ctx, `
+	if _, err := f.pool.ExecContext(ctx, `
 		UPDATE agent_task_queue
 		SET failure_reason = 'agent_error.process_failure', error = 'worker exited', completed_at = now()
 		WHERE id = $1`, failedID); err != nil {
@@ -759,8 +757,8 @@ func TestUserCancelledDelegatedFailureRecoveryStaysCancelled(t *testing.T) {
 		t.Fatalf("initial recovery = handled %v err %v", handled, err)
 	}
 
-	var recoveryTaskID, recoveryCommentID pgtype.UUID
-	if err := f.pool.QueryRow(ctx, `
+	var recoveryTaskID, recoveryCommentID string
+	if err := f.pool.QueryRowContext(ctx, `
 		SELECT task.id, recovery.id
 		FROM agent_task_queue task
 		JOIN comment recovery ON recovery.id = task.trigger_comment_id
@@ -781,7 +779,7 @@ func TestUserCancelledDelegatedFailureRecoveryStaysCancelled(t *testing.T) {
 	}
 
 	var acknowledged bool
-	if err := f.pool.QueryRow(ctx, `
+	if err := f.pool.QueryRowContext(ctx, `
 		SELECT $2::uuid = ANY(delivered_comment_ids)
 		FROM agent_task_queue WHERE id = $1`, recoveryTaskID, recoveryCommentID).Scan(&acknowledged); err != nil {
 		t.Fatalf("read user-cancel acknowledgement: %v", err)
@@ -793,7 +791,7 @@ func TestUserCancelledDelegatedFailureRecoveryStaysCancelled(t *testing.T) {
 		t.Fatalf("recovery sweep after user cancel = %+v, %v; want zero result, nil", result, err)
 	}
 	var taskCount int
-	if err := f.pool.QueryRow(ctx, `
+	if err := f.pool.QueryRowContext(ctx, `
 		SELECT count(*) FROM agent_task_queue
 		WHERE trigger_evidence_kind = 'delegated_failure' AND trigger_evidence_ref_id = $1`, failedID).Scan(&taskCount); err != nil {
 		t.Fatalf("count recovery tasks: %v", err)
@@ -807,7 +805,7 @@ func TestManualRerunKeepsDelegatedFailureRecoveryReplayable(t *testing.T) {
 	f, svc := seedDelegatedFailureFixture(t)
 	ctx := context.Background()
 	failedID := f.insertWorkerTask(t, "failed", "comment", 1, 2)
-	if _, err := f.pool.Exec(ctx, `
+	if _, err := f.pool.ExecContext(ctx, `
 		UPDATE agent_task_queue
 		SET failure_reason = 'agent_error.process_failure', error = 'worker exited', completed_at = now()
 		WHERE id = $1`, failedID); err != nil {
@@ -821,8 +819,8 @@ func TestManualRerunKeepsDelegatedFailureRecoveryReplayable(t *testing.T) {
 		t.Fatalf("initial recovery = handled %v err %v", handled, err)
 	}
 
-	var firstRecoveryTaskID, recoveryCommentID pgtype.UUID
-	if err := f.pool.QueryRow(ctx, `
+	var firstRecoveryTaskID, recoveryCommentID string
+	if err := f.pool.QueryRowContext(ctx, `
 		SELECT task.id, recovery.id
 		FROM agent_task_queue task
 		JOIN comment recovery ON recovery.id = task.trigger_comment_id
@@ -835,7 +833,7 @@ func TestManualRerunKeepsDelegatedFailureRecoveryReplayable(t *testing.T) {
 		ctx,
 		util.MustParseUUID(f.issueID),
 		util.MustParseUUID(f.sourceTask),
-		pgtype.UUID{},
+		"",
 		util.MustParseUUID(f.userID),
 		nil,
 	)
@@ -844,7 +842,7 @@ func TestManualRerunKeepsDelegatedFailureRecoveryReplayable(t *testing.T) {
 	}
 	var firstStatus string
 	var acknowledged bool
-	if err := f.pool.QueryRow(ctx, `
+	if err := f.pool.QueryRowContext(ctx, `
 		SELECT status, $2::uuid = ANY(delivered_comment_ids)
 		FROM agent_task_queue WHERE id = $1`, firstRecoveryTaskID, recoveryCommentID).Scan(&firstStatus, &acknowledged); err != nil {
 		t.Fatalf("read rerun-cancelled recovery task: %v", err)
@@ -858,14 +856,14 @@ func TestManualRerunKeepsDelegatedFailureRecoveryReplayable(t *testing.T) {
 		t.Fatalf("recovery sweep after rerun = %+v, %v; want one replay", result, err)
 	}
 	var rerunTrigger string
-	if err := f.pool.QueryRow(ctx, `SELECT COALESCE(trigger_comment_id::text, '') FROM agent_task_queue WHERE id = $1`, rerun.ID).Scan(&rerunTrigger); err != nil {
+	if err := f.pool.QueryRowContext(ctx, `SELECT COALESCE(trigger_comment_id::text, '') FROM agent_task_queue WHERE id = $1`, rerun.ID).Scan(&rerunTrigger); err != nil {
 		t.Fatalf("read rerun trigger: %v", err)
 	}
 	if rerunTrigger != util.UUIDToString(recoveryCommentID) {
 		t.Fatalf("rerun trigger = %q, want recovery comment %s", rerunTrigger, util.UUIDToString(recoveryCommentID))
 	}
 	var dedicatedRecoveryTasks int
-	if err := f.pool.QueryRow(ctx, `
+	if err := f.pool.QueryRowContext(ctx, `
 		SELECT count(*) FROM agent_task_queue
 		WHERE trigger_evidence_kind = 'delegated_failure' AND trigger_evidence_ref_id = $1`, failedID).Scan(&dedicatedRecoveryTasks); err != nil {
 		t.Fatalf("count dedicated recovery tasks: %v", err)
@@ -882,7 +880,7 @@ func TestDelegatedFailureRecoveryStopsAfterBoundedUndeliveredAttempts(t *testing
 	f, svc := seedDelegatedFailureFixture(t)
 	ctx := context.Background()
 	failedID := f.insertWorkerTask(t, "failed", "comment", 1, 2)
-	if _, err := f.pool.Exec(ctx, `
+	if _, err := f.pool.ExecContext(ctx, `
 		UPDATE agent_task_queue
 		SET failure_reason = 'agent_error.process_failure', error = 'worker exited', completed_at = now()
 		WHERE id = $1`, failedID); err != nil {
@@ -897,8 +895,8 @@ func TestDelegatedFailureRecoveryStopsAfterBoundedUndeliveredAttempts(t *testing
 	}
 
 	for attempt := 1; attempt <= delegatedFailureRecoveryMaxTaskAttempts; attempt++ {
-		var currentTaskID pgtype.UUID
-		if err := f.pool.QueryRow(ctx, `
+		var currentTaskID string
+		if err := f.pool.QueryRowContext(ctx, `
 			SELECT id FROM agent_task_queue
 			WHERE trigger_evidence_kind = 'delegated_failure'
 			  AND trigger_evidence_ref_id = $1
@@ -907,7 +905,7 @@ func TestDelegatedFailureRecoveryStopsAfterBoundedUndeliveredAttempts(t *testing
 			LIMIT 1`, failedID).Scan(&currentTaskID); err != nil {
 			t.Fatalf("load recovery attempt %d: %v", attempt, err)
 		}
-		if _, err := f.pool.Exec(ctx, `
+		if _, err := f.pool.ExecContext(ctx, `
 			UPDATE agent_task_queue
 			SET status = 'failed', completed_at = now(), failure_reason = 'queued_expired',
 			    error = 'task expired in queue', delivered_comment_ids = '{}'
@@ -927,7 +925,7 @@ func TestDelegatedFailureRecoveryStopsAfterBoundedUndeliveredAttempts(t *testing
 			t.Fatalf("recovery sweep after final attempt = %+v, want one exhaustion", result)
 		}
 		var active, total int
-		if err := f.pool.QueryRow(ctx, `
+		if err := f.pool.QueryRowContext(ctx, `
 			SELECT count(*) FILTER (WHERE status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')),
 			       count(*)
 			FROM agent_task_queue
@@ -947,7 +945,7 @@ func TestDelegatedFailureRecoveryStopsAfterBoundedUndeliveredAttempts(t *testing
 
 	var exhaustionComments int
 	var exhaustionContent, exhaustionParentID string
-	if err := f.pool.QueryRow(ctx, `
+	if err := f.pool.QueryRowContext(ctx, `
 		SELECT count(*), COALESCE(max(content), ''), COALESCE(max(parent_id::text), '')
 		FROM comment
 		WHERE issue_id = $1 AND author_type = 'system' AND type = 'system' AND source_task_id = $2`, f.issueID, failedID).
@@ -962,7 +960,7 @@ func TestDelegatedFailureRecoveryStopsAfterBoundedUndeliveredAttempts(t *testing
 	}
 	var inboxItems int
 	var inboxSeverity, inboxBody string
-	if err := f.pool.QueryRow(ctx, `
+	if err := f.pool.QueryRowContext(ctx, `
 		SELECT count(*), COALESCE(max(severity), ''), COALESCE(max(body), '')
 		FROM inbox_item
 		WHERE workspace_id = $1
@@ -979,7 +977,7 @@ func TestDelegatedFailureRecoveryStopsAfterBoundedUndeliveredAttempts(t *testing
 	if result, err := svc.RecoverPendingDelegatedFailures(ctx, 100); err != nil || result != (DelegatedFailureRecoverySweepResult{}) {
 		t.Fatalf("post-exhaustion recovery sweep = %+v, %v; want zero result, nil", result, err)
 	}
-	if err := f.pool.QueryRow(ctx, `
+	if err := f.pool.QueryRowContext(ctx, `
 		SELECT count(*) FROM inbox_item
 		WHERE workspace_id = $1 AND recipient_id = $2 AND issue_id = $3
 		  AND type = 'task_failed'`, f.workspaceID, f.userID, f.issueID).Scan(&inboxItems); err != nil {
@@ -989,7 +987,7 @@ func TestDelegatedFailureRecoveryStopsAfterBoundedUndeliveredAttempts(t *testing
 		t.Fatalf("post-exhaustion inbox count = %d, want 1", inboxItems)
 	}
 	var finalTasks int
-	if err := f.pool.QueryRow(ctx, `
+	if err := f.pool.QueryRowContext(ctx, `
 		SELECT count(*) FROM agent_task_queue
 		WHERE trigger_evidence_kind = 'delegated_failure' AND trigger_evidence_ref_id = $1`, failedID).Scan(&finalTasks); err != nil {
 		t.Fatalf("count final recovery tasks: %v", err)
@@ -1003,7 +1001,7 @@ func TestHandleFailedTasksFinalDelegatedFailureWakesCoordinator(t *testing.T) {
 	f, svc := seedDelegatedFailureFixture(t)
 	ctx := context.Background()
 	failedID := f.insertWorkerTask(t, "failed", "comment", 1, 2)
-	if _, err := f.pool.Exec(ctx, `
+	if _, err := f.pool.ExecContext(ctx, `
 		UPDATE agent_task_queue
 		SET failure_reason = 'agent_error.process_failure', error = 'worker process exited', completed_at = now()
 		WHERE id = $1`, failedID); err != nil {
@@ -1019,10 +1017,10 @@ func TestHandleFailedTasksFinalDelegatedFailureWakesCoordinator(t *testing.T) {
 	}
 
 	var recoveryTasks, recoveryComments int
-	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE trigger_evidence_kind = 'delegated_failure' AND trigger_evidence_ref_id = $1`, failedID).Scan(&recoveryTasks); err != nil {
+	if err := f.pool.QueryRowContext(ctx, `SELECT count(*) FROM agent_task_queue WHERE trigger_evidence_kind = 'delegated_failure' AND trigger_evidence_ref_id = $1`, failedID).Scan(&recoveryTasks); err != nil {
 		t.Fatalf("count recovery tasks: %v", err)
 	}
-	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM comment WHERE issue_id = $1 AND type = 'progress_update' AND source_task_id = $2`, f.issueID, failedID).Scan(&recoveryComments); err != nil {
+	if err := f.pool.QueryRowContext(ctx, `SELECT count(*) FROM comment WHERE issue_id = $1 AND type = 'progress_update' AND source_task_id = $2`, f.issueID, failedID).Scan(&recoveryComments); err != nil {
 		t.Fatalf("count recovery comments: %v", err)
 	}
 	if recoveryTasks != 1 || recoveryComments != 1 {
@@ -1040,13 +1038,13 @@ func TestFailTaskRetryPendingDoesNotWakeCoordinator(t *testing.T) {
 	}
 
 	var retries, recoveries, comments int
-	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE parent_task_id = $1`, failedID).Scan(&retries); err != nil {
+	if err := f.pool.QueryRowContext(ctx, `SELECT count(*) FROM agent_task_queue WHERE parent_task_id = $1`, failedID).Scan(&retries); err != nil {
 		t.Fatalf("count retries: %v", err)
 	}
-	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE trigger_evidence_kind = 'delegated_failure' AND trigger_evidence_ref_id = $1`, failedID).Scan(&recoveries); err != nil {
+	if err := f.pool.QueryRowContext(ctx, `SELECT count(*) FROM agent_task_queue WHERE trigger_evidence_kind = 'delegated_failure' AND trigger_evidence_ref_id = $1`, failedID).Scan(&recoveries); err != nil {
 		t.Fatalf("count recoveries: %v", err)
 	}
-	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM comment WHERE type = 'progress_update' AND source_task_id = $1`, failedID).Scan(&comments); err != nil {
+	if err := f.pool.QueryRowContext(ctx, `SELECT count(*) FROM comment WHERE type = 'progress_update' AND source_task_id = $1`, failedID).Scan(&comments); err != nil {
 		t.Fatalf("count recovery comments: %v", err)
 	}
 	if retries != 1 || recoveries != 0 || comments != 0 {
@@ -1059,8 +1057,8 @@ func TestFinalDelegatedFailureMergesIntoPendingCoordinatorTask(t *testing.T) {
 	ctx := context.Background()
 	failedID := f.insertWorkerTask(t, "running", "comment", 1, 2)
 
-	var pendingID pgtype.UUID
-	if err := f.pool.QueryRow(ctx, `
+	var pendingID string
+	if err := f.pool.QueryRowContext(ctx, `
 		INSERT INTO agent_task_queue (
 			agent_id, runtime_id, issue_id, status, priority,
 			originator_user_id, accountable_user_id, originator_source,
@@ -1075,20 +1073,20 @@ func TestFinalDelegatedFailureMergesIntoPendingCoordinatorTask(t *testing.T) {
 		t.Fatalf("FailTask: %v", err)
 	}
 
-	var triggerID pgtype.UUID
+	var triggerID string
 	var evidenceKind string
-	if err := f.pool.QueryRow(ctx, `SELECT trigger_comment_id, trigger_evidence_kind FROM agent_task_queue WHERE id = $1`, pendingID).
+	if err := f.pool.QueryRowContext(ctx, `SELECT trigger_comment_id, trigger_evidence_kind FROM agent_task_queue WHERE id = $1`, pendingID).
 		Scan(&triggerID, &evidenceKind); err != nil {
 		t.Fatalf("read pending coordinator task: %v", err)
 	}
-	if !triggerID.Valid {
+	if triggerID == "" {
 		t.Fatal("pending coordinator task did not receive the recovery comment")
 	}
 	if evidenceKind != string(attribution.EvidenceIssueAssignment) {
 		t.Fatalf("pending task attribution changed to %q, want issue_assignment", evidenceKind)
 	}
 	var newRecoveryTasks int
-	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE trigger_evidence_kind = 'delegated_failure' AND trigger_evidence_ref_id = $1`, failedID).Scan(&newRecoveryTasks); err != nil {
+	if err := f.pool.QueryRowContext(ctx, `SELECT count(*) FROM agent_task_queue WHERE trigger_evidence_kind = 'delegated_failure' AND trigger_evidence_ref_id = $1`, failedID).Scan(&newRecoveryTasks); err != nil {
 		t.Fatalf("count standalone recovery tasks: %v", err)
 	}
 	if newRecoveryTasks != 0 {
@@ -1101,12 +1099,12 @@ func TestFinalDelegatedFailureMergesIntoPendingCoordinatorTask(t *testing.T) {
 	if _, err := svc.FailTask(ctx, secondFailedID, "second worker exited", "", "", "", "agent_error.process_failure", false, "", ""); err != nil {
 		t.Fatalf("FailTask(second): %v", err)
 	}
-	var secondCommentID pgtype.UUID
-	if err := f.pool.QueryRow(ctx, `SELECT id FROM comment WHERE type = 'progress_update' AND source_task_id = $1`, secondFailedID).Scan(&secondCommentID); err != nil {
+	var secondCommentID string
+	if err := f.pool.QueryRowContext(ctx, `SELECT id FROM comment WHERE type = 'progress_update' AND source_task_id = $1`, secondFailedID).Scan(&secondCommentID); err != nil {
 		t.Fatalf("load second recovery comment: %v", err)
 	}
 	var newestTrigger, coversFirst bool
-	if err := f.pool.QueryRow(ctx, `
+	if err := f.pool.QueryRowContext(ctx, `
 		SELECT trigger_comment_id = $2::uuid, $3::uuid = ANY(coalesced_comment_ids)
 		FROM agent_task_queue WHERE id = $1`, pendingID, secondCommentID, triggerID).Scan(&newestTrigger, &coversFirst); err != nil {
 		t.Fatalf("read second merged signal: %v", err)
@@ -1121,8 +1119,8 @@ func TestDelegatedFailurePlannedBehindDispatchedCoordinatorGetsFollowUp(t *testi
 	ctx := context.Background()
 	failedID := f.insertWorkerTask(t, "running", "comment", 1, 2)
 
-	var activeID pgtype.UUID
-	if err := f.pool.QueryRow(ctx, `
+	var activeID string
+	if err := f.pool.QueryRowContext(ctx, `
 		INSERT INTO agent_task_queue (
 			agent_id, runtime_id, issue_id, status, priority, dispatched_at,
 			originator_user_id, accountable_user_id, originator_source, trigger_comment_id
@@ -1138,13 +1136,13 @@ func TestDelegatedFailurePlannedBehindDispatchedCoordinatorGetsFollowUp(t *testi
 	comment, err := svc.Queries.GetDelegatedFailureRecoveryComment(ctx, db.GetDelegatedFailureRecoveryCommentParams{
 		IssueID:      util.MustParseUUID(f.issueID),
 		WorkspaceID:  util.MustParseUUID(f.workspaceID),
-		SourceTaskID: failedID,
+		SourceTaskID: nullString(failedID),
 	})
 	if err != nil {
 		t.Fatalf("load recovery comment: %v", err)
 	}
 	var planned bool
-	if err := f.pool.QueryRow(ctx, `SELECT $2::uuid = ANY(coalesced_comment_ids) FROM agent_task_queue WHERE id = $1`, activeID, comment.ID).Scan(&planned); err != nil {
+	if err := f.pool.QueryRowContext(ctx, `SELECT $2::uuid = ANY(coalesced_comment_ids) FROM agent_task_queue WHERE id = $1`, activeID, comment.ID).Scan(&planned); err != nil {
 		t.Fatalf("read active recovery plan: %v", err)
 	}
 	if !planned {
@@ -1152,8 +1150,8 @@ func TestDelegatedFailurePlannedBehindDispatchedCoordinatorGetsFollowUp(t *testi
 	}
 	reconcilable, err := svc.Queries.ListReconcilableCommentsForIssueSince(ctx, db.ListReconcilableCommentsForIssueSinceParams{
 		IssueID:           util.MustParseUUID(f.issueID),
-		Since:             pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
-		PlannedCommentIds: []pgtype.UUID{comment.ID},
+		Since:             nullTime(time.Now().Add(time.Hour), true).String,
+		PlannedCommentIds: []string{comment.ID},
 	})
 	if err != nil {
 		t.Fatalf("list reconcilable recovery comments: %v", err)
@@ -1162,14 +1160,14 @@ func TestDelegatedFailurePlannedBehindDispatchedCoordinatorGetsFollowUp(t *testi
 		t.Fatalf("reconcilable recovery comments = %+v, want only %s", reconcilable, util.UUIDToString(comment.ID))
 	}
 
-	if _, err := f.pool.Exec(ctx, `UPDATE agent_task_queue SET status = 'completed', completed_at = now() WHERE id = $1`, activeID); err != nil {
+	if _, err := f.pool.ExecContext(ctx, `UPDATE agent_task_queue SET status = 'completed', completed_at = now() WHERE id = $1`, activeID); err != nil {
 		t.Fatalf("complete coordinator task: %v", err)
 	}
 	if err := svc.DispatchDelegatedFailureRecoveryComment(ctx, comment, activeID); err != nil {
 		t.Fatalf("replay recovery after completion: %v", err)
 	}
 	var followUps int
-	if err := f.pool.QueryRow(ctx, `
+	if err := f.pool.QueryRowContext(ctx, `
 		SELECT count(*) FROM agent_task_queue
 		WHERE agent_id = $1 AND issue_id = $2 AND trigger_evidence_kind = 'delegated_failure'
 		  AND trigger_evidence_ref_id = $3`, f.coordinator, f.issueID, failedID).Scan(&followUps); err != nil {
@@ -1190,7 +1188,7 @@ func TestDelegatedFailureRecoveryTaskDoesNotRecursivelyWake(t *testing.T) {
 	}
 
 	var comments int
-	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM comment WHERE type = 'progress_update' AND source_task_id = $1`, recoveryID).Scan(&comments); err != nil {
+	if err := f.pool.QueryRowContext(ctx, `SELECT count(*) FROM comment WHERE type = 'progress_update' AND source_task_id = $1`, recoveryID).Scan(&comments); err != nil {
 		t.Fatalf("count recursive recovery comments: %v", err)
 	}
 	if comments != 0 {
@@ -1212,7 +1210,7 @@ func TestPendingDelegatedFailureSweepSkipsTriageSourceIssue(t *testing.T) {
 	f, svc := seedDelegatedFailureFixture(t)
 	ctx := context.Background()
 	failedID := f.insertWorkerTask(t, "failed", "comment", 1, 2)
-	if _, err := f.pool.Exec(ctx, `
+	if _, err := f.pool.ExecContext(ctx, `
 		UPDATE agent_task_queue
 		SET failure_reason = 'agent_error.process_failure', error = 'worker exited', completed_at = now()
 		WHERE id = $1`, failedID); err != nil {
@@ -1225,7 +1223,7 @@ func TestPendingDelegatedFailureSweepSkipsTriageSourceIssue(t *testing.T) {
 	recoveryTasks := func() int {
 		t.Helper()
 		var n int
-		if err := f.pool.QueryRow(ctx, `
+		if err := f.pool.QueryRowContext(ctx, `
 			SELECT count(*) FROM agent_task_queue
 			WHERE trigger_evidence_kind = 'delegated_failure' AND trigger_evidence_ref_id = $1`, failedID).Scan(&n); err != nil {
 			t.Fatalf("count recovery tasks: %v", err)
@@ -1233,7 +1231,7 @@ func TestPendingDelegatedFailureSweepSkipsTriageSourceIssue(t *testing.T) {
 		return n
 	}
 
-	if _, err := f.pool.Exec(ctx, `UPDATE issue SET triage_state = 'pending' WHERE id = $1`, f.issueID); err != nil {
+	if _, err := f.pool.ExecContext(ctx, `UPDATE issue SET triage_state = 'pending' WHERE id = $1`, f.issueID); err != nil {
 		t.Fatalf("move source issue into triage: %v", err)
 	}
 	result, err := svc.RecoverPendingDelegatedFailures(ctx, 100)
@@ -1250,7 +1248,7 @@ func TestPendingDelegatedFailureSweepSkipsTriageSourceIssue(t *testing.T) {
 	// Accept clears the marker and the same pending comment wakes the
 	// coordinator — which is what makes the zero above the column's doing and
 	// not an inert fixture. The status never moved: only triage_state did.
-	if _, err := f.pool.Exec(ctx, `UPDATE issue SET triage_state = NULL WHERE id = $1`, f.issueID); err != nil {
+	if _, err := f.pool.ExecContext(ctx, `UPDATE issue SET triage_state = NULL WHERE id = $1`, f.issueID); err != nil {
 		t.Fatalf("accept source issue: %v", err)
 	}
 	if result, err := svc.RecoverPendingDelegatedFailures(ctx, 100); err != nil || result.Replayed != 1 {

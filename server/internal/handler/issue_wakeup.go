@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -8,9 +9,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -72,16 +71,16 @@ func (h *Handler) ListWorkspaceWakeups(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "failed to resolve agent access")
 		return
 	}
-	ids := make([]pgtype.UUID, 0, len(allowed))
+	ids := make([]string, 0, len(allowed))
 	for id := range allowed {
 		ids = append(ids, parseUUID(id))
 	}
 	// Management flags use the same initiating human as the mutation endpoints.
 	originator := h.invokeOriginatorFromRequest(r, actorType, actorID)
-	managerID, isAdmin := pgtype.UUID{}, false
+	managerID, isAdmin := "", false
 	if originator != "" {
 		manager, err := h.getWorkspaceMember(r.Context(), originator, workspaceID)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			writeError(w, 500, "failed to resolve management access")
 			return
 		}
@@ -91,14 +90,21 @@ func (h *Handler) ListWorkspaceWakeups(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	result, err := h.Queries.ListWorkspaceWakeups(r.Context(), db.ListWorkspaceWakeupsParams{
-		WorkspaceID: parseUUID(workspaceID), AgentIds: ids, MemberID: managerID, IsAdmin: isAdmin,
-		Scope: scope, Kind: kind, Source: source, AgentID: agentID, Search: search, PageLimit: int32(limit), PageOffset: int32(page),
+		WorkspaceID: parseUUID(workspaceID), AgentIds: ids, MemberID: nullString(managerID), IsAdmin: isAdmin,
+		Scope: scope, Kind: kind, Source: source, AgentID: agentID, Search: search, PageLimit: int64(int32(limit)), PageOffset: int64(int32(page)),
 	})
 	if err != nil {
 		wakeupError(w, err)
 		return
 	}
-	writeJSON(w, 200, json.RawMessage(result))
+	switch raw := result.(type) {
+	case string:
+		writeJSON(w, 200, json.RawMessage(raw))
+	case []byte:
+		writeJSON(w, 200, json.RawMessage(raw))
+	default:
+		writeJSON(w, 200, result)
+	}
 }
 
 func wakeupError(w http.ResponseWriter, err error) {
@@ -118,7 +124,7 @@ func wakeupError(w http.ResponseWriter, err error) {
 		writeError(w, 400, err.Error())
 	case errors.Is(err, service.ErrWakeupForbidden):
 		writeError(w, 403, "wakeup permission denied")
-	case errors.Is(err, pgx.ErrNoRows):
+	case errors.Is(err, sql.ErrNoRows):
 		writeError(w, 404, "wakeup not found")
 	default:
 		writeError(w, 500, "could not save wakeup")
@@ -141,7 +147,7 @@ func (h *Handler) ListIssueWakeups(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "failed to resolve agent access")
 		return
 	}
-	ids := make([]pgtype.UUID, 0, len(allowed))
+	ids := make([]string, 0, len(allowed))
 	for id := range allowed {
 		ids = append(ids, parseUUID(id))
 	}
@@ -168,7 +174,7 @@ func (h *Handler) ListWorkspaceWakeupSummaries(w http.ResponseWriter, r *http.Re
 		writeError(w, 500, "failed to resolve agent access")
 		return
 	}
-	ids := make([]pgtype.UUID, 0, len(allowed))
+	ids := make([]string, 0, len(allowed))
 	for id := range allowed {
 		ids = append(ids, parseUUID(id))
 	}
@@ -184,7 +190,7 @@ func (h *Handler) ListWorkspaceWakeupSummaries(w http.ResponseWriter, r *http.Re
 	}
 	out := make([]summaryRow, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, summaryRow{ListWorkspaceWakeupSummaryRowsRow: row, Condition: json.RawMessage(row.Condition)})
+		out = append(out, summaryRow{ListWorkspaceWakeupSummaryRowsRow: row, Condition: nullJSON(row.Condition)})
 	}
 	writeJSON(w, 200, out)
 }
@@ -212,7 +218,7 @@ func (h *Handler) CreateIssueWakeup(w http.ResponseWriter, r *http.Request) {
 	}
 	member := parseUUID(originator)
 	svc := service.IssueWakeupService{Tasks: h.TaskService}
-	existingID := pgtype.UUID{}
+	existingID := ""
 	if rawID := chi.URLParam(r, "wakeupID"); rawID != "" {
 		var valid bool
 		existingID, valid = parseUUIDOrBadRequest(w, rawID, "wakeup id")
@@ -220,7 +226,7 @@ func (h *Handler) CreateIssueWakeup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if r.Method == http.MethodPut && !existingID.Valid {
+	if r.Method == http.MethodPut && !(existingID != "") {
 		writeError(w, 400, "invalid wakeup id")
 		return
 	}
@@ -230,7 +236,7 @@ func (h *Handler) CreateIssueWakeup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status := http.StatusCreated
-	if existingID.Valid {
+	if existingID != "" {
 		status = http.StatusOK
 	}
 	writeJSON(w, status, result)
@@ -261,10 +267,10 @@ func (h *Handler) DisableIssueWakeup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, result)
 }
 
-func (h *Handler) wakeupSourceTaskID(r *http.Request) pgtype.UUID {
+func (h *Handler) wakeupSourceTaskID(r *http.Request) string {
 	actorType, _ := h.resolveActor(r, requestUserID(r), h.resolveWorkspaceID(r))
 	if actorType != "agent" {
-		return pgtype.UUID{}
+		return ""
 	}
 	return h.commentSourceTaskID(r)
 }
@@ -332,12 +338,12 @@ func (h *Handler) EditIssueWakeupInstruction(w http.ResponseWriter, r *http.Requ
 
 // wakeupMember resolves the human a management request acts for, the same way
 // as the create and disable endpoints.
-func (h *Handler) wakeupMember(w http.ResponseWriter, r *http.Request, issue db.Issue) (pgtype.UUID, bool) {
+func (h *Handler) wakeupMember(w http.ResponseWriter, r *http.Request, issue db.Issue) (string, bool) {
 	actorType, actorID := h.resolveActor(r, requestUserID(r), uuidToString(issue.WorkspaceID))
 	originator := h.invokeOriginatorFromRequest(r, actorType, actorID)
 	if originator == "" {
 		writeError(w, 403, "a human originator is required")
-		return pgtype.UUID{}, false
+		return "", false
 	}
 	return parseUUID(originator), true
 }
@@ -407,7 +413,7 @@ func (h *Handler) CheckInIssueWakeup(w http.ResponseWriter, r *http.Request) {
 	}
 	actorType, actorID := h.resolveActor(r, requestUserID(r), uuidToString(issue.WorkspaceID))
 	task := h.wakeupSourceTaskID(r)
-	if actorType != "agent" || !task.Valid {
+	if actorType != "agent" || !(task != "") {
 		writeError(w, 403, "only the run a wakeup started can check in")
 		return
 	}
@@ -445,21 +451,18 @@ func (h *Handler) ListIssueWakeupRuns(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "wakeup not found")
 		return
 	}
-	rows, err := h.Queries.ListWakeupRuns(r.Context(), db.ListWakeupRunsParams{WakeupID: uuidToString(id), IssueID: issue.ID})
+	rows, err := h.Queries.ListWakeupRuns(r.Context(), db.ListWakeupRunsParams{WakeupID: nullString(uuidToString(id)), IssueID: nullString(issue.ID)})
 	if err != nil {
 		wakeupError(w, err)
 		return
 	}
 	out := make([]wakeupRunResponse, 0, len(rows))
 	for _, row := range rows {
-		triggers := row.Triggers
-		if triggers == nil {
-			triggers = []string{}
-		}
+		triggers := ifaceStringSlice(row.Triggers)
 		out = append(out, wakeupRunResponse{
 			ID: uuidToString(row.ID), Status: row.Status, CreatedAt: timestampToString(row.CreatedAt),
 			StartedAt: timestampToPtr(row.StartedAt), CompletedAt: timestampToPtr(row.CompletedAt),
-			CheckinNote: row.CheckinNote, Triggers: triggers, Commented: row.Commented,
+			CheckinNote: ifaceString(row.CheckinNote), Triggers: triggers, Commented: row.Commented,
 		})
 	}
 	writeJSON(w, 200, out)
@@ -485,7 +488,7 @@ func (h *Handler) ListPausedWakeups(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]paused, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, paused{IssueID: uuidToString(row.IssueID), ID: uuidToString(row.ID), AgentID: uuidToString(row.AgentID), Reason: row.PausedReason.String})
+		out = append(out, paused{IssueID: uuidToString(row.IssueID), ID: uuidToString(row.ID), AgentID: uuidToString(row.AgentID.String), Reason: row.PausedReason.String})
 	}
 	writeJSON(w, 200, out)
 }

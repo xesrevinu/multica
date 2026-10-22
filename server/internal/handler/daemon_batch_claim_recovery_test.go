@@ -44,9 +44,9 @@ func TestClaimTasksByRuntime_DeadlineRecoveryOverWebSocket(t *testing.T) {
 	taskID := seedQueuedIssueTask(t, ctx, agentID, runtimeID, issueID)
 
 	h := *testHandler
-	h.Queries = db.New(&expireClaimBuildDB{DBTX: testPool})
+	h.Queries = db.New(&expireClaimBuildDB{DBTX: testSQLite})
 	hub := daemonws.NewHub()
-	h.TaskService = service.NewTaskService(testHandler.Queries, testPool, testHandler.TaskService.Hub, testHandler.TaskService.Bus, hub)
+	h.TaskService = service.NewTaskService(testHandler.Queries, testSQLite, testHandler.TaskService.Hub, testHandler.TaskService.Bus, hub)
 	hub.SetRPCHandler(h.DaemonRPCHandler)
 	identity := daemonws.ClientIdentity{
 		DaemonID: batchClaimTestDaemonID, UserID: testUserID,

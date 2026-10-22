@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/seatcapacity"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -51,7 +50,7 @@ func capacityIntentParams(workspaceID, token uuid.UUID, action string, due time.
 		WorkspaceID:    uuidToPG(workspaceID),
 		OperationToken: uuidToPG(token),
 		Action:         action,
-		NextAttemptAt:  pgtype.Timestamptz{Time: due, Valid: true},
+		NextAttemptAt:  due.UTC().Format(time.RFC3339Nano),
 	}
 }
 
@@ -64,10 +63,10 @@ func (h *Handler) reserveInvitationCapacity(ctx context.Context, workspaceID, in
 		return fmt.Errorf("%w: acquire workspace capacity lock: %v", errSeatCapacityUnavailable, err)
 	}
 	defer unlock()
-	params := capacityIntentParams(workspaceID, invitationID, seatcapacity.ActionReserveInvitation, seatcapacity.RecoveryDue(time.Now()).Time)
-	params.SubjectID = uuidToPG(invitationID)
-	params.InvitationID = uuidToPG(invitationID)
-	params.ExpiresAt = pgtype.Timestamptz{Time: expiresAt, Valid: true}
+	params := capacityIntentParams(workspaceID, invitationID, seatcapacity.ActionReserveInvitation, parseDBTime(seatcapacity.RecoveryDue(time.Now())))
+	params.SubjectID = nullString(uuidToPG(invitationID))
+	params.InvitationID = nullString(uuidToPG(invitationID))
+	params.ExpiresAt = nullString(expiresAt.UTC().Format(time.RFC3339Nano))
 	if _, err := q.UpsertSeatCapacityIntent(ctx, params); err != nil {
 		return fmt.Errorf("record invitation capacity intent: %w", err)
 	}
@@ -118,10 +117,10 @@ func (h *Handler) beginCapacityConsume(ctx context.Context, workspaceID, token, 
 		return false, fmt.Errorf("%w: acquire workspace capacity lock: %v", errSeatCapacityUnavailable, err)
 	}
 	defer unlock()
-	params := capacityIntentParams(workspaceID, token, seatcapacity.ActionConsumeInvitation, seatcapacity.RecoveryDue(time.Now()).Time)
-	params.SubjectID = uuidToPG(token)
-	params.InvitationID = uuidToPG(invitationID)
-	params.UserID = uuidToPG(userID)
+	params := capacityIntentParams(workspaceID, token, seatcapacity.ActionConsumeInvitation, parseDBTime(seatcapacity.RecoveryDue(time.Now())))
+	params.SubjectID = nullString(uuidToPG(token))
+	params.InvitationID = nullString(uuidToPG(invitationID))
+	params.UserID = nullString(uuidToPG(userID))
 	if _, err := q.UpsertSeatCapacityIntent(ctx, params); err != nil {
 		return false, fmt.Errorf("record invitation consume intent: %w", err)
 	}
@@ -161,13 +160,13 @@ func (h *Handler) beginShareJoinCapacity(ctx context.Context, workspaceID, share
 	defer unlock()
 	intent, err := q.CreateOrReactivateShareJoinCapacityIntent(ctx, db.CreateOrReactivateShareJoinCapacityIntentParams{
 		WorkspaceID: uuidToPG(workspaceID), OperationToken: uuidToPG(uuid.New()),
-		ShareLinkID: uuidToPG(shareLinkID), UserID: uuidToPG(userID),
+		ShareLinkID: nullString(uuidToPG(shareLinkID)), UserID: nullString(uuidToPG(userID)),
 		NextAttemptAt: seatcapacity.RecoveryDue(time.Now()),
 	})
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("record share-join capacity intent: %w", err)
 	}
-	token := uuid.UUID(intent.OperationToken.Bytes)
+	token := uuid.MustParse(intent.OperationToken)
 	decision, err := h.SeatCapacity.ClaimShareJoin(ctx, workspaceID, token)
 	if err != nil {
 		if seatcapacity.IsRateLimited(err) {
@@ -204,7 +203,7 @@ func (h *Handler) beginShareJoinCapacity(ctx context.Context, workspaceID, share
 func transitionCapacityIntentToConfirm(ctx context.Context, q *db.Queries, token, memberID uuid.UUID, currentAction string) error {
 	rows, err := q.TransitionSeatCapacityIntent(ctx, db.TransitionSeatCapacityIntentParams{
 		NextAction: seatcapacity.ActionConfirm, CurrentAction: currentAction,
-		MemberID: uuidToPG(memberID), OperationToken: uuidToPG(token),
+		MemberID: nullString(uuidToPG(memberID)), OperationToken: uuidToPG(token),
 		NextAttemptAt: seatcapacity.RetryDue(time.Now()),
 	})
 	if err != nil {
@@ -219,7 +218,7 @@ func transitionCapacityIntentToConfirm(ctx context.Context, q *db.Queries, token
 func enqueueCapacityRelease(ctx context.Context, q *db.Queries, workspaceID, token uuid.UUID) error {
 	_, err := q.EnqueueSeatCapacityRelease(ctx, db.EnqueueSeatCapacityReleaseParams{
 		WorkspaceID: uuidToPG(workspaceID), OperationToken: uuidToPG(token),
-		SubjectID: uuidToPG(token), NextAttemptAt: seatcapacity.RetryDue(time.Now()),
+		SubjectID: nullString(uuidToPG(token)), NextAttemptAt: seatcapacity.RetryDue(time.Now()),
 	})
 	return err
 }
@@ -227,7 +226,7 @@ func enqueueCapacityRelease(ctx context.Context, q *db.Queries, workspaceID, tok
 func enqueueMemberCapacityRelease(ctx context.Context, q *db.Queries, workspaceID, memberID uuid.UUID) error {
 	operationToken := uuid.New()
 	params := capacityIntentParams(workspaceID, operationToken, seatcapacity.ActionReleaseMember, time.Now())
-	params.MemberID = uuidToPG(memberID)
+	params.MemberID = nullString(uuidToPG(memberID))
 	_, err := q.UpsertSeatCapacityIntent(ctx, params)
 	return err
 }
@@ -269,7 +268,7 @@ func (h *Handler) compensateCapacityIntent(ctx context.Context, token uuid.UUID)
 	if err != nil {
 		return
 	}
-	q, unlock, err := h.lockSeatCapacityWorkspace(ctx, uuid.UUID(intent.WorkspaceID.Bytes))
+	q, unlock, err := h.lockSeatCapacityWorkspace(ctx, uuid.MustParse(intent.WorkspaceID))
 	if err != nil {
 		return
 	}
@@ -294,7 +293,7 @@ func (h *Handler) compensateCapacityIntentLocked(ctx context.Context, q *db.Quer
 	if err != nil || rows != 1 {
 		return
 	}
-	decision, releaseErr := h.SeatCapacity.Release(ctx, uuid.UUID(intent.WorkspaceID.Bytes), token)
+	decision, releaseErr := h.SeatCapacity.Release(ctx, uuid.MustParse(intent.WorkspaceID), token)
 	if (releaseErr == nil && (!decision.Managed || decision.Allowed || decision.Reason == "released")) || seatcapacity.IsNotFound(releaseErr) {
 		_ = deleteCapacityIntentForAction(ctx, q, token, seatcapacity.ActionRelease)
 		return
@@ -315,20 +314,20 @@ func (h *Handler) settleMemberCapacityRelease(ctx context.Context, workspaceID, 
 	}
 	defer unlock()
 	intent, err := q.GetMemberReleaseCapacityIntent(ctx, db.GetMemberReleaseCapacityIntentParams{
-		WorkspaceID: uuidToPG(workspaceID), MemberID: uuidToPG(memberID),
+		WorkspaceID: uuidToPG(workspaceID), MemberID: nullString(uuidToPG(memberID)),
 	})
 	if err != nil {
 		return
 	}
 	decision, releaseErr := h.SeatCapacity.ReleaseMember(ctx, workspaceID, memberID)
 	if (releaseErr == nil && (!decision.Managed || decision.Allowed || decision.Reason == "released")) || seatcapacity.IsNotFound(releaseErr) {
-		_ = deleteCapacityIntentForAction(ctx, q, uuid.UUID(intent.OperationToken.Bytes), seatcapacity.ActionReleaseMember)
+		_ = deleteCapacityIntentForAction(ctx, q, uuid.MustParse(intent.OperationToken), seatcapacity.ActionReleaseMember)
 		return
 	}
 	if releaseErr == nil {
 		releaseErr = fmt.Errorf("member release rejected in state %s", decision.Reason)
 	}
-	recordCapacityFailure(ctx, q, uuid.UUID(intent.OperationToken.Bytes), intent.Action, releaseErr)
+	recordCapacityFailure(ctx, q, uuid.MustParse(intent.OperationToken), intent.Action, releaseErr)
 }
 
 func deleteCapacityIntentForAction(ctx context.Context, q *db.Queries, token uuid.UUID, action string) error {
@@ -342,7 +341,7 @@ func recordCapacityFailure(ctx context.Context, q *db.Queries, token uuid.UUID, 
 		return
 	}
 	_ = q.MarkSeatCapacityIntentFailed(ctx, db.MarkSeatCapacityIntentFailedParams{
-		LastError: capacityErr.Error(), NextAttemptAt: pgtype.Timestamptz{Time: time.Now().Add(5 * time.Second), Valid: true},
+		LastError: capacityErr.Error(), NextAttemptAt: time.Now().Add(5 * time.Second).UTC().Format(time.RFC3339Nano),
 		OperationToken: uuidToPG(token), Action: action,
 	})
 	slog.WarnContext(ctx, "seat capacity intent deferred to outbox",
@@ -369,6 +368,6 @@ func writeSeatCapacityError(w http.ResponseWriter, err error) {
 	}
 }
 
-func uuidToPG(value uuid.UUID) pgtype.UUID {
-	return pgtype.UUID{Bytes: value, Valid: value != uuid.Nil}
+func uuidToPG(value uuid.UUID) string {
+	return formatUUID(value, value != uuid.Nil)
 }

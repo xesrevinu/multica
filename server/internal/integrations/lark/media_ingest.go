@@ -13,8 +13,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jackc/pgx/v5/pgtype"
-
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
 )
@@ -62,7 +60,7 @@ func (r *feishuMediaResolver) HasMedia(msg channel.InboundMessage) bool {
 	return len(mediaResourcesFromMessage(lm)) > 0
 }
 
-func (r *feishuMediaResolver) ResolveMedia(ctx context.Context, inst engine.ResolvedInstallation, _ engine.ResolvedIdentity, _ pgtype.UUID, chatMessageID pgtype.UUID, msg channel.InboundMessage) channel.InboundMessage {
+func (r *feishuMediaResolver) ResolveMedia(ctx context.Context, inst engine.ResolvedInstallation, _ engine.ResolvedIdentity, _ string, chatMessageID string, msg channel.InboundMessage) channel.InboundMessage {
 	lm, err := larkMsgFromRaw(msg)
 	if err != nil {
 		r.logMediaWarn("lark media ingest skipped: raw decode failed", InboundMessage{MessageID: msg.MessageID}, err)
@@ -154,7 +152,7 @@ func (r *feishuMediaResolver) ResolveMedia(ctx context.Context, inst engine.Reso
 // silently drop its media for as long as the re-delete schedule runs. A key
 // per chat message keeps the ingests independent; nothing leaks, because each
 // one's objects are covered by its own ledger row.
-func mediaObjectKey(inst engine.ResolvedInstallation, chatMessageID pgtype.UUID, res larkMediaResource) string {
+func mediaObjectKey(inst engine.ResolvedInstallation, chatMessageID string, res larkMediaResource) string {
 	sum := sha256.Sum256([]byte(uuidString(chatMessageID) + "\x00" + res.messageID + "\x00" + res.fetchType + "\x00" + res.key))
 	return path.Join(
 		"workspaces",

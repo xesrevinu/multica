@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/slack-go/slack"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -33,9 +32,9 @@ var (
 // this bot represents, who is installing, and the two tokens the user pasted
 // from their own Slack app.
 type RegisterBYOParams struct {
-	WorkspaceID pgtype.UUID
-	AgentID     pgtype.UUID
-	InitiatorID pgtype.UUID
+	WorkspaceID string
+	AgentID     string
+	InitiatorID string
 	BotToken    string // xoxb-… — outbound Web API (chat.postMessage)
 	AppToken    string // xapp-… — this app's OWN Socket Mode connection (inbound)
 }
@@ -124,7 +123,7 @@ func (s *InstallService) RegisterBYO(ctx context.Context, p RegisterBYOParams) (
 		agentID:     p.AgentID,
 		installerID: p.InitiatorID,
 		appIDKey:    appID,
-		configJSON:  cfgJSON,
+		configJSON:  string(cfgJSON),
 	})
 }
 

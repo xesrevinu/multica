@@ -6,8 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
@@ -76,7 +75,7 @@ func (r *feishuInstallationResolver) ResolveInstallation(ctx context.Context, ms
 	}
 	inst, err := r.store.GetLarkInstallationByAppID(ctx, lm.AppID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return engine.ResolvedInstallation{}, engine.ErrInstallationNotFound
 		}
 		return engine.ResolvedInstallation{}, err
@@ -101,7 +100,7 @@ func (r *feishuIdentityResolver) ResolveSender(ctx context.Context, inst engine.
 		ChannelUserID:  msg.Source.SenderID,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return engine.ResolvedIdentity{}, engine.ErrSenderUnbound
 		}
 		return engine.ResolvedIdentity{}, err
@@ -120,21 +119,21 @@ func (r *feishuIdentityResolver) ResolveSender(ctx context.Context, inst engine.
 
 type feishuDeduper struct{ store *ChannelStore }
 
-func (r *feishuDeduper) Claim(ctx context.Context, installationID pgtype.UUID, messageID string) (pgtype.UUID, error) {
+func (r *feishuDeduper) Claim(ctx context.Context, installationID string, messageID string) (string, error) {
 	claim, err := r.store.ClaimLarkInboundDedup(ctx, ClaimInboundDedupParams{
 		InstallationID: installationID,
 		MessageID:      messageID,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return pgtype.UUID{}, engine.ErrDuplicate
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", engine.ErrDuplicate
 		}
-		return pgtype.UUID{}, err
+		return "", err
 	}
 	return claim.ClaimToken, nil
 }
 
-func (r *feishuDeduper) Mark(ctx context.Context, installationID pgtype.UUID, messageID string, claimToken pgtype.UUID) error {
+func (r *feishuDeduper) Mark(ctx context.Context, installationID string, messageID string, claimToken string) error {
 	_, err := r.store.MarkLarkInboundDedupProcessed(ctx, MarkInboundDedupProcessedParams{
 		InstallationID: installationID,
 		MessageID:      messageID,
@@ -143,7 +142,7 @@ func (r *feishuDeduper) Mark(ctx context.Context, installationID pgtype.UUID, me
 	return err
 }
 
-func (r *feishuDeduper) Release(ctx context.Context, installationID pgtype.UUID, messageID string, claimToken pgtype.UUID) error {
+func (r *feishuDeduper) Release(ctx context.Context, installationID string, messageID string, claimToken string) error {
 	_, err := r.store.ReleaseLarkInboundDedup(ctx, ReleaseInboundDedupParams{
 		InstallationID: installationID,
 		MessageID:      messageID,
@@ -158,9 +157,9 @@ func (r *feishuDeduper) Release(ctx context.Context, installationID pgtype.UUID,
 // Declared as an interface so the (platform-specific) param mapping can be
 // unit-tested with a fake; *engine.ChatSession is the production value.
 type chatSession interface {
-	EnsureSession(ctx context.Context, in engine.EnsureSessionInput) (pgtype.UUID, error)
+	EnsureSession(ctx context.Context, in engine.EnsureSessionInput) (string, error)
 	StartSession(ctx context.Context, in engine.StartSessionInput) (engine.StartSessionResult, error)
-	MarkPendingFresh(ctx context.Context, sessionID pgtype.UUID, messageID string) error
+	MarkPendingFresh(ctx context.Context, sessionID string, messageID string) error
 	AppendUserMessage(ctx context.Context, in engine.AppendInput) (engine.AppendResult, error)
 	BindMediaRefs(ctx context.Context, in engine.BindMediaInput) error
 }
@@ -209,7 +208,7 @@ func larkSessionRouting(msg channel.InboundMessage) (bindingKey string, config [
 	return chatID + ":" + msg.Source.ThreadID, cfg
 }
 
-func (r *feishuSessionBinder) EnsureSession(ctx context.Context, p engine.EnsureSessionParams) (pgtype.UUID, error) {
+func (r *feishuSessionBinder) EnsureSession(ctx context.Context, p engine.EnsureSessionParams) (string, error) {
 	bindingKey, config := larkSessionRouting(p.Message)
 	return r.session.EnsureSession(ctx, engine.EnsureSessionInput{
 		WorkspaceID:    p.Installation.WorkspaceID,
@@ -222,7 +221,7 @@ func (r *feishuSessionBinder) EnsureSession(ctx context.Context, p engine.Ensure
 	})
 }
 
-func (r *feishuSessionBinder) MarkPendingFresh(ctx context.Context, sessionID pgtype.UUID, messageID string) error {
+func (r *feishuSessionBinder) MarkPendingFresh(ctx context.Context, sessionID string, messageID string) error {
 	return r.session.MarkPendingFresh(ctx, sessionID, messageID)
 }
 
@@ -270,7 +269,7 @@ func (r *feishuSessionBinder) BindMedia(ctx context.Context, p engine.BindMediaP
 
 type feishuAuditor struct{ audit AuditLogger }
 
-func (r *feishuAuditor) RecordDrop(ctx context.Context, instID pgtype.UUID, msg channel.InboundMessage, reason engine.DropReason) error {
+func (r *feishuAuditor) RecordDrop(ctx context.Context, instID string, msg channel.InboundMessage, reason engine.DropReason) error {
 	// event_type is platform-specific (read from Raw); a decode failure is
 	// non-fatal — the drop is still worth auditing without it.
 	lm, _ := larkMsgFromRaw(msg)
@@ -320,7 +319,7 @@ func dispatchResultFromEngine(res engine.Result) DispatchResult {
 
 type feishuTypingNotifier struct{ mgr *TypingIndicatorManager }
 
-func (r *feishuTypingNotifier) OnIngested(ctx context.Context, inst engine.ResolvedInstallation, msg channel.InboundMessage, sessionID pgtype.UUID, chatMessageID pgtype.UUID) {
+func (r *feishuTypingNotifier) OnIngested(ctx context.Context, inst engine.ResolvedInstallation, msg channel.InboundMessage, sessionID string, chatMessageID string) {
 	larkInst, ok := inst.Platform.(Installation)
 	if !ok {
 		return
@@ -333,6 +332,6 @@ func (r *feishuTypingNotifier) OnIngested(ctx context.Context, inst engine.Resol
 // offline / archived, or an enqueue failure) — the Patcher's bus-driven clear on
 // chat-done / task-failed never fires for those, so without this the Typing
 // reaction sticks.
-func (r *feishuTypingNotifier) OnSettled(ctx context.Context, sessionID pgtype.UUID, scope engine.TypingSettlement) {
+func (r *feishuTypingNotifier) OnSettled(ctx context.Context, sessionID string, scope engine.TypingSettlement) {
 	r.mgr.Settle(ctx, sessionID, scope)
 }

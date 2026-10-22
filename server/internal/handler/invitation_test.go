@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +15,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
@@ -138,11 +138,11 @@ func clearInvitationsForTestWorkspace(t *testing.T) {
 }
 
 type rollbackOnCommitTx struct {
-	pgx.Tx
+	*sql.Tx
 }
 
 func (tx rollbackOnCommitTx) Commit(ctx context.Context) error {
-	_ = tx.Tx.Rollback(ctx)
+	_ = tx.Tx.Rollback()
 	return errors.New("forced commit failure")
 }
 
@@ -150,7 +150,7 @@ type rollbackOnCommitTxStarter struct {
 	pool *pgxpool.Pool
 }
 
-func (s rollbackOnCommitTxStarter) Begin(ctx context.Context) (pgx.Tx, error) {
+func (s rollbackOnCommitTxStarter) BeginTx(ctx context.Context, _ *sql.TxOptions) (*sql.Tx, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err

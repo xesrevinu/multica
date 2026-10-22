@@ -1,9 +1,9 @@
 package metrics
 
 import (
+	"database/sql"
 	"strings"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 
@@ -12,8 +12,8 @@ import (
 )
 
 type RegistryOptions struct {
-	Pool        *pgxpool.Pool
-	ReplicaPool *pgxpool.Pool
+	Pool        *sql.DB
+	ReplicaPool *sql.DB
 	Realtime    *realtime.Metrics
 	DaemonWS    *daemonws.Metrics
 	Version     string

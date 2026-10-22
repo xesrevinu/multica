@@ -138,12 +138,9 @@ func DaemonAuth(queries *db.Queries, patCache *auth.PATCache, daemonCache *auth.
 					WorkspaceID: uuidToString(dt.WorkspaceID),
 					DaemonID:    dt.DaemonID,
 				}
-				// daemon_token.expires_at is NOT NULL; pgtype Valid is true
-				// in normal operation, but defend against zero just in case.
-				var expiresAt time.Time
-				if dt.ExpiresAt.Valid {
-					expiresAt = dt.ExpiresAt.Time
-				}
+				// daemon_token.expires_at is NOT NULL text (RFC3339). An empty
+				// or unparseable value is treated as already expired.
+				expiresAt := parseDBTime(dt.ExpiresAt)
 				daemonCache.Set(r.Context(), hash, identity, auth.TTLForExpiry(time.Now(), expiresAt))
 
 				ctx := context.WithValue(r.Context(), ctxKeyDaemonWorkspaceID, identity.WorkspaceID)
@@ -228,10 +225,7 @@ func DaemonAuth(queries *db.Queries, patCache *auth.PATCache, daemonCache *auth.
 				}
 				r.Header.Set("X-User-ID", userID)
 
-				var expiresAt time.Time
-				if pat.ExpiresAt.Valid {
-					expiresAt = pat.ExpiresAt.Time
-				}
+				expiresAt := nullDBTime(pat.ExpiresAt)
 				patCache.Set(r.Context(), hash, userID, auth.TTLForExpiry(time.Now(), expiresAt))
 
 				// Cache miss = first request in this TTL window. Refresh

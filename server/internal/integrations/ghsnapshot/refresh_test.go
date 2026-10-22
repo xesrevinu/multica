@@ -8,41 +8,38 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
+
 	"github.com/multica-ai/multica/server/internal/dbreader"
 	"github.com/multica-ai/multica/server/internal/github/app"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-type emptyRows struct{}
-
-func (*emptyRows) Close()                                       {}
-func (*emptyRows) Err() error                                   { return nil }
-func (*emptyRows) CommandTag() pgconn.CommandTag                { return pgconn.NewCommandTag("") }
-func (*emptyRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
-func (*emptyRows) Next() bool                                   { return false }
-func (*emptyRows) Scan(...any) error                            { return nil }
-func (*emptyRows) Values() ([]any, error)                       { return nil, nil }
-func (*emptyRows) RawValues() [][]byte                          { return nil }
-func (*emptyRows) Conn() *pgx.Conn                              { return nil }
-func (*emptyRows) TypeMap() *pgtype.Map                         { return nil }
-
 type queryCountingDB struct {
 	queries int
 }
 
-func (*queryCountingDB) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
-	return pgconn.NewCommandTag(""), nil
+type queryCountingResult struct{}
+
+func (queryCountingResult) LastInsertId() (int64, error) { return 0, nil }
+func (queryCountingResult) RowsAffected() (int64, error) { return 0, nil }
+
+func (*queryCountingDB) ExecContext(context.Context, string, ...any) (sql.Result, error) {
+	return queryCountingResult{}, nil
 }
 
-func (d *queryCountingDB) Query(context.Context, string, ...any) (pgx.Rows, error) {
+func (*queryCountingDB) PrepareContext(context.Context, string) (*sql.Stmt, error) {
+	return nil, nil
+}
+
+func (d *queryCountingDB) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
 	d.queries++
-	return &emptyRows{}, nil
+	return nil, errors.New("query counting stub")
 }
 
-func (*queryCountingDB) QueryRow(context.Context, string, ...any) pgx.Row { return nil }
+func (*queryCountingDB) QueryRowContext(context.Context, string, ...any) *sql.Row {
+	return nil
+}
 
 func enabledClient(t *testing.T) *Client {
 	t.Helper()

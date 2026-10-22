@@ -147,9 +147,7 @@ var errInjectedChatAttachmentRead = errors.New("injected chat attachment batch r
 func newChatAttachmentReadFailureHandler(t *testing.T) *Handler {
 	t.Helper()
 	return New(
-		db.New(chatAttachmentBatchFailDBTX{inner: testPool}),
-		testPool,
-		testHandler.Hub,
+		db.New(chatAttachmentBatchFailDBTX{inner: testSQLite}), sqlDBBeginner{DB: testSQLite}, testHandler.Hub,
 		testHandler.Bus,
 		testHandler.EmailService,
 		nil,

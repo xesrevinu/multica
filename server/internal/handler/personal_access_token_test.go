@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/auth"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -33,7 +32,7 @@ func insertTestPAT(t *testing.T, expiresAt time.Time) (string, string) {
 		Name:        "renew-test",
 		TokenHash:   auth.HashToken(raw),
 		TokenPrefix: prefix,
-		ExpiresAt:   pgtype.Timestamptz{Time: expiresAt, Valid: !expiresAt.IsZero()},
+		ExpiresAt:   nullString(formatTS(expiresAt, !expiresAt.IsZero())),
 	})
 	if err != nil {
 		t.Fatalf("create pat: %v", err)
@@ -199,7 +198,7 @@ func TestRenewPAT_HandlesNullExpiresAt(t *testing.T) {
 func TestRenewPAT_ConcurrentRenewIsIdempotent(t *testing.T) {
 	// Two callers race to extend the same PAT. The WHERE clause on
 	// ExtendPersonalAccessTokenExpiry guarantees only one UPDATE actually
-	// bumps the row; the loser sees pgx.ErrNoRows and reports renewed=false
+	// bumps the row; the loser sees sql.ErrNoRows and reports renewed=false
 	// with the already-extended expires_at. Both calls return 200.
 	raw, patID := insertTestPAT(t, time.Now().Add(2*24*time.Hour))
 
@@ -312,7 +311,7 @@ func TestRenewPAT_ParallelRenewExtendsExactlyOnce(t *testing.T) {
 	).Scan(&finalExpiry); err != nil {
 		t.Fatalf("readback: %v", err)
 	}
-	finalAsString := timestampToString(pgtype.Timestamptz{Time: finalExpiry, Valid: true})
+	finalAsString := timestampToString(finalExpiry.UTC().Format(time.RFC3339Nano))
 	if winnerExpiry != "" && finalAsString != winnerExpiry {
 		t.Fatalf("DB expires_at must match the winner's response (no double-bump); db=%q winner=%q", finalAsString, winnerExpiry)
 	}
@@ -349,7 +348,7 @@ func TestRenewPAT_RejectsTokenBelongingToDifferentUser(t *testing.T) {
 		Name:        "other-renew",
 		TokenHash:   auth.HashToken(raw),
 		TokenPrefix: prefix,
-		ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(3 * 24 * time.Hour), Valid: true},
+		ExpiresAt:   nullString(time.Now().Add(3 * 24 * time.Hour).UTC().Format(time.RFC3339Nano)),
 	})
 	if err != nil {
 		t.Fatalf("create other pat: %v", err)

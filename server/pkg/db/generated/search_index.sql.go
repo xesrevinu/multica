@@ -7,70 +7,68 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const deleteWorkspaceSearchIndexChanges = `-- name: DeleteWorkspaceSearchIndexChanges :exec
-DELETE FROM search_index_change WHERE workspace_id = $1
+DELETE FROM search_index_change WHERE workspace_id = ?1
 `
 
-func (q *Queries) DeleteWorkspaceSearchIndexChanges(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteWorkspaceSearchIndexChanges, workspaceID)
+func (q *Queries) DeleteWorkspaceSearchIndexChanges(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceSearchIndexChanges, workspaceID)
 	return err
 }
 
 const getSearchIndexCurrentSnapshot = `-- name: GetSearchIndexCurrentSnapshot :one
-SELECT pg_current_snapshot()::text AS snapshot
+SELECT n AS change_seq FROM search_change_counter WHERE singleton = 1
 `
 
-func (q *Queries) GetSearchIndexCurrentSnapshot(ctx context.Context) (string, error) {
-	row := q.db.QueryRow(ctx, getSearchIndexCurrentSnapshot)
-	var snapshot string
-	err := row.Scan(&snapshot)
-	return snapshot, err
+func (q *Queries) GetSearchIndexCurrentSnapshot(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getSearchIndexCurrentSnapshot)
+	var change_seq int64
+	err := row.Scan(&change_seq)
+	return change_seq, err
 }
 
 const getSearchIndexManifest = `-- name: GetSearchIndexManifest :one
 
-WITH ws AS (SELECT $1::uuid AS id)
 SELECT
-    pg_current_snapshot()::text AS snapshot,
-    (SELECT count(*) FROM issue i, ws WHERE i.workspace_id = ws.id)::bigint AS issue_count,
-    (SELECT COALESCE(sum(octet_length(i.title) + COALESCE(octet_length(i.description), 0)), 0)
-        FROM issue i, ws WHERE i.workspace_id = ws.id)::bigint AS issue_bytes,
-    (SELECT count(*) FROM comment c, ws
-        WHERE c.workspace_id = ws.id AND c.deleted_at IS NULL)::bigint AS comment_count,
-    (SELECT COALESCE(sum(octet_length(c.content)), 0) FROM comment c, ws
-        WHERE c.workspace_id = ws.id AND c.deleted_at IS NULL)::bigint AS comment_bytes,
-    (SELECT count(*) FROM project p, ws WHERE p.workspace_id = ws.id)::bigint AS project_count,
-    (SELECT COALESCE(sum(octet_length(p.title) + COALESCE(octet_length(p.description), 0)), 0)
-        FROM project p, ws WHERE p.workspace_id = ws.id)::bigint AS project_bytes
+    (SELECT n FROM search_change_counter WHERE singleton = 1) AS change_seq,
+    (SELECT count(*) FROM issue i WHERE i.workspace_id = ?1) AS issue_count,
+    (SELECT COALESCE(sum(length(i.title) + COALESCE(length(i.description), 0)), 0)
+        FROM issue i WHERE i.workspace_id = ?1) AS issue_bytes,
+    (SELECT count(*) FROM comment c
+        WHERE c.workspace_id = ?1 AND c.deleted_at IS NULL) AS comment_count,
+    (SELECT COALESCE(sum(length(c.content)), 0) FROM comment c
+        WHERE c.workspace_id = ?1 AND c.deleted_at IS NULL) AS comment_bytes,
+    (SELECT count(*) FROM project p WHERE p.workspace_id = ?1) AS project_count,
+    (SELECT COALESCE(sum(length(p.title) + COALESCE(length(p.description), 0)), 0)
+        FROM project p WHERE p.workspace_id = ?1) AS project_bytes
 `
 
 type GetSearchIndexManifestRow struct {
-	Snapshot     string `json:"snapshot"`
-	IssueCount   int64  `json:"issue_count"`
-	IssueBytes   int64  `json:"issue_bytes"`
-	CommentCount int64  `json:"comment_count"`
-	CommentBytes int64  `json:"comment_bytes"`
-	ProjectCount int64  `json:"project_count"`
-	ProjectBytes int64  `json:"project_bytes"`
+	ChangeSeq    int64       `json:"change_seq"`
+	IssueCount   int64       `json:"issue_count"`
+	IssueBytes   interface{} `json:"issue_bytes"`
+	CommentCount int64       `json:"comment_count"`
+	CommentBytes interface{} `json:"comment_bytes"`
+	ProjectCount int64       `json:"project_count"`
+	ProjectBytes interface{} `json:"project_bytes"`
 }
 
 // Local search index sync (MUL-7754). Web and Desktop copy the issue, comment,
 // and project text of a workspace, then catch up through search_index_change.
-// Snapshots are exchanged as pg_snapshot text; see migration 561.
+// The cursor is search_change_counter.n (singleton = 1), not a snapshot.
 // Taken before any snapshot page, so every write the pages might miss is newer
 // than this snapshot and reaches the client through the change log. The byte
 // totals let the client reject a workspace too large for its memory budget
-// before downloading it; octet_length reads the stored length, so TOASTed
+// before downloading it; length reads the stored length, so TOASTed
 // bodies are not decompressed.
-func (q *Queries) GetSearchIndexManifest(ctx context.Context, workspaceID pgtype.UUID) (GetSearchIndexManifestRow, error) {
-	row := q.db.QueryRow(ctx, getSearchIndexManifest, workspaceID)
+func (q *Queries) GetSearchIndexManifest(ctx context.Context, workspaceID string) (GetSearchIndexManifestRow, error) {
+	row := q.db.QueryRowContext(ctx, getSearchIndexManifest, workspaceID)
 	var i GetSearchIndexManifestRow
 	err := row.Scan(
-		&i.Snapshot,
+		&i.ChangeSeq,
 		&i.IssueCount,
 		&i.IssueBytes,
 		&i.CommentCount,
@@ -82,44 +80,40 @@ func (q *Queries) GetSearchIndexManifest(ctx context.Context, workspaceID pgtype
 }
 
 const listSearchIndexChanges = `-- name: ListSearchIndexChanges :many
-SELECT entity_type, entity_id, change_xid::text AS change_xid
+SELECT entity_type, entity_id, change_seq
 FROM search_index_change
-WHERE workspace_id = $1
-  AND change_xid >= pg_snapshot_xmin(($2::text)::pg_snapshot)
-  AND change_xid < pg_snapshot_xmax(($3::text)::pg_snapshot)
-  AND NOT pg_visible_in_snapshot(change_xid, ($2::text)::pg_snapshot)
-  AND pg_visible_in_snapshot(change_xid, ($3::text)::pg_snapshot)
-  AND (change_xid, entity_type, entity_id)
-      > (($4::text)::xid8, $5::text, $6::uuid)
-ORDER BY change_xid, entity_type, entity_id
-LIMIT $7
+WHERE workspace_id = ?1
+  AND change_seq > ?2
+  AND change_seq <= ?3
+  AND (change_seq, entity_type, entity_id)
+      > (?4, ?5, ?6)
+ORDER BY change_seq, entity_type, entity_id
+LIMIT ?7
 `
 
 type ListSearchIndexChangesParams struct {
-	WorkspaceID    pgtype.UUID `json:"workspace_id"`
-	SinceSnapshot  string      `json:"since_snapshot"`
-	TargetSnapshot string      `json:"target_snapshot"`
-	AfterXid       string      `json:"after_xid"`
-	AfterType      string      `json:"after_type"`
-	AfterID        pgtype.UUID `json:"after_id"`
-	PageLimit      int32       `json:"page_limit"`
+	WorkspaceID string `json:"workspace_id"`
+	Since       int64  `json:"since"`
+	Target      int64  `json:"target"`
+	AfterSeq    int64  `json:"after_seq"`
+	AfterType   int64  `json:"after_type"`
+	AfterID     int64  `json:"after_id"`
+	PageLimit   int64  `json:"page_limit"`
 }
 
 type ListSearchIndexChangesRow struct {
-	EntityType string      `json:"entity_type"`
-	EntityID   pgtype.UUID `json:"entity_id"`
-	ChangeXid  string      `json:"change_xid"`
+	EntityType string `json:"entity_type"`
+	EntityID   string `json:"entity_id"`
+	ChangeSeq  int64  `json:"change_seq"`
 }
 
-// Changes committed in the target snapshot but not in the since snapshot, in
-// keyset order. An entity rewritten after the target snapshot carries a newer
-// xid, drops out of this range, and is returned by the next catch-up instead.
+// Changes with change_seq > since AND change_seq <= target, in keyset order.
 func (q *Queries) ListSearchIndexChanges(ctx context.Context, arg ListSearchIndexChangesParams) ([]ListSearchIndexChangesRow, error) {
-	rows, err := q.db.Query(ctx, listSearchIndexChanges,
+	rows, err := q.db.QueryContext(ctx, listSearchIndexChanges,
 		arg.WorkspaceID,
-		arg.SinceSnapshot,
-		arg.TargetSnapshot,
-		arg.AfterXid,
+		arg.Since,
+		arg.Target,
+		arg.AfterSeq,
 		arg.AfterType,
 		arg.AfterID,
 		arg.PageLimit,
@@ -131,10 +125,13 @@ func (q *Queries) ListSearchIndexChanges(ctx context.Context, arg ListSearchInde
 	items := []ListSearchIndexChangesRow{}
 	for rows.Next() {
 		var i ListSearchIndexChangesRow
-		if err := rows.Scan(&i.EntityType, &i.EntityID, &i.ChangeXid); err != nil {
+		if err := rows.Scan(&i.EntityType, &i.EntityID, &i.ChangeSeq); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -145,25 +142,25 @@ func (q *Queries) ListSearchIndexChanges(ctx context.Context, arg ListSearchInde
 const listSearchIndexCommentsByIDs = `-- name: ListSearchIndexCommentsByIDs :many
 SELECT id, issue_id, content, created_at, deleted_at
 FROM comment
-WHERE workspace_id = $1 AND id = ANY($2::uuid[])
+WHERE workspace_id = ?1 AND id IN (SELECT value FROM json_each(?2))
 `
 
 type ListSearchIndexCommentsByIDsParams struct {
-	WorkspaceID pgtype.UUID   `json:"workspace_id"`
-	Ids         []pgtype.UUID `json:"ids"`
+	WorkspaceID string      `json:"workspace_id"`
+	Ids         interface{} `json:"ids"`
 }
 
 type ListSearchIndexCommentsByIDsRow struct {
-	ID        pgtype.UUID        `json:"id"`
-	IssueID   pgtype.UUID        `json:"issue_id"`
-	Content   string             `json:"content"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	DeletedAt pgtype.Timestamptz `json:"deleted_at"`
+	ID        string         `json:"id"`
+	IssueID   string         `json:"issue_id"`
+	Content   string         `json:"content"`
+	CreatedAt string         `json:"created_at"`
+	DeletedAt sql.NullString `json:"deleted_at"`
 }
 
 // Tombstoned comments are returned so the caller can report them as deleted.
 func (q *Queries) ListSearchIndexCommentsByIDs(ctx context.Context, arg ListSearchIndexCommentsByIDsParams) ([]ListSearchIndexCommentsByIDsRow, error) {
-	rows, err := q.db.Query(ctx, listSearchIndexCommentsByIDs, arg.WorkspaceID, arg.Ids)
+	rows, err := q.db.QueryContext(ctx, listSearchIndexCommentsByIDs, arg.WorkspaceID, arg.Ids)
 	if err != nil {
 		return nil, err
 	}
@@ -182,6 +179,9 @@ func (q *Queries) ListSearchIndexCommentsByIDs(ctx context.Context, arg ListSear
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -191,25 +191,25 @@ func (q *Queries) ListSearchIndexCommentsByIDs(ctx context.Context, arg ListSear
 const listSearchIndexCommentsByIssues = `-- name: ListSearchIndexCommentsByIssues :many
 SELECT id, issue_id, content, created_at
 FROM comment
-WHERE workspace_id = $1
-  AND issue_id = ANY($2::uuid[])
+WHERE workspace_id = ?1
+  AND issue_id IN (SELECT value FROM json_each(?2))
   AND deleted_at IS NULL
 `
 
 type ListSearchIndexCommentsByIssuesParams struct {
-	WorkspaceID pgtype.UUID   `json:"workspace_id"`
-	IssueIds    []pgtype.UUID `json:"issue_ids"`
+	WorkspaceID string      `json:"workspace_id"`
+	IssueIds    interface{} `json:"issue_ids"`
 }
 
 type ListSearchIndexCommentsByIssuesRow struct {
-	ID        pgtype.UUID        `json:"id"`
-	IssueID   pgtype.UUID        `json:"issue_id"`
-	Content   string             `json:"content"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	ID        string `json:"id"`
+	IssueID   string `json:"issue_id"`
+	Content   string `json:"content"`
+	CreatedAt string `json:"created_at"`
 }
 
 func (q *Queries) ListSearchIndexCommentsByIssues(ctx context.Context, arg ListSearchIndexCommentsByIssuesParams) ([]ListSearchIndexCommentsByIssuesRow, error) {
-	rows, err := q.db.Query(ctx, listSearchIndexCommentsByIssues, arg.WorkspaceID, arg.IssueIds)
+	rows, err := q.db.QueryContext(ctx, listSearchIndexCommentsByIssues, arg.WorkspaceID, arg.IssueIds)
 	if err != nil {
 		return nil, err
 	}
@@ -227,6 +227,9 @@ func (q *Queries) ListSearchIndexCommentsByIssues(ctx context.Context, arg ListS
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -235,16 +238,16 @@ func (q *Queries) ListSearchIndexCommentsByIssues(ctx context.Context, arg ListS
 
 const listSearchIndexIssuesByIDs = `-- name: ListSearchIndexIssuesByIDs :many
 SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id FROM issue
-WHERE workspace_id = $1 AND id = ANY($2::uuid[])
+WHERE workspace_id = ?1 AND id IN (SELECT value FROM json_each(?2))
 `
 
 type ListSearchIndexIssuesByIDsParams struct {
-	WorkspaceID pgtype.UUID   `json:"workspace_id"`
-	Ids         []pgtype.UUID `json:"ids"`
+	WorkspaceID string      `json:"workspace_id"`
+	Ids         interface{} `json:"ids"`
 }
 
 func (q *Queries) ListSearchIndexIssuesByIDs(ctx context.Context, arg ListSearchIndexIssuesByIDsParams) ([]Issue, error) {
-	rows, err := q.db.Query(ctx, listSearchIndexIssuesByIDs, arg.WorkspaceID, arg.Ids)
+	rows, err := q.db.QueryContext(ctx, listSearchIndexIssuesByIDs, arg.WorkspaceID, arg.Ids)
 	if err != nil {
 		return nil, err
 	}
@@ -287,6 +290,9 @@ func (q *Queries) ListSearchIndexIssuesByIDs(ctx context.Context, arg ListSearch
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -296,20 +302,20 @@ func (q *Queries) ListSearchIndexIssuesByIDs(ctx context.Context, arg ListSearch
 
 const listSearchIndexIssuesPage = `-- name: ListSearchIndexIssuesPage :many
 SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id FROM issue
-WHERE workspace_id = $1 AND number > $2
+WHERE workspace_id = ?1 AND number > ?2
 ORDER BY number
-LIMIT $3
+LIMIT ?3
 `
 
 type ListSearchIndexIssuesPageParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	AfterNumber int32       `json:"after_number"`
-	PageLimit   int32       `json:"page_limit"`
+	WorkspaceID string `json:"workspace_id"`
+	AfterNumber int64  `json:"after_number"`
+	PageLimit   int64  `json:"page_limit"`
 }
 
 // Pages by the unique (workspace_id, number) index.
 func (q *Queries) ListSearchIndexIssuesPage(ctx context.Context, arg ListSearchIndexIssuesPageParams) ([]Issue, error) {
-	rows, err := q.db.Query(ctx, listSearchIndexIssuesPage, arg.WorkspaceID, arg.AfterNumber, arg.PageLimit)
+	rows, err := q.db.QueryContext(ctx, listSearchIndexIssuesPage, arg.WorkspaceID, arg.AfterNumber, arg.PageLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -353,6 +359,9 @@ func (q *Queries) ListSearchIndexIssuesPage(ctx context.Context, arg ListSearchI
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -361,12 +370,12 @@ func (q *Queries) ListSearchIndexIssuesPage(ctx context.Context, arg ListSearchI
 
 const listSearchIndexProjects = `-- name: ListSearchIndexProjects :many
 SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, start_date, due_date, workflow_id FROM project
-WHERE workspace_id = $1
+WHERE workspace_id = ?1
 ORDER BY id
 `
 
-func (q *Queries) ListSearchIndexProjects(ctx context.Context, workspaceID pgtype.UUID) ([]Project, error) {
-	rows, err := q.db.Query(ctx, listSearchIndexProjects, workspaceID)
+func (q *Queries) ListSearchIndexProjects(ctx context.Context, workspaceID string) ([]Project, error) {
+	rows, err := q.db.QueryContext(ctx, listSearchIndexProjects, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -393,6 +402,9 @@ func (q *Queries) ListSearchIndexProjects(ctx context.Context, workspaceID pgtyp
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -402,16 +414,16 @@ func (q *Queries) ListSearchIndexProjects(ctx context.Context, workspaceID pgtyp
 
 const listSearchIndexProjectsByIDs = `-- name: ListSearchIndexProjectsByIDs :many
 SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, start_date, due_date, workflow_id FROM project
-WHERE workspace_id = $1 AND id = ANY($2::uuid[])
+WHERE workspace_id = ?1 AND id IN (SELECT value FROM json_each(?2))
 `
 
 type ListSearchIndexProjectsByIDsParams struct {
-	WorkspaceID pgtype.UUID   `json:"workspace_id"`
-	Ids         []pgtype.UUID `json:"ids"`
+	WorkspaceID string      `json:"workspace_id"`
+	Ids         interface{} `json:"ids"`
 }
 
 func (q *Queries) ListSearchIndexProjectsByIDs(ctx context.Context, arg ListSearchIndexProjectsByIDsParams) ([]Project, error) {
-	rows, err := q.db.Query(ctx, listSearchIndexProjectsByIDs, arg.WorkspaceID, arg.Ids)
+	rows, err := q.db.QueryContext(ctx, listSearchIndexProjectsByIDs, arg.WorkspaceID, arg.Ids)
 	if err != nil {
 		return nil, err
 	}
@@ -439,6 +451,9 @@ func (q *Queries) ListSearchIndexProjectsByIDs(ctx context.Context, arg ListSear
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -447,56 +462,80 @@ func (q *Queries) ListSearchIndexProjectsByIDs(ctx context.Context, arg ListSear
 
 const pruneSearchIndexChanges = `-- name: PruneSearchIndexChanges :one
 WITH doomed AS (
-    SELECT sic.entity_type, sic.entity_id
+    SELECT sic.entity_type AS entity_type, sic.entity_id AS entity_id, sic.change_seq AS change_seq
     FROM search_index_change sic
-    WHERE sic.changed_at < $1
+    WHERE sic.changed_at < ?1
     ORDER BY sic.changed_at
-    LIMIT $2
-    FOR UPDATE SKIP LOCKED
-), deleted AS (
-    DELETE FROM search_index_change c
-    USING doomed d
-    WHERE c.entity_type = d.entity_type
-      AND c.entity_id = d.entity_id
-      AND c.changed_at < $1
-    RETURNING c.change_xid
-), marked AS (
-    INSERT INTO search_index_prune_mark (singleton, pruned_through_xid)
-    SELECT TRUE, deleted.change_xid FROM deleted ORDER BY deleted.change_xid DESC LIMIT 1
-    ON CONFLICT (singleton) DO UPDATE
-        SET pruned_through_xid = GREATEST(search_index_prune_mark.pruned_through_xid, EXCLUDED.pruned_through_xid)
-    RETURNING 1
+    LIMIT ?2
+),
+payload AS (
+    SELECT json_group_array(entity_type || char(31) || entity_id) AS keys,
+           count(*) AS n
+    FROM doomed
 )
-SELECT count(*)::bigint AS deleted_count FROM deleted
+DELETE FROM search_index_change
+WHERE entity_type || char(31) || entity_id IN (
+    SELECT value FROM json_each((SELECT keys FROM payload))
+)
+RETURNING (SELECT n FROM payload) AS deleted_count
 `
 
 type PruneSearchIndexChangesParams struct {
-	Cutoff    pgtype.Timestamptz `json:"cutoff"`
-	BatchSize int32              `json:"batch_size"`
+	Cutoff    string `json:"cutoff"`
+	BatchSize int64  `json:"batch_size"`
 }
 
-// Deletes one bounded batch of rows older than the cutoff and raises the prune
-// mark to the highest xid removed, in the same statement.
+// Deletes one bounded batch of rows older than the cutoff.
+// Order: PruneSearchIndexChanges_Step2, then PruneSearchIndexChanges.
+// Step2 raises the prune mark to the highest change_seq in the batch while
+// those rows still exist. deleted_count is the batch size Step2 observed.
 func (q *Queries) PruneSearchIndexChanges(ctx context.Context, arg PruneSearchIndexChangesParams) (int64, error) {
-	row := q.db.QueryRow(ctx, pruneSearchIndexChanges, arg.Cutoff, arg.BatchSize)
-	var deleted_count int64
-	err := row.Scan(&deleted_count)
-	return deleted_count, err
+	row := q.db.QueryRowContext(ctx, pruneSearchIndexChanges, arg.Cutoff, arg.BatchSize)
+	var n int64
+	err := row.Scan(&n)
+	return n, err
+}
+
+const pruneSearchIndexChanges_Step2 = `-- name: PruneSearchIndexChanges_Step2 :exec
+INSERT INTO search_index_prune_mark (singleton, pruned_through_seq)
+SELECT 1 AS singleton, batch.mx AS pruned_through_seq
+FROM (
+    SELECT max(change_seq) AS mx
+    FROM (
+        SELECT change_seq
+        FROM search_index_change
+        WHERE changed_at < ?1
+        ORDER BY changed_at
+        LIMIT ?2
+    ) doomed
+) batch
+WHERE batch.mx IS NOT NULL
+ON CONFLICT (singleton) DO UPDATE
+SET pruned_through_seq = max(search_index_prune_mark.pruned_through_seq, excluded.pruned_through_seq)
+`
+
+type PruneSearchIndexChanges_Step2Params struct {
+	Cutoff    string `json:"cutoff"`
+	BatchSize int64  `json:"batch_size"`
+}
+
+func (q *Queries) PruneSearchIndexChanges_Step2(ctx context.Context, arg PruneSearchIndexChanges_Step2Params) error {
+	_, err := q.db.ExecContext(ctx, pruneSearchIndexChanges_Step2, arg.Cutoff, arg.BatchSize)
+	return err
 }
 
 const searchIndexSinceIsPruned = `-- name: SearchIndexSinceIsPruned :one
 SELECT EXISTS (
     SELECT 1 FROM search_index_prune_mark
-    WHERE singleton
-      AND pruned_through_xid >= pg_snapshot_xmin(($1::text)::pg_snapshot)
+    WHERE singleton = 1
+      AND pruned_through_seq >= ?1
 ) AS pruned
 `
 
 // True when retention pruning may have removed a change the client has not
-// seen yet: a pruned xid at or above the snapshot's xmin could be one it has
-// not consumed.
-func (q *Queries) SearchIndexSinceIsPruned(ctx context.Context, sinceSnapshot string) (bool, error) {
-	row := q.db.QueryRow(ctx, searchIndexSinceIsPruned, sinceSnapshot)
+// seen yet: pruned_through_seq >= since.
+func (q *Queries) SearchIndexSinceIsPruned(ctx context.Context, since int64) (bool, error) {
+	row := q.db.QueryRowContext(ctx, searchIndexSinceIsPruned, since)
 	var pruned bool
 	err := row.Scan(&pruned)
 	return pruned, err

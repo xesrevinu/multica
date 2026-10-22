@@ -2,22 +2,22 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // Helper to build a pgtype.UUID from a string.
-func testUUID(s string) pgtype.UUID {
+func testUUID(s string) string {
 	return parseUUID(s)
 }
 
 // Helper to build a pgtype.Text.
-func testText(s string) pgtype.Text {
-	return pgtype.Text{String: s, Valid: true}
+func testText(s string) sql.NullString {
+	return sql.NullString{String: s, Valid: true}
 }
 
 const (
@@ -30,7 +30,7 @@ const (
 func issueWithAgentAssignee() db.Issue {
 	return db.Issue{
 		AssigneeType: testText("agent"),
-		AssigneeID:   testUUID(agentAssigneeID),
+		AssigneeID:   nullString(testUUID(agentAssigneeID)),
 	}
 }
 

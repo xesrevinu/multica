@@ -10,9 +10,9 @@ import (
 func TestIssueTableStatusOrder(t *testing.T) {
 	entries := []db.IssueStatus{
 		{Key: "qa", Category: "started", Position: -1},
-		{Key: "in_progress", Category: "started", Position: 20, IsSystem: true},
-		{Key: "blocked", Category: "started", Position: 10, IsSystem: true},
-		{Key: "in_review", Category: "started", Position: 0, IsSystem: true},
+		{Key: "in_progress", Category: "started", Position: 20, IsSystem: 1},
+		{Key: "blocked", Category: "started", Position: 10, IsSystem: 1},
+		{Key: "in_review", Category: "started", Position: 0, IsSystem: 1},
 		{Key: "shipped", Category: "done", Position: -100},
 	}
 	want := []string{"backlog", "todo", "qa", "in_review", "blocked", "in_progress", "shipped", "done", "cancelled"}

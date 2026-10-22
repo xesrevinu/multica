@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -16,7 +18,7 @@ import (
 )
 
 // TestRuntimeLookupClassifiesResult pins the distinction the metric exists to
-// preserve: a deleted runtime row (pgx.ErrNoRows, which the daemon reads as
+// preserve: a deleted runtime row (sql.ErrNoRows, which the daemon reads as
 // "drop your local registration") must not be counted as a database failure,
 // and neither may be counted as a success. Collapsing them would make a real
 // outage indistinguishable from a user deleting a machine.
@@ -31,7 +33,7 @@ func TestRuntimeLookupClassifiesResult(t *testing.T) {
 		wantErr    error
 	}{
 		{"found", nil, obsmetrics.RuntimeLookupResultOK, nil},
-		{"deleted", pgx.ErrNoRows, obsmetrics.RuntimeLookupResultNotFound, pgx.ErrNoRows},
+		{"deleted", sql.ErrNoRows, obsmetrics.RuntimeLookupResultNotFound, sql.ErrNoRows},
 		{"db down", dbErr, obsmetrics.RuntimeLookupResultError, dbErr},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -44,7 +46,7 @@ func TestRuntimeLookupClassifiesResult(t *testing.T) {
 				Source:  obsmetrics.RuntimeLookupSourceHeartbeatWS,
 			}
 
-			_, err := lookup.Get(context.Background(), pgtype.UUID{})
+			_, err := lookup.Get(context.Background(), "")
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("Get error = %v, want %v", err, tc.wantErr)
 			}
@@ -60,9 +62,9 @@ func TestRuntimeLookupClassifiesResult(t *testing.T) {
 func TestRuntimeLookupNilMetricsIsSafe(t *testing.T) {
 	t.Parallel()
 
-	lookup := RuntimeLookup{Queries: db.New(scanErrDBTX{err: pgx.ErrNoRows}), Source: obsmetrics.RuntimeLookupSourceTask}
-	if _, err := lookup.Get(context.Background(), pgtype.UUID{}); !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("Get error = %v, want pgx.ErrNoRows", err)
+	lookup := RuntimeLookup{Queries: db.New(scanErrDBTX{err: sql.ErrNoRows}), Source: obsmetrics.RuntimeLookupSourceTask}
+	if _, err := lookup.Get(context.Background(), ""); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("Get error = %v, want sql.ErrNoRows", err)
 	}
 }
 
@@ -82,7 +84,7 @@ func TestRuntimeLookupGetManyFailsClosed(t *testing.T) {
 		Source:  obsmetrics.RuntimeLookupSourceDaemonAPI,
 	}
 
-	ids := []pgtype.UUID{{}, {}, {}}
+	ids := []string{"", "", ""}
 	got, err := lookup.GetMany(context.Background(), ids)
 	if !errors.Is(err, dbErr) {
 		t.Fatalf("GetMany error = %v, want %v", err, dbErr)
@@ -101,7 +103,7 @@ func TestRuntimeLookupGetManyNilMetricsIsSafe(t *testing.T) {
 	t.Parallel()
 
 	lookup := RuntimeLookup{Queries: db.New(scanErrDBTX{err: errors.New("db down")}), Source: obsmetrics.RuntimeLookupSourceDaemonAPI}
-	if _, err := lookup.GetMany(context.Background(), []pgtype.UUID{{}}); err == nil {
+	if _, err := lookup.GetMany(context.Background(), []string{""}); err == nil {
 		t.Fatal("GetMany error = nil, want the injected read failure")
 	}
 }
@@ -128,7 +130,7 @@ func TestRuntimeLookupGetManySuccessClassifiesEachID(t *testing.T) {
 	}
 
 	// Request found twice (duplicate) plus the missing id.
-	ids := []pgtype.UUID{found, missing, found}
+	ids := []string{found, missing, found}
 	got, err := lookup.GetMany(context.Background(), ids)
 	if err != nil {
 		t.Fatalf("GetMany error = %v, want nil", err)
@@ -178,21 +180,23 @@ func labelValue(m *dto.Metric, name string) string {
 // the wrapper's error classification is testable without a database.
 type scanErrDBTX struct{ err error }
 
-func (d scanErrDBTX) Exec(context.Context, string, ...interface{}) (pgconn.CommandTag, error) {
-	return pgconn.CommandTag{}, d.err
+func (d scanErrDBTX) ExecContext(context.Context, string, ...interface{}) (sql.Result, error) {
+	return stubResult{}, d.err
 }
 
-func (d scanErrDBTX) Query(context.Context, string, ...interface{}) (pgx.Rows, error) {
+func (d scanErrDBTX) QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error) {
 	return nil, d.err
 }
 
-func (d scanErrDBTX) QueryRow(context.Context, string, ...interface{}) pgx.Row { return errRow{d.err} }
+func (d scanErrDBTX) QueryRowContext(context.Context, string, ...interface{}) *sql.Row {
+	return errQueryRow()
+}
 
 type errRow struct{ err error }
 
 func (r errRow) Scan(...any) error { return r.err }
 
-func mustUUID(t *testing.T, s string) pgtype.UUID {
+func mustUUID(t *testing.T, s string) string {
 	t.Helper()
 	u, err := util.ParseUUID(s)
 	if err != nil {
@@ -207,19 +211,19 @@ func mustUUID(t *testing.T, s string) pgtype.UUID {
 // served; GetMany only keys on ID, so unset columns stay zero-valued.
 type runtimeRowsDBTX struct{ rows []db.AgentRuntime }
 
-func (d runtimeRowsDBTX) Exec(context.Context, string, ...interface{}) (pgconn.CommandTag, error) {
-	return pgconn.CommandTag{}, nil
+func (d runtimeRowsDBTX) ExecContext(context.Context, string, ...interface{}) (sql.Result, error) {
+	return stubResult{}, nil
 }
 
-func (d runtimeRowsDBTX) Query(context.Context, string, ...interface{}) (pgx.Rows, error) {
-	return &runtimeRows{rows: d.rows}, nil
+func (d runtimeRowsDBTX) QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error) {
+	return nil, fmt.Errorf("sqlite rows unsupported in test double")
 }
 
-func (d runtimeRowsDBTX) QueryRow(context.Context, string, ...interface{}) pgx.Row {
-	return errRow{err: pgx.ErrNoRows}
+func (d runtimeRowsDBTX) QueryRowContext(context.Context, string, ...interface{}) *sql.Row {
+	return errQueryRow()
 }
 
-// runtimeRows is a minimal pgx.Rows over a slice of AgentRuntime. Scan writes
+// runtimeRows is a minimal *sql.Rows over a slice of AgentRuntime. Scan writes
 // each row's fields positionally into the destinations GetAgentRuntimes passes.
 type runtimeRows struct {
 	rows []db.AgentRuntime
@@ -228,7 +232,7 @@ type runtimeRows struct {
 
 func (r *runtimeRows) Close()                                       {}
 func (r *runtimeRows) Err() error                                   { return nil }
-func (r *runtimeRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (r *runtimeRows) CommandTag() sql.Result                       { return stubResult{} }
 func (r *runtimeRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
 func (r *runtimeRows) Values() ([]any, error)                       { return nil, nil }
 func (r *runtimeRows) RawValues() [][]byte                          { return nil }
@@ -248,9 +252,17 @@ func (r *runtimeRows) Next() bool {
 func (r *runtimeRows) Scan(dest ...any) error {
 	row := r.rows[r.i-1]
 	if len(dest) > 0 {
-		if p, ok := dest[0].(*pgtype.UUID); ok {
+		if p, ok := dest[0].(*string); ok {
 			*p = row.ID
 		}
 	}
 	return nil
+}
+
+func (runtimeRowsDBTX) PrepareContext(context.Context, string) (*sql.Stmt, error) {
+	return nil, fmt.Errorf("prepare not supported")
+}
+
+func (scanErrDBTX) PrepareContext(context.Context, string) (*sql.Stmt, error) {
+	return nil, fmt.Errorf("prepare not supported")
 }

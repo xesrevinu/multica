@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -221,7 +220,7 @@ func TestBatchedHeartbeatScheduler_StopRecoveryUsesBoundedContextAndKnownWorkspa
 		t.Fatalf("Schedule: %v", err)
 	}
 	rows, err := testHandler.Queries.MarkRuntimesOfflineByIDs(context.Background(), db.MarkRuntimesOfflineByIDsParams{
-		Ids:          []pgtype.UUID{rt.ID},
+		Ids:          []string{rt.ID},
 		StaleSeconds: service.RuntimeClaimFreshnessSeconds,
 	})
 	if err != nil {
@@ -292,7 +291,7 @@ func TestBatchedHeartbeatScheduler_RaceToOfflineSelfHeals(t *testing.T) {
 	// The real sweeper query races us to offline before the flush. Its stale
 	// predicate is the fact receipt reconciliation is allowed to rely on.
 	rows, err := testHandler.Queries.MarkRuntimesOfflineByIDs(context.Background(), db.MarkRuntimesOfflineByIDsParams{
-		Ids:          []pgtype.UUID{rt.ID},
+		Ids:          []string{rt.ID},
 		StaleSeconds: service.RuntimeClaimFreshnessSeconds,
 	})
 	if err != nil {
@@ -399,4 +398,4 @@ type recoveryContextKey struct{}
 
 // silenceUnusedPgUUID ensures the package compiles even if no other test
 // happens to reference pgtype after future edits trim imports.
-var _ = pgtype.UUID{}
+var _ = ""

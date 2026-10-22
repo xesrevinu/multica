@@ -31,9 +31,9 @@ import (
 	"strconv"
 	"time"
 
+	"database/sql"
+
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -110,8 +110,8 @@ const (
 // state it found. Every write goes through the lease, so a caller cannot
 // record an outcome against a turn it no longer owns.
 type deliveryLease struct {
-	turnID pgtype.UUID
-	token  pgtype.UUID
+	turnID string
+	token  sql.NullString
 	row    db.ChannelReplyDelivery
 }
 
@@ -146,8 +146,8 @@ func (l *deliveryLease) sendState() string {
 // replyTurn is which user turn a task belongs to and how far down that turn's
 // retry chain the task sits.
 type replyTurn struct {
-	id    pgtype.UUID
-	depth int32
+	id    string
+	depth int64
 }
 
 // turnFor maps a task to its user turn: the root of its automatic-retry chain.
@@ -158,24 +158,24 @@ type replyTurn struct {
 // a failure. Any other error is reported: guessing that the task is its own
 // turn would open a second reply next to the one the previous attempt is still
 // holding, which is the bug this lineage exists to prevent.
-func (o *Outbound) turnFor(ctx context.Context, taskID pgtype.UUID) (replyTurn, error) {
+func (o *Outbound) turnFor(ctx context.Context, taskID string) (replyTurn, error) {
 	row, err := o.q.GetChannelReplyTurn(ctx, taskID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return replyTurn{id: taskID}, nil
 		}
 		return replyTurn{}, fmt.Errorf("resolve reply turn: %w", err)
 	}
-	if !row.TurnID.Valid {
+	if row.TurnID == "" {
 		return replyTurn{id: taskID}, nil
 	}
-	return replyTurn{id: row.TurnID, depth: int32(row.AttemptDepth)}, nil
+	return replyTurn{id: row.TurnID, depth: attemptDepth(row.AttemptDepth)}, nil
 }
 
 // acquireDelivery takes the turn's lease for one of the delivery phases.
 func (o *Outbound) acquireDelivery(ctx context.Context, target *replyTarget, turn replyTurn, phase string) (*deliveryLease, deliveryStatus, error) {
 	turnID := turn.id
-	token := pgtype.UUID{Bytes: uuid.New(), Valid: true}
+	token := sql.NullString{String: uuid.NewString(), Valid: true}
 	row, err := o.q.AcquireChannelReplyDelivery(ctx, db.AcquireChannelReplyDeliveryParams{
 		TurnID:         turnID,
 		TaskID:         target.taskID,
@@ -191,7 +191,7 @@ func (o *Outbound) acquireDelivery(ctx context.Context, target *replyTarget, tur
 	if err == nil {
 		return &deliveryLease{turnID: turnID, token: token, row: row}, deliveryAcquired, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, deliveryBusy, err
 	}
 
@@ -199,7 +199,7 @@ func (o *Outbound) acquireDelivery(ctx context.Context, target *replyTarget, tur
 	// answers: settled and taken-over are final, a live owner is not.
 	current, readErr := o.q.GetChannelReplyDelivery(ctx, turnID)
 	if readErr != nil {
-		if errors.Is(readErr, pgx.ErrNoRows) {
+		if errors.Is(readErr, sql.ErrNoRows) {
 			// Raced with a concurrent close; nothing to deliver.
 			return nil, deliveryClosed, nil
 		}
@@ -375,7 +375,7 @@ func (o *Outbound) closeTurn(ctx context.Context, target *replyTarget, turn repl
 	if err == nil {
 		return closedNow, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sql.ErrNoRows) {
 		return closeHeld, err
 	}
 	// Settled, superseded, or held by a live owner — only the last is worth
@@ -404,13 +404,30 @@ func (o *Outbound) recordContext(ctx context.Context) (context.Context, context.
 	return context.WithTimeout(context.WithoutCancel(ctx), deliveryRecordTimeout)
 }
 
-func uuidText(id pgtype.UUID) string {
-	text, err := id.Value()
-	if err != nil || text == nil {
-		return ""
+func uuidText(id string) string {
+	return id
+}
+
+// attemptDepth converts the SQLite aggregate sqlc leaves as interface{}.
+func attemptDepth(v any) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case int32:
+		return int64(n)
+	case int:
+		return int64(n)
+	case float64:
+		return int64(n)
+	case string:
+		i, _ := strconv.ParseInt(n, 10, 64)
+		return i
+	case []byte:
+		i, _ := strconv.ParseInt(string(n), 10, 64)
+		return i
+	default:
+		return 0
 	}
-	s, _ := text.(string)
-	return s
 }
 
 // renewDelivery re-proves the turn is ours and pushes the lease out. Terminal
@@ -454,11 +471,12 @@ func (o *Outbound) inheritedSend(ctx context.Context, lease *deliveryLease) bool
 }
 
 // leaseSeconds is the lease length this Outbound hands out.
-func (o *Outbound) leaseSeconds() float64 {
+func (o *Outbound) leaseSeconds() sql.NullString {
+	secs := deliveryLeaseTTL.Seconds()
 	if o.leaseTTL > 0 {
-		return o.leaseTTL.Seconds()
+		secs = o.leaseTTL.Seconds()
 	}
-	return deliveryLeaseTTL.Seconds()
+	return sql.NullString{String: strconv.FormatFloat(secs, 'f', -1, 64), Valid: true}
 }
 
 // callContext bounds one provider call so it cannot outlive the lease that

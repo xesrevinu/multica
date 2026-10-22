@@ -2,10 +2,11 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -15,13 +16,13 @@ type startReplayDB struct {
 	calls    int
 }
 
-func (m *startReplayDB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+func (m *startReplayDB) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
 	m.calls++
-	return &mockRow{err: m.startErr}
+	return errQueryRow()
 }
 
 func TestStartTaskLegacyDoesNotAcknowledgeReplayOrDatabaseFailure(t *testing.T) {
-	for _, want := range []error{pgx.ErrNoRows, errors.New("database unavailable")} {
+	for _, want := range []error{sql.ErrNoRows, errors.New("database unavailable")} {
 		store := &startReplayDB{startErr: want}
 		svc := &TaskService{Queries: db.New(store)}
 		got, err := svc.StartTask(context.Background(), testUUID(1))
@@ -29,4 +30,8 @@ func TestStartTaskLegacyDoesNotAcknowledgeReplayOrDatabaseFailure(t *testing.T) 
 			t.Fatalf("legacy start: task=%v err=%v queries=%d", got, err, store.calls)
 		}
 	}
+}
+
+func (*startReplayDB) PrepareContext(context.Context, string) (*sql.Stmt, error) {
+	return nil, fmt.Errorf("prepare not supported")
 }

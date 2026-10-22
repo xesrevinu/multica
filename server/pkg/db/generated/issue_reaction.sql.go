@@ -7,56 +7,37 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const addIssueReaction = `-- name: AddIssueReaction :one
-WITH inserted AS (
-    INSERT INTO issue_reaction (issue_id, workspace_id, actor_type, actor_id, emoji)
-    VALUES ($1, $2, $3, $4, $5)
-    ON CONFLICT (issue_id, actor_type, actor_id, emoji) DO NOTHING
-    RETURNING id, issue_id, workspace_id, actor_type, actor_id, emoji, created_at
-), bumped AS (
-    UPDATE issue
-    SET revision = revision + 1
-    WHERE id IN (SELECT issue_id FROM inserted)
-    RETURNING revision
-)
-SELECT reaction.id, reaction.issue_id, reaction.workspace_id, reaction.actor_type, reaction.actor_id, reaction.emoji, reaction.created_at, COALESCE((SELECT revision FROM bumped), 0)::bigint AS issue_revision
-FROM inserted reaction
-UNION ALL
-SELECT reaction.id, reaction.issue_id, reaction.workspace_id, reaction.actor_type, reaction.actor_id, reaction.emoji, reaction.created_at, 0::bigint AS issue_revision
-FROM issue_reaction reaction
-WHERE reaction.issue_id = $1
-  AND reaction.actor_type = $3
-  AND reaction.actor_id = $4
-  AND reaction.emoji = $5
-  AND NOT EXISTS (SELECT 1 FROM inserted)
-LIMIT 1
+INSERT INTO issue_reaction (issue_id, workspace_id, actor_type, actor_id, emoji)
+VALUES (?1, ?2, ?3, ?4, ?5)
+ON CONFLICT (issue_id, actor_type, actor_id, emoji) DO NOTHING
+RETURNING id, issue_id, workspace_id, actor_type, actor_id, emoji, created_at,
+    (SELECT src.issue_revision FROM (SELECT CAST(0 AS INTEGER) AS issue_revision) AS src) AS issue_revision
 `
 
 type AddIssueReactionParams struct {
-	IssueID     pgtype.UUID `json:"issue_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	ActorType   string      `json:"actor_type"`
-	ActorID     pgtype.UUID `json:"actor_id"`
-	Emoji       string      `json:"emoji"`
+	IssueID     string `json:"issue_id"`
+	WorkspaceID string `json:"workspace_id"`
+	ActorType   string `json:"actor_type"`
+	ActorID     string `json:"actor_id"`
+	Emoji       string `json:"emoji"`
 }
 
 type AddIssueReactionRow struct {
-	ID            pgtype.UUID        `json:"id"`
-	IssueID       pgtype.UUID        `json:"issue_id"`
-	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
-	ActorType     string             `json:"actor_type"`
-	ActorID       pgtype.UUID        `json:"actor_id"`
-	Emoji         string             `json:"emoji"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	IssueRevision int64              `json:"issue_revision"`
+	ID            string `json:"id"`
+	IssueID       string `json:"issue_id"`
+	WorkspaceID   string `json:"workspace_id"`
+	ActorType     string `json:"actor_type"`
+	ActorID       string `json:"actor_id"`
+	Emoji         string `json:"emoji"`
+	CreatedAt     string `json:"created_at"`
+	IssueRevision int64  `json:"issue_revision"`
 }
 
 func (q *Queries) AddIssueReaction(ctx context.Context, arg AddIssueReactionParams) (AddIssueReactionRow, error) {
-	row := q.db.QueryRow(ctx, addIssueReaction,
+	row := q.db.QueryRowContext(ctx, addIssueReaction,
 		arg.IssueID,
 		arg.WorkspaceID,
 		arg.ActorType,
@@ -77,14 +58,27 @@ func (q *Queries) AddIssueReaction(ctx context.Context, arg AddIssueReactionPara
 	return i, err
 }
 
+const addIssueReaction_Step2 = `-- name: AddIssueReaction_Step2 :exec
+UPDATE issue
+SET revision = revision + 1
+WHERE id = ?1
+  AND changes() = 1
+`
+
+// Bump the issue only when the insert above actually wrote a row.
+func (q *Queries) AddIssueReaction_Step2(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, addIssueReaction_Step2, id)
+	return err
+}
+
 const listIssueReactions = `-- name: ListIssueReactions :many
 SELECT id, issue_id, workspace_id, actor_type, actor_id, emoji, created_at FROM issue_reaction
-WHERE issue_id = $1
+WHERE issue_id = ?1
 ORDER BY created_at ASC
 `
 
-func (q *Queries) ListIssueReactions(ctx context.Context, issueID pgtype.UUID) ([]IssueReaction, error) {
-	rows, err := q.db.Query(ctx, listIssueReactions, issueID)
+func (q *Queries) ListIssueReactions(ctx context.Context, issueID string) ([]IssueReaction, error) {
+	rows, err := q.db.QueryContext(ctx, listIssueReactions, issueID)
 	if err != nil {
 		return nil, err
 	}
@@ -105,6 +99,9 @@ func (q *Queries) ListIssueReactions(ctx context.Context, issueID pgtype.UUID) (
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -112,34 +109,27 @@ func (q *Queries) ListIssueReactions(ctx context.Context, issueID pgtype.UUID) (
 }
 
 const removeIssueReaction = `-- name: RemoveIssueReaction :one
-WITH deleted AS (
-    DELETE FROM issue_reaction
-    WHERE issue_id = $1 AND actor_type = $2 AND actor_id = $3 AND emoji = $4
-    RETURNING issue_id
-), bumped AS (
-    UPDATE issue
-    SET revision = revision + 1
-    WHERE id IN (SELECT issue_id FROM deleted)
-    RETURNING revision
-)
-SELECT EXISTS(SELECT 1 FROM deleted) AS changed,
-       COALESCE((SELECT revision FROM bumped), 0)::bigint AS issue_revision
+DELETE FROM issue_reaction
+WHERE issue_id = ?1 AND actor_type = ?2 AND actor_id = ?3 AND emoji = ?4
+RETURNING
+    (SELECT src.changed FROM (SELECT 1 AS changed) AS src) AS changed,
+    (SELECT src.issue_revision FROM (SELECT CAST(0 AS INTEGER) AS issue_revision) AS src) AS issue_revision
 `
 
 type RemoveIssueReactionParams struct {
-	IssueID   pgtype.UUID `json:"issue_id"`
-	ActorType string      `json:"actor_type"`
-	ActorID   pgtype.UUID `json:"actor_id"`
-	Emoji     string      `json:"emoji"`
+	IssueID   string `json:"issue_id"`
+	ActorType string `json:"actor_type"`
+	ActorID   string `json:"actor_id"`
+	Emoji     string `json:"emoji"`
 }
 
 type RemoveIssueReactionRow struct {
-	Changed       bool  `json:"changed"`
+	Changed       int64 `json:"changed"`
 	IssueRevision int64 `json:"issue_revision"`
 }
 
 func (q *Queries) RemoveIssueReaction(ctx context.Context, arg RemoveIssueReactionParams) (RemoveIssueReactionRow, error) {
-	row := q.db.QueryRow(ctx, removeIssueReaction,
+	row := q.db.QueryRowContext(ctx, removeIssueReaction,
 		arg.IssueID,
 		arg.ActorType,
 		arg.ActorID,
@@ -148,4 +138,16 @@ func (q *Queries) RemoveIssueReaction(ctx context.Context, arg RemoveIssueReacti
 	var i RemoveIssueReactionRow
 	err := row.Scan(&i.Changed, &i.IssueRevision)
 	return i, err
+}
+
+const removeIssueReaction_Step2 = `-- name: RemoveIssueReaction_Step2 :exec
+UPDATE issue
+SET revision = revision + 1
+WHERE id = ?1
+  AND changes() = 1
+`
+
+func (q *Queries) RemoveIssueReaction_Step2(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, removeIssueReaction_Step2, id)
+	return err
 }

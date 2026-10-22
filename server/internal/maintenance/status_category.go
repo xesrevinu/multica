@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
+	"database/sql"
 )
 
 const StatusCategoryType = "issue_status_category"
@@ -34,16 +34,16 @@ func (StatusCategory) Validate(scope string, dry bool, raw json.RawMessage) (jso
 	}
 	return asJSON(p), nil
 }
-func (StatusCategory) Preflight(ctx context.Context, tx pgx.Tx) error {
+func (StatusCategory) Preflight(ctx context.Context, tx *sql.Tx) error {
 	var applied bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version='478_issue_status_category_expand')`).Scan(&applied); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version='478_issue_status_category_expand')`).Scan(&applied); err != nil {
 		return err
 	}
 	if !applied {
 		return fmt.Errorf("migration 478 is not applied")
 	}
 	var compatible bool
-	if err := tx.QueryRow(ctx, `SELECT bool_and(issue_status_category(old_value)=new_value)
+	if err := tx.QueryRowContext(ctx, `SELECT bool_and(issue_status_category(old_value)=new_value)
  FROM (VALUES ('backlog','unstarted'),('todo','unstarted'),('in_progress','started'),
  ('in_review','started'),('blocked','started'),('cancelled','closed'),
  ('unstarted','unstarted'),('started','started'),('done','done'),('closed','closed')) v(old_value,new_value)`).Scan(&compatible); err != nil {
@@ -56,7 +56,7 @@ func (StatusCategory) Preflight(ctx context.Context, tx pgx.Tx) error {
 	// alone cannot prove that the compatibility schema is still installed.
 	for _, name := range []string{"issue_status_category_check", "issue_status_system_is_canonical"} {
 		var expression string
-		if err := tx.QueryRow(ctx, `SELECT pg_get_expr(conbin,conrelid) FROM pg_constraint
+		if err := tx.QueryRowContext(ctx, `SELECT pg_get_expr(conbin,conrelid) FROM pg_constraint
   WHERE conrelid='issue_status'::regclass AND conname=$1 AND contype='c'`, name).Scan(&expression); err != nil {
 			return err
 		}
@@ -67,7 +67,7 @@ func (StatusCategory) Preflight(ctx context.Context, tx pgx.Tx) error {
 		}
 	}
 	var effective string
-	if err := tx.QueryRow(ctx, "SELECT pg_get_functiondef('issue_effective_status(uuid,text)'::regprocedure)").Scan(&effective); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT pg_get_functiondef('issue_effective_status(uuid,text)'::regprocedure)").Scan(&effective); err != nil {
 		return err
 	}
 	if !strings.Contains(effective, "WHEN 'cancelled'") || !strings.Contains(effective, "WHEN 'closed'") {
@@ -96,7 +96,7 @@ var categoryMapping = map[string]string{
 }
 var systemCategories = map[string]string{"backlog": "unstarted", "todo": "unstarted", "in_progress": "started", "in_review": "started", "blocked": "started", "done": "done", "cancelled": "closed"}
 
-func (StatusCategory) Step(ctx context.Context, tx pgx.Tx, j Job) (json.RawMessage, json.RawMessage, json.RawMessage, bool, error) {
+func (StatusCategory) Step(ctx context.Context, tx *sql.Tx, j Job) (json.RawMessage, json.RawMessage, json.RawMessage, bool, error) {
 	var cp statusCheckpoint
 	var progress statusProgress
 	if err := decode(j.Checkpoint, &cp); err != nil {
@@ -125,7 +125,7 @@ func (StatusCategory) Step(ctx context.Context, tx pgx.Tx, j Job) (json.RawMessa
 	// Qualify the UUID column: an unqualified ORDER BY id would resolve to the
 	// SELECT's id::text output and require a text sort instead of the UUID index.
 	query += " ORDER BY issue_status.id LIMIT $1"
-	rows, err := tx.Query(ctx, query, args...)
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, nil, nil, false, err
 	}
@@ -176,12 +176,16 @@ func (StatusCategory) Step(ctx context.Context, tx pgx.Tx, j Job) (json.RawMessa
 	}
 	if len(ids) > 0 {
 		if cp.Phase == "scan" && !j.DryRun {
-			tag, e := tx.Exec(ctx, `UPDATE issue_status SET category=issue_status_category(category)
+			tag, e := tx.ExecContext(ctx, `UPDATE issue_status SET category=issue_status_category(category)
    WHERE id=ANY($1::uuid[]) AND category IN ('backlog','todo','in_progress','in_review','blocked','cancelled')`, ids)
 			if e != nil {
 				return nil, nil, nil, false, e
 			}
-			progress.Updated += tag.RowsAffected()
+			n, e := tag.RowsAffected()
+			if e != nil {
+				return nil, nil, nil, false, e
+			}
+			progress.Updated += n
 		}
 		cp.AfterID = ids[len(ids)-1]
 		return asJSON(cp), asJSON(progress), j.Result, false, nil

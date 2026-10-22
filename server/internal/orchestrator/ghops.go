@@ -47,7 +47,7 @@ func (s *Service) prFor(r *http.Request) (*IssueView, *prTarget, int, string) {
 	if n, aerr := strconv.Atoi(r.URL.Query().Get("number")); aerr == nil && n > 0 {
 		t.number = n
 	}
-	err = s.opt.Pool.QueryRow(r.Context(), `SELECT g.installation_id, g.repo_owner, g.repo_name FROM issue_pull_request ip JOIN github_pull_request g ON g.id=ip.pull_request_id
+	err = s.opt.Pool.QueryRowContext(r.Context(), `SELECT g.installation_id, g.repo_owner, g.repo_name FROM issue_pull_request ip JOIN github_pull_request g ON g.id=ip.pull_request_id
 		WHERE ip.issue_id=$1 AND g.pr_number=$2 AND g.workspace_id=$3 ORDER BY g.pr_updated_at DESC LIMIT 1`, v.ID, t.number, wsID(r)).Scan(&t.installation, &t.owner, &t.repo)
 	if err != nil {
 		return v, nil, 0, ""

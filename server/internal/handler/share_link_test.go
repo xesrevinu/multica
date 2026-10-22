@@ -13,7 +13,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/seatcapacity"
@@ -306,14 +305,14 @@ func TestCreateShareLink_RejectsOverflowingInput(t *testing.T) {
 	if w3.Code != http.StatusCreated {
 		t.Fatalf("expires_in = duration-safe max: expected 201, got %d: %s", w3.Code, w3.Body.String())
 	}
-	var expiresAt pgtype.Timestamptz
+	var expiresAt string
 	if err := testPool.QueryRow(context.Background(),
 		`SELECT expires_at FROM workspace_share_link WHERE workspace_id = $1 ORDER BY created_at DESC LIMIT 1`,
 		parseUUID(testWorkspaceID)).Scan(&expiresAt); err != nil {
 		t.Fatalf("load created link expiry: %v", err)
 	}
-	if !expiresAt.Valid || !expiresAt.Time.After(time.Now()) {
-		t.Fatalf("accepted max expires_in must persist a future expires_at, got %v", expiresAt.Time)
+	if !(expiresAt != "") || !parseDBTime(expiresAt).After(time.Now()) {
+		t.Fatalf("accepted max expires_in must persist a future expires_at, got %v", parseDBTime(expiresAt))
 	}
 
 	// Deactivate so a fresh active link can be created for the max_uses check.
@@ -450,12 +449,12 @@ func TestJoinShareLink_ReactivatesDeadLetterWithSameCapacityToken(t *testing.T) 
 	stub := &shareJoinCapacityStub{}
 	useSeatCapacity(t, stub)
 
-	queries := db.New(testPool)
+	queries := db.New(testSQLite)
 	originalToken := uuid.New()
 	intent, err := queries.CreateOrReactivateShareJoinCapacityIntent(context.Background(), db.CreateOrReactivateShareJoinCapacityIntentParams{
 		WorkspaceID: link.WorkspaceID, OperationToken: uuidToPG(originalToken),
-		ShareLinkID: link.ID, UserID: parseUUID(userID),
-		NextAttemptAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		ShareLinkID: nullString(link.ID), UserID: nullString(parseUUID(userID)),
+		NextAttemptAt: time.Now().UTC().Format(time.RFC3339Nano),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -675,15 +674,15 @@ func TestJoinShareLink_SettledInvitationReleasesSeatReservation(t *testing.T) {
 	stub := &shareJoinCapacityStub{}
 	useSeatCapacity(t, stub)
 	// Pre-create the reservation intent the way CreateInvitation does.
-	queries := db.New(testPool)
+	queries := db.New(testSQLite)
 	if _, err := queries.UpsertSeatCapacityIntent(context.Background(), db.UpsertSeatCapacityIntentParams{
 		WorkspaceID:    link.WorkspaceID,
 		OperationToken: invitationUUID,
 		Action:         seatcapacity.ActionReserveInvitation,
-		NextAttemptAt:  pgtype.Timestamptz{Time: time.Now(), Valid: true},
-		SubjectID:      invitationUUID,
-		InvitationID:   invitationUUID,
-		ExpiresAt:      pgtype.Timestamptz{Time: time.Now().Add(24 * time.Hour), Valid: true},
+		NextAttemptAt:  time.Now().UTC().Format(time.RFC3339Nano),
+		SubjectID:      nullString(invitationUUID),
+		InvitationID:   nullString(invitationUUID),
+		ExpiresAt:      nullString(time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339Nano)),
 	}); err != nil {
 		t.Fatalf("seed invitation reservation intent: %v", err)
 	}
@@ -697,7 +696,7 @@ func TestJoinShareLink_SettledInvitationReleasesSeatReservation(t *testing.T) {
 	}
 
 	released := stub.releases()
-	if len(released) != 1 || released[0] != uuid.UUID(invitationUUID.Bytes) {
+	if len(released) != 1 || released[0] != uuid.MustParse(invitationUUID) {
 		t.Fatalf("release calls = %v, want the invitation reservation %s", released, invitationUUID)
 	}
 	var intents int

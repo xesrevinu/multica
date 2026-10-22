@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -43,7 +42,7 @@ const (
 type IssueTriggerProbe struct {
 	CanAccessAgent               func(agent db.Agent) bool
 	IsSelfLoop                   func() bool
-	SuppressActiveSelfAssignment func(agentID pgtype.UUID) bool
+	SuppressActiveSelfAssignment func(agentID string) bool
 }
 
 // IssueTriggerInput describes one prospective issue write in its post-write
@@ -66,8 +65,8 @@ type IssueTriggerInput struct {
 // paths. AgentID is the agent that will actually run — the assignee for an
 // agent issue, the squad leader for a squad issue.
 type IssueRunTrigger struct {
-	IssueID      pgtype.UUID
-	AgentID      pgtype.UUID
+	IssueID      string
+	AgentID      string
 	AssigneeType string
 	Source       RunEnqueueSource
 }
@@ -149,7 +148,7 @@ func (s *IssueService) WillEnqueueRun(ctx context.Context, in IssueTriggerInput,
 
 	switch issue.AssigneeType.String {
 	case "agent":
-		agent, err := s.Queries.GetAgent(ctx, issue.AssigneeID)
+		agent, err := s.Queries.GetAgent(ctx, issue.AssigneeID.String)
 		if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
 			return IssueRunTrigger{}, false
 		}
@@ -157,24 +156,24 @@ func (s *IssueService) WillEnqueueRun(ctx context.Context, in IssueTriggerInput,
 			return IssueRunTrigger{}, false
 		}
 		if source == RunSourceAssign && !in.IsCreate && !in.EnteredHandoffStep && probe.SuppressActiveSelfAssignment != nil &&
-			probe.SuppressActiveSelfAssignment(issue.AssigneeID) {
+			probe.SuppressActiveSelfAssignment(issue.AssigneeID.String) {
 			return IssueRunTrigger{}, false
 		}
 		// A step entered under the agent's own run queues behind it; one
 		// already queued covers the new step too.
-		if (source == RunSourceStatus || in.EnteredHandoffStep) && s.hasPendingRun(ctx, issue.ID, issue.AssigneeID) {
+		if (source == RunSourceStatus || in.EnteredHandoffStep) && s.hasPendingRun(ctx, issue.ID, issue.AssigneeID.String) {
 			return IssueRunTrigger{}, false
 		}
 		// Leaving backlog while the agent is already RUNNING this issue (an
 		// orchestrator override that moved a started issue back and forth) must
 		// not queue a second run behind it: that duplicate later starts on the
 		// same branch and work (OX-102/OX-104 on heavy-engineer-4/5).
-		if source == RunSourceStatus && s.hasActiveRun(ctx, issue.ID, issue.AssigneeID) {
+		if source == RunSourceStatus && s.hasActiveRun(ctx, issue.ID, issue.AssigneeID.String) {
 			return IssueRunTrigger{}, false
 		}
 		return IssueRunTrigger{
 			IssueID:      issue.ID,
-			AgentID:      issue.AssigneeID,
+			AgentID:      issue.AssigneeID.String,
 			AssigneeType: "agent",
 			Source:       source,
 		}, true
@@ -187,7 +186,7 @@ func (s *IssueService) WillEnqueueRun(ctx context.Context, in IssueTriggerInput,
 		// than a redundant direct self-claim. The status path below still uses
 		// the leader's pending-task guard.
 		squad, err := s.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
-			ID:          issue.AssigneeID,
+			ID:          issue.AssigneeID.String,
 			WorkspaceID: issue.WorkspaceID,
 		})
 		if err != nil {
@@ -219,8 +218,8 @@ func (s *IssueService) WillEnqueueRun(ctx context.Context, in IssueTriggerInput,
 
 // hasActiveRun reports any non-terminal task (queued, dispatched, running,
 // waiting_local_directory) for the pair. Errors fail closed.
-func (s *IssueService) hasActiveRun(ctx context.Context, issueID, agentID pgtype.UUID) bool {
-	active, err := s.Queries.HasActiveTaskForIssueAndAgent(ctx, db.HasActiveTaskForIssueAndAgentParams{IssueID: issueID, AgentID: agentID})
+func (s *IssueService) hasActiveRun(ctx context.Context, issueID, agentID string) bool {
+	active, err := s.Queries.HasActiveTaskForIssueAndAgent(ctx, db.HasActiveTaskForIssueAndAgentParams{IssueID: nullString(issueID), AgentID: agentID})
 	if err != nil {
 		return true
 	}
@@ -230,9 +229,9 @@ func (s *IssueService) hasActiveRun(ctx context.Context, issueID, agentID pgtype
 // hasPendingRun reports whether the agent already holds a queued or dispatched
 // task for the issue (the (issue_id, agent_id) unique-index slot). Errors fail
 // closed to "pending" so preview never over-promises a run.
-func (s *IssueService) hasPendingRun(ctx context.Context, issueID, agentID pgtype.UUID) bool {
+func (s *IssueService) hasPendingRun(ctx context.Context, issueID, agentID string) bool {
 	pending, err := s.Queries.HasPendingTaskForIssueAndAgent(ctx, db.HasPendingTaskForIssueAndAgentParams{
-		IssueID: issueID,
+		IssueID: nullString(issueID),
 		AgentID: agentID,
 		// Key dedup on the reviewed head so a pending run against an old HEAD
 		// does not shadow a request after HEAD advanced (TEN-356).

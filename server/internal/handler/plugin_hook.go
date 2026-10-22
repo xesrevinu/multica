@@ -144,7 +144,7 @@ func (h *Handler) ListPluginInvocations(w http.ResponseWriter, r *http.Request) 
 			Status:    row.Status,
 			Attempt:   int(row.Attempt),
 			LatencyMs: int(row.LatencyMs),
-			CreatedAt: row.CreatedAt.Time.UTC().Format("2006-01-02T15:04:05Z07:00"),
+			CreatedAt: parseDBTime(row.CreatedAt).UTC().Format("2006-01-02T15:04:05Z07:00"),
 		}
 		if row.EventType.Valid {
 			value := row.EventType.String
@@ -159,7 +159,7 @@ func (h *Handler) ListPluginInvocations(w http.ResponseWriter, r *http.Request) 
 			item.DeliveryID = &value
 		}
 		if row.PlannedAt.Valid {
-			value := row.PlannedAt.Time.UTC().Format("2006-01-02T15:04:05Z07:00")
+			value := parseDBTime(row.PlannedAt.String).UTC().Format("2006-01-02T15:04:05Z07:00")
 			item.PlannedAt = &value
 		}
 		items = append(items, item)

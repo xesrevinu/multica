@@ -71,7 +71,7 @@ func (h *Handler) IssueTaskGitHubToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "workspace not found")
 		return
 	}
-	if !workspaceHasGitHubRepo(parseWorkspaceRepos(ws.Repos), owner, repo) {
+	if !workspaceHasGitHubRepo(parseWorkspaceRepos([]byte(ws.Repos)), owner, repo) {
 		writeError(w, http.StatusForbidden, "repo is not a repository of this workspace")
 		return
 	}

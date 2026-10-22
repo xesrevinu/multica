@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -25,7 +26,7 @@ type issueTableEnrichmentFailTxStarter struct {
 	groupQuerySQL   *string
 }
 
-func (s issueTableEnrichmentFailTxStarter) Begin(ctx context.Context) (pgx.Tx, error) {
+func (s issueTableEnrichmentFailTxStarter) BeginTx(ctx context.Context, _ *sql.TxOptions) (*sql.Tx, error) {
 	tx, err := s.inner.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -41,7 +42,8 @@ func (s issueTableEnrichmentFailTxStarter) Begin(ctx context.Context) (pgx.Tx, e
 }
 
 type issueTableEnrichmentFailTx struct {
-	pgx.Tx
+	*sql.Tx
+
 	labelCalls      *int
 	tableQueryCalls *int
 	facetQueryCalls *int

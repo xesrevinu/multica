@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -11,7 +12,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
@@ -295,7 +295,7 @@ type quickActionCatalog struct {
 	publicAgents map[string]bool
 }
 
-func (h *Handler) loadQuickActionCatalog(ctx context.Context, workspaceID pgtype.UUID) quickActionCatalog {
+func (h *Handler) loadQuickActionCatalog(ctx context.Context, workspaceID string) quickActionCatalog {
 	cat := quickActionCatalog{
 		agents:       map[string]db.Agent{},
 		squads:       map[string]db.Squad{},
@@ -309,7 +309,7 @@ func (h *Handler) loadQuickActionCatalog(ctx context.Context, workspaceID pgtype
 		// everything that matters anyway.
 		return cat
 	}
-	agentIDs := make([]pgtype.UUID, 0, len(agents))
+	agentIDs := make([]string, 0, len(agents))
 	for _, a := range agents {
 		cat.agents[uuidToString(a.ID)] = a
 		agentIDs = append(agentIDs, a.ID)
@@ -446,7 +446,7 @@ func (h *Handler) requireQuickActionActor(w http.ResponseWriter, r *http.Request
 func (h *Handler) loadReachableQuickAction(
 	w http.ResponseWriter,
 	r *http.Request,
-	id, workspaceID pgtype.UUID,
+	id, workspaceID string,
 	userID string,
 ) (db.QuickAction, bool) {
 	qa, err := h.Queries.GetQuickAction(r.Context(), db.GetQuickActionParams{ID: id, WorkspaceID: workspaceID})
@@ -625,7 +625,7 @@ func (h *Handler) UpdateQuickAction(w http.ResponseWriter, r *http.Request) {
 
 	params := db.UpdateQuickActionParams{ID: idUUID, WorkspaceID: wsUUID}
 	if req.Visibility != nil {
-		params.Visibility = pgtype.Text{String: visibility, Valid: true}
+		params.Visibility = sql.NullString{String: visibility, Valid: true}
 	}
 
 	if req.Name != nil {
@@ -634,14 +634,14 @@ func (h *Handler) UpdateQuickAction(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		params.Name = pgtype.Text{String: name, Valid: true}
+		params.Name = sql.NullString{String: name, Valid: true}
 	}
 	if req.Description != nil {
 		description, ok := trimmedWithinLimit(w, *req.Description, maxQuickActionDescriptionLen, "description")
 		if !ok {
 			return
 		}
-		params.Description = pgtype.Text{String: description, Valid: true}
+		params.Description = sql.NullString{String: description, Valid: true}
 	}
 
 	// assignee_type and assignee_id move together so a type swap can never
@@ -665,8 +665,8 @@ func (h *Handler) UpdateQuickAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.AssigneeType != nil || req.AssigneeID != nil {
-		params.AssigneeType = pgtype.Text{String: newType, Valid: true}
-		params.AssigneeID = newUUID
+		params.AssigneeType = sql.NullString{String: newType, Valid: true}
+		params.AssigneeID = nullString(newUUID)
 	}
 	if !h.validateQuickActionBinding(w, r, newType, newUUID, wsUUID, visibility) {
 		return
@@ -678,7 +678,7 @@ func (h *Handler) UpdateQuickAction(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		params.Prompt = pgtype.Text{String: prompt, Valid: true}
+		params.Prompt = sql.NullString{String: prompt, Valid: true}
 	}
 	if req.Status != nil {
 		if *req.Status != "active" && *req.Status != "archived" {
@@ -692,7 +692,7 @@ func (h *Handler) UpdateQuickAction(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		params.Status = pgtype.Text{String: *req.Status, Valid: true}
+		params.Status = sql.NullString{String: *req.Status, Valid: true}
 	}
 
 	qa, err := h.Queries.UpdateQuickAction(r.Context(), params)
@@ -754,7 +754,7 @@ func trimmedWithinLimit(w http.ResponseWriter, raw string, limit int, field stri
 // validateQuickActionBinding checks that the target exists in this workspace
 // and, for a `public` action, that every member can invoke it. Writes the 400
 // itself and returns false when the binding is rejected.
-func (h *Handler) validateQuickActionBinding(w http.ResponseWriter, r *http.Request, assigneeType string, id, workspaceID pgtype.UUID, visibility string) bool {
+func (h *Handler) validateQuickActionBinding(w http.ResponseWriter, r *http.Request, assigneeType string, id, workspaceID string, visibility string) bool {
 	qa := db.QuickAction{AssigneeType: assigneeType, AssigneeID: id, WorkspaceID: workspaceID}
 	target := h.resolveQuickActionTarget(r.Context(), qa)
 	if !target.Found {
@@ -890,7 +890,7 @@ func (h *Handler) RunQuickAction(w http.ResponseWriter, r *http.Request) {
 	body := sanitizeNullBytes(buildQuickActionBody(qa, target))
 
 	created, err := h.Queries.CreateComment(r.Context(), db.CreateCommentParams{
-		ID:          dbid.NewV7(),
+		ID:          nullString(dbid.NewV7()),
 		IssueID:     issue.ID,
 		WorkspaceID: issue.WorkspaceID,
 		AuthorType:  actorType,
@@ -901,7 +901,7 @@ func (h *Handler) RunQuickAction(w http.ResponseWriter, r *http.Request) {
 		// on the generic comment endpoint, so a dedicated type value would be
 		// forgeable and would also have cost a CHECK rebuild on a hot table.
 		Type:          "comment",
-		QuickActionID: qa.ID,
+		QuickActionID: nullString(qa.ID),
 	})
 	if err != nil {
 		slog.Warn("quick action comment create failed", append(logger.RequestAttrs(r), "error", err, "quick_action_id", uuidToString(qa.ID))...)
@@ -911,14 +911,14 @@ func (h *Handler) RunQuickAction(w http.ResponseWriter, r *http.Request) {
 	comment := created.Comment()
 
 	resp := commentToResponse(comment, nil, nil)
-	resp.IssueRevision = created.IssueRevision
+	resp.IssueRevision = created.Revision_2
 	h.publish(protocol.EventCommentCreated, workspaceID, actorType, actorID, map[string]any{
 		"comment":             resp,
 		"issue_title":         issue.Title,
 		"issue_assignee_type": textToPtr(issue.AssigneeType),
 		"issue_assignee_id":   uuidToPtr(issue.AssigneeID),
 		"issue_status":        issue.Status,
-		"issue_revision":      created.IssueRevision,
+		"issue_revision":      created.Revision_2,
 	})
 
 	resp.TriggerOutcomes = h.triggerTasksForComment(r.Context(), issue, comment, nil, actorType, actorID, originatorUserID, nil, nil)

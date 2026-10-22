@@ -2,14 +2,13 @@ package slack
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/slack-go/slack"
 
 	"github.com/multica-ai/multica/server/internal/events"
@@ -23,9 +22,9 @@ import (
 // outboundQueries is the slice of generated queries the Slack outbound
 // subscriber needs. *db.Queries satisfies it.
 type outboundQueries interface {
-	GetAgentTask(ctx context.Context, id pgtype.UUID) (db.AgentTaskQueue, error)
-	TaskHasChannelIngestedMessages(ctx context.Context, taskID pgtype.UUID) (bool, error)
-	GetChannelTaskDelivery(ctx context.Context, taskID pgtype.UUID) (db.ChannelTaskDelivery, error)
+	GetAgentTask(ctx context.Context, id string) (db.AgentTaskQueue, error)
+	TaskHasChannelIngestedMessages(ctx context.Context, taskID sql.NullString) (bool, error)
+	GetChannelTaskDelivery(ctx context.Context, taskID string) (db.ChannelTaskDelivery, error)
 	GetChannelInstallation(ctx context.Context, arg db.GetChannelInstallationParams) (db.ChannelInstallation, error)
 	SetChatMessageChannelOutboundProvenanceByTask(ctx context.Context, arg db.SetChatMessageChannelOutboundProvenanceByTaskParams) (int64, error)
 	RecordChannelOutboundMessage(ctx context.Context, arg db.RecordChannelOutboundMessageParams) error
@@ -83,7 +82,7 @@ func (o *Outbound) handleEvent(e events.Event) {
 
 func (o *Outbound) processEvent(ctx context.Context, e events.Event) error {
 	sessionID, err := util.ParseUUID(e.ChatSessionID)
-	if err != nil || !sessionID.Valid {
+	if err != nil || sessionID == "" {
 		// Issue / autopilot tasks carry no chat_session.
 		return nil
 	}
@@ -105,7 +104,7 @@ func (o *Outbound) processEvent(ctx context.Context, e events.Event) error {
 	}
 	delivery, err := o.q.GetChannelTaskDelivery(ctx, taskID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil // direct Chat or another channel
 		}
 		return fmt.Errorf("lookup slack task delivery: %w", err)
@@ -155,12 +154,16 @@ func (o *Outbound) processEvent(ctx context.Context, e events.Event) error {
 	if len(messageIDs) == 0 {
 		return errors.New("post slack reply: provider returned no message id")
 	}
+	encodedIDs, err := json.Marshal(messageIDs)
+	if err != nil {
+		return fmt.Errorf("encode slack reply message ids: %w", err)
+	}
 	rows, err := o.q.SetChatMessageChannelOutboundProvenanceByTask(ctx, db.SetChatMessageChannelOutboundProvenanceByTaskParams{
-		ChannelType:    pgtype.Text{String: string(TypeSlack), Valid: true},
-		InstallationID: binding.InstallationID,
-		ChannelChatID:  pgtype.Text{String: channelID, Valid: true},
-		MessageIds:     messageIDs,
-		TaskID:         taskID,
+		ChannelType:    nullText(string(TypeSlack)),
+		InstallationID: nullText(binding.InstallationID),
+		ChannelChatID:  nullText(channelID),
+		MessageIds:     nullText(string(encodedIDs)),
+		TaskID:         nullText(taskID),
 	})
 	if err != nil {
 		return fmt.Errorf("record slack reply provenance: %w", err)
@@ -175,7 +178,7 @@ func (o *Outbound) processEvent(ctx context.Context, e events.Event) error {
 			OutboundMessageID:      messageID,
 			OutboundBindingID:      delivery.BindingID,
 			OutboundRouteRevision:  delivery.RouteRevision,
-			OutboundTaskID:         taskID,
+			OutboundTaskID:         nullText(taskID),
 			OutboundKind:           "task_reply",
 		}); err != nil {
 			return fmt.Errorf("record slack outbound message: %w", err)
@@ -197,7 +200,7 @@ func slackBindingFromTaskDelivery(delivery db.ChannelTaskDelivery) db.ChannelCha
 // chatDoneTaskID extracts the task id from the event envelope or the typed/map
 // payload emitted by TaskService. Outbound delivery fails closed when the task
 // origin cannot be established.
-func chatDoneTaskID(e events.Event) (pgtype.UUID, bool) {
+func chatDoneTaskID(e events.Event) (string, bool) {
 	raw := e.TaskID
 	if raw == "" {
 		switch p := e.Payload.(type) {
@@ -208,7 +211,7 @@ func chatDoneTaskID(e events.Event) (pgtype.UUID, bool) {
 		}
 	}
 	id, err := util.ParseUUID(raw)
-	return id, err == nil && id.Valid
+	return id, err == nil && id != ""
 }
 
 // outboundTarget recovers the real send target from the chat binding. The
@@ -219,7 +222,7 @@ func outboundTarget(b db.ChannelChatSessionBinding) (channelID, threadTS string)
 	channelID = b.ChannelChatID
 	if len(b.Config) > 0 {
 		var cfg slackBindingConfig
-		if err := json.Unmarshal(b.Config, &cfg); err == nil && cfg.ChannelID != "" {
+		if err := json.Unmarshal([]byte(b.Config), &cfg); err == nil && cfg.ChannelID != "" {
 			channelID = cfg.ChannelID
 		}
 	}

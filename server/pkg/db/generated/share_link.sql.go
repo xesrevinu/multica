@@ -7,14 +7,13 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const claimShareLinkByID = `-- name: ClaimShareLinkByID :one
 UPDATE workspace_share_link
 SET use_count = use_count + 1
-WHERE id = $1
+WHERE id = ?1
   AND is_active = true
   AND (expires_at IS NULL OR expires_at > now())
   AND (max_uses IS NULL OR use_count < max_uses)
@@ -24,8 +23,8 @@ RETURNING id, workspace_id, code, created_by, role, expires_at, max_uses, use_co
 // The caller first resolves the opaque code and then atomically consumes the
 // non-secret row ID. The conditional UPDATE revalidates validity and the use
 // limit so a join cannot race past revocation or expiry.
-func (q *Queries) ClaimShareLinkByID(ctx context.Context, id pgtype.UUID) (WorkspaceShareLink, error) {
-	row := q.db.QueryRow(ctx, claimShareLinkByID, id)
+func (q *Queries) ClaimShareLinkByID(ctx context.Context, id string) (WorkspaceShareLink, error) {
+	row := q.db.QueryRowContext(ctx, claimShareLinkByID, id)
 	var i WorkspaceShareLink
 	err := row.Scan(
 		&i.ID,
@@ -44,21 +43,21 @@ func (q *Queries) ClaimShareLinkByID(ctx context.Context, id pgtype.UUID) (Works
 
 const createShareLink = `-- name: CreateShareLink :one
 INSERT INTO workspace_share_link (workspace_id, code, created_by, role, expires_at, max_uses)
-VALUES ($1, $2, $3, $4, $5, $6)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6)
 RETURNING id, workspace_id, code, created_by, role, expires_at, max_uses, use_count, is_active, created_at
 `
 
 type CreateShareLinkParams struct {
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	Code        string             `json:"code"`
-	CreatedBy   pgtype.UUID        `json:"created_by"`
-	Role        string             `json:"role"`
-	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
-	MaxUses     pgtype.Int4        `json:"max_uses"`
+	WorkspaceID string         `json:"workspace_id"`
+	Code        string         `json:"code"`
+	CreatedBy   string         `json:"created_by"`
+	Role        string         `json:"role"`
+	ExpiresAt   sql.NullString `json:"expires_at"`
+	MaxUses     sql.NullInt64  `json:"max_uses"`
 }
 
 func (q *Queries) CreateShareLink(ctx context.Context, arg CreateShareLinkParams) (WorkspaceShareLink, error) {
-	row := q.db.QueryRow(ctx, createShareLink,
+	row := q.db.QueryRowContext(ctx, createShareLink,
 		arg.WorkspaceID,
 		arg.Code,
 		arg.CreatedBy,
@@ -85,24 +84,24 @@ func (q *Queries) CreateShareLink(ctx context.Context, arg CreateShareLinkParams
 const deactivateWorkspaceShareLinks = `-- name: DeactivateWorkspaceShareLinks :exec
 UPDATE workspace_share_link
 SET is_active = false
-WHERE workspace_id = $1 AND is_active = true
+WHERE workspace_id = ?1 AND is_active = true
 `
 
-func (q *Queries) DeactivateWorkspaceShareLinks(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deactivateWorkspaceShareLinks, workspaceID)
+func (q *Queries) DeactivateWorkspaceShareLinks(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deactivateWorkspaceShareLinks, workspaceID)
 	return err
 }
 
 const getActiveShareLinkByCode = `-- name: GetActiveShareLinkByCode :one
 SELECT id, workspace_id, code, created_by, role, expires_at, max_uses, use_count, is_active, created_at FROM workspace_share_link
-WHERE code = $1
+WHERE code = ?1
   AND is_active = true
   AND (expires_at IS NULL OR expires_at > now())
   AND (max_uses IS NULL OR use_count < max_uses)
 `
 
 func (q *Queries) GetActiveShareLinkByCode(ctx context.Context, code string) (WorkspaceShareLink, error) {
-	row := q.db.QueryRow(ctx, getActiveShareLinkByCode, code)
+	row := q.db.QueryRowContext(ctx, getActiveShareLinkByCode, code)
 	var i WorkspaceShareLink
 	err := row.Scan(
 		&i.ID,
@@ -127,7 +126,7 @@ SELECT wsl.role,
 FROM workspace_share_link wsl
 JOIN workspace w ON w.id = wsl.workspace_id
 JOIN "user" u ON u.id = wsl.created_by
-WHERE wsl.code = $1 AND wsl.is_active = true
+WHERE wsl.code = ?1 AND wsl.is_active = true
   AND (wsl.expires_at IS NULL OR wsl.expires_at > now())
   AND (wsl.max_uses IS NULL OR wsl.use_count < wsl.max_uses)
 `
@@ -140,7 +139,7 @@ type GetShareLinkInfoByCodeRow struct {
 }
 
 func (q *Queries) GetShareLinkInfoByCode(ctx context.Context, code string) (GetShareLinkInfoByCodeRow, error) {
-	row := q.db.QueryRow(ctx, getShareLinkInfoByCode, code)
+	row := q.db.QueryRowContext(ctx, getShareLinkInfoByCode, code)
 	var i GetShareLinkInfoByCodeRow
 	err := row.Scan(
 		&i.Role,
@@ -157,27 +156,27 @@ SELECT wsl.id, wsl.workspace_id, wsl.code, wsl.created_by, wsl.role, wsl.expires
        u.email AS creator_email
 FROM workspace_share_link wsl
 JOIN "user" u ON u.id = wsl.created_by
-WHERE wsl.workspace_id = $1 AND wsl.is_active = true
+WHERE wsl.workspace_id = ?1 AND wsl.is_active = true
 ORDER BY wsl.created_at DESC
 `
 
 type ListShareLinksByWorkspaceRow struct {
-	ID           pgtype.UUID        `json:"id"`
-	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
-	Code         string             `json:"code"`
-	CreatedBy    pgtype.UUID        `json:"created_by"`
-	Role         string             `json:"role"`
-	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
-	MaxUses      pgtype.Int4        `json:"max_uses"`
-	UseCount     int32              `json:"use_count"`
-	IsActive     bool               `json:"is_active"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	CreatorName  string             `json:"creator_name"`
-	CreatorEmail string             `json:"creator_email"`
+	ID           string         `json:"id"`
+	WorkspaceID  string         `json:"workspace_id"`
+	Code         string         `json:"code"`
+	CreatedBy    string         `json:"created_by"`
+	Role         string         `json:"role"`
+	ExpiresAt    sql.NullString `json:"expires_at"`
+	MaxUses      sql.NullInt64  `json:"max_uses"`
+	UseCount     int64          `json:"use_count"`
+	IsActive     int64          `json:"is_active"`
+	CreatedAt    string         `json:"created_at"`
+	CreatorName  string         `json:"creator_name"`
+	CreatorEmail string         `json:"creator_email"`
 }
 
-func (q *Queries) ListShareLinksByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]ListShareLinksByWorkspaceRow, error) {
-	rows, err := q.db.Query(ctx, listShareLinksByWorkspace, workspaceID)
+func (q *Queries) ListShareLinksByWorkspace(ctx context.Context, workspaceID string) ([]ListShareLinksByWorkspaceRow, error) {
+	rows, err := q.db.QueryContext(ctx, listShareLinksByWorkspace, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -203,6 +202,9 @@ func (q *Queries) ListShareLinksByWorkspace(ctx context.Context, workspaceID pgt
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -212,15 +214,15 @@ func (q *Queries) ListShareLinksByWorkspace(ctx context.Context, workspaceID pgt
 const revokeShareLink = `-- name: RevokeShareLink :exec
 UPDATE workspace_share_link
 SET is_active = false
-WHERE id = $1 AND workspace_id = $2
+WHERE id = ?1 AND workspace_id = ?2
 `
 
 type RevokeShareLinkParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 func (q *Queries) RevokeShareLink(ctx context.Context, arg RevokeShareLinkParams) error {
-	_, err := q.db.Exec(ctx, revokeShareLink, arg.ID, arg.WorkspaceID)
+	_, err := q.db.ExecContext(ctx, revokeShareLink, arg.ID, arg.WorkspaceID)
 	return err
 }

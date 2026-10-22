@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -36,7 +35,7 @@ func TestCreateTaskMessagesKeepsTruncationTriState(t *testing.T) {
 
 	params := db.CreateTaskMessagesParams{
 		TaskID:            parseUUID(taskID),
-		Ids:               make([]pgtype.UUID, 0, len(messages)),
+		Ids:               make([]string, 0, len(messages)),
 		Seqs:              make([]int32, 0, len(messages)),
 		Types:             make([]string, 0, len(messages)),
 		Tools:             make([]string, 0, len(messages)),
@@ -47,7 +46,7 @@ func TestCreateTaskMessagesKeepsTruncationTriState(t *testing.T) {
 		OutputTruncations: make([]string, 0, len(messages)),
 	}
 	for _, msg := range messages {
-		params.Ids = append(params.Ids, pgtype.UUID{Bytes: uuid.Must(uuid.NewV7()), Valid: true})
+		params.Ids = append(params.Ids, uuid.Must(uuid.NewV7()).String())
 		params.Seqs = append(params.Seqs, int32(msg.Seq))
 		params.Types = append(params.Types, msg.Type)
 		params.Tools = append(params.Tools, msg.Tool)

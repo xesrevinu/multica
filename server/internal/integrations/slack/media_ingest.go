@@ -26,8 +26,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
-
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -133,7 +131,7 @@ func (r *slackMediaResolver) HasMedia(msg channel.InboundMessage) bool {
 // ResolveMedia downloads and stores every file on the message, returning it
 // with a MediaRef per object that landed. Files are independent: one that
 // fails does not stop the rest.
-func (r *slackMediaResolver) ResolveMedia(ctx context.Context, inst engine.ResolvedInstallation, _ engine.ResolvedIdentity, _ pgtype.UUID, chatMessageID pgtype.UUID, msg channel.InboundMessage) channel.InboundMessage {
+func (r *slackMediaResolver) ResolveMedia(ctx context.Context, inst engine.ResolvedInstallation, _ engine.ResolvedIdentity, _ string, chatMessageID string, msg channel.InboundMessage) channel.InboundMessage {
 	raw, err := decodeSlackRaw(msg)
 	if err != nil || len(raw.Files) == 0 {
 		return msg
@@ -203,7 +201,7 @@ func fileFetchBudget(ctx context.Context, remainingFiles int) time.Duration {
 // ingestOne carries a single file from URL to MediaRef. The ledger row goes
 // first: from that point on every failure — download, upload, a crash — leaves
 // an intent the reconciler settles, and nothing here deletes anything.
-func (r *slackMediaResolver) ingestOne(ctx context.Context, inst engine.ResolvedInstallation, chatMessageID pgtype.UUID, index int, f slackRawFile, botToken string) (channel.MediaRef, error) {
+func (r *slackMediaResolver) ingestOne(ctx context.Context, inst engine.ResolvedInstallation, chatMessageID string, index int, f slackRawFile, botToken string) (channel.MediaRef, error) {
 	// Slack states the size up front, so an oversized file is refused before it
 	// costs an intent row and a full transfer. A file that under-reports still
 	// hits the byte cap in download.
@@ -357,7 +355,7 @@ func slackMediaKind(contentType string) channel.MsgType {
 // and a shared key would run the second ingest into the first one's ledger
 // row — possibly a tombstone the intent upsert refuses, silently dropping the
 // media.
-func slackMediaObjectKey(inst engine.ResolvedInstallation, chatMessageID pgtype.UUID, f slackRawFile, index int) string {
+func slackMediaObjectKey(inst engine.ResolvedInstallation, chatMessageID string, f slackRawFile, index int) string {
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d", util.UUIDToString(chatMessageID), f.ID, index)))
 	return path.Join(
 		"workspaces",

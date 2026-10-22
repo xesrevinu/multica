@@ -7,7 +7,6 @@ import (
 	"sort"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -164,15 +163,15 @@ func (h *Handler) ListTimeline(w http.ResponseWriter, r *http.Request) {
 	comments, err := h.Queries.ListCommentsForIssue(ctx, db.ListCommentsForIssueParams{
 		IssueID:     issue.ID,
 		WorkspaceID: issue.WorkspaceID,
-		Limit:       timelineProbeLimit(),
+		Limit:       int64(timelineProbeLimit()),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list comments")
 		return
 	}
 	activities, err := h.Queries.ListActivitiesForIssue(ctx, db.ListActivitiesForIssueParams{
-		IssueID: issue.ID,
-		Limit:   timelineProbeLimit(),
+		IssueID: nullString(issue.ID),
+		Limit:   int64(timelineProbeLimit()),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list activities")
@@ -284,7 +283,7 @@ func (h *Handler) commentsToEntries(r *http.Request, comments []db.Comment) []Ti
 	if len(comments) == 0 {
 		return nil
 	}
-	ids := make([]pgtype.UUID, len(comments))
+	ids := make([]string, len(comments))
 	for i, c := range comments {
 		ids[i] = c.ID
 	}
@@ -339,9 +338,9 @@ func activityToEntry(a db.ActivityLog) TimelineEntry {
 		Type:      "activity",
 		ID:        uuidToString(a.ID),
 		ActorType: actorType,
-		ActorID:   uuidToString(a.ActorID),
+		ActorID:   uuidToString(a.ActorID.String),
 		Action:    &action,
-		Details:   a.Details,
+		Details:   json.RawMessage(a.Details),
 		CreatedAt: timestampToString(a.CreatedAt),
 	}
 }
@@ -353,7 +352,7 @@ func activityToEntry(a db.ActivityLog) TimelineEntry {
 // timeline hard caps and runs once for the whole response, never once per row.
 func (h *Handler) hydrateTimelineMemberActors(ctx context.Context, entries []TimelineEntry) {
 	seen := make(map[string]struct{})
-	ids := make([]pgtype.UUID, 0)
+	ids := make([]string, 0)
 	for i := range entries {
 		entry := &entries[i]
 		if entry.ActorType != "member" || entry.ActorID == "" {
@@ -419,7 +418,7 @@ func (h *Handler) GetAssigneeFrequency(w http.ResponseWriter, r *http.Request) {
 	// Source 1: assignee_changed activities by this user.
 	activityCounts, err := h.Queries.CountAssigneeChangesByActor(r.Context(), db.CountAssigneeChangesByActorParams{
 		WorkspaceID: parseUUID(workspaceID),
-		ActorID:     parseUUID(userID),
+		ActorID:     nullString(parseUUID(userID)),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get assignee frequency")
@@ -446,7 +445,7 @@ func (h *Handler) GetAssigneeFrequency(w http.ResponseWriter, r *http.Request) {
 		if !row.AssigneeType.Valid || !row.AssigneeID.Valid {
 			continue
 		}
-		key := row.AssigneeType.String + ":" + uuidToString(row.AssigneeID)
+		key := row.AssigneeType.String + ":" + uuidToString(row.AssigneeID.String)
 		freq[key] += row.Frequency
 	}
 

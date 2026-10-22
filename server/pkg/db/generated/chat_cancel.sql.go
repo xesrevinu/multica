@@ -7,17 +7,15 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const hasTaskMessages = `-- name: HasTaskMessages :one
-SELECT EXISTS (SELECT 1 FROM task_message WHERE task_id = $1)
+SELECT EXISTS (SELECT 1 FROM task_message WHERE task_id = ?1)
 `
 
 // Cancellation only needs to know whether a transcript exists.
-func (q *Queries) HasTaskMessages(ctx context.Context, taskID pgtype.UUID) (bool, error) {
-	row := q.db.QueryRow(ctx, hasTaskMessages, taskID)
+func (q *Queries) HasTaskMessages(ctx context.Context, taskID string) (bool, error) {
+	row := q.db.QueryRowContext(ctx, hasTaskMessages, taskID)
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err

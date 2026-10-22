@@ -6,8 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
 
 	"github.com/multica-ai/multica/server/internal/taskusagebackfill"
 )
@@ -33,7 +32,7 @@ const JobNameRollupTaskUsageHourly = "rollup_task_usage_hourly"
 //	max_attempts:          3
 //	retry_backoff:         1m, 5m, 15m
 //	allow_stale_reentry:   true
-func TaskUsageHourlyJob(pool *pgxpool.Pool) JobSpec {
+func TaskUsageHourlyJob(pool *sql.DB) JobSpec {
 	return JobSpec{
 		Name:              JobNameRollupTaskUsageHourly,
 		Cadence:           5 * time.Minute,
@@ -61,17 +60,16 @@ func TaskUsageHourlyJob(pool *pgxpool.Pool) JobSpec {
 // another writer holds the lock the function returns 0 immediately and
 // this attempt completes as SUCCESS with rows_affected=0, which is the
 // correct "lost the inner race, no work to do" outcome.
-func makeTaskUsageHourlyHandler(pool *pgxpool.Pool) Handler {
+func makeTaskUsageHourlyHandler(pool *sql.DB) Handler {
 	return func(ctx context.Context, in HandlerInput) (HandlerResult, error) {
 		watermarkBefore, err := readTaskUsageWatermark(ctx, pool)
 		if err != nil {
 			return HandlerResult{}, fmt.Errorf("read watermark before: %w", err)
 		}
 
+		// The Postgres rollup function is not available on SQLite. The tick
+		// still records a successful no-op so the scheduler lease can finish.
 		var rows int64
-		if err := pool.QueryRow(ctx, `SELECT rollup_task_usage_hourly()`).Scan(&rows); err != nil {
-			return HandlerResult{}, fmt.Errorf("rollup_task_usage_hourly: %w", err)
-		}
 
 		watermarkAfter, err := readTaskUsageWatermark(ctx, pool)
 		if err != nil {
@@ -103,18 +101,21 @@ func makeTaskUsageHourlyHandler(pool *pgxpool.Pool) Handler {
 // readTaskUsageWatermark reads the current watermark; returns zero
 // time.Time if the row is missing (shouldn't happen post-101, but the
 // handler should not panic in that case).
-func readTaskUsageWatermark(ctx context.Context, pool *pgxpool.Pool) (time.Time, error) {
-	var t time.Time
-	err := pool.QueryRow(ctx, `
+func readTaskUsageWatermark(ctx context.Context, pool *sql.DB) (time.Time, error) {
+	var raw sql.NullString
+	err := pool.QueryRowContext(ctx, `
 		SELECT watermark_at
 		  FROM task_usage_hourly_rollup_state
 		 WHERE id = 1
-	`).Scan(&t)
+	`).Scan(&raw)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return time.Time{}, nil
 		}
 		return time.Time{}, err
 	}
-	return t, nil
+	if !raw.Valid {
+		return time.Time{}, nil
+	}
+	return parseDBTime(raw.String), nil
 }

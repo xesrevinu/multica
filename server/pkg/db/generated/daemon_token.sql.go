@@ -7,25 +7,23 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const createDaemonToken = `-- name: CreateDaemonToken :one
 INSERT INTO daemon_token (token_hash, workspace_id, daemon_id, expires_at)
-VALUES ($1, $2, $3, $4)
+VALUES (?1, ?2, ?3, ?4)
 RETURNING id, token_hash, workspace_id, daemon_id, expires_at, created_at
 `
 
 type CreateDaemonTokenParams struct {
-	TokenHash   string             `json:"token_hash"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	DaemonID    string             `json:"daemon_id"`
-	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	TokenHash   string `json:"token_hash"`
+	WorkspaceID string `json:"workspace_id"`
+	DaemonID    string `json:"daemon_id"`
+	ExpiresAt   string `json:"expires_at"`
 }
 
 func (q *Queries) CreateDaemonToken(ctx context.Context, arg CreateDaemonTokenParams) (DaemonToken, error) {
-	row := q.db.QueryRow(ctx, createDaemonToken,
+	row := q.db.QueryRowContext(ctx, createDaemonToken,
 		arg.TokenHash,
 		arg.WorkspaceID,
 		arg.DaemonID,
@@ -45,25 +43,25 @@ func (q *Queries) CreateDaemonToken(ctx context.Context, arg CreateDaemonTokenPa
 
 const deleteDaemonTokensByWorkspaceAndDaemons = `-- name: DeleteDaemonTokensByWorkspaceAndDaemons :many
 DELETE FROM daemon_token
-WHERE workspace_id = $1
-  AND daemon_id = ANY($2::text[])
+WHERE workspace_id = ?1
+  AND daemon_id IN (SELECT value FROM json_each(?2))
 RETURNING token_hash
 `
 
 type DeleteDaemonTokensByWorkspaceAndDaemonsParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	DaemonIds   []string    `json:"daemon_ids"`
+	WorkspaceID string      `json:"workspace_id"`
+	DaemonIds   interface{} `json:"daemon_ids"`
 }
 
 // Deletes every daemon_token row matching the (workspace_id, daemon_id)
 // pairs implied by `daemon_ids`. Used by the member-revocation flow to
 // nuke tokens for all runtimes a leaving member owned in one shot.
 // Returns token_hash so the caller can invalidate auth.DaemonTokenCache
-// before the 10-minute TTL expires — without that invalidate, a daemon
+// before the 10-minute TTL expires - without that invalidate, a daemon
 // can keep using its stale token until cache eviction even though the
 // DB row is gone.
 func (q *Queries) DeleteDaemonTokensByWorkspaceAndDaemons(ctx context.Context, arg DeleteDaemonTokensByWorkspaceAndDaemonsParams) ([]string, error) {
-	rows, err := q.db.Query(ctx, deleteDaemonTokensByWorkspaceAndDaemons, arg.WorkspaceID, arg.DaemonIds)
+	rows, err := q.db.QueryContext(ctx, deleteDaemonTokensByWorkspaceAndDaemons, arg.WorkspaceID, arg.DaemonIds)
 	if err != nil {
 		return nil, err
 	}
@@ -75,6 +73,9 @@ func (q *Queries) DeleteDaemonTokensByWorkspaceAndDaemons(ctx context.Context, a
 			return nil, err
 		}
 		items = append(items, token_hash)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -88,17 +89,17 @@ WHERE expires_at <= now()
 `
 
 func (q *Queries) DeleteExpiredDaemonTokens(ctx context.Context) error {
-	_, err := q.db.Exec(ctx, deleteExpiredDaemonTokens)
+	_, err := q.db.ExecContext(ctx, deleteExpiredDaemonTokens)
 	return err
 }
 
 const getDaemonTokenByHash = `-- name: GetDaemonTokenByHash :one
 SELECT id, token_hash, workspace_id, daemon_id, expires_at, created_at FROM daemon_token
-WHERE token_hash = $1 AND expires_at > now()
+WHERE token_hash = ?1 AND expires_at > now()
 `
 
 func (q *Queries) GetDaemonTokenByHash(ctx context.Context, tokenHash string) (DaemonToken, error) {
-	row := q.db.QueryRow(ctx, getDaemonTokenByHash, tokenHash)
+	row := q.db.QueryRowContext(ctx, getDaemonTokenByHash, tokenHash)
 	var i DaemonToken
 	err := row.Scan(
 		&i.ID,

@@ -7,25 +7,24 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const addSquadMember = `-- name: AddSquadMember :one
 INSERT INTO squad_member (squad_id, member_type, member_id, role)
-VALUES ($1, $2, $3, $4)
+VALUES (?1, ?2, ?3, ?4)
 RETURNING id, squad_id, member_type, member_id, role, created_at
 `
 
 type AddSquadMemberParams struct {
-	SquadID    pgtype.UUID `json:"squad_id"`
-	MemberType string      `json:"member_type"`
-	MemberID   pgtype.UUID `json:"member_id"`
-	Role       string      `json:"role"`
+	SquadID    string `json:"squad_id"`
+	MemberType string `json:"member_type"`
+	MemberID   string `json:"member_id"`
+	Role       string `json:"role"`
 }
 
 func (q *Queries) AddSquadMember(ctx context.Context, arg AddSquadMemberParams) (SquadMember, error) {
-	row := q.db.QueryRow(ctx, addSquadMember,
+	row := q.db.QueryRowContext(ctx, addSquadMember,
 		arg.SquadID,
 		arg.MemberType,
 		arg.MemberID,
@@ -44,18 +43,18 @@ func (q *Queries) AddSquadMember(ctx context.Context, arg AddSquadMemberParams) 
 }
 
 const archiveSquad = `-- name: ArchiveSquad :one
-UPDATE squad SET archived_at = now(), archived_by = $2, updated_at = now()
-WHERE id = $1
+UPDATE squad SET archived_at = now(), archived_by = ?2, updated_at = now()
+WHERE id = ?1
 RETURNING id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions
 `
 
 type ArchiveSquadParams struct {
-	ID         pgtype.UUID `json:"id"`
-	ArchivedBy pgtype.UUID `json:"archived_by"`
+	ID         string         `json:"id"`
+	ArchivedBy sql.NullString `json:"archived_by"`
 }
 
 func (q *Queries) ArchiveSquad(ctx context.Context, arg ArchiveSquadParams) (Squad, error) {
-	row := q.db.QueryRow(ctx, archiveSquad, arg.ID, arg.ArchivedBy)
+	row := q.db.QueryRowContext(ctx, archiveSquad, arg.ID, arg.ArchivedBy)
 	var i Squad
 	err := row.Scan(
 		&i.ID,
@@ -75,11 +74,11 @@ func (q *Queries) ArchiveSquad(ctx context.Context, arg ArchiveSquadParams) (Squ
 }
 
 const countSquadMembers = `-- name: CountSquadMembers :one
-SELECT count(*) FROM squad_member WHERE squad_id = $1
+SELECT count(*) FROM squad_member WHERE squad_id = ?1
 `
 
-func (q *Queries) CountSquadMembers(ctx context.Context, squadID pgtype.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countSquadMembers, squadID)
+func (q *Queries) CountSquadMembers(ctx context.Context, squadID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countSquadMembers, squadID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -87,21 +86,21 @@ func (q *Queries) CountSquadMembers(ctx context.Context, squadID pgtype.UUID) (i
 
 const createSquad = `-- name: CreateSquad :one
 INSERT INTO squad (workspace_id, name, description, leader_id, creator_id, avatar_url)
-VALUES ($1, $2, $3, $4, $5, $6)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6)
 RETURNING id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions
 `
 
 type CreateSquadParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Name        string      `json:"name"`
-	Description string      `json:"description"`
-	LeaderID    pgtype.UUID `json:"leader_id"`
-	CreatorID   pgtype.UUID `json:"creator_id"`
-	AvatarUrl   pgtype.Text `json:"avatar_url"`
+	WorkspaceID string         `json:"workspace_id"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	LeaderID    string         `json:"leader_id"`
+	CreatorID   string         `json:"creator_id"`
+	AvatarUrl   sql.NullString `json:"avatar_url"`
 }
 
 func (q *Queries) CreateSquad(ctx context.Context, arg CreateSquadParams) (Squad, error) {
-	row := q.db.QueryRow(ctx, createSquad,
+	row := q.db.QueryRowContext(ctx, createSquad,
 		arg.WorkspaceID,
 		arg.Name,
 		arg.Description,
@@ -128,11 +127,11 @@ func (q *Queries) CreateSquad(ctx context.Context, arg CreateSquadParams) (Squad
 }
 
 const getSquad = `-- name: GetSquad :one
-SELECT id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions FROM squad WHERE id = $1
+SELECT id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions FROM squad WHERE id = ?1
 `
 
-func (q *Queries) GetSquad(ctx context.Context, id pgtype.UUID) (Squad, error) {
-	row := q.db.QueryRow(ctx, getSquad, id)
+func (q *Queries) GetSquad(ctx context.Context, id string) (Squad, error) {
+	row := q.db.QueryRowContext(ctx, getSquad, id)
 	var i Squad
 	err := row.Scan(
 		&i.ID,
@@ -152,17 +151,17 @@ func (q *Queries) GetSquad(ctx context.Context, id pgtype.UUID) (Squad, error) {
 }
 
 const getSquadByAssignee = `-- name: GetSquadByAssignee :one
-SELECT s.id, s.workspace_id, s.name, s.description, s.leader_id, s.creator_id, s.created_at, s.updated_at, s.archived_at, s.archived_by, s.avatar_url, s.instructions FROM squad s WHERE s.id = $1 AND s.workspace_id = $2
+SELECT s.id, s.workspace_id, s.name, s.description, s.leader_id, s.creator_id, s.created_at, s.updated_at, s.archived_at, s.archived_by, s.avatar_url, s.instructions FROM squad s WHERE s.id = ?1 AND s.workspace_id = ?2
 `
 
 type GetSquadByAssigneeParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // Look up the squad when an issue is assigned to a squad.
 func (q *Queries) GetSquadByAssignee(ctx context.Context, arg GetSquadByAssigneeParams) (Squad, error) {
-	row := q.db.QueryRow(ctx, getSquadByAssignee, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, getSquadByAssignee, arg.ID, arg.WorkspaceID)
 	var i Squad
 	err := row.Scan(
 		&i.ID,
@@ -182,16 +181,16 @@ func (q *Queries) GetSquadByAssignee(ctx context.Context, arg GetSquadByAssignee
 }
 
 const getSquadInWorkspace = `-- name: GetSquadInWorkspace :one
-SELECT id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions FROM squad WHERE id = $1 AND workspace_id = $2
+SELECT id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions FROM squad WHERE id = ?1 AND workspace_id = ?2
 `
 
 type GetSquadInWorkspaceParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 func (q *Queries) GetSquadInWorkspace(ctx context.Context, arg GetSquadInWorkspaceParams) (Squad, error) {
-	row := q.db.QueryRow(ctx, getSquadInWorkspace, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, getSquadInWorkspace, arg.ID, arg.WorkspaceID)
 	var i Squad
 	err := row.Scan(
 		&i.ID,
@@ -213,29 +212,29 @@ func (q *Queries) GetSquadInWorkspace(ctx context.Context, arg GetSquadInWorkspa
 const isSquadMember = `-- name: IsSquadMember :one
 SELECT EXISTS(
     SELECT 1 FROM squad_member
-    WHERE squad_id = $1 AND member_type = $2 AND member_id = $3
+    WHERE squad_id = ?1 AND member_type = ?2 AND member_id = ?3
 ) AS is_member
 `
 
 type IsSquadMemberParams struct {
-	SquadID    pgtype.UUID `json:"squad_id"`
-	MemberType string      `json:"member_type"`
-	MemberID   pgtype.UUID `json:"member_id"`
+	SquadID    string `json:"squad_id"`
+	MemberType string `json:"member_type"`
+	MemberID   string `json:"member_id"`
 }
 
 func (q *Queries) IsSquadMember(ctx context.Context, arg IsSquadMemberParams) (bool, error) {
-	row := q.db.QueryRow(ctx, isSquadMember, arg.SquadID, arg.MemberType, arg.MemberID)
+	row := q.db.QueryRowContext(ctx, isSquadMember, arg.SquadID, arg.MemberType, arg.MemberID)
 	var is_member bool
 	err := row.Scan(&is_member)
 	return is_member, err
 }
 
 const listAllSquads = `-- name: ListAllSquads :many
-SELECT id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions FROM squad WHERE workspace_id = $1 ORDER BY created_at ASC
+SELECT id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions FROM squad WHERE workspace_id = ?1 ORDER BY created_at ASC
 `
 
-func (q *Queries) ListAllSquads(ctx context.Context, workspaceID pgtype.UUID) ([]Squad, error) {
-	rows, err := q.db.Query(ctx, listAllSquads, workspaceID)
+func (q *Queries) ListAllSquads(ctx context.Context, workspaceID string) ([]Squad, error) {
+	rows, err := q.db.QueryContext(ctx, listAllSquads, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -261,6 +260,9 @@ func (q *Queries) ListAllSquads(ctx context.Context, workspaceID pgtype.UUID) ([
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -275,7 +277,7 @@ SELECT
     sm.role
 FROM squad_member sm
 JOIN squad s ON s.id = sm.squad_id
-WHERE s.workspace_id = $1 AND s.archived_at IS NULL
+WHERE s.workspace_id = ?1 AND s.archived_at IS NULL
 ORDER BY
     sm.squad_id ASC,
     (sm.member_type = 'agent' AND sm.member_id = s.leader_id) DESC,
@@ -283,17 +285,17 @@ ORDER BY
 `
 
 type ListSquadMemberPreviewRowsRow struct {
-	SquadID    pgtype.UUID `json:"squad_id"`
-	MemberType string      `json:"member_type"`
-	MemberID   pgtype.UUID `json:"member_id"`
-	Role       string      `json:"role"`
+	SquadID    string `json:"squad_id"`
+	MemberType string `json:"member_type"`
+	MemberID   string `json:"member_id"`
+	Role       string `json:"role"`
 }
 
 // Static squad membership summary for list/hover previews. This deliberately
 // excludes derived runtime/task status; the squad detail members-status
 // endpoint owns live state.
-func (q *Queries) ListSquadMemberPreviewRows(ctx context.Context, workspaceID pgtype.UUID) ([]ListSquadMemberPreviewRowsRow, error) {
-	rows, err := q.db.Query(ctx, listSquadMemberPreviewRows, workspaceID)
+func (q *Queries) ListSquadMemberPreviewRows(ctx context.Context, workspaceID string) ([]ListSquadMemberPreviewRowsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSquadMemberPreviewRows, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -311,6 +313,9 @@ func (q *Queries) ListSquadMemberPreviewRows(ctx context.Context, workspaceID pg
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -325,21 +330,21 @@ SELECT
     sm.role
 FROM squad_member sm
 JOIN squad s ON s.id = sm.squad_id
-WHERE sm.squad_id = $1
+WHERE sm.squad_id = ?1
 ORDER BY
     (sm.member_type = 'agent' AND sm.member_id = s.leader_id) DESC,
     sm.created_at ASC
 `
 
 type ListSquadMemberPreviewRowsBySquadRow struct {
-	SquadID    pgtype.UUID `json:"squad_id"`
-	MemberType string      `json:"member_type"`
-	MemberID   pgtype.UUID `json:"member_id"`
-	Role       string      `json:"role"`
+	SquadID    string `json:"squad_id"`
+	MemberType string `json:"member_type"`
+	MemberID   string `json:"member_id"`
+	Role       string `json:"role"`
 }
 
-func (q *Queries) ListSquadMemberPreviewRowsBySquad(ctx context.Context, squadID pgtype.UUID) ([]ListSquadMemberPreviewRowsBySquadRow, error) {
-	rows, err := q.db.Query(ctx, listSquadMemberPreviewRowsBySquad, squadID)
+func (q *Queries) ListSquadMemberPreviewRowsBySquad(ctx context.Context, squadID string) ([]ListSquadMemberPreviewRowsBySquadRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSquadMemberPreviewRowsBySquad, squadID)
 	if err != nil {
 		return nil, err
 	}
@@ -356,6 +361,9 @@ func (q *Queries) ListSquadMemberPreviewRowsBySquad(ctx context.Context, squadID
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -389,35 +397,35 @@ LEFT JOIN agent_task_queue atq
       AND atq.status IN ('dispatched', 'running', 'waiting_local_directory')
 LEFT JOIN issue i
        ON i.id = atq.issue_id
-WHERE sm.squad_id = $1
-ORDER BY sm.created_at ASC, atq.dispatched_at DESC NULLS LAST
+WHERE sm.squad_id = ?1
+ORDER BY sm.created_at ASC, atq.dispatched_at DESC
 `
 
 type ListSquadMemberStatusRowsRow struct {
-	SquadMemberID     pgtype.UUID        `json:"squad_member_id"`
-	MemberType        string             `json:"member_type"`
-	MemberID          pgtype.UUID        `json:"member_id"`
-	AgentArchivedAt   pgtype.Timestamptz `json:"agent_archived_at"`
-	RuntimeStatus     pgtype.Text        `json:"runtime_status"`
-	RuntimeLastSeenAt pgtype.Timestamptz `json:"runtime_last_seen_at"`
-	TaskID            pgtype.UUID        `json:"task_id"`
-	TaskStatus        pgtype.Text        `json:"task_status"`
-	TaskIssueID       pgtype.UUID        `json:"task_issue_id"`
-	TaskDispatchedAt  pgtype.Timestamptz `json:"task_dispatched_at"`
-	IssueNumber       pgtype.Int4        `json:"issue_number"`
-	IssueTitle        pgtype.Text        `json:"issue_title"`
-	IssueStatus       pgtype.Text        `json:"issue_status"`
+	SquadMemberID     string         `json:"squad_member_id"`
+	MemberType        string         `json:"member_type"`
+	MemberID          string         `json:"member_id"`
+	AgentArchivedAt   sql.NullString `json:"agent_archived_at"`
+	RuntimeStatus     sql.NullString `json:"runtime_status"`
+	RuntimeLastSeenAt sql.NullString `json:"runtime_last_seen_at"`
+	TaskID            sql.NullString `json:"task_id"`
+	TaskStatus        sql.NullString `json:"task_status"`
+	TaskIssueID       sql.NullString `json:"task_issue_id"`
+	TaskDispatchedAt  sql.NullString `json:"task_dispatched_at"`
+	IssueNumber       sql.NullInt64  `json:"issue_number"`
+	IssueTitle        sql.NullString `json:"issue_title"`
+	IssueStatus       sql.NullString `json:"issue_status"`
 }
 
 // Per-row join used to build the squad-members status view. One row per
-// (squad_member × in_flight_task); members with no in-flight task return a
+// (squad_member   in_flight_task); members with no in-flight task return a
 // single row with NULL task_* columns. Human members and agent members
 // with no agent row also return one row with NULL agent_/runtime_ columns.
 // waiting_local_directory stays in the row set so its issue remains visible,
 // but the handler only treats dispatched/running rows as working because the
 // squad status vocabulary has no queued bucket.
-func (q *Queries) ListSquadMemberStatusRows(ctx context.Context, squadID pgtype.UUID) ([]ListSquadMemberStatusRowsRow, error) {
-	rows, err := q.db.Query(ctx, listSquadMemberStatusRows, squadID)
+func (q *Queries) ListSquadMemberStatusRows(ctx context.Context, squadID string) ([]ListSquadMemberStatusRowsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSquadMemberStatusRows, squadID)
 	if err != nil {
 		return nil, err
 	}
@@ -444,6 +452,9 @@ func (q *Queries) ListSquadMemberStatusRows(ctx context.Context, squadID pgtype.
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -451,11 +462,11 @@ func (q *Queries) ListSquadMemberStatusRows(ctx context.Context, squadID pgtype.
 }
 
 const listSquadMembers = `-- name: ListSquadMembers :many
-SELECT id, squad_id, member_type, member_id, role, created_at FROM squad_member WHERE squad_id = $1 ORDER BY created_at ASC
+SELECT id, squad_id, member_type, member_id, role, created_at FROM squad_member WHERE squad_id = ?1 ORDER BY created_at ASC
 `
 
-func (q *Queries) ListSquadMembers(ctx context.Context, squadID pgtype.UUID) ([]SquadMember, error) {
-	rows, err := q.db.Query(ctx, listSquadMembers, squadID)
+func (q *Queries) ListSquadMembers(ctx context.Context, squadID string) ([]SquadMember, error) {
+	rows, err := q.db.QueryContext(ctx, listSquadMembers, squadID)
 	if err != nil {
 		return nil, err
 	}
@@ -475,6 +486,9 @@ func (q *Queries) ListSquadMembers(ctx context.Context, squadID pgtype.UUID) ([]
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -482,11 +496,11 @@ func (q *Queries) ListSquadMembers(ctx context.Context, squadID pgtype.UUID) ([]
 }
 
 const listSquads = `-- name: ListSquads :many
-SELECT id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions FROM squad WHERE workspace_id = $1 AND archived_at IS NULL ORDER BY created_at ASC
+SELECT id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions FROM squad WHERE workspace_id = ?1 AND archived_at IS NULL ORDER BY created_at ASC
 `
 
-func (q *Queries) ListSquads(ctx context.Context, workspaceID pgtype.UUID) ([]Squad, error) {
-	rows, err := q.db.Query(ctx, listSquads, workspaceID)
+func (q *Queries) ListSquads(ctx context.Context, workspaceID string) ([]Squad, error) {
+	rows, err := q.db.QueryContext(ctx, listSquads, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -511,6 +525,9 @@ func (q *Queries) ListSquads(ctx context.Context, workspaceID pgtype.UUID) ([]Sq
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -521,19 +538,19 @@ func (q *Queries) ListSquads(ctx context.Context, workspaceID pgtype.UUID) ([]Sq
 const listSquadsByMember = `-- name: ListSquadsByMember :many
 SELECT s.id, s.workspace_id, s.name, s.description, s.leader_id, s.creator_id, s.created_at, s.updated_at, s.archived_at, s.archived_by, s.avatar_url, s.instructions FROM squad s
 JOIN squad_member sm ON sm.squad_id = s.id
-WHERE s.workspace_id = $1 AND sm.member_type = $2 AND sm.member_id = $3
+WHERE s.workspace_id = ?1 AND sm.member_type = ?2 AND sm.member_id = ?3
 ORDER BY s.created_at ASC
 `
 
 type ListSquadsByMemberParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	MemberType  string      `json:"member_type"`
-	MemberID    pgtype.UUID `json:"member_id"`
+	WorkspaceID string `json:"workspace_id"`
+	MemberType  string `json:"member_type"`
+	MemberID    string `json:"member_id"`
 }
 
 // Find all squads a given entity belongs to in a workspace.
 func (q *Queries) ListSquadsByMember(ctx context.Context, arg ListSquadsByMemberParams) ([]Squad, error) {
-	rows, err := q.db.Query(ctx, listSquadsByMember, arg.WorkspaceID, arg.MemberType, arg.MemberID)
+	rows, err := q.db.QueryContext(ctx, listSquadsByMember, arg.WorkspaceID, arg.MemberType, arg.MemberID)
 	if err != nil {
 		return nil, err
 	}
@@ -559,6 +576,9 @@ func (q *Queries) ListSquadsByMember(ctx context.Context, arg ListSquadsByMember
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -567,21 +587,20 @@ func (q *Queries) ListSquadsByMember(ctx context.Context, arg ListSquadsByMember
 
 const lockSquadForAutopilotAssignment = `-- name: LockSquadForAutopilotAssignment :one
 SELECT id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions FROM squad
-WHERE id = $1 AND workspace_id = $2
-FOR SHARE
+WHERE id = ?1 AND workspace_id = ?2
 `
 
 type LockSquadForAutopilotAssignmentParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // Stabilizes the squad-to-leader resolution while an active Autopilot is
-// created, retargeted, or resumed. FOR SHARE conflicts with an ordinary
+// created, retargeted, or resumed. conflicts with an ordinary
 // leader_id update, so the caller subsequently locks the same leader Agent
 // whose row Runtime teardown serializes against.
 func (q *Queries) LockSquadForAutopilotAssignment(ctx context.Context, arg LockSquadForAutopilotAssignmentParams) (Squad, error) {
-	row := q.db.QueryRow(ctx, lockSquadForAutopilotAssignment, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, lockSquadForAutopilotAssignment, arg.ID, arg.WorkspaceID)
 	var i Squad
 	err := row.Scan(
 		&i.ID,
@@ -602,20 +621,19 @@ func (q *Queries) LockSquadForAutopilotAssignment(ctx context.Context, arg LockS
 
 const lockSquadForUpdate = `-- name: LockSquadForUpdate :one
 SELECT id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions FROM squad
-WHERE id = $1 AND workspace_id = $2
-FOR UPDATE
+WHERE id = ?1 AND workspace_id = ?2
 `
 
 type LockSquadForUpdateParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // Squad leader changes take the exclusive side of the same lock used by
 // Autopilot assignment. The handler then locks the proposed leader Agent and
 // pauses active squad Autopilots when that Agent is unbound.
 func (q *Queries) LockSquadForUpdate(ctx context.Context, arg LockSquadForUpdateParams) (Squad, error) {
-	row := q.db.QueryRow(ctx, lockSquadForUpdate, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, lockSquadForUpdate, arg.ID, arg.WorkspaceID)
 	var i Squad
 	err := row.Scan(
 		&i.ID,
@@ -636,50 +654,50 @@ func (q *Queries) LockSquadForUpdate(ctx context.Context, arg LockSquadForUpdate
 
 const removeSquadMember = `-- name: RemoveSquadMember :execrows
 DELETE FROM squad_member
-WHERE squad_id = $1 AND member_type = $2 AND member_id = $3
+WHERE squad_id = ?1 AND member_type = ?2 AND member_id = ?3
 `
 
 type RemoveSquadMemberParams struct {
-	SquadID    pgtype.UUID `json:"squad_id"`
-	MemberType string      `json:"member_type"`
-	MemberID   pgtype.UUID `json:"member_id"`
+	SquadID    string `json:"squad_id"`
+	MemberType string `json:"member_type"`
+	MemberID   string `json:"member_id"`
 }
 
 func (q *Queries) RemoveSquadMember(ctx context.Context, arg RemoveSquadMemberParams) (int64, error) {
-	result, err := q.db.Exec(ctx, removeSquadMember, arg.SquadID, arg.MemberType, arg.MemberID)
+	result, err := q.db.ExecContext(ctx, removeSquadMember, arg.SquadID, arg.MemberType, arg.MemberID)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const transferSquadAssignees = `-- name: TransferSquadAssignees :exec
-UPDATE issue SET assignee_type = 'agent', assignee_id = $2, revision = revision + 1, updated_at = now()
-WHERE assignee_type = 'squad' AND assignee_id = $1
+UPDATE issue SET assignee_type = 'agent', assignee_id = ?2, revision = revision + 1, updated_at = now()
+WHERE assignee_type = 'squad' AND assignee_id = ?1
 `
 
 type TransferSquadAssigneesParams struct {
-	AssigneeID   pgtype.UUID `json:"assignee_id"`
-	AssigneeID_2 pgtype.UUID `json:"assignee_id_2"`
+	AssigneeID   sql.NullString `json:"assignee_id"`
+	AssigneeID_2 sql.NullString `json:"assignee_id_2"`
 }
 
 // Transfer all issues assigned to a squad to the squad's leader agent.
 func (q *Queries) TransferSquadAssignees(ctx context.Context, arg TransferSquadAssigneesParams) error {
-	_, err := q.db.Exec(ctx, transferSquadAssignees, arg.AssigneeID, arg.AssigneeID_2)
+	_, err := q.db.ExecContext(ctx, transferSquadAssignees, arg.AssigneeID, arg.AssigneeID_2)
 	return err
 }
 
 const transferSquadAutopilotsToLeader = `-- name: TransferSquadAutopilotsToLeader :exec
 UPDATE autopilot
 SET assignee_type = 'agent',
-    assignee_id = $2,
+    assignee_id = ?2,
     updated_at = now()
-WHERE assignee_type = 'squad' AND assignee_id = $1
+WHERE assignee_type = 'squad' AND assignee_id = ?1
 `
 
 type TransferSquadAutopilotsToLeaderParams struct {
-	AssigneeID   pgtype.UUID `json:"assignee_id"`
-	AssigneeID_2 pgtype.UUID `json:"assignee_id_2"`
+	AssigneeID   string `json:"assignee_id"`
+	AssigneeID_2 string `json:"assignee_id_2"`
 }
 
 // Mirrors TransferSquadAssignees for autopilot rows: when a squad is archived,
@@ -689,33 +707,33 @@ type TransferSquadAutopilotsToLeaderParams struct {
 // the autopilot keeps firing under the same leader-only execution semantics
 // it had a moment before the archive (Path A from MUL-2429).
 func (q *Queries) TransferSquadAutopilotsToLeader(ctx context.Context, arg TransferSquadAutopilotsToLeaderParams) error {
-	_, err := q.db.Exec(ctx, transferSquadAutopilotsToLeader, arg.AssigneeID, arg.AssigneeID_2)
+	_, err := q.db.ExecContext(ctx, transferSquadAutopilotsToLeader, arg.AssigneeID, arg.AssigneeID_2)
 	return err
 }
 
 const updateSquad = `-- name: UpdateSquad :one
 UPDATE squad SET
-    name = COALESCE($2, name),
-    description = COALESCE($3, description),
-    leader_id = COALESCE($4, leader_id),
-    avatar_url = COALESCE($5, avatar_url),
-    instructions = COALESCE($6, instructions),
+    name = COALESCE(?2, name),
+    description = COALESCE(?3, description),
+    leader_id = COALESCE(?4, leader_id),
+    avatar_url = COALESCE(?5, avatar_url),
+    instructions = COALESCE(?6, instructions),
     updated_at = now()
-WHERE id = $1
+WHERE id = ?1
 RETURNING id, workspace_id, name, description, leader_id, creator_id, created_at, updated_at, archived_at, archived_by, avatar_url, instructions
 `
 
 type UpdateSquadParams struct {
-	ID           pgtype.UUID `json:"id"`
-	Name         pgtype.Text `json:"name"`
-	Description  pgtype.Text `json:"description"`
-	LeaderID     pgtype.UUID `json:"leader_id"`
-	AvatarUrl    pgtype.Text `json:"avatar_url"`
-	Instructions pgtype.Text `json:"instructions"`
+	ID           string         `json:"id"`
+	Name         sql.NullString `json:"name"`
+	Description  sql.NullString `json:"description"`
+	LeaderID     sql.NullString `json:"leader_id"`
+	AvatarUrl    sql.NullString `json:"avatar_url"`
+	Instructions sql.NullString `json:"instructions"`
 }
 
 func (q *Queries) UpdateSquad(ctx context.Context, arg UpdateSquadParams) (Squad, error) {
-	row := q.db.QueryRow(ctx, updateSquad,
+	row := q.db.QueryRowContext(ctx, updateSquad,
 		arg.ID,
 		arg.Name,
 		arg.Description,
@@ -742,20 +760,20 @@ func (q *Queries) UpdateSquad(ctx context.Context, arg UpdateSquadParams) (Squad
 }
 
 const updateSquadMemberRole = `-- name: UpdateSquadMemberRole :one
-UPDATE squad_member SET role = $4
-WHERE squad_id = $1 AND member_type = $2 AND member_id = $3
+UPDATE squad_member SET role = ?4
+WHERE squad_id = ?1 AND member_type = ?2 AND member_id = ?3
 RETURNING id, squad_id, member_type, member_id, role, created_at
 `
 
 type UpdateSquadMemberRoleParams struct {
-	SquadID    pgtype.UUID `json:"squad_id"`
-	MemberType string      `json:"member_type"`
-	MemberID   pgtype.UUID `json:"member_id"`
-	Role       string      `json:"role"`
+	SquadID    string `json:"squad_id"`
+	MemberType string `json:"member_type"`
+	MemberID   string `json:"member_id"`
+	Role       string `json:"role"`
 }
 
 func (q *Queries) UpdateSquadMemberRole(ctx context.Context, arg UpdateSquadMemberRoleParams) (SquadMember, error) {
-	row := q.db.QueryRow(ctx, updateSquadMemberRole,
+	row := q.db.QueryRowContext(ctx, updateSquadMemberRole,
 		arg.SquadID,
 		arg.MemberType,
 		arg.MemberID,

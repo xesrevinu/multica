@@ -2,10 +2,10 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/plugincontract"
 )
@@ -40,10 +40,10 @@ func (s *PluginService) reconcilePluginHookSchedules(
 			// safer than installing a schedule the runtime cannot evaluate.
 			return &PluginError{Kind: PluginErrorInvalid, Message: fmt.Sprintf("schedule for hook %q is invalid", hook.Key), Err: err}
 		}
-		if !installation.Enabled {
+		if installation.Enabled == 0 {
 			// Disabled installations have no meaningful "next" run. Re-enable
 			// rotates the generation and computes this projection from that time.
-			nextRun = pgtype.Timestamptz{}
+			nextRun = sql.NullString{}
 		}
 
 		row, found := existing[hook.Key]
@@ -84,21 +84,21 @@ func (s *PluginService) reconcilePluginHookSchedules(
 	return nil
 }
 
-func pluginScheduleNextRun(schedule plugincontract.HookSchedule, after time.Time) (pgtype.Timestamptz, error) {
+func pluginScheduleNextRun(schedule plugincontract.HookSchedule, after time.Time) (sql.NullString, error) {
 	next, err := NextOccurrenceAfterUTC(schedule.Cron, schedule.Timezone, after)
 	if err != nil {
-		return pgtype.Timestamptz{}, err
+		return sql.NullString{}, err
 	}
 	if next.IsZero() {
-		return pgtype.Timestamptz{}, nil
+		return sql.NullString{}, nil
 	}
-	return pgtype.Timestamptz{Time: next.UTC(), Valid: true}, nil
+	return nullTime(next.UTC(), true), nil
 }
 
 func (s *PluginService) setPluginHookSchedulesEnabled(
 	ctx context.Context,
 	queries *db.Queries,
-	installationID pgtype.UUID,
+	installationID string,
 	enabled bool,
 ) error {
 	if !enabled {

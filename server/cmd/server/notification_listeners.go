@@ -5,14 +5,12 @@ import (
 	"encoding/json"
 	"log/slog"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/handler"
 	"github.com/multica-ai/multica/server/internal/inbox"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	"github.com/multica-ai/multica/server/pkg/dbid"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -122,7 +120,7 @@ var delegatedAlwaysNotifTypes = map[string]bool{
 func issueStatusIsHandoff(
 	ctx context.Context,
 	queries *db.Queries,
-	workspaceID pgtype.UUID,
+	workspaceID string,
 	status string,
 ) (bool, error) {
 	category, err := issuestatus.CategoryWithError(ctx, queries, workspaceID, status)
@@ -210,14 +208,14 @@ func loadUserPrefs(
 		return nil
 	}
 
-	uuids := make([]pgtype.UUID, len(userIDs))
+	ids := make([]string, len(userIDs))
 	for i, id := range userIDs {
-		uuids[i] = parseUUID(id)
+		ids[i] = parseUUID(id)
 	}
 
 	rows, err := queries.ListNotificationPreferencesByUsers(ctx, db.ListNotificationPreferencesByUsersParams{
 		WorkspaceID: parseUUID(workspaceID),
-		UserIds:     uuids,
+		UserIds:     jsonStringArray(ids),
 	})
 	if err != nil {
 		slog.Error("failed to load notification preferences", "error", err)
@@ -227,7 +225,7 @@ func loadUserPrefs(
 	result := make(map[string]map[string]string, len(rows))
 	for _, row := range rows {
 		var prefs map[string]string
-		if err := json.Unmarshal(row.Preferences, &prefs); err != nil {
+		if err := json.Unmarshal([]byte(row.Preferences), &prefs); err != nil {
 			continue
 		}
 		result[util.UUIDToString(row.UserID)] = prefs
@@ -247,7 +245,7 @@ func archiveStaleTaskFailedInbox(
 ) {
 	rows, err := queries.ArchiveInboxByIssueAndType(ctx, db.ArchiveInboxByIssueAndTypeParams{
 		WorkspaceID: parseUUID(workspaceID),
-		IssueID:     parseUUID(issueID),
+		IssueID:     nullText(parseUUID(issueID)),
 		Type:        "task_failed",
 	})
 	if err != nil {
@@ -353,7 +351,7 @@ func notifySubscribers(
 
 	// Query subscribers from the parent issue, but the inbox item still
 	// points to the sub-issue so the user navigates to the actual change.
-	parentID := util.UUIDToString(issue.ParentIssueID)
+	parentID := issue.ParentIssueID.String
 	notifyIssueSubscribers(ctx, queries, bus,
 		parentID, issueID, issueStatus, workspaceID, e, parentExclude,
 		notifType, severity, title, body, details)
@@ -449,18 +447,18 @@ func notifyIssueSubscribers(
 		}
 
 		item, inserted, err := inbox.CreateIfEligible(ctx, queries, db.CreateInboxItemParams{
-			ID:            dbid.NewV7(),
+			ID:            newNullID(),
 			WorkspaceID:   parseUUID(workspaceID),
 			RecipientType: "member",
 			RecipientID:   sub.UserID,
 			Type:          notifType,
 			Severity:      severity,
-			IssueID:       parseUUID(targetIssueID),
+			IssueID:       nullText(parseUUID(targetIssueID)),
 			Title:         title,
-			Body:          util.StrToText(body),
-			ActorType:     util.StrToText(e.ActorType),
+			Body:          nullText(body),
+			ActorType:     nullText(e.ActorType),
 			ActorID:       optionalUUID(e.ActorID),
-			Details:       details,
+			Details:       nullJSON(details),
 		})
 		if err != nil {
 			slog.Error("subscriber notification creation failed",
@@ -518,18 +516,18 @@ func notifyDirect(
 	}
 
 	item, inserted, err := inbox.CreateIfEligible(ctx, queries, db.CreateInboxItemParams{
-		ID:            dbid.NewV7(),
+		ID:            newNullID(),
 		WorkspaceID:   parseUUID(workspaceID),
 		RecipientType: recipientType,
 		RecipientID:   parseUUID(recipientID),
 		Type:          notifType,
 		Severity:      severity,
-		IssueID:       parseUUID(issueID),
+		IssueID:       nullText(parseUUID(issueID)),
 		Title:         title,
-		Body:          util.StrToText(body),
-		ActorType:     util.StrToText(e.ActorType),
+		Body:          nullText(body),
+		ActorType:     nullText(e.ActorType),
 		ActorID:       optionalUUID(e.ActorID),
-		Details:       details,
+		Details:       nullJSON(details),
 	})
 	if err != nil {
 		slog.Error("direct notification creation failed",
@@ -639,17 +637,17 @@ func notifyMentionedMembers(
 			continue
 		}
 		item, inserted, err := inbox.CreateIfEligible(context.Background(), queries, db.CreateInboxItemParams{
-			ID:            dbid.NewV7(),
+			ID:            newNullID(),
 			WorkspaceID:   parseUUID(e.WorkspaceID),
 			RecipientType: "member",
 			RecipientID:   parseUUID(id),
 			Type:          "mentioned",
 			Severity:      "info",
-			IssueID:       parseUUID(issueID),
+			IssueID:       nullText(parseUUID(issueID)),
 			Title:         title,
-			ActorType:     util.StrToText(e.ActorType),
+			ActorType:     nullText(e.ActorType),
 			ActorID:       optionalUUID(e.ActorID),
-			Details:       details,
+			Details:       nullJSON(details),
 		})
 		if err != nil {
 			slog.Error("mention inbox creation failed", "mentioned_id", id, "error", err)
@@ -1090,14 +1088,14 @@ func inboxItemToResponse(item db.InboxItem) map[string]any {
 		"recipient_id":   util.UUIDToString(item.RecipientID),
 		"type":           item.Type,
 		"severity":       item.Severity,
-		"issue_id":       util.UUIDToPtr(item.IssueID),
+		"issue_id":       nullStringPtr(item.IssueID),
 		"title":          item.Title,
-		"body":           util.TextToPtr(item.Body),
-		"read":           item.Read,
-		"archived":       item.Archived,
-		"created_at":     util.TimestampToString(item.CreatedAt),
-		"actor_type":     util.TextToPtr(item.ActorType),
-		"actor_id":       util.UUIDToPtr(item.ActorID),
-		"details":        json.RawMessage(item.Details),
+		"body":           nullStringPtr(item.Body),
+		"read":           item.Read != 0,
+		"archived":       item.Archived != 0,
+		"created_at":     item.CreatedAt,
+		"actor_type":     nullStringPtr(item.ActorType),
+		"actor_id":       nullStringPtr(item.ActorID),
+		"details":        json.RawMessage(item.Details.String),
 	}
 }

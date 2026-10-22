@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -102,8 +102,8 @@ func TestCreateTrigger_RepublishesRuleVersionAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatalf("webhook trigger create must republish a rule version: %v", err)
 	}
-	if ver.PublishedByType != "member" || uuidToString(ver.PublishedByID) != testUserID {
-		t.Errorf("webhook version published_by = %s/%s, want member/%s", ver.PublishedByType, uuidToString(ver.PublishedByID), testUserID)
+	if ver.PublishedByType != "member" || uuidToString(ver.PublishedByID.String) != testUserID {
+		t.Errorf("webhook version published_by = %s/%s, want member/%s", ver.PublishedByType, uuidToString(ver.PublishedByID.String), testUserID)
 	}
 
 	// Schedule create appends a fresh version, also published by the acting member.
@@ -121,11 +121,11 @@ func TestCreateTrigger_RepublishesRuleVersionAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatalf("schedule trigger create must republish a rule version: %v", err)
 	}
-	if ver2.ID.Bytes == ver.ID.Bytes {
+	if ver2.ID == ver.ID {
 		t.Error("schedule create must append a NEW rule version, not reuse the webhook one")
 	}
-	if ver2.PublishedByType != "member" || uuidToString(ver2.PublishedByID) != testUserID {
-		t.Errorf("schedule version published_by = %s/%s, want member/%s", ver2.PublishedByType, uuidToString(ver2.PublishedByID), testUserID)
+	if ver2.PublishedByType != "member" || uuidToString(ver2.PublishedByID.String) != testUserID {
+		t.Errorf("schedule version published_by = %s/%s, want member/%s", ver2.PublishedByType, uuidToString(ver2.PublishedByID.String), testUserID)
 	}
 }
 
@@ -324,7 +324,7 @@ func TestUpdateWebhookTrigger_ExplicitEmptyArrayClearsFilters(t *testing.T) {
 		Event:        "github.something_else.opened",
 		EventPayload: json.RawMessage(`{"action":"opened"}`),
 	}
-	if !webhookEventAllowedByTriggerScope(row.EventFilters, env) {
+	if !webhookEventAllowedByTriggerScope([]byte(row.EventFilters.String), env) {
 		t.Fatal("after clear, matcher should allow all events")
 	}
 }
@@ -612,7 +612,7 @@ func TestWebhookHandler_DisabledTriggerReturnsIgnored(t *testing.T) {
 
 	if _, err := testHandler.Queries.UpdateAutopilotTrigger(context.Background(), db.UpdateAutopilotTriggerParams{
 		ID:      parseUUID(trig.ID),
-		Enabled: pgtype.Bool{Bool: false, Valid: true},
+		Enabled: sql.NullInt64{Int64: boolToInt64(false), Valid: true},
 	}); err != nil {
 		t.Fatalf("disable trigger: %v", err)
 	}
@@ -669,7 +669,7 @@ func TestWebhookHandler_ActiveDispatchesRunWithPayload(t *testing.T) {
 	// The run ID is allocated synchronously, while durable dispatch remains
 	// owned by the queued delivery worker.
 	delivery := processQueuedWebhookDelivery(t, deliveryID)
-	if got := uuidToString(delivery.AutopilotRunID); got != runID {
+	if got := uuidToString(delivery.AutopilotRunID.String); got != runID {
 		t.Fatalf("delivery run_id mismatch: got %q want %q", got, runID)
 	}
 
@@ -681,14 +681,14 @@ func TestWebhookHandler_ActiveDispatchesRunWithPayload(t *testing.T) {
 	if run.Source != "webhook" {
 		t.Fatalf("run.source: %q", run.Source)
 	}
-	if uuidToString(run.TriggerID) != trig.ID {
-		t.Fatalf("run.trigger_id mismatch: %q vs %q", uuidToString(run.TriggerID), trig.ID)
+	if uuidToString(run.TriggerID.String) != trig.ID {
+		t.Fatalf("run.trigger_id mismatch: %q vs %q", uuidToString(run.TriggerID.String), trig.ID)
 	}
 	var payload struct {
 		Event        string                 `json:"event"`
 		EventPayload map[string]interface{} `json:"eventPayload"`
 	}
-	if err := json.Unmarshal(run.TriggerPayload, &payload); err != nil {
+	if err := json.Unmarshal([]byte(run.TriggerPayload.String), &payload); err != nil {
 		t.Fatalf("payload decode: %v body=%s", err, string(run.TriggerPayload))
 	}
 	if payload.Event != "demo.received" {
@@ -752,8 +752,8 @@ func TestWebhookHandler_ActiveSkippedRunReturnsLegacyContract(t *testing.T) {
 	}
 
 	delivery := processQueuedWebhookDelivery(t, deliveryID)
-	if delivery.Status != deliveryStatusDispatched || uuidToString(delivery.AutopilotRunID) != runID {
-		t.Fatalf("skipped run was not linked to delivery: status=%s run_id=%s", delivery.Status, uuidToString(delivery.AutopilotRunID))
+	if delivery.Status != deliveryStatusDispatched || uuidToString(delivery.AutopilotRunID.String) != runID {
+		t.Fatalf("skipped run was not linked to delivery: status=%s run_id=%s", delivery.Status, uuidToString(delivery.AutopilotRunID.String))
 	}
 }
 
@@ -769,7 +769,7 @@ func TestWebhookHandler_GitHubHeaderInferredEvent(t *testing.T) {
 		},
 	}, map[string]string{"X-GitHub-Event": "pull_request"})
 	delivery := processQueuedWebhookDelivery(t, requireAcceptedWebhookResponse(t, w))
-	runID := uuidToString(delivery.AutopilotRunID)
+	runID := uuidToString(delivery.AutopilotRunID.String)
 	run, err := testHandler.Queries.GetAutopilotRun(context.Background(), parseUUID(runID))
 	if err != nil {
 		t.Fatalf("load run: %v", err)
@@ -777,7 +777,7 @@ func TestWebhookHandler_GitHubHeaderInferredEvent(t *testing.T) {
 	var env struct {
 		Event string `json:"event"`
 	}
-	json.Unmarshal(run.TriggerPayload, &env)
+	json.Unmarshal([]byte(run.TriggerPayload.String), &env)
 	if env.Event != "github.pull_request.opened" {
 		t.Fatalf("event inference: got %q", env.Event)
 	}
@@ -1058,7 +1058,7 @@ func TestGetAutopilotRun_ReturnsFullPayload(t *testing.T) {
 		"eventPayload": map[string]any{"answer": 42},
 	}, nil)
 	delivery := processQueuedWebhookDelivery(t, requireAcceptedWebhookResponse(t, post))
-	runID := uuidToString(delivery.AutopilotRunID)
+	runID := uuidToString(delivery.AutopilotRunID.String)
 
 	// LIST: trigger_payload should be omitted (slim response).
 	wList := httptest.NewRecorder()

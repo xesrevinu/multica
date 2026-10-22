@@ -7,45 +7,44 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const addAgentMcpServer = `-- name: AddAgentMcpServer :exec
 INSERT INTO agent_mcp_server (agent_id, server_id)
-VALUES ($1, $2)
+VALUES (?1, ?2)
 ON CONFLICT DO NOTHING
 `
 
 type AddAgentMcpServerParams struct {
-	AgentID  pgtype.UUID `json:"agent_id"`
-	ServerID pgtype.UUID `json:"server_id"`
+	AgentID  string `json:"agent_id"`
+	ServerID string `json:"server_id"`
 }
 
 func (q *Queries) AddAgentMcpServer(ctx context.Context, arg AddAgentMcpServerParams) error {
-	_, err := q.db.Exec(ctx, addAgentMcpServer, arg.AgentID, arg.ServerID)
+	_, err := q.db.ExecContext(ctx, addAgentMcpServer, arg.AgentID, arg.ServerID)
 	return err
 }
 
 const countWorkspaceMcpServerAgents = `-- name: CountWorkspaceMcpServerAgents :many
-SELECT ams.server_id, COUNT(*)::bigint AS agent_count
+SELECT ams.server_id, COUNT(*) AS agent_count
 FROM agent_mcp_server ams
 JOIN workspace_mcp_server s ON s.id = ams.server_id
 JOIN agent a ON a.id = ams.agent_id
-WHERE s.workspace_id = $1 AND a.archived_at IS NULL
+WHERE s.workspace_id = ?1 AND a.archived_at IS NULL
 GROUP BY ams.server_id
 `
 
 type CountWorkspaceMcpServerAgentsRow struct {
-	ServerID   pgtype.UUID `json:"server_id"`
-	AgentCount int64       `json:"agent_count"`
+	ServerID   string `json:"server_id"`
+	AgentCount int64  `json:"agent_count"`
 }
 
 // How many live agents each library entry is assigned to, for the workspace
 // settings list. Archived agents never receive the server, so they are not
 // counted; servers with no assignment are simply absent from the result.
-func (q *Queries) CountWorkspaceMcpServerAgents(ctx context.Context, workspaceID pgtype.UUID) ([]CountWorkspaceMcpServerAgentsRow, error) {
-	rows, err := q.db.Query(ctx, countWorkspaceMcpServerAgents, workspaceID)
+func (q *Queries) CountWorkspaceMcpServerAgents(ctx context.Context, workspaceID string) ([]CountWorkspaceMcpServerAgentsRow, error) {
+	rows, err := q.db.QueryContext(ctx, countWorkspaceMcpServerAgents, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -58,6 +57,9 @@ func (q *Queries) CountWorkspaceMcpServerAgents(ctx context.Context, workspaceID
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -66,19 +68,19 @@ func (q *Queries) CountWorkspaceMcpServerAgents(ctx context.Context, workspaceID
 
 const createWorkspaceMcpServer = `-- name: CreateWorkspaceMcpServer :one
 INSERT INTO workspace_mcp_server (workspace_id, name, config, created_by)
-VALUES ($1, $2, $3, $4)
+VALUES (?1, ?2, ?3, ?4)
 RETURNING id, workspace_id, name, config, created_by, created_at, updated_at
 `
 
 type CreateWorkspaceMcpServerParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Name        string      `json:"name"`
-	Config      []byte      `json:"config"`
-	CreatedBy   pgtype.UUID `json:"created_by"`
+	WorkspaceID string         `json:"workspace_id"`
+	Name        string         `json:"name"`
+	Config      string         `json:"config"`
+	CreatedBy   sql.NullString `json:"created_by"`
 }
 
 func (q *Queries) CreateWorkspaceMcpServer(ctx context.Context, arg CreateWorkspaceMcpServerParams) (WorkspaceMcpServer, error) {
-	row := q.db.QueryRow(ctx, createWorkspaceMcpServer,
+	row := q.db.QueryRowContext(ctx, createWorkspaceMcpServer,
 		arg.WorkspaceID,
 		arg.Name,
 		arg.Config,
@@ -98,46 +100,46 @@ func (q *Queries) CreateWorkspaceMcpServer(ctx context.Context, arg CreateWorksp
 }
 
 const deleteAgentMcpServersByServer = `-- name: DeleteAgentMcpServersByServer :exec
-DELETE FROM agent_mcp_server WHERE server_id = $1
+DELETE FROM agent_mcp_server WHERE server_id = ?1
 `
 
 // Bindings carry no FK, so removing a library entry must sweep them explicitly
 // in the same transaction as the delete.
-func (q *Queries) DeleteAgentMcpServersByServer(ctx context.Context, serverID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteAgentMcpServersByServer, serverID)
+func (q *Queries) DeleteAgentMcpServersByServer(ctx context.Context, serverID string) error {
+	_, err := q.db.ExecContext(ctx, deleteAgentMcpServersByServer, serverID)
 	return err
 }
 
 const deleteWorkspaceMcpServer = `-- name: DeleteWorkspaceMcpServer :execrows
 DELETE FROM workspace_mcp_server
-WHERE id = $1 AND workspace_id = $2
+WHERE id = ?1 AND workspace_id = ?2
 `
 
 type DeleteWorkspaceMcpServerParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 func (q *Queries) DeleteWorkspaceMcpServer(ctx context.Context, arg DeleteWorkspaceMcpServerParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteWorkspaceMcpServer, arg.ID, arg.WorkspaceID)
+	result, err := q.db.ExecContext(ctx, deleteWorkspaceMcpServer, arg.ID, arg.WorkspaceID)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const getWorkspaceMcpServer = `-- name: GetWorkspaceMcpServer :one
 SELECT id, workspace_id, name, config, created_by, created_at, updated_at FROM workspace_mcp_server
-WHERE id = $1 AND workspace_id = $2
+WHERE id = ?1 AND workspace_id = ?2
 `
 
 type GetWorkspaceMcpServerParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 func (q *Queries) GetWorkspaceMcpServer(ctx context.Context, arg GetWorkspaceMcpServerParams) (WorkspaceMcpServer, error) {
-	row := q.db.QueryRow(ctx, getWorkspaceMcpServer, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, getWorkspaceMcpServer, arg.ID, arg.WorkspaceID)
 	var i WorkspaceMcpServer
 	err := row.Scan(
 		&i.ID,
@@ -155,24 +157,24 @@ const listAgentMcpServers = `-- name: ListAgentMcpServers :many
 SELECT s.id, s.workspace_id, s.name, s.config, s.created_at, s.updated_at, ams.enabled
 FROM workspace_mcp_server s
 JOIN agent_mcp_server ams ON ams.server_id = s.id
-WHERE ams.agent_id = $1
+WHERE ams.agent_id = ?1
 ORDER BY s.name ASC
 `
 
 type ListAgentMcpServersRow struct {
-	ID          pgtype.UUID        `json:"id"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	Name        string             `json:"name"`
-	Config      []byte             `json:"config"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
-	Enabled     bool               `json:"enabled"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	Name        string `json:"name"`
+	Config      string `json:"config"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+	Enabled     int64  `json:"enabled"`
 }
 
 // Every workspace server bound to this agent, enabled or not, for the agent
 // settings list. `enabled` comes from the binding.
-func (q *Queries) ListAgentMcpServers(ctx context.Context, agentID pgtype.UUID) ([]ListAgentMcpServersRow, error) {
-	rows, err := q.db.Query(ctx, listAgentMcpServers, agentID)
+func (q *Queries) ListAgentMcpServers(ctx context.Context, agentID string) ([]ListAgentMcpServersRow, error) {
+	rows, err := q.db.QueryContext(ctx, listAgentMcpServers, agentID)
 	if err != nil {
 		return nil, err
 	}
@@ -193,6 +195,9 @@ func (q *Queries) ListAgentMcpServers(ctx context.Context, agentID pgtype.UUID) 
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -203,20 +208,20 @@ const listEnabledAgentMcpServers = `-- name: ListEnabledAgentMcpServers :many
 SELECT s.name, s.config
 FROM workspace_mcp_server s
 JOIN agent_mcp_server ams ON ams.server_id = s.id
-WHERE ams.agent_id = $1 AND ams.enabled = TRUE
+WHERE ams.agent_id = ?1 AND ams.enabled = TRUE
 ORDER BY s.name ASC
 `
 
 type ListEnabledAgentMcpServersRow struct {
 	Name   string `json:"name"`
-	Config []byte `json:"config"`
+	Config string `json:"config"`
 }
 
 // Claim path: only bound AND enabled servers reach the runtime. An unbound
-// workspace server is invisible to this agent — creating one gives it to
+// workspace server is invisible to this agent - creating one gives it to
 // nobody until someone adds it here.
-func (q *Queries) ListEnabledAgentMcpServers(ctx context.Context, agentID pgtype.UUID) ([]ListEnabledAgentMcpServersRow, error) {
-	rows, err := q.db.Query(ctx, listEnabledAgentMcpServers, agentID)
+func (q *Queries) ListEnabledAgentMcpServers(ctx context.Context, agentID string) ([]ListEnabledAgentMcpServersRow, error) {
+	rows, err := q.db.QueryContext(ctx, listEnabledAgentMcpServers, agentID)
 	if err != nil {
 		return nil, err
 	}
@@ -229,6 +234,9 @@ func (q *Queries) ListEnabledAgentMcpServers(ctx context.Context, agentID pgtype
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -237,15 +245,15 @@ func (q *Queries) ListEnabledAgentMcpServers(ctx context.Context, agentID pgtype
 
 const listWorkspaceMcpServers = `-- name: ListWorkspaceMcpServers :many
 SELECT id, workspace_id, name, config, created_by, created_at, updated_at FROM workspace_mcp_server
-WHERE workspace_id = $1
+WHERE workspace_id = ?1
 ORDER BY name ASC
 `
 
 // The workspace's MCP library. Returns `config` because the callers that need
 // it (claim assembly, the write path's read-modify-write) run server-side; the
 // HTTP layer projects it down to the non-secret inventory.
-func (q *Queries) ListWorkspaceMcpServers(ctx context.Context, workspaceID pgtype.UUID) ([]WorkspaceMcpServer, error) {
-	rows, err := q.db.Query(ctx, listWorkspaceMcpServers, workspaceID)
+func (q *Queries) ListWorkspaceMcpServers(ctx context.Context, workspaceID string) ([]WorkspaceMcpServer, error) {
+	rows, err := q.db.QueryContext(ctx, listWorkspaceMcpServers, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -266,6 +274,9 @@ func (q *Queries) ListWorkspaceMcpServers(ctx context.Context, workspaceID pgtyp
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -274,106 +285,104 @@ func (q *Queries) ListWorkspaceMcpServers(ctx context.Context, workspaceID pgtyp
 
 const lockWorkspaceMcpServerForShare = `-- name: LockWorkspaceMcpServerForShare :one
 SELECT id FROM workspace_mcp_server
-WHERE id = $1 AND workspace_id = $2
-FOR SHARE
+WHERE id = ?1 AND workspace_id = ?2
 `
 
 type LockWorkspaceMcpServerForShareParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // Taken by the assignment writer before it inserts. A shared row lock
 // conflicts with the exclusive lock DeleteWorkspaceMcpServer takes, so an
 // assignment can never land in the window between that delete sweeping the
-// bindings and committing — the junction has no FK to catch the orphan.
-func (q *Queries) LockWorkspaceMcpServerForShare(ctx context.Context, arg LockWorkspaceMcpServerForShareParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, lockWorkspaceMcpServerForShare, arg.ID, arg.WorkspaceID)
-	var id pgtype.UUID
+// bindings and committing - the junction has no FK to catch the orphan.
+func (q *Queries) LockWorkspaceMcpServerForShare(ctx context.Context, arg LockWorkspaceMcpServerForShareParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, lockWorkspaceMcpServerForShare, arg.ID, arg.WorkspaceID)
+	var id string
 	err := row.Scan(&id)
 	return id, err
 }
 
 const lockWorkspaceMcpServerForUpdate = `-- name: LockWorkspaceMcpServerForUpdate :one
 SELECT id FROM workspace_mcp_server
-WHERE id = $1 AND workspace_id = $2
-FOR UPDATE
+WHERE id = ?1 AND workspace_id = ?2
 `
 
 type LockWorkspaceMcpServerForUpdateParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // The delete half of the same protocol: take the row exclusively first, so a
 // concurrent assignment either lands before this transaction (and is swept) or
 // waits and then finds the server gone.
-func (q *Queries) LockWorkspaceMcpServerForUpdate(ctx context.Context, arg LockWorkspaceMcpServerForUpdateParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, lockWorkspaceMcpServerForUpdate, arg.ID, arg.WorkspaceID)
-	var id pgtype.UUID
+func (q *Queries) LockWorkspaceMcpServerForUpdate(ctx context.Context, arg LockWorkspaceMcpServerForUpdateParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, lockWorkspaceMcpServerForUpdate, arg.ID, arg.WorkspaceID)
+	var id string
 	err := row.Scan(&id)
 	return id, err
 }
 
 const removeAgentMcpServer = `-- name: RemoveAgentMcpServer :execrows
 DELETE FROM agent_mcp_server
-WHERE agent_id = $1 AND server_id = $2
+WHERE agent_id = ?1 AND server_id = ?2
 `
 
 type RemoveAgentMcpServerParams struct {
-	AgentID  pgtype.UUID `json:"agent_id"`
-	ServerID pgtype.UUID `json:"server_id"`
+	AgentID  string `json:"agent_id"`
+	ServerID string `json:"server_id"`
 }
 
 func (q *Queries) RemoveAgentMcpServer(ctx context.Context, arg RemoveAgentMcpServerParams) (int64, error) {
-	result, err := q.db.Exec(ctx, removeAgentMcpServer, arg.AgentID, arg.ServerID)
+	result, err := q.db.ExecContext(ctx, removeAgentMcpServer, arg.AgentID, arg.ServerID)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const setAgentMcpServerEnabled = `-- name: SetAgentMcpServerEnabled :execrows
 UPDATE agent_mcp_server
-SET enabled = $3
-WHERE agent_id = $1 AND server_id = $2
+SET enabled = ?3
+WHERE agent_id = ?1 AND server_id = ?2
 `
 
 type SetAgentMcpServerEnabledParams struct {
-	AgentID  pgtype.UUID `json:"agent_id"`
-	ServerID pgtype.UUID `json:"server_id"`
-	Enabled  bool        `json:"enabled"`
+	AgentID  string `json:"agent_id"`
+	ServerID string `json:"server_id"`
+	Enabled  int64  `json:"enabled"`
 }
 
 func (q *Queries) SetAgentMcpServerEnabled(ctx context.Context, arg SetAgentMcpServerEnabledParams) (int64, error) {
-	result, err := q.db.Exec(ctx, setAgentMcpServerEnabled, arg.AgentID, arg.ServerID, arg.Enabled)
+	result, err := q.db.ExecContext(ctx, setAgentMcpServerEnabled, arg.AgentID, arg.ServerID, arg.Enabled)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const updateWorkspaceMcpServer = `-- name: UpdateWorkspaceMcpServer :one
 UPDATE workspace_mcp_server SET
-    name = COALESCE($3, name),
-    config = COALESCE($4, config),
+    name = COALESCE(?3, name),
+    config = COALESCE(?4, config),
     updated_at = now()
-WHERE id = $1 AND workspace_id = $2
+WHERE id = ?1 AND workspace_id = ?2
 RETURNING id, workspace_id, name, config, created_by, created_at, updated_at
 `
 
 type UpdateWorkspaceMcpServerParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Name        pgtype.Text `json:"name"`
-	Config      []byte      `json:"config"`
+	ID          string         `json:"id"`
+	WorkspaceID string         `json:"workspace_id"`
+	Name        sql.NullString `json:"name"`
+	Config      sql.NullString `json:"config"`
 }
 
 // Full replace of one entry. The name can change here (unlike the previous
 // document model) because bindings key off the id, so a rename cannot orphan
 // the agents that use it.
 func (q *Queries) UpdateWorkspaceMcpServer(ctx context.Context, arg UpdateWorkspaceMcpServerParams) (WorkspaceMcpServer, error) {
-	row := q.db.QueryRow(ctx, updateWorkspaceMcpServer,
+	row := q.db.QueryRowContext(ctx, updateWorkspaceMcpServer,
 		arg.ID,
 		arg.WorkspaceID,
 		arg.Name,

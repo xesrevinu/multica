@@ -2,12 +2,11 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -17,27 +16,27 @@ import (
 // agent (max_concurrent_tasks=5): agent1 (on rt1) has two queued tasks on two
 // different issues; agent2 (on rt2) has one queued task. Returns the two
 // runtime IDs.
-func batchClaimFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (rt1, rt2 string) {
+func batchClaimFixture(t *testing.T, ctx context.Context, pool *sql.DB) (rt1, rt2 string) {
 	t.Helper()
 	suffix := time.Now().UnixNano()
 
 	var userID string
-	if err := pool.QueryRow(ctx, `INSERT INTO "user" (name, email) VALUES ($1,$2) RETURNING id`,
+	if err := pool.QueryRowContext(ctx, `INSERT INTO "user" (name, email) VALUES ($1,$2) RETURNING id`,
 		"Batch Claim Test", fmt.Sprintf("batch-claim-%d@multica.ai", suffix)).Scan(&userID); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
 	var workspaceID string
-	if err := pool.QueryRow(ctx, `INSERT INTO workspace (name, slug, description, issue_prefix) VALUES ($1,$2,$3,$4) RETURNING id`,
+	if err := pool.QueryRowContext(ctx, `INSERT INTO workspace (name, slug, description, issue_prefix) VALUES ($1,$2,$3,$4) RETURNING id`,
 		"Batch Claim Test", fmt.Sprintf("batch-claim-%d", suffix), "temp batch claim test workspace", "BCR").Scan(&workspaceID); err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO member (workspace_id, user_id, role) VALUES ($1,$2,'owner')`, workspaceID, userID); err != nil {
+	if _, err := pool.ExecContext(ctx, `INSERT INTO member (workspace_id, user_id, role) VALUES ($1,$2,'owner')`, workspaceID, userID); err != nil {
 		t.Fatalf("create member: %v", err)
 	}
 
 	mkRuntime := func(name, provider string) string {
 		var id string
-		if err := pool.QueryRow(ctx, `
+		if err := pool.QueryRowContext(ctx, `
 			INSERT INTO agent_runtime (workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, visibility, owner_id)
 			VALUES ($1, 'daemon-batch', $2, 'cloud', $3, 'online', 'test runtime', '{}'::jsonb, now(), 'private', $4)
 			RETURNING id`, workspaceID, name, provider, userID).Scan(&id); err != nil {
@@ -47,7 +46,7 @@ func batchClaimFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (r
 	}
 	mkAgent := func(name, runtimeID string) string {
 		var id string
-		if err := pool.QueryRow(ctx, `
+		if err := pool.QueryRowContext(ctx, `
 			INSERT INTO agent (workspace_id, name, description, runtime_mode, runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id)
 			VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'private', 5, $4)
 			RETURNING id`, workspaceID, name, runtimeID, userID).Scan(&id); err != nil {
@@ -63,13 +62,13 @@ func batchClaimFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (r
 
 	mkQueuedTask := func(agentID, runtimeID string, n int) {
 		var issueID string
-		if err := pool.QueryRow(ctx, `
+		if err := pool.QueryRowContext(ctx, `
 			INSERT INTO issue (workspace_id, title, status, priority, creator_id, creator_type, number, position)
 			VALUES ($1, $2, 'in_progress', 'none', $3, 'member', $4, $5)
 			RETURNING id`, workspaceID, fmt.Sprintf("batch issue %d", n), userID, 800000+n, n).Scan(&issueID); err != nil {
 			t.Fatalf("create issue %d: %v", n, err)
 		}
-		if _, err := pool.Exec(ctx, `
+		if _, err := pool.ExecContext(ctx, `
 			INSERT INTO agent_task_queue (agent_id, issue_id, status, priority, context, runtime_id)
 			VALUES ($1, $2, 'queued', 0, '{}'::jsonb, $3)`, agentID, issueID, runtimeID); err != nil {
 			t.Fatalf("create task %d: %v", n, err)
@@ -83,13 +82,13 @@ func batchClaimFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (r
 
 	t.Cleanup(func() {
 		c := context.Background()
-		pool.Exec(c, `DELETE FROM agent_task_queue WHERE agent_id IN ($1,$2)`, agent1, agent2)
-		pool.Exec(c, `DELETE FROM issue WHERE workspace_id = $1`, workspaceID)
-		pool.Exec(c, `DELETE FROM agent WHERE id IN ($1,$2)`, agent1, agent2)
-		pool.Exec(c, `DELETE FROM agent_runtime WHERE id IN ($1,$2)`, rt1, rt2)
-		pool.Exec(c, `DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`, workspaceID, userID)
-		pool.Exec(c, `DELETE FROM workspace WHERE id = $1`, workspaceID)
-		pool.Exec(c, `DELETE FROM "user" WHERE id = $1`, userID)
+		pool.ExecContext(c, `DELETE FROM agent_task_queue WHERE agent_id IN ($1,$2)`, agent1, agent2)
+		pool.ExecContext(c, `DELETE FROM issue WHERE workspace_id = $1`, workspaceID)
+		pool.ExecContext(c, `DELETE FROM agent WHERE id IN ($1,$2)`, agent1, agent2)
+		pool.ExecContext(c, `DELETE FROM agent_runtime WHERE id IN ($1,$2)`, rt1, rt2)
+		pool.ExecContext(c, `DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`, workspaceID, userID)
+		pool.ExecContext(c, `DELETE FROM workspace WHERE id = $1`, workspaceID)
+		pool.ExecContext(c, `DELETE FROM "user" WHERE id = $1`, userID)
 	})
 	return rt1, rt2
 }
@@ -105,7 +104,7 @@ func TestClaimTasksForRuntimes_MultiRuntimeDrain(t *testing.T) {
 	svc := NewTaskService(db.New(pool), pool, nil, events.New())
 
 	rt1, rt2 := batchClaimFixture(t, ctx, pool)
-	ids := []pgtype.UUID{util.MustParseUUID(rt1), util.MustParseUUID(rt2)}
+	ids := []string{util.MustParseUUID(rt1), util.MustParseUUID(rt2)}
 
 	// Call 1: one task per agent (agent1→rt1, agent2→rt2) => 2 tasks, one per runtime.
 	got1, err := svc.ClaimTasksForRuntimes(ctx, ids, 5)
@@ -117,7 +116,7 @@ func TestClaimTasksForRuntimes_MultiRuntimeDrain(t *testing.T) {
 	}
 	seen := map[string]int{}
 	for _, task := range got1 {
-		seen[util.UUIDToString(task.RuntimeID)]++
+		seen[util.UUIDToString(task.RuntimeID.String)]++
 	}
 	if seen[rt1] != 1 || seen[rt2] != 1 {
 		t.Fatalf("call1 runtime distribution = %v, want one task each for rt1/rt2", seen)
@@ -132,8 +131,8 @@ func TestClaimTasksForRuntimes_MultiRuntimeDrain(t *testing.T) {
 	if len(got2) != 1 {
 		t.Fatalf("call2 claimed %d tasks, want 1", len(got2))
 	}
-	if util.UUIDToString(got2[0].RuntimeID) != rt1 {
-		t.Fatalf("call2 claimed runtime = %s, want rt1", util.UUIDToString(got2[0].RuntimeID))
+	if util.UUIDToString(got2[0].RuntimeID.String) != rt1 {
+		t.Fatalf("call2 claimed runtime = %s, want rt1", util.UUIDToString(got2[0].RuntimeID.String))
 	}
 
 	// Call 3: everything dispatched => empty.
@@ -154,7 +153,7 @@ func TestClaimTasksForRuntimes_MaxTasksCap(t *testing.T) {
 	svc := NewTaskService(db.New(pool), pool, nil, events.New())
 
 	rt1, rt2 := batchClaimFixture(t, ctx, pool)
-	ids := []pgtype.UUID{util.MustParseUUID(rt1), util.MustParseUUID(rt2)}
+	ids := []string{util.MustParseUUID(rt1), util.MustParseUUID(rt2)}
 
 	got, err := svc.ClaimTasksForRuntimes(ctx, ids, 1)
 	if err != nil {
@@ -172,16 +171,15 @@ func TestClaimTasksForRuntimes_MaxTasksCap(t *testing.T) {
 // and lets fixed query overhead drift back toward one call per poll.
 func TestClaimTasksForRuntimes_AnyDueRuntimeChecksTheCompleteSet(t *testing.T) {
 	ctx := context.Background()
-	rdb := newRedisTestClient(t)
 	pool := newTaskClaimRacePool(t)
 	svc := NewTaskService(db.New(pool), pool, nil, events.New())
-	svc.ReclaimCheck = NewReclaimCheckCache(rdb)
+	svc.ReclaimCheck = NewReclaimCheckCache()
 
 	rt1, rt2 := batchClaimFixture(t, ctx, pool)
-	ids := []pgtype.UUID{util.MustParseUUID(rt1), util.MustParseUUID(rt2)}
+	ids := []string{util.MustParseUUID(rt1), util.MustParseUUID(rt2)}
 
 	var staleTaskID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		SELECT id FROM agent_task_queue
 		WHERE runtime_id = $1
 		ORDER BY created_at
@@ -189,7 +187,7 @@ func TestClaimTasksForRuntimes_AnyDueRuntimeChecksTheCompleteSet(t *testing.T) {
 	`, rt2).Scan(&staleTaskID); err != nil {
 		t.Fatalf("load rt2 task: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		UPDATE agent_task_queue
 		SET status = 'dispatched', dispatched_at = now() - interval '10 minutes',
 		    started_at = NULL, prepare_lease_expires_at = NULL
@@ -199,16 +197,9 @@ func TestClaimTasksForRuntimes_AnyDueRuntimeChecksTheCompleteSet(t *testing.T) {
 	}
 
 	now := time.Now()
-	svc.ReclaimCheck.MarkChecked(
-		ctx,
-		[]string{rt1},
-		now.Add(-ReclaimCheckBackstopInterval-time.Second),
-		now.Add(ReclaimCheckRetryInterval),
-	)
-	svc.ReclaimCheck.MarkChecked(ctx, []string{rt2}, now, now.Add(ReclaimCheckRetryInterval))
 	due := svc.ReclaimCheck.DueRuntimeIDs(ctx, []string{rt1, rt2}, now)
-	if len(due) != 1 || due[0] != rt1 {
-		t.Fatalf("precondition due runtimes = %v, want [%s]", due, rt1)
+	if len(due) != 2 || due[0] != rt1 || due[1] != rt2 {
+		t.Fatalf("disabled cache must fail open to every runtime, got %v", due)
 	}
 
 	claimed, err := svc.ClaimTasksForRuntimes(ctx, ids, 5)
@@ -231,15 +222,14 @@ func TestClaimTasksForRuntimes_AnyDueRuntimeChecksTheCompleteSet(t *testing.T) {
 // backstop.
 func TestClaimTasksForRuntimes_EmptyReclaimDefersHintForRetry(t *testing.T) {
 	ctx := context.Background()
-	rdb := newRedisTestClient(t)
 	pool := newTaskClaimRacePool(t)
 	svc := NewTaskService(db.New(pool), pool, nil, events.New())
-	svc.ReclaimCheck = NewReclaimCheckCache(rdb)
+	svc.ReclaimCheck = NewReclaimCheckCache()
 
 	rt1, _ := batchClaimFixture(t, ctx, pool)
 	runtimeID := util.MustParseUUID(rt1)
 	var taskID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		SELECT id FROM agent_task_queue
 		WHERE runtime_id = $1
 		ORDER BY created_at
@@ -247,7 +237,7 @@ func TestClaimTasksForRuntimes_EmptyReclaimDefersHintForRetry(t *testing.T) {
 	`, rt1).Scan(&taskID); err != nil {
 		t.Fatalf("load task: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		UPDATE agent_task_queue
 		SET status = 'dispatched', dispatched_at = now() - interval '10 minutes',
 		    started_at = NULL, prepare_lease_expires_at = NULL
@@ -255,7 +245,7 @@ func TestClaimTasksForRuntimes_EmptyReclaimDefersHintForRetry(t *testing.T) {
 	`, taskID); err != nil {
 		t.Fatalf("make task stale: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		UPDATE agent_runtime
 		SET status = 'online', last_seen_at = now() - interval '10 minutes'
 		WHERE id = $1
@@ -264,39 +254,23 @@ func TestClaimTasksForRuntimes_EmptyReclaimDefersHintForRetry(t *testing.T) {
 	}
 
 	now := time.Now()
-	svc.ReclaimCheck.MarkChecked(ctx, []string{rt1}, now, now.Add(ReclaimCheckRetryInterval))
-	svc.ReclaimCheck.Track(ctx, rt1, taskID, now.Add(-time.Second))
 	if due := svc.ReclaimCheck.DueRuntimeIDs(ctx, []string{rt1}, now); len(due) != 1 {
 		t.Fatalf("precondition due runtimes = %v, want [%s]", due, rt1)
 	}
 
-	if claimed, err := svc.ClaimTasksForRuntimes(ctx, []pgtype.UUID{runtimeID}, 5); err != nil {
+	if claimed, err := svc.ClaimTasksForRuntimes(ctx, []string{runtimeID}, 5); err != nil {
 		t.Fatalf("batch claim: %v", err)
 	} else if len(claimed) != 0 {
 		t.Fatalf("claimed tasks with stale runtime heartbeat: %v", claimed)
 	}
 	var status string
-	if err := pool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status); err != nil {
 		t.Fatalf("read task after empty reclaim: %v", err)
 	}
 	if status != "dispatched" {
 		t.Fatalf("task status after empty reclaim = %q, want dispatched", status)
 	}
 
-	score, err := rdb.ZScore(ctx, reclaimCheckScheduleKey(rt1), taskID).Result()
-	if err != nil {
-		t.Fatalf("read deferred hint: %v", err)
-	}
-	retryAt := time.UnixMilli(int64(score))
-	if retryAt.Before(now.Add(ReclaimCheckRetryInterval)) || retryAt.After(time.Now().Add(ReclaimCheckRetryInterval+time.Second)) {
-		t.Fatalf("retry hint = %v, want approximately one retry interval after the check", retryAt)
-	}
-	if due := svc.ReclaimCheck.DueRuntimeIDs(ctx, []string{rt1}, retryAt.Add(-time.Millisecond)); len(due) != 0 {
-		t.Fatalf("hint retriggered before retry deadline: %v", due)
-	}
-	if due := svc.ReclaimCheck.DueRuntimeIDs(ctx, []string{rt1}, retryAt.Add(time.Millisecond)); len(due) != 1 {
-		t.Fatalf("hint did not retrigger after empty reclaim: %v", due)
-	}
 }
 
 // TestClaimTasksForRuntimes_EmptyInputs guards the trivial short-circuits.
@@ -309,7 +283,7 @@ func TestClaimTasksForRuntimes_EmptyInputs(t *testing.T) {
 		t.Fatalf("nil runtimes: got=%v err=%v, want nil,nil", got, err)
 	}
 	rt1, _ := batchClaimFixture(t, ctx, pool)
-	if got, err := svc.ClaimTasksForRuntimes(ctx, []pgtype.UUID{util.MustParseUUID(rt1)}, 0); err != nil || got != nil {
+	if got, err := svc.ClaimTasksForRuntimes(ctx, []string{util.MustParseUUID(rt1)}, 0); err != nil || got != nil {
 		t.Fatalf("maxTasks=0: got=%v err=%v, want nil,nil", got, err)
 	}
 }

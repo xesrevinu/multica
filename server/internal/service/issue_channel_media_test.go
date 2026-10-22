@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,9 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -20,38 +19,38 @@ import (
 )
 
 type afterCommitTxStarter struct {
-	pool        *pgxpool.Pool
+	pool        *sql.DB
 	afterCommit func()
 }
 
-func (s *afterCommitTxStarter) Begin(ctx context.Context) (pgx.Tx, error) {
-	tx, err := s.pool.Begin(ctx)
+func (s *afterCommitTxStarter) BeginTx(ctx context.Context, _ *sql.TxOptions) (*sql.Tx, error) {
+	tx, err := s.pool.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	return &afterCommitTx{Tx: tx, afterCommit: s.afterCommit}, nil
+	return tx, nil
 }
 
 type afterCommitTx struct {
-	pgx.Tx
+	*sql.Tx
 	afterCommit func()
 }
 
 type rejectIssueCommitTxStarter struct {
-	pool *pgxpool.Pool
+	pool *sql.DB
 	err  error
 }
 
-func (s *rejectIssueCommitTxStarter) Begin(ctx context.Context) (pgx.Tx, error) {
-	tx, err := s.pool.Begin(ctx)
+func (s *rejectIssueCommitTxStarter) BeginTx(ctx context.Context, _ *sql.TxOptions) (*sql.Tx, error) {
+	tx, err := s.pool.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	return &rejectIssueCommitTx{Tx: tx, err: s.err}, nil
+	return tx, nil
 }
 
 type rejectIssueCommitTx struct {
-	pgx.Tx
+	*sql.Tx
 	err error
 }
 
@@ -66,12 +65,12 @@ func (a *recordingIssueAnalytics) Capture(event analytics.Event) {
 func (*recordingIssueAnalytics) Close() {}
 
 func (t *rejectIssueCommitTx) Commit(ctx context.Context) error {
-	_ = t.Tx.Rollback(ctx)
+	_ = t.Tx.Rollback()
 	return t.err
 }
 
 func (t *afterCommitTx) Commit(ctx context.Context) error {
-	if err := t.Tx.Commit(ctx); err != nil {
+	if err := t.Tx.Commit(); err != nil {
 		return err
 	}
 	if t.afterCommit != nil {
@@ -110,7 +109,7 @@ func TestPublishAttachmentsChangedAlsoBroadcastsUpdatedDescription(t *testing.T)
 	issueUUID := util.MustParseUUID(issueID)
 	actorID := util.MustParseUUID(userID)
 	const description = "![](/api/attachments/22222222-2222-4222-8222-222222222222/download)"
-	if _, err := pool.Exec(ctx, `UPDATE issue SET description = $1 WHERE id = $2`, description, issueUUID); err != nil {
+	if _, err := pool.ExecContext(ctx, `UPDATE issue SET description = $1 WHERE id = $2`, description, issueUUID); err != nil {
 		t.Fatalf("update issue description: %v", err)
 	}
 	issue, err := q.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{
@@ -179,15 +178,15 @@ func TestCreateMediaGatedIssueCommitsDeferredTaskAtomicallyBeforeCreatedEvent(t 
 		Bus:       bus,
 		Wakeup:    wakeup,
 	}
-	var competingTaskID pgtype.UUID
+	var competingTaskID string
 	var competingErr error
 	txStarter := &afterCommitTxStarter{pool: pool, afterCommit: func() {
 		// This callback runs after the issue transaction is visible but before
 		// IssueService resumes. The old implementation committed only the issue,
 		// so this ordinary queued insert won the unique slot. The fixed path has
 		// already committed the deferred task in the same transaction.
-		var issueID, runtimeID pgtype.UUID
-		if err := pool.QueryRow(ctx, `
+		var issueID, runtimeID string
+		if err := pool.QueryRowContext(ctx, `
 			SELECT i.id, a.runtime_id
 			FROM issue i
 			JOIN agent a ON a.id = i.assignee_id
@@ -196,7 +195,7 @@ func TestCreateMediaGatedIssueCommitsDeferredTaskAtomicallyBeforeCreatedEvent(t 
 			competingErr = fmt.Errorf("discover committed issue: %w", err)
 			return
 		}
-		competingErr = pool.QueryRow(ctx, `
+		competingErr = pool.QueryRowContext(ctx, `
 			INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority)
 			VALUES ($1, $2, $3, 'queued', 1)
 			RETURNING id`, agentUUID, runtimeID, issueID).Scan(&competingTaskID)
@@ -204,7 +203,7 @@ func TestCreateMediaGatedIssueCommitsDeferredTaskAtomicallyBeforeCreatedEvent(t 
 	issueService := NewIssueService(q, txStarter, bus, nil, taskService)
 
 	var callbackErr error
-	var mergedCommentID pgtype.UUID
+	var mergedCommentID string
 	bus.Subscribe(protocol.EventIssueCreated, func(event events.Event) {
 		payload, ok := event.Payload.(map[string]any)
 		if !ok {
@@ -221,7 +220,7 @@ func TestCreateMediaGatedIssueCommitsDeferredTaskAtomicallyBeforeCreatedEvent(t 
 		var status string
 		var mediaPending bool
 		var runtimeOverlay []byte
-		if err := pool.QueryRow(ctx, `
+		if err := pool.QueryRowContext(ctx, `
 			SELECT status, context->>'channel_issue_media_pending' = 'true', runtime_mcp_overlay
 			FROM agent_task_queue
 			WHERE issue_id = $1 AND agent_id = $2`, issueUUID, agentUUID).Scan(&status, &mediaPending, &runtimeOverlay); err != nil {
@@ -237,7 +236,7 @@ func TestCreateMediaGatedIssueCommitsDeferredTaskAtomicallyBeforeCreatedEvent(t 
 			return
 		}
 
-		if err := pool.QueryRow(ctx, `
+		if err := pool.QueryRowContext(ctx, `
 			INSERT INTO comment (issue_id, workspace_id, author_type, author_id, content)
 			VALUES ($1, $2, 'member', $3, 'Immediate follow-up')
 			RETURNING id`, issueUUID, workspaceUUID, userUUID).Scan(&mergedCommentID); err != nil {
@@ -245,15 +244,15 @@ func TestCreateMediaGatedIssueCommitsDeferredTaskAtomicallyBeforeCreatedEvent(t 
 			return
 		}
 		if _, err := q.MergeCommentIntoPendingTask(ctx, db.MergeCommentIntoPendingTaskParams{
-			IssueID:                 issueUUID,
+			IssueID:                 nullString(issueUUID),
 			AgentID:                 agentUUID,
-			NewTriggerCommentID:     mergedCommentID,
-			NewOriginatorUserID:     userUUID,
-			NewAccountableUserID:    userUUID,
-			NewOriginatorSource:     pgtype.Text{String: "direct_human", Valid: true},
-			NewTriggerEvidenceKind:  pgtype.Text{String: "comment", Valid: true},
-			NewTriggerEvidenceRefID: mergedCommentID,
-		}); !errors.Is(err, pgx.ErrNoRows) {
+			NewTriggerCommentID:     nullString(mergedCommentID),
+			NewOriginatorUserID:     nullString(userUUID),
+			NewAccountableUserID:    nullString(userUUID),
+			NewOriginatorSource:     sql.NullString{String: "direct_human", Valid: true},
+			NewTriggerEvidenceKind:  sql.NullString{String: "comment", Valid: true},
+			NewTriggerEvidenceRefID: nullString(mergedCommentID),
+		}); !errors.Is(err, sql.ErrNoRows) {
 			callbackErr = fmt.Errorf("new comment thread must not merge into the assignment: %v", err)
 		}
 	})
@@ -263,7 +262,7 @@ func TestCreateMediaGatedIssueCommitsDeferredTaskAtomicallyBeforeCreatedEvent(t 
 		Title:        "Media-gated issue",
 		Status:       "todo",
 		Priority:     "medium",
-		AssigneeType: pgtype.Text{String: "agent", Valid: true},
+		AssigneeType: sql.NullString{String: "agent", Valid: true},
 		AssigneeID:   agentUUID,
 		CreatorType:  "member",
 		CreatorID:    userUUID,
@@ -274,7 +273,7 @@ func TestCreateMediaGatedIssueCommitsDeferredTaskAtomicallyBeforeCreatedEvent(t 
 	if callbackErr != nil {
 		t.Fatal(callbackErr)
 	}
-	if !result.AssignedTaskID.Valid {
+	if result.AssignedTaskID == "" {
 		t.Fatal("media-gated issue did not return its deferred task")
 	}
 	if len(wakeup.calls) != 1 || wakeup.calls[0].taskID != "" {
@@ -283,13 +282,13 @@ func TestCreateMediaGatedIssueCommitsDeferredTaskAtomicallyBeforeCreatedEvent(t 
 	if !isDuplicatePendingTaskErr(competingErr) {
 		t.Fatalf("post-commit competing queued insert error = %v, want duplicate pending task", competingErr)
 	}
-	if competingTaskID.Valid {
+	if competingTaskID != "" {
 		t.Fatalf("post-commit competing task unexpectedly won: %s", util.UUIDToString(competingTaskID))
 	}
 
-	var taskID, triggerCommentID, runtimeID pgtype.UUID
+	var taskID, triggerCommentID, runtimeID string
 	var taskCount int
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		SELECT id, trigger_comment_id, runtime_id, count(*) OVER ()
 		FROM agent_task_queue
 		WHERE issue_id = $1 AND agent_id = $2
@@ -299,7 +298,7 @@ func TestCreateMediaGatedIssueCommitsDeferredTaskAtomicallyBeforeCreatedEvent(t 
 		Scan(&taskID, &triggerCommentID, &runtimeID, &taskCount); err != nil {
 		t.Fatalf("load final pending task: %v", err)
 	}
-	if taskCount != 1 || taskID != result.AssignedTaskID || triggerCommentID.Valid {
+	if taskCount != 1 || taskID != result.AssignedTaskID || (triggerCommentID != "") {
 		t.Fatalf("pending task = count %d id %v trigger %v, want one assignment task %v without a comment trigger", taskCount, taskID, triggerCommentID, result.AssignedTaskID)
 	}
 	if wakeup.calls[0].runtimeID != util.UUIDToString(runtimeID) {
@@ -315,11 +314,13 @@ func TestCreateIssuePropertiesCommitFailureHasNoSideEffects(t *testing.T) {
 	workspaceUUID := util.MustParseUUID(workspaceID)
 	userUUID := util.MustParseUUID(userID)
 	agentUUID := util.MustParseUUID(agentID)
-	propertyID := pgtype.UUID{Bytes: [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}, Valid: true}
-	if _, err := pool.Exec(ctx, `INSERT INTO issue_property (id, workspace_id, name, type, config) VALUES ($1, $2, 'Commit property', 'text', '{}')`, propertyID, workspaceUUID); err != nil {
+	propertyID := uuid.UUID([16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}).String()
+	if _, err := pool.ExecContext(ctx, `INSERT INTO issue_property (id, workspace_id, name, type, config) VALUES ($1, $2, 'Commit property', 'text', '{}')`, propertyID, workspaceUUID); err != nil {
 		t.Fatalf("insert property: %v", err)
 	}
-	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM issue_property WHERE id = $1`, propertyID) })
+	t.Cleanup(func() {
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM issue_property WHERE id = $1`, propertyID)
+	})
 
 	bus := events.New()
 	createdEvents := 0
@@ -329,7 +330,7 @@ func TestCreateIssuePropertiesCommitFailureHasNoSideEffects(t *testing.T) {
 	injected := errors.New("injected issue commit failure")
 	issueService := NewIssueService(q, &rejectIssueCommitTxStarter{pool: pool, err: injected}, bus, analyticsSink, taskService)
 	var taskCountBefore int
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM agent_task_queue WHERE agent_id = $1`, agentUUID).Scan(&taskCountBefore); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT COUNT(*) FROM agent_task_queue WHERE agent_id = $1`, agentUUID).Scan(&taskCountBefore); err != nil {
 		t.Fatalf("count tasks before create: %v", err)
 	}
 	if taskCountBefore != 0 {
@@ -341,11 +342,11 @@ func TestCreateIssuePropertiesCommitFailureHasNoSideEffects(t *testing.T) {
 		Title:        "properties commit failure",
 		Status:       "todo",
 		Priority:     "none",
-		AssigneeType: pgtype.Text{String: "agent", Valid: true},
+		AssigneeType: sql.NullString{String: "agent", Valid: true},
 		AssigneeID:   agentUUID,
 		CreatorType:  "member",
 		CreatorID:    userUUID,
-		Properties: map[pgtype.UUID]json.RawMessage{
+		Properties: map[string]json.RawMessage{
 			propertyID: json.RawMessage(`"kept only if committed"`),
 		},
 	}, IssueCreateOpts{})
@@ -359,10 +360,10 @@ func TestCreateIssuePropertiesCommitFailureHasNoSideEffects(t *testing.T) {
 		t.Fatalf("captured %d analytics events after failed commit", len(analyticsSink.events))
 	}
 	var issueCount, taskCountAfter int
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM issue WHERE workspace_id = $1 AND title = 'properties commit failure'`, workspaceUUID).Scan(&issueCount); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT COUNT(*) FROM issue WHERE workspace_id = $1 AND title = 'properties commit failure'`, workspaceUUID).Scan(&issueCount); err != nil {
 		t.Fatalf("count issues: %v", err)
 	}
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM agent_task_queue WHERE agent_id = $1`, agentUUID).Scan(&taskCountAfter); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT COUNT(*) FROM agent_task_queue WHERE agent_id = $1`, agentUUID).Scan(&taskCountAfter); err != nil {
 		t.Fatalf("count tasks: %v", err)
 	}
 	if issueCount != 0 || taskCountAfter != 0 {
@@ -378,16 +379,18 @@ func TestCreateIssuePropertiesAreVisibleAtCommitBeforeEnqueue(t *testing.T) {
 	workspaceUUID := util.MustParseUUID(workspaceID)
 	userUUID := util.MustParseUUID(userID)
 	agentUUID := util.MustParseUUID(agentID)
-	propertyID := pgtype.UUID{Bytes: [16]byte{16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1}, Valid: true}
-	if _, err := pool.Exec(ctx, `INSERT INTO issue_property (id, workspace_id, name, type, config) VALUES ($1, $2, 'Enqueue property', 'text', '{}')`, propertyID, workspaceUUID); err != nil {
+	propertyID := uuid.UUID([16]byte{16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1}).String()
+	if _, err := pool.ExecContext(ctx, `INSERT INTO issue_property (id, workspace_id, name, type, config) VALUES ($1, $2, 'Enqueue property', 'text', '{}')`, propertyID, workspaceUUID); err != nil {
 		t.Fatalf("insert property: %v", err)
 	}
-	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM issue_property WHERE id = $1`, propertyID) })
+	t.Cleanup(func() {
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM issue_property WHERE id = $1`, propertyID)
+	})
 
 	var atCommit map[string]any
 	txStarter := &afterCommitTxStarter{pool: pool, afterCommit: func() {
 		var raw []byte
-		if err := pool.QueryRow(ctx, `SELECT properties FROM issue WHERE workspace_id = $1 AND title = 'properties before enqueue'`, workspaceUUID).Scan(&raw); err != nil {
+		if err := pool.QueryRowContext(ctx, `SELECT properties FROM issue WHERE workspace_id = $1 AND title = 'properties before enqueue'`, workspaceUUID).Scan(&raw); err != nil {
 			atCommit = map[string]any{"error": err.Error()}
 			return
 		}
@@ -410,17 +413,17 @@ func TestCreateIssuePropertiesAreVisibleAtCommitBeforeEnqueue(t *testing.T) {
 		Title:        "properties before enqueue",
 		Status:       "todo",
 		Priority:     "none",
-		AssigneeType: pgtype.Text{String: "agent", Valid: true},
+		AssigneeType: sql.NullString{String: "agent", Valid: true},
 		AssigneeID:   agentUUID,
 		CreatorType:  "member",
 		CreatorID:    userUUID,
-		Properties: map[pgtype.UUID]json.RawMessage{
+		Properties: map[string]json.RawMessage{
 			propertyID: json.RawMessage(`"ready"`),
 		},
 	}, IssueCreateOpts{
 		BroadcastPayload: func(issue db.Issue, _ []db.Attachment, _ []db.IssueLabel) map[string]any {
 			var properties map[string]any
-			if err := json.Unmarshal(issue.Properties, &properties); err != nil {
+			if err := json.Unmarshal([]byte(issue.Properties), &properties); err != nil {
 				return map[string]any{"error": err.Error()}
 			}
 			return map[string]any{"issue": map[string]any{"properties": properties}}
@@ -432,7 +435,7 @@ func TestCreateIssuePropertiesAreVisibleAtCommitBeforeEnqueue(t *testing.T) {
 	if atCommit[util.UUIDToString(propertyID)] != "ready" {
 		t.Fatalf("properties visible immediately after commit = %#v", atCommit)
 	}
-	if !result.AssignedTaskID.Valid {
+	if result.AssignedTaskID == "" {
 		t.Fatal("assigned task was not enqueued after property-bearing commit")
 	}
 	if len(createdEvents) != 1 || propertyChangedEvents != 0 {
@@ -463,8 +466,8 @@ func TestHydrateDeferredChannelIssueTaskOverlayDoesNotOverwriteMergedCommentPlan
 	task, err := plainService.EnqueueDeferredChannelIssueTask(ctx, db.Issue{
 		ID:           util.MustParseUUID(issueID),
 		WorkspaceID:  util.MustParseUUID(workspaceID),
-		AssigneeType: pgtype.Text{String: "agent", Valid: true},
-		AssigneeID:   util.MustParseUUID(agentID),
+		AssigneeType: sql.NullString{String: "agent", Valid: true},
+		AssigneeID:   nullString(util.MustParseUUID(agentID)),
 		CreatorType:  "member",
 		CreatorID:    userUUID,
 		Priority:     "medium",
@@ -473,27 +476,27 @@ func TestHydrateDeferredChannelIssueTaskOverlayDoesNotOverwriteMergedCommentPlan
 		t.Fatalf("EnqueueDeferredChannelIssueTask: %v", err)
 	}
 
-	var commentID pgtype.UUID
-	if err := pool.QueryRow(ctx, `
+	var commentID string
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO comment (issue_id, workspace_id, author_type, author_id, content)
 		VALUES ($1, $2, 'member', $3, 'New effective trigger')
 		RETURNING id`, task.IssueID, workspaceID, userID).Scan(&commentID); err != nil {
 		t.Fatalf("seed merged comment: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `UPDATE agent_task_queue SET trigger_comment_id=$2 WHERE id=$1`, task.ID, commentID); err != nil {
+	if _, err := pool.ExecContext(ctx, `UPDATE agent_task_queue SET trigger_comment_id=$2 WHERE id=$1`, task.ID, commentID); err != nil {
 		t.Fatal(err)
 	}
 	mergedOverlay := json.RawMessage(`{"mcpServers":{"merged":{"url":"https://merged.example"}}}`)
 	if _, err := q.MergeCommentIntoPendingTask(ctx, db.MergeCommentIntoPendingTaskParams{
 		IssueID:                 task.IssueID,
 		AgentID:                 task.AgentID,
-		NewTriggerCommentID:     commentID,
-		NewOriginatorUserID:     userUUID,
-		NewAccountableUserID:    userUUID,
-		NewRuntimeMcpOverlay:    mergedOverlay,
-		NewOriginatorSource:     pgtype.Text{String: "direct_human", Valid: true},
-		NewTriggerEvidenceKind:  pgtype.Text{String: "comment", Valid: true},
-		NewTriggerEvidenceRefID: commentID,
+		NewTriggerCommentID:     nullString(commentID),
+		NewOriginatorUserID:     nullString(userUUID),
+		NewAccountableUserID:    nullString(userUUID),
+		NewRuntimeMcpOverlay:    nullString(string(mergedOverlay)),
+		NewOriginatorSource:     sql.NullString{String: "direct_human", Valid: true},
+		NewTriggerEvidenceKind:  sql.NullString{String: "comment", Valid: true},
+		NewTriggerEvidenceRefID: nullString(commentID),
 	}); err != nil {
 		t.Fatalf("MergeCommentIntoPendingTask: %v", err)
 	}
@@ -505,9 +508,9 @@ func TestHydrateDeferredChannelIssueTaskOverlayDoesNotOverwriteMergedCommentPlan
 		t.Fatalf("hydrateDeferredChannelIssueTaskOverlay: %v", err)
 	}
 
-	var triggerID pgtype.UUID
+	var triggerID string
 	var storedOverlay []byte
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		SELECT trigger_comment_id, runtime_mcp_overlay
 		FROM agent_task_queue WHERE id = $1`, task.ID).Scan(&triggerID, &storedOverlay); err != nil {
 		t.Fatalf("load hydrated task: %v", err)
@@ -545,14 +548,14 @@ func TestPublishAttachmentsChangedKeepsDuplicateMark(t *testing.T) {
 		t.Fatalf("load issue: %v", err)
 	}
 	var originalID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO issue (workspace_id, number, title, creator_type, creator_id, priority, status)
 		VALUES ($1, (SELECT COALESCE(MAX(number), 0) + 1 FROM issue WHERE workspace_id = $1),
 			'attr original', 'member', $2, 'none', 'in_progress')
 		RETURNING id`, workspaceID, userID).Scan(&originalID); err != nil {
 		t.Fatalf("seed original: %v", err)
 	}
-	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, originalID) })
+	t.Cleanup(func() { pool.ExecContext(context.Background(), `DELETE FROM issue WHERE id = $1`, originalID) })
 	original, err := q.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{
 		ID: util.MustParseUUID(originalID), WorkspaceID: workspaceUUID,
 	})
@@ -574,7 +577,7 @@ func TestPublishAttachmentsChangedKeepsDuplicateMark(t *testing.T) {
 		{"pointer left on a reopened issue", "todo", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := pool.Exec(ctx, `UPDATE issue SET status = $1, duplicate_of_issue_id = $2 WHERE id = $3`,
+			if _, err := pool.ExecContext(ctx, `UPDATE issue SET status = $1, duplicate_of_issue_id = $2 WHERE id = $3`,
 				tc.status, originalID, issueID); err != nil {
 				t.Fatalf("mark: %v", err)
 			}
@@ -603,7 +606,7 @@ func TestPublishAttachmentsChangedKeepsDuplicateMark(t *testing.T) {
 			}
 			want := map[string]any{
 				"id":         originalID,
-				"identifier": IssueIdentifier(workspace.IssuePrefix, original.Number),
+				"identifier": IssueIdentifier(workspace.IssuePrefix, int32(original.Number)),
 				"title":      "attr original",
 				"status":     "in_progress",
 			}

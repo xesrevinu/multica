@@ -70,7 +70,7 @@ func TestIssueWakeupCollaborationCapture(t *testing.T) {
 			t.Errorf("advertised event %s has no captured fact", event)
 		}
 	}
-	rows, err := f.Pool.Query(context.Background(), "SELECT payload FROM issue_wakeup_receipt WHERE wakeup_id=$1", w.ID)
+	rows, err := f.Pool.QueryContext(context.Background(), "SELECT payload FROM issue_wakeup_receipt WHERE wakeup_id=$1", w.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,27 +152,27 @@ func TestIssueWakeupCollaborationTransactionAndActor(t *testing.T) {
 	ctx := context.Background()
 	write := func(commit, own bool) {
 		t.Helper()
-		tx, err := f.Pool.Begin(ctx)
+		tx, err := f.Pool.BeginTx(ctx, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer tx.Rollback(ctx)
-		if _, err = tx.Exec(ctx, "SELECT set_config('multica.source_task_id',$1,true),set_config('multica.actor_type','agent',true),set_config('multica.actor_id',$2,true)", run, agent); err != nil {
+		defer tx.Rollback()
+		if _, err = tx.ExecContext(ctx, "SELECT set_config('multica.source_task_id',$1,true),set_config('multica.actor_type','agent',true),set_config('multica.actor_id',$2,true)", run, agent); err != nil {
 			t.Fatal(err)
 		}
 		if own {
-			if _, err = tx.Exec(ctx, "UPDATE agent_task_queue SET context=jsonb_build_object('wakeup_id',$2::text) WHERE id=$1", run, util.UUIDToString(w.ID)); err != nil {
+			if _, err = tx.ExecContext(ctx, "UPDATE agent_task_queue SET context=jsonb_build_object('wakeup_id',$2::text) WHERE id=$1", run, util.UUIDToString(w.ID)); err != nil {
 				t.Fatal(err)
 			}
 		}
-		if _, err = tx.Exec(ctx, "UPDATE comment SET content=content||'!' WHERE id=$1", comment); err != nil {
+		if _, err = tx.ExecContext(ctx, "UPDATE comment SET content=content||'!' WHERE id=$1", comment); err != nil {
 			t.Fatal(err)
 		}
-		if _, err = tx.Exec(ctx, "UPDATE issue SET metadata=jsonb_build_object('changed',gen_random_uuid()) WHERE id=$1", issue); err != nil {
+		if _, err = tx.ExecContext(ctx, "UPDATE issue SET metadata=jsonb_build_object('changed',gen_random_uuid()) WHERE id=$1", issue); err != nil {
 			t.Fatal(err)
 		}
 		if commit {
-			if err := tx.Commit(ctx); err != nil {
+			if err := tx.Commit(); err != nil {
 				t.Fatal(err)
 			}
 		}

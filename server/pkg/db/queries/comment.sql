@@ -1,5 +1,5 @@
 -- name: ListCommentsForIssue :many
--- The NEWEST $3 comments for an issue, returned in chronological order.
+-- The NEWEST arg3 comments for an issue, returned in chronological order.
 --
 -- Same shape and same reason as ListActivitiesForIssue: the inner query takes
 -- the window with the keyset ordering so the cap discards the OLDEST rows, and
@@ -10,17 +10,17 @@
 -- A newest-N window is a suffix of the timeline, and unlike a prefix it is NOT
 -- closed under "parent of": a reply is always newer than its parent, so an old
 -- thread root can fall outside the window while a fresh reply to it stays
--- inside. Callers that render threads must close the parent chains afterwards —
+-- inside. Callers that render threads must close the parent chains afterwards -
 -- see completeCommentThreads (MUL-5492).
 --
--- The cap is still purely defensive here — issue p99 is ~30 comments and the max
--- ever observed in prod is ~1.1k — but "defensive" is not a reason to drop the
+-- The cap is still purely defensive here - issue p99 is ~30 comments and the max
+-- ever observed in prod is ~1.1k - but "defensive" is not a reason to drop the
 -- newest rows when it does fire (MUL-5492).
 SELECT * FROM (
     SELECT * FROM comment
-    WHERE issue_id = $1 AND workspace_id = $2
+    WHERE issue_id = ?1 AND workspace_id = ?2
     ORDER BY created_at DESC, id DESC
-    LIMIT $3
+    LIMIT ?3
 ) AS recent
 ORDER BY created_at ASC, id ASC;
 
@@ -29,13 +29,13 @@ ORDER BY created_at ASC, id ASC;
 --
 -- Used to walk parent chains one level at a time (see completeCommentThreads).
 -- Deliberately NOT a recursive CTE: an earlier revision walked parent_id upward
--- in SQL, which had no depth bound — a deep chain could pull tens of thousands of
--- ancestors back and defeat the whole point of the row cap — and its recursive
+-- in SQL, which had no depth bound - a deep chain could pull tens of thousands of
+-- ancestors back and defeat the whole point of the row cap - and its recursive
 -- branch matched on parent_id alone, so a stray cross-workspace parent reference
 -- would have dragged another tenant's comments into the response. Both tenant
 -- columns are required here on every level, and the caller owns the budget.
 SELECT * FROM comment
-WHERE id = ANY(@ids::uuid[])
+WHERE id IN (SELECT value FROM json_each(@ids))
   AND issue_id = @issue_id
   AND workspace_id = @workspace_id
 ORDER BY created_at ASC, id ASC;
@@ -51,20 +51,20 @@ ORDER BY created_at ASC, id ASC;
 -- the original window, so replies created concurrently are left to realtime
 -- delivery instead of making the multi-query snapshot internally inconsistent.
 SELECT * FROM comment
-WHERE parent_id = ANY(@parent_ids::uuid[])
+WHERE parent_id IN (SELECT value FROM json_each(@parent_ids))
   AND issue_id = @issue_id
   AND workspace_id = @workspace_id
-  AND (created_at, id) <= (@through_at::timestamptz, @through_id::uuid)
+  AND (created_at, id) <= (@through_at, @through_id)
 ORDER BY parent_id ASC, created_at ASC, id ASC
 LIMIT @row_limit;
 
 -- name: ListCommentsSinceForIssue :many
--- Comments created strictly after $3 in chronological order, capped at $4.
+-- Comments created strictly after arg3 in chronological order, capped at arg4.
 -- Powers the CLI's `--since` agent-polling flow.
 SELECT * FROM comment
-WHERE issue_id = $1 AND workspace_id = $2 AND created_at > $3
+WHERE issue_id = ?1 AND workspace_id = ?2 AND created_at > ?3
 ORDER BY created_at ASC, id ASC
-LIMIT $4;
+LIMIT ?4;
 
 -- name: ListRootCommentsForIssue :many
 -- Top-level comments only, in issue chronological order, each annotated with
@@ -100,8 +100,8 @@ membership(id, root_id, comment_created_at) AS (
 ),
 thread_stats AS (
     SELECT root_id,
-           (COUNT(*) - 1)::int AS reply_count,
-           MAX(comment_created_at)::timestamptz AS last_activity_at
+           (COUNT(*) - 1) AS reply_count,
+           MAX(comment_created_at) AS last_activity_at
     FROM membership
     GROUP BY root_id
 )
@@ -146,8 +146,8 @@ membership(id, root_id, comment_created_at) AS (
 ),
 thread_stats AS (
     SELECT root_id,
-           (COUNT(*) - 1)::int AS reply_count,
-           MAX(comment_created_at)::timestamptz AS last_activity_at
+           (COUNT(*) - 1) AS reply_count,
+           MAX(comment_created_at) AS last_activity_at
     FROM membership
     GROUP BY root_id
 )
@@ -166,7 +166,7 @@ ORDER BY c.created_at ASC, c.id ASC;
 -- Resolves @anchor_id to its thread root, recursively expands every descendant,
 -- and returns the root + only the @reply_limit most recent replies (per the
 -- (created_at, id) composite key). When @has_cursor=TRUE only replies with
--- (created_at, id) < (@before_at, @before_id) are eligible — that is the
+-- (created_at, id) < (@before_at, @before_id) are eligible - that is the
 -- cursor for scrolling *within* a thread.
 --
 -- Root is unconditional: it is included regardless of @reply_limit (even 0)
@@ -176,7 +176,7 @@ ORDER BY c.created_at ASC, c.id ASC;
 --
 -- Reply selection happens DESC (newest replies first) so the cursor walks
 -- toward older replies; the outer SELECT then re-sorts the combined output
--- ASC so the body stays chronological (oldest → newest), matching every
+-- ASC so the body stays chronological (oldest -> newest), matching every
 -- other comment list path.
 WITH RECURSIVE root_of AS (
     SELECT c.id, c.parent_id
@@ -215,8 +215,15 @@ reply_page AS (
     FROM descendants d
     WHERE d.id NOT IN (SELECT id FROM thread_root)
       AND (
-          @has_cursor::boolean = FALSE
-          OR (d.created_at, d.id) < (@before_at::timestamptz, @before_id::uuid)
+          @has_cursor = FALSE
+          OR EXISTS (
+              SELECT 1 FROM comment AS cursor_row
+              WHERE cursor_row.id = d.id
+                AND (
+                    cursor_row.created_at < @before_at
+                    OR (cursor_row.created_at = @before_at AND cursor_row.id < @before_id)
+                )
+          )
       )
     ORDER BY d.created_at DESC, d.id DESC
     LIMIT @reply_limit
@@ -248,7 +255,7 @@ ORDER BY created_at ASC, id ASC;
 -- root_id DESC) and the top N are expanded.
 --
 -- Why thread-grouped instead of row-recent: with row-recent the newest 20
--- comments can come from 8 different threads — the agent sees 8 unrelated
+-- comments can come from 8 different threads - the agent sees 8 unrelated
 -- tails. With thread-grouped the agent sees N complete conversational arcs,
 -- which matches how a human reads an issue (#2340).
 --
@@ -260,7 +267,7 @@ ORDER BY created_at ASC, id ASC;
 --
 -- Cursor scrolls back through threads. When @has_cursor=TRUE only threads
 -- with (last_activity_at, root_id) < (@before_at, @before_id) are eligible.
--- The cursor is a THREAD cursor — both values identify a thread (its last
+-- The cursor is a THREAD cursor - both values identify a thread (its last
 -- activity timestamp and its root comment id), not a single row.
 --
 -- The recursive `membership` CTE labels each comment with its thread root by
@@ -284,17 +291,37 @@ WITH RECURSIVE membership(id, root_id, comment_created_at) AS (
       AND c.workspace_id = @workspace_id
 ),
 thread_stats AS (
-    SELECT root_id, MAX(comment_created_at)::timestamptz AS last_activity_at
+    SELECT root_id, MAX(comment_created_at) AS last_activity_at
     FROM membership
     GROUP BY root_id
 ),
 picked AS (
     SELECT ts.root_id, ts.last_activity_at
     FROM thread_stats ts
-    WHERE (
-        @has_cursor::boolean = FALSE
-        OR (ts.last_activity_at, ts.root_id) < (@before_at::timestamptz, @before_id::uuid)
-    )
+    WHERE @has_cursor = FALSE
+       OR EXISTS (
+            SELECT 1 FROM comment AS cursor_root
+            WHERE cursor_root.id = ts.root_id
+              AND NOT EXISTS (
+                  SELECT 1 FROM comment AS late
+                  WHERE late.id IN (
+                      SELECT membership.id FROM membership
+                      WHERE membership.root_id = cursor_root.id
+                  )
+                    AND late.created_at > @before_at
+              )
+              AND (
+                  NOT EXISTS (
+                      SELECT 1 FROM comment AS eq
+                      WHERE eq.id IN (
+                          SELECT membership.id FROM membership
+                          WHERE membership.root_id = cursor_root.id
+                      )
+                        AND eq.created_at = @before_at
+                  )
+                  OR cursor_root.id < @before_id
+              )
+       )
     ORDER BY ts.last_activity_at DESC, ts.root_id DESC
     LIMIT @thread_limit
 )
@@ -311,12 +338,12 @@ ORDER BY p.last_activity_at ASC, p.root_id ASC, c.created_at ASC, c.id ASC;
 
 -- name: CountComments :one
 SELECT count(*) FROM comment
-WHERE issue_id = $1 AND workspace_id = $2;
+WHERE issue_id = ?1 AND workspace_id = ?2;
 
 -- name: CountNewCommentsSince :one
 -- Counts comments on an issue created strictly after @since, ACROSS THE WHOLE
 -- ISSUE (every thread, not just the triggering one). Excludes the triggering
--- comment itself (@anchor_id — its body is already injected into the prompt)
+-- comment itself (@anchor_id - its body is already injected into the prompt)
 -- and any authored by the given agent (@author_id), so a chatty agent does not
 -- inflate its own new-comment count. The agent is steered to read the
 -- triggering thread first (see BuildNewCommentsHint), but the count is
@@ -334,8 +361,8 @@ WHERE issue_id = @issue_id
 -- MUL-4195 completion reconciliation: the newest MEMBER-authored comment on an
 -- issue created strictly after @since (a run's started_at). Used when a task
 -- completes to detect deliberate user input that landed while the agent was
--- busy — or that was merged into the running task after its context was
--- already built — so a single follow-up run can be scheduled for it. Restricted
+-- busy - or that was merged into the running task after its context was
+-- already built - so a single follow-up run can be scheduled for it. Restricted
 -- to author_type = 'member' on purpose: only human input earns the guaranteed
 -- follow-up, which preserves the existing anti-loop guarantees (agent replies,
 -- acknowledgements, and self-triggers never qualify). Returns pgx.ErrNoRows
@@ -363,7 +390,7 @@ LIMIT 1;
 -- replays the remainder through the normal trigger pipeline oldest first.
 --
 -- Author-type scope (MUL-4304): originally restricted to author_type = 'member'.
--- That left a gap — an explicit agent→agent @mention (agent A comments
+-- That left a gap - an explicit agent->agent @mention (agent A comments
 -- `@agent B`) that landed while B already had a DISPATCHED task was dropped by
 -- the create-time enqueue path (merge only folds into a QUEUED task, so a
 -- dispatched target hits the merge-miss + active-task continue) and then never
@@ -377,8 +404,8 @@ LIMIT 1;
 -- Ordered ASC so later comments coalesce onto the follow-up created by the first.
 SELECT c.* FROM comment c
 WHERE c.issue_id = @issue_id
-  AND (c.id = ANY(@planned_comment_ids::uuid[])
-       OR comment_thread_root_id(c.id) = sqlc.narg('comment_thread_id')::uuid)
+  AND (c.id IN (SELECT value FROM json_each(@planned_comment_ids))
+       OR comment_thread_root_id(c.id) = sqlc.narg('comment_thread_id'))
   -- A deleted comment is no longer input, even when replies keep its row.
   AND c.deleted_at IS NULL
   -- A comment that steered this agent's running turn belongs to that turn,
@@ -392,28 +419,28 @@ WHERE c.issue_id = @issue_id
         AND bound.agent_id = @agent_id
   )
   -- Nor does a comment whose author chose not to start this agent for it.
-  AND NOT COALESCE(@agent_id::uuid = ANY(c.suppressed_agent_ids), false)
+  AND NOT COALESCE(@agent_id IN (SELECT value FROM json_each(c.suppressed_agent_ids)), false)
   AND (
       (
           c.author_type IN ('member', 'agent')
-          AND (c.created_at > @since OR c.id = ANY(@planned_comment_ids::uuid[]))
+          AND (c.created_at > @since OR c.id IN (SELECT value FROM json_each(@planned_comment_ids)))
       )
       OR (
           c.author_type = 'system'
           AND c.type = 'progress_update'
           AND c.source_task_id IS NOT NULL
-          AND c.id = ANY(@planned_comment_ids::uuid[])
+          AND c.id IN (SELECT value FROM json_each(@planned_comment_ids))
       )
   )
 ORDER BY c.created_at ASC, c.id ASC;
 
 -- name: GetComment :one
 SELECT * FROM comment
-WHERE id = $1;
+WHERE id = ?1;
 
 -- name: GetCommentInWorkspace :one
 SELECT * FROM comment
-WHERE id = $1 AND workspace_id = $2;
+WHERE id = ?1 AND workspace_id = ?2;
 
 -- name: GetThreadRoot :one
 -- Returns the thread-root comment for @comment_id by walking parent_id up to
@@ -438,10 +465,10 @@ WHERE c.id = (SELECT id FROM root_of WHERE parent_id IS NULL LIMIT 1);
 -- the parent issue's updated_at and last_activity_at. The touch is a leading data-modifying CTE and
 -- the INSERT selects the issue/workspace back out of it, which makes the two
 -- inseparable and gives two query-level guarantees:
---   * atomicity — the insert and the timestamp bump commit or roll back
+--   * atomicity - the insert and the timestamp bump commit or roll back
 --     together, so an issue is never left with a stale updated_at after a
 --     comment persists; and
---   * tenant integrity — the comment can only be created against an issue that
+--   * tenant integrity - the comment can only be created against an issue that
 --     actually exists in the given workspace. A mismatched (issue, workspace)
 --     pair matches 0 rows in the CTE, the dependent INSERT then selects nothing,
 --     and the :one query returns pgx.ErrNoRows. A wrong workspace can therefore
@@ -449,22 +476,35 @@ WHERE c.id = (SELECT id FROM root_of WHERE parent_id IS NULL LIMIT 1);
 -- Centralizing this here means every comment entrypoint inherits both
 -- guarantees regardless of what a caller passes. The "Updated date" sort and
 -- the daemon GC TTL both read updated_at, so this consistency is load-bearing.
-WITH touched_issue AS (
-    UPDATE issue SET
-        updated_at = now(),
-        revision = revision + 1,
-        last_activity_at = GREATEST(COALESCE(last_activity_at, updated_at), now())
-    WHERE issue.id = sqlc.arg(issue_id) AND issue.workspace_id = sqlc.arg(workspace_id)
-    RETURNING issue.id, issue.workspace_id, issue.revision
-), inserted_comment AS (
-    INSERT INTO comment (issue_id, workspace_id, author_type, author_id, content, type, parent_id, source_task_id, quick_action_id, via_plugin_id, suppressed_agent_ids, id)
-    SELECT ti.id, ti.workspace_id, sqlc.arg(author_type), sqlc.arg(author_id), sqlc.arg(content), sqlc.arg(type), sqlc.narg(parent_id), sqlc.narg(source_task_id), sqlc.narg(quick_action_id), sqlc.narg(via_plugin_id), sqlc.narg(suppressed_agent_ids)::uuid[], COALESCE(sqlc.narg('id')::uuid, gen_random_uuid())
-    FROM touched_issue ti
-    RETURNING *
+-- Call in order: CreateComment_Step2, CreateComment.
+INSERT INTO comment (
+    issue_id, workspace_id, author_type, author_id, content, type, parent_id,
+    source_task_id, quick_action_id, via_plugin_id, suppressed_agent_ids, id
 )
-SELECT inserted_comment.*, touched_issue.revision AS issue_revision
-FROM inserted_comment
-JOIN touched_issue ON touched_issue.id = inserted_comment.issue_id;
+SELECT issue.id AS issue_id,
+       issue.workspace_id AS workspace_id,
+       sqlc.arg(author_type) AS author_type,
+       sqlc.arg(author_id) AS author_id,
+       sqlc.arg(content) AS content,
+       sqlc.arg(type) AS type,
+       sqlc.narg(parent_id) AS parent_id,
+       sqlc.narg(source_task_id) AS source_task_id,
+       sqlc.narg(quick_action_id) AS quick_action_id,
+       sqlc.narg(via_plugin_id) AS via_plugin_id,
+       sqlc.narg(suppressed_agent_ids) AS suppressed_agent_ids,
+       COALESCE(sqlc.narg('id'), gen_random_uuid()) AS id
+FROM issue
+WHERE issue.id = sqlc.arg(issue_id) AND issue.workspace_id = sqlc.arg(workspace_id)
+RETURNING *,
+    (SELECT issue.revision FROM issue WHERE issue.id = comment.issue_id AND issue.workspace_id = comment.workspace_id) AS issue_revision;
+
+-- name: CreateComment_Step2 :exec
+-- Call in order before CreateComment.
+UPDATE issue SET
+    updated_at = now(),
+    revision = revision + 1,
+    last_activity_at = GREATEST(COALESCE(last_activity_at, updated_at), now())
+WHERE issue.id = sqlc.arg(issue_id) AND issue.workspace_id = sqlc.arg(workspace_id);
 
 -- name: GetDelegatedFailureRecoveryComment :one
 -- The failed task row is locked by the caller before this lookup/insert pair,
@@ -495,78 +535,67 @@ ORDER BY created_at ASC, id ASC
 LIMIT 1;
 
 -- name: UpdateComment :one
-WITH locked_issue AS MATERIALIZED (
-    -- Keep the global issue -> child lock order used by issue teardown. The
-    -- aggregate below still yields one row when the parent was concurrently
-    -- deleted, preserving best-effort edits of an orphaned comment.
-    SELECT issue.id
-    FROM issue
-    JOIN comment ON comment.issue_id = issue.id
-                AND comment.workspace_id = issue.workspace_id
-    WHERE comment.id = $1
-    FOR UPDATE OF issue
-), issue_fence AS MATERIALIZED (
-    -- The aggregate always emits one row. Consuming locked_count in target's
-    -- tautological predicate creates a real data dependency: locked_issue must
-    -- acquire the owner lock before target can lock the comment. MATERIALIZED
-    -- prevents folding/re-evaluation; it does not itself establish lock order.
-    SELECT count(*) AS locked_count FROM locked_issue
-), target AS MATERIALIZED (
-    SELECT comment.*,
-           ROW(comment.content, comment.source_task_id) IS DISTINCT FROM
-               ROW($2, sqlc.narg(source_task_id)::uuid) AS did_change
+-- Call in order: UpdateComment_Step2, UpdateComment.
+WITH target AS (
+    SELECT comment.id AS id,
+           NOT (comment.content IS ?2 AND comment.source_task_id IS sqlc.narg(source_task_id)) AS did_change
     FROM comment
-    CROSS JOIN issue_fence
-    WHERE comment.id = $1
-      AND issue_fence.locked_count >= 0
-      -- A deleted comment's tombstone is not editable.
+    WHERE comment.id = ?1
       AND comment.deleted_at IS NULL
-      AND (sqlc.narg('expected_revision')::bigint IS NULL OR revision = sqlc.narg('expected_revision')::bigint)
+      AND (sqlc.narg('expected_revision') IS NULL OR comment.revision = sqlc.narg('expected_revision'))
       AND (
-        sqlc.narg('content_base')::text IS NULL
-        OR content IS NOT DISTINCT FROM sqlc.narg('content_base')::text
-        OR content IS NOT DISTINCT FROM $2
+        sqlc.narg('content_base') IS NULL
+        OR comment.content IS sqlc.narg('content_base')
+        OR comment.content IS ?2
       )
-    FOR UPDATE OF comment
-), updated_comment AS (
-    UPDATE comment SET
-        content = $2,
-        source_task_id = sqlc.narg(source_task_id)::uuid,
-        -- New text re-decides which agents it must not start, under the same
-        -- revision check as the text itself.
-        suppressed_agent_ids = CASE WHEN target.content IS DISTINCT FROM $2
-                                    THEN sqlc.narg(suppressed_agent_ids)::uuid[]
-                                    ELSE comment.suppressed_agent_ids END,
-        revision = comment.revision + CASE WHEN target.did_change THEN 1 ELSE 0 END,
-        updated_at = CASE WHEN target.did_change THEN now() ELSE comment.updated_at END
-    FROM target
-    WHERE comment.id = target.id
-    RETURNING comment.id, comment.issue_id, comment.author_type, comment.author_id,
-              comment.content, comment.type, comment.created_at, comment.updated_at,
-              comment.parent_id, comment.workspace_id, comment.resolved_at,
-              comment.resolved_by_type, comment.resolved_by_id, comment.source_task_id,
-              comment.quick_action_id, comment.via_plugin_id, comment.revision,
-              comment.deleted_at, target.did_change
-), touched_issue AS (
-    UPDATE issue
-    SET revision = issue.revision + 1,
-        last_activity_at = GREATEST(COALESCE(issue.last_activity_at, issue.updated_at), now())
-    FROM updated_comment
-    WHERE updated_comment.did_change
-      AND issue.id = updated_comment.issue_id
-      AND issue.workspace_id = updated_comment.workspace_id
-    RETURNING issue.id, issue.revision
 )
-SELECT updated_comment.id, updated_comment.issue_id, updated_comment.author_type,
-       updated_comment.author_id, updated_comment.content, updated_comment.type,
-       updated_comment.created_at, updated_comment.updated_at, updated_comment.parent_id,
-       updated_comment.workspace_id, updated_comment.resolved_at,
-       updated_comment.resolved_by_type, updated_comment.resolved_by_id,
-       updated_comment.source_task_id, updated_comment.quick_action_id,
-       updated_comment.via_plugin_id, updated_comment.revision,
-       updated_comment.deleted_at,
-       COALESCE((SELECT revision FROM touched_issue), 0)::bigint AS issue_revision
-FROM updated_comment;
+UPDATE comment SET
+    content = ?2,
+    source_task_id = sqlc.narg(source_task_id),
+    suppressed_agent_ids = CASE WHEN comment.content IS NOT ?2
+                            THEN sqlc.narg(suppressed_agent_ids)
+                            ELSE comment.suppressed_agent_ids END,
+    revision = comment.revision + CASE WHEN EXISTS (
+        SELECT 1 FROM target WHERE target.id = comment.id AND target.did_change
+    ) THEN 1 ELSE 0 END,
+    updated_at = CASE WHEN EXISTS (
+        SELECT 1 FROM target WHERE target.id = comment.id AND target.did_change
+    ) THEN now() ELSE comment.updated_at END
+WHERE comment.id IN (SELECT target.id FROM target)
+RETURNING comment.id, comment.issue_id, comment.author_type, comment.author_id,
+          comment.content, comment.type, comment.created_at, comment.updated_at,
+          comment.parent_id, comment.workspace_id, comment.resolved_at,
+          comment.resolved_by_type, comment.resolved_by_id, comment.source_task_id,
+          comment.quick_action_id, comment.via_plugin_id, comment.revision,
+          comment.deleted_at,
+          CASE WHEN EXISTS (SELECT 1 FROM target WHERE target.id = comment.id AND target.did_change)
+               THEN COALESCE((SELECT issue.revision FROM issue WHERE issue.id = comment.issue_id AND issue.workspace_id = comment.workspace_id), 0)
+               ELSE 0 END AS issue_revision;
+
+-- name: UpdateComment_Step2 :exec
+-- Call in order before UpdateComment.
+WITH target AS (
+    SELECT comment.issue_id AS issue_id,
+           comment.workspace_id AS workspace_id
+    FROM comment
+    WHERE comment.id = ?1
+      AND comment.deleted_at IS NULL
+      AND (sqlc.narg('expected_revision') IS NULL OR comment.revision = sqlc.narg('expected_revision'))
+      AND (
+        sqlc.narg('content_base') IS NULL
+        OR comment.content IS sqlc.narg('content_base')
+        OR comment.content IS ?2
+      )
+      AND NOT (comment.content IS ?2 AND comment.source_task_id IS sqlc.narg(source_task_id))
+)
+UPDATE issue
+SET revision = issue.revision + 1,
+    last_activity_at = GREATEST(COALESCE(issue.last_activity_at, issue.updated_at), now())
+WHERE EXISTS (
+    SELECT 1 FROM target
+    WHERE target.issue_id = issue.id
+      AND target.workspace_id = issue.workspace_id
+);
 
 -- name: BumpCommentRevision :one
 UPDATE comment
@@ -606,16 +635,15 @@ WHERE parent_id = @parent_id AND author_type = 'agent' AND author_id = @agent_id
 -- what makes their reply check exact.
 --
 -- A tombstone is excluded: deleting an already-deleted comment finds nothing.
-WITH locked_issue AS MATERIALIZED (
+WITH locked_issue AS (
     SELECT issue.id
     FROM issue
     JOIN comment ON comment.issue_id = issue.id
                 AND comment.workspace_id = issue.workspace_id
     WHERE comment.id = @id AND comment.workspace_id = @workspace_id
-    FOR UPDATE OF issue
-), issue_fence AS MATERIALIZED (
+), issue_fence AS (
     -- The consumed locked_count below is the ordering fence: the issue lock is
-    -- acquired before the comment lock. MATERIALIZED only prevents
+    -- acquired before the comment lock. only prevents
     -- folding/re-evaluation and is not, by itself, a lock-order guarantee.
     SELECT count(*) AS locked_count FROM locked_issue
 )
@@ -624,24 +652,22 @@ FROM comment
 CROSS JOIN issue_fence
 WHERE comment.id = @id AND comment.workspace_id = @workspace_id
   AND comment.deleted_at IS NULL
-  AND issue_fence.locked_count >= 0
-FOR UPDATE OF comment;
+  AND issue_fence.locked_count >= 0;
 
 -- name: LockLiveComment :one
--- Locks a live comment ahead of a write to one of its children — reactions and
--- attachments — in the order every comment mutation shares: issue, then
+-- Locks a live comment ahead of a write to one of its children - reactions and
+-- attachments - in the order every comment mutation shares: issue, then
 -- comment, then child. A comment deleted before or while this waits reads as
 -- absent (the row lock re-checks deleted_at), so no child can land on its
--- tombstone. FOR NO KEY UPDATE conflicts with the delete transaction's FOR
--- UPDATE but not with a reply's FOR KEY SHARE, so it never blocks replies.
-WITH locked_issue AS MATERIALIZED (
+-- tombstone. conflicts with the delete transaction's FOR
+-- UPDATE but not with a reply's, so it never blocks replies.
+WITH locked_issue AS (
     SELECT issue.id
     FROM issue
     JOIN comment ON comment.issue_id = issue.id
                 AND comment.workspace_id = issue.workspace_id
     WHERE comment.id = @id AND comment.workspace_id = @workspace_id
-    FOR NO KEY UPDATE OF issue
-), issue_fence AS MATERIALIZED (
+), issue_fence AS (
     SELECT count(*) AS locked_count FROM locked_issue
 )
 SELECT comment.*
@@ -649,8 +675,7 @@ FROM comment
 CROSS JOIN issue_fence
 WHERE comment.id = @id AND comment.workspace_id = @workspace_id
   AND comment.deleted_at IS NULL
-  AND issue_fence.locked_count >= 0
-FOR NO KEY UPDATE OF comment;
+  AND issue_fence.locked_count >= 0;
 
 -- name: CommentHasReplies :one
 SELECT EXISTS (
@@ -707,15 +732,15 @@ RETURNING revision;
 
 -- name: ResolveComment :one
 -- Idempotent: re-resolving keeps the original resolved_at + resolver. Always
--- returns the row so the handler can surface the canonical state — unless the
+-- returns the row so the handler can surface the canonical state - unless the
 -- comment has been deleted, whose tombstone cannot be a resolution.
 UPDATE comment SET
     resolved_at = COALESCE(resolved_at, now()),
-    resolved_by_type = COALESCE(resolved_by_type, $2),
-    resolved_by_id = COALESCE(resolved_by_id, $3),
+    resolved_by_type = COALESCE(resolved_by_type, ?2),
+    resolved_by_id = COALESCE(resolved_by_id, ?3),
     revision = revision + CASE WHEN resolved_at IS NULL THEN 1 ELSE 0 END,
     updated_at = CASE WHEN resolved_at IS NULL THEN now() ELSE updated_at END
-WHERE id = $1
+WHERE id = ?1
   AND deleted_at IS NULL
 RETURNING *;
 
@@ -724,7 +749,7 @@ RETURNING *;
 -- Resolving @target_id makes it the sole resolution, so this clears resolved_at
 -- on every OTHER currently-resolved comment in the same thread (the root of
 -- @target_id plus every descendant). The handler runs this in the SAME tx as
--- ResolveComment so the replace is atomic — a crash can never leave two
+-- ResolveComment so the replace is atomic - a crash can never leave two
 -- resolutions or zero. Scope is the thread only (id IN descendants AND
 -- id <> @target_id), never the whole issue. Returns each cleared row so the
 -- handler can emit a comment:unresolved event per row; granular realtime
@@ -774,11 +799,11 @@ UPDATE comment SET
     resolved_by_id = NULL,
     revision = revision + CASE WHEN resolved_at IS NOT NULL THEN 1 ELSE 0 END,
     updated_at = CASE WHEN resolved_at IS NOT NULL THEN now() ELSE updated_at END
-WHERE id = $1
+WHERE id = ?1
 RETURNING *;
 -- name: ListCommentAncestorPath :many
 WITH RECURSIVE ancestor_path AS (
-  SELECT c.*, ARRAY[c.id]::uuid[] AS visited_ids, 1::integer AS depth, false AS cycle
+  SELECT c.*, json_array(c.id) AS visited_ids, 1 AS depth, false AS cycle
   FROM comment c
   WHERE c.id = sqlc.arg(comment_id)
     AND c.workspace_id = sqlc.arg(workspace_id)
@@ -787,9 +812,9 @@ WITH RECURSIVE ancestor_path AS (
   UNION ALL
 
   SELECT parent.*,
-         path.visited_ids || parent.id,
+         json_insert(path.visited_ids, '$[#]', parent.id),
          path.depth + 1,
-         parent.id = ANY(path.visited_ids)
+         EXISTS (SELECT 1 FROM json_each(path.visited_ids) v WHERE v.value = parent.id)
   FROM ancestor_path path
   JOIN comment parent ON parent.id = path.parent_id
   WHERE parent.workspace_id = sqlc.arg(workspace_id)
@@ -816,8 +841,8 @@ WITH RECURSIVE thread_history AS (
     AND root.issue_id = sqlc.arg(issue_id)
     AND root.parent_id IS NULL
     AND (root.created_at, root.id) <= (
-      sqlc.arg(anchor_created_at)::timestamptz,
-      sqlc.arg(anchor_id)::uuid
+      sqlc.arg(anchor_created_at),
+      sqlc.arg(anchor_id)
     )
 
   UNION ALL
@@ -828,8 +853,8 @@ WITH RECURSIVE thread_history AS (
   WHERE child.workspace_id = sqlc.arg(workspace_id)
     AND child.issue_id = sqlc.arg(issue_id)
     AND (child.created_at, child.id) <= (
-      sqlc.arg(anchor_created_at)::timestamptz,
-      sqlc.arg(anchor_id)::uuid
+      sqlc.arg(anchor_created_at),
+      sqlc.arg(anchor_id)
     )
 )
 SELECT *
@@ -839,7 +864,7 @@ LIMIT sqlc.arg(row_limit);
 
 -- name: LockCommentAncestorPath :many
 WITH RECURSIVE ancestor_ids AS (
-  SELECT c.id, c.parent_id, 1::integer AS depth, ARRAY[c.id]::uuid[] AS visited_ids
+  SELECT c.id, c.parent_id, 1 AS depth, json_array(c.id) AS visited_ids
   FROM comment c
   WHERE c.id = sqlc.arg(comment_id)
     AND c.workspace_id = sqlc.arg(workspace_id)
@@ -847,16 +872,15 @@ WITH RECURSIVE ancestor_ids AS (
 
   UNION ALL
 
-  SELECT parent.id, parent.parent_id, path.depth + 1, path.visited_ids || parent.id
+  SELECT parent.id, parent.parent_id, path.depth + 1, json_insert(path.visited_ids, '$[#]', parent.id)
   FROM ancestor_ids path
   JOIN comment parent ON parent.id = path.parent_id
   WHERE parent.workspace_id = sqlc.arg(workspace_id)
     AND parent.issue_id = sqlc.arg(issue_id)
     AND path.depth <= 256
-    AND NOT parent.id = ANY(path.visited_ids)
+    AND NOT parent.id IN (SELECT value FROM json_each(path.visited_ids))
 )
 SELECT c.id
 FROM comment c
 JOIN ancestor_ids path ON path.id = c.id
-ORDER BY c.id
-FOR UPDATE OF c;
+ORDER BY c.id;

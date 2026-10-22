@@ -669,7 +669,7 @@ func buildIssueCreateProperties(ctx context.Context, client *cli.APIClient, pair
 		if err != nil {
 			return nil, fmt.Errorf("encode property %q config: %w", property.Name, err)
 		}
-		canonical, err := issueproperty.ValidateValue(db.IssueProperty{Type: property.Type, Config: config}, encoded)
+		canonical, err := issueproperty.ValidateValue(db.IssueProperty{Type: property.Type, Config: string(config)}, encoded)
 		if err != nil {
 			return nil, fmt.Errorf("--property %s: %w", name, err)
 		}

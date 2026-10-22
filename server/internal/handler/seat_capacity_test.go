@@ -2,14 +2,13 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/seatcapacity"
 	"github.com/multica-ai/multica/server/internal/testutil"
@@ -54,7 +53,7 @@ func TestSeatCapacityWorkspaceLockWaitersDoNotPinPoolConnections(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	locker := seatcapacity.NewWorkspaceLocker(pool)
+	locker := seatcapacity.NewWorkspaceLocker(testSQLite)
 	workspaceID := uuid.New()
 
 	_, unlock, err := locker.Lock(ctx, workspaceID)
@@ -126,13 +125,13 @@ func TestSeatCapacityIntentCannotRegressOrBeDeletedByStaleWorker(t *testing.T) {
 	ctx := context.Background()
 	workspaceID := parseUUID(testWorkspaceID)
 	token, linkID, userID, memberID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	queries := db.New(testPool)
+	queries := db.New(testSQLite)
 
 	_, err := queries.UpsertSeatCapacityIntent(ctx, db.UpsertSeatCapacityIntentParams{
-		WorkspaceID: uuidToPG(uuid.UUID(workspaceID.Bytes)), OperationToken: uuidToPG(token),
-		Action: seatcapacity.ActionClaimShareJoin, SubjectID: uuidToPG(token),
-		ShareLinkID: uuidToPG(linkID), UserID: uuidToPG(userID),
-		NextAttemptAt: pgtype.Timestamptz{Time: time.Now().Add(time.Minute), Valid: true},
+		WorkspaceID: uuidToPG(uuid.MustParse(workspaceID)), OperationToken: uuidToPG(token),
+		Action: seatcapacity.ActionClaimShareJoin, SubjectID: nullString(uuidToPG(token)),
+		ShareLinkID: nullString(uuidToPG(linkID)), UserID: nullString(uuidToPG(userID)),
+		NextAttemptAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -143,21 +142,21 @@ func TestSeatCapacityIntentCannotRegressOrBeDeletedByStaleWorker(t *testing.T) {
 
 	rows, err := queries.TransitionSeatCapacityIntent(ctx, db.TransitionSeatCapacityIntentParams{
 		NextAction: seatcapacity.ActionConfirm, CurrentAction: seatcapacity.ActionClaimShareJoin,
-		MemberID: uuidToPG(memberID), OperationToken: uuidToPG(token),
-		NextAttemptAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		MemberID: nullString(uuidToPG(memberID)), OperationToken: uuidToPG(token),
+		NextAttemptAt: time.Now().UTC().Format(time.RFC3339Nano),
 	})
 	if err != nil || rows != 1 {
 		t.Fatalf("transition rows=%d err=%v", rows, err)
 	}
 
 	_, err = queries.UpsertSeatCapacityIntent(ctx, db.UpsertSeatCapacityIntentParams{
-		WorkspaceID: uuidToPG(uuid.UUID(workspaceID.Bytes)), OperationToken: uuidToPG(token),
-		Action: seatcapacity.ActionClaimShareJoin, SubjectID: uuidToPG(token),
-		ShareLinkID: uuidToPG(linkID), UserID: uuidToPG(userID),
-		NextAttemptAt: pgtype.Timestamptz{Time: time.Now().Add(time.Minute), Valid: true},
+		WorkspaceID: uuidToPG(uuid.MustParse(workspaceID)), OperationToken: uuidToPG(token),
+		Action: seatcapacity.ActionClaimShareJoin, SubjectID: nullString(uuidToPG(token)),
+		ShareLinkID: nullString(uuidToPG(linkID)), UserID: nullString(uuidToPG(userID)),
+		NextAttemptAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano),
 	})
-	if !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("regressive upsert error = %v, want pgx.ErrNoRows", err)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("regressive upsert error = %v, want sql.ErrNoRows", err)
 	}
 	if err := queries.DeleteSeatCapacityIntentForAction(ctx, db.DeleteSeatCapacityIntentForActionParams{
 		OperationToken: uuidToPG(token), Action: seatcapacity.ActionClaimShareJoin,
@@ -168,11 +167,11 @@ func TestSeatCapacityIntentCannotRegressOrBeDeletedByStaleWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if intent.Action != seatcapacity.ActionConfirm || !intent.MemberID.Valid || intent.MemberID.Bytes != memberID {
+	if intent.Action != seatcapacity.ActionConfirm || !intent.MemberID.Valid || intent.MemberID.String != memberID {
 		t.Fatalf("intent regressed or was deleted: %+v", intent)
 	}
-	if err := enqueueCapacityRelease(ctx, queries, uuid.UUID(workspaceID.Bytes), token); !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("release over confirm error = %v, want pgx.ErrNoRows", err)
+	if err := enqueueCapacityRelease(ctx, queries, uuid.MustParse(workspaceID), token); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("release over confirm error = %v, want sql.ErrNoRows", err)
 	}
 	intent, err = queries.GetSeatCapacityIntent(ctx, uuidToPG(token))
 	if err != nil {
@@ -195,7 +194,7 @@ func TestSeatCapacityIntentCannotRegressOrBeDeletedByStaleWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = queries.GetSeatCapacityIntent(ctx, uuidToPG(token))
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("confirmed token intent survived workspace deletion: %v", err)
 	}
 	var memberReleases int
@@ -212,12 +211,12 @@ func TestSeatCapacityIntentCannotRegressOrBeDeletedByStaleWorker(t *testing.T) {
 
 func TestCapacityConsumeRecordsDeliveredIntent(t *testing.T) {
 	ctx := context.Background()
-	workspaceID := uuid.UUID(parseUUID(testWorkspaceID).Bytes)
+	workspaceID := uuid.MustParse(parseUUID(testWorkspaceID))
 	token, userID := uuid.New(), uuid.New()
 	executor := &stubSeatCapacity{}
 	useSeatCapacity(t, executor)
 	previousLocker := testHandler.SeatCapacityLocker
-	testHandler.SeatCapacityLocker = seatcapacity.NewWorkspaceLocker(testPool)
+	testHandler.SeatCapacityLocker = seatcapacity.NewWorkspaceLocker(testSQLite)
 	t.Cleanup(func() {
 		testHandler.SeatCapacityLocker = previousLocker
 		_, _ = testPool.Exec(ctx, `DELETE FROM seat_capacity_outbox WHERE operation_token = $1`, token)
@@ -241,7 +240,7 @@ func TestCapacityConsumeRecordsDeliveredIntent(t *testing.T) {
 
 func TestCapacityConsumeFailsClosedWhenCloudIsUnavailable(t *testing.T) {
 	ctx := context.Background()
-	workspaceID := uuid.UUID(parseUUID(testWorkspaceID).Bytes)
+	workspaceID := uuid.MustParse(parseUUID(testWorkspaceID))
 	token, userID := uuid.New(), uuid.New()
 	executor := &stubSeatCapacity{consumeErr: errors.New("capacity service unavailable")}
 	useSeatCapacity(t, executor)
@@ -307,7 +306,7 @@ func TestAcceptInvitationRejectsUnavailableReservedCapacity(t *testing.T) {
 
 func TestSeatCapacityWorkspaceDeletionSettlesOverlappingInvitationIntent(t *testing.T) {
 	ctx := context.Background()
-	queries := db.New(testPool)
+	queries := db.New(testSQLite)
 	workspaceID := parseUUID(testWorkspaceID)
 	invitationID := uuid.MustParse(dbfx.Insert(t, "workspace_invitation", testutil.Cols{
 		"workspace_id":  testWorkspaceID,
@@ -322,10 +321,10 @@ func TestSeatCapacityWorkspaceDeletionSettlesOverlappingInvitationIntent(t *test
 	})
 	_, err := queries.UpsertSeatCapacityIntent(ctx, db.UpsertSeatCapacityIntentParams{
 		WorkspaceID: workspaceID, OperationToken: uuidToPG(invitationID),
-		Action: seatcapacity.ActionReserveInvitation, SubjectID: uuidToPG(invitationID),
-		InvitationID:  uuidToPG(invitationID),
-		ExpiresAt:     pgtype.Timestamptz{Time: time.Now().Add(24 * time.Hour), Valid: true},
-		NextAttemptAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		Action: seatcapacity.ActionReserveInvitation, SubjectID: nullString(uuidToPG(invitationID)),
+		InvitationID:  nullString(uuidToPG(invitationID)),
+		ExpiresAt:     nullString(time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339Nano)),
+		NextAttemptAt: time.Now().UTC().Format(time.RFC3339Nano),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -348,7 +347,7 @@ func TestSeatCapacityWorkspaceDeletionSettlesOverlappingInvitationIntent(t *test
 
 func TestSeatCapacityWorkspaceDeletionCannotRegressConcurrentConfirm(t *testing.T) {
 	ctx := context.Background()
-	queries := db.New(testPool)
+	queries := db.New(testSQLite)
 	workspaceID := parseUUID(testWorkspaceID)
 	invitationID := uuid.MustParse(dbfx.Insert(t, "workspace_invitation", testutil.Cols{
 		"workspace_id":  testWorkspaceID,
@@ -363,9 +362,9 @@ func TestSeatCapacityWorkspaceDeletionCannotRegressConcurrentConfirm(t *testing.
 	})
 	_, err := queries.UpsertSeatCapacityIntent(ctx, db.UpsertSeatCapacityIntentParams{
 		WorkspaceID: workspaceID, OperationToken: uuidToPG(invitationID),
-		Action: seatcapacity.ActionConfirm, SubjectID: uuidToPG(invitationID),
-		InvitationID: uuidToPG(invitationID), MemberID: uuidToPG(uuid.New()),
-		NextAttemptAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		Action: seatcapacity.ActionConfirm, SubjectID: nullString(uuidToPG(invitationID)),
+		InvitationID: nullString(uuidToPG(invitationID)), MemberID: nullString(uuidToPG(uuid.New())),
+		NextAttemptAt: time.Now().UTC().Format(time.RFC3339Nano),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -385,7 +384,7 @@ func TestSeatCapacityWorkspaceDeletionCannotRegressConcurrentConfirm(t *testing.
 
 func TestShareJoinCapacityIntentReusesDeadLetterAndSerializesConcurrentCreates(t *testing.T) {
 	ctx := context.Background()
-	queries := db.New(testPool)
+	queries := db.New(testSQLite)
 	workspaceID := parseUUID(testWorkspaceID)
 	shareLinkID, userID := uuid.New(), uuid.New()
 	cleanup := func() {
@@ -400,8 +399,8 @@ func TestShareJoinCapacityIntentReusesDeadLetterAndSerializesConcurrentCreates(t
 	create := func(candidate uuid.UUID) (db.SeatCapacityOutbox, error) {
 		return queries.CreateOrReactivateShareJoinCapacityIntent(ctx, db.CreateOrReactivateShareJoinCapacityIntentParams{
 			WorkspaceID: workspaceID, OperationToken: uuidToPG(candidate),
-			ShareLinkID: uuidToPG(shareLinkID), UserID: uuidToPG(userID),
-			NextAttemptAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+			ShareLinkID: nullString(uuidToPG(shareLinkID)), UserID: nullString(uuidToPG(userID)),
+			NextAttemptAt: time.Now().UTC().Format(time.RFC3339Nano),
 		})
 	}
 
@@ -451,9 +450,9 @@ func TestShareJoinCapacityIntentReusesDeadLetterAndSerializesConcurrentCreates(t
 			t.Fatal(createErr)
 		}
 	}
-	var token pgtype.UUID
+	var token string
 	for intent := range results {
-		if !token.Valid {
+		if !(token != "") {
 			token = intent.OperationToken
 		} else if intent.OperationToken != token {
 			t.Fatalf("concurrent creates returned different tokens: %v and %v", token, intent.OperationToken)
@@ -473,13 +472,13 @@ func TestShareJoinCapacityIntentReusesDeadLetterAndSerializesConcurrentCreates(t
 
 func TestStaleSeatCapacityWorkerCannotMutateReactivatedIntent(t *testing.T) {
 	ctx := context.Background()
-	queries := db.New(testPool)
+	queries := db.New(testSQLite)
 	workspaceID := parseUUID(testWorkspaceID)
 	shareLinkID, userID := uuid.New(), uuid.New()
 	created, err := queries.CreateOrReactivateShareJoinCapacityIntent(ctx, db.CreateOrReactivateShareJoinCapacityIntentParams{
 		WorkspaceID: workspaceID, OperationToken: uuidToPG(uuid.New()),
-		ShareLinkID: uuidToPG(shareLinkID), UserID: uuidToPG(userID),
-		NextAttemptAt: pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true},
+		ShareLinkID: nullString(uuidToPG(shareLinkID)), UserID: nullString(uuidToPG(userID)),
+		NextAttemptAt: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -487,7 +486,7 @@ func TestStaleSeatCapacityWorkerCannotMutateReactivatedIntent(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = testPool.Exec(ctx, `DELETE FROM seat_capacity_outbox WHERE operation_token = $1`, created.OperationToken)
 	})
-	claimed, err := queries.ClaimNextDueSeatCapacityIntent(ctx, pgtype.Timestamptz{Time: time.Now().Add(5 * time.Minute), Valid: true})
+	claimed, err := queries.ClaimNextDueSeatCapacityIntent(ctx, time.Now().Add(5*time.Minute).UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -496,8 +495,8 @@ func TestStaleSeatCapacityWorkerCannotMutateReactivatedIntent(t *testing.T) {
 	}
 	if _, err := queries.CreateOrReactivateShareJoinCapacityIntent(ctx, db.CreateOrReactivateShareJoinCapacityIntentParams{
 		WorkspaceID: workspaceID, OperationToken: uuidToPG(uuid.New()),
-		ShareLinkID: uuidToPG(shareLinkID), UserID: uuidToPG(userID),
-		NextAttemptAt: pgtype.Timestamptz{Time: time.Now().Add(5 * time.Minute), Valid: true},
+		ShareLinkID: nullString(uuidToPG(shareLinkID)), UserID: nullString(uuidToPG(userID)),
+		NextAttemptAt: time.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339Nano),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -505,13 +504,13 @@ func TestStaleSeatCapacityWorkerCannotMutateReactivatedIntent(t *testing.T) {
 	transitioned, err := queries.TransitionClaimedSeatCapacityIntent(ctx, db.TransitionClaimedSeatCapacityIntentParams{
 		NextAction: seatcapacity.ActionRelease, CurrentAction: claimed.Action,
 		OperationToken: claimed.OperationToken, LeaseToken: claimed.LeaseToken,
-		NextAttemptAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		NextAttemptAt: time.Now().UTC().Format(time.RFC3339Nano),
 	})
 	if err != nil || transitioned != 0 {
 		t.Fatalf("stale transition rows=%d err=%v, want 0", transitioned, err)
 	}
 	failed, err := queries.MarkClaimedSeatCapacityIntentFailed(ctx, db.MarkClaimedSeatCapacityIntentFailedParams{
-		LastError: "stale", NextAttemptAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		LastError: "stale", NextAttemptAt: time.Now().UTC().Format(time.RFC3339Nano),
 		OperationToken: claimed.OperationToken, Action: claimed.Action, LeaseToken: claimed.LeaseToken,
 	})
 	if err != nil || failed != 0 {
@@ -541,13 +540,13 @@ func TestStaleSeatCapacityWorkerCannotMutateReactivatedIntent(t *testing.T) {
 
 func TestClaimNextDueSeatCapacityIntentIsExclusiveAcrossReplicas(t *testing.T) {
 	ctx := context.Background()
-	queries := db.New(testPool)
+	queries := db.New(testSQLite)
 	workspaceID := parseUUID(testWorkspaceID)
 	token := uuid.New()
 	_, err := queries.UpsertSeatCapacityIntent(ctx, db.UpsertSeatCapacityIntentParams{
 		WorkspaceID: workspaceID, OperationToken: uuidToPG(token),
-		Action: seatcapacity.ActionConfirm, MemberID: uuidToPG(uuid.New()),
-		NextAttemptAt: pgtype.Timestamptz{Time: time.Now().Add(-time.Minute), Valid: true},
+		Action: seatcapacity.ActionConfirm, MemberID: nullString(uuidToPG(uuid.New())),
+		NextAttemptAt: time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -564,9 +563,9 @@ func TestClaimNextDueSeatCapacityIntentIsExclusiveAcrossReplicas(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			_, claimErr := queries.ClaimNextDueSeatCapacityIntent(ctx, pgtype.Timestamptz{
-				Time: time.Now().Add(5 * time.Minute), Valid: true,
-			})
+			_, claimErr := queries.ClaimNextDueSeatCapacityIntent(ctx,
+				time.Now().Add(5*time.Minute).UTC().Format(time.RFC3339Nano),
+			)
 			results <- claimErr
 		}()
 	}
@@ -579,7 +578,7 @@ func TestClaimNextDueSeatCapacityIntentIsExclusiveAcrossReplicas(t *testing.T) {
 		switch {
 		case claimErr == nil:
 			claimed++
-		case errors.Is(claimErr, pgx.ErrNoRows):
+		case errors.Is(claimErr, sql.ErrNoRows):
 			empty++
 		default:
 			t.Fatal(claimErr)

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -12,7 +13,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -113,14 +113,15 @@ type failNthBegin struct {
 
 // lockCommentForDeleteTxStarter begins real transactions whose
 // LockCommentForDelete statement answers with lockErr instead: an error
-// simulates a storage failure, pgx.ErrNoRows a concurrent delete that won.
+// simulates a storage failure, sql.ErrNoRows a concurrent delete that won.
 type lockCommentForDeleteTxStarter struct {
 	delegate *pgxpool.Pool
 	lockErr  error
 }
 
 type lockCommentForDeleteTx struct {
-	pgx.Tx
+	*sql.Tx
+
 	lockErr error
 }
 
@@ -128,7 +129,7 @@ type errorRow struct{ err error }
 
 func (r errorRow) Scan(...interface{}) error { return r.err }
 
-func (s *lockCommentForDeleteTxStarter) Begin(ctx context.Context) (pgx.Tx, error) {
+func (s *lockCommentForDeleteTxStarter) BeginTx(ctx context.Context, _ *sql.TxOptions) (*sql.Tx, error) {
 	tx, err := s.delegate.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -143,7 +144,7 @@ func (t lockCommentForDeleteTx) QueryRow(ctx context.Context, query string, args
 	return t.Tx.QueryRow(ctx, query, args...)
 }
 
-func (f *failNthBegin) Begin(ctx context.Context) (pgx.Tx, error) {
+func (f *failNthBegin) BeginTx(ctx context.Context, _ *sql.TxOptions) (*sql.Tx, error) {
 	f.calls++
 	if f.calls == f.failAt {
 		return nil, errors.New("injected claim finalization transaction failure")
@@ -528,7 +529,7 @@ func TestDeleteComment_ConcurrentNoOpIsReportedAndRestoresCancelledBatch(t *test
 	}
 
 	zeroHandler := *testHandler
-	zeroHandler.TxStarter = &lockCommentForDeleteTxStarter{delegate: testPool, lockErr: pgx.ErrNoRows}
+	zeroHandler.TxStarter = &lockCommentForDeleteTxStarter{delegate: testPool, lockErr: sql.ErrNoRows}
 	w := httptest.NewRecorder()
 	req := newRequest(http.MethodDelete, "/api/comments/"+fixture.commentID[2], nil)
 	req = withURLParam(req, "commentId", fixture.commentID[2])
@@ -586,7 +587,7 @@ func TestBuildCoalescedCommentData_SortsEqualTimestampsByID(t *testing.T) {
 	`, fixture.commentID[:2]); err != nil {
 		t.Fatalf("set equal comment timestamps: %v", err)
 	}
-	ids := []pgtype.UUID{
+	ids := []string{
 		util.MustParseUUID(fixture.commentID[1]),
 		util.MustParseUUID(fixture.commentID[0]),
 	}
@@ -716,7 +717,7 @@ func TestCreateRetryTask_PreservesCommentPlanAndResetsReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRetryTask: %v", err)
 	}
-	if got := uuidToString(child.TriggerCommentID); got != commentIDs[2] {
+	if got := uuidToString(child.TriggerCommentID.String); got != commentIDs[2] {
 		t.Fatalf("child trigger = %s, want %s", got, commentIDs[2])
 	}
 	gotCoalesced := uuidsToStrings(child.CoalescedCommentIds)
@@ -773,11 +774,11 @@ func TestRerunIssue_PreservesSourceCommentPlanAndResetsReceipt(t *testing.T) {
 		testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE issue_id = $1`, issueID)
 	})
 
-	rerun, err := testHandler.TaskService.RerunIssue(ctx, util.MustParseUUID(issueID), util.MustParseUUID(sourceID), pgtype.UUID{}, pgtype.UUID{}, nil)
+	rerun, err := testHandler.TaskService.RerunIssue(ctx, util.MustParseUUID(issueID), util.MustParseUUID(sourceID), "", "", nil)
 	if err != nil {
 		t.Fatalf("RerunIssue: %v", err)
 	}
-	if got := uuidToString(rerun.TriggerCommentID); got != commentIDs[2] {
+	if got := uuidToString(rerun.TriggerCommentID.String); got != commentIDs[2] {
 		t.Fatalf("rerun trigger = %s, want %s", got, commentIDs[2])
 	}
 	gotCoalesced := uuidsToStrings(rerun.CoalescedCommentIds)
@@ -820,11 +821,11 @@ func testRerunPromotesSurvivorAfterTriggerDeleted(t *testing.T, deleteTriggerSQL
 		t.Fatalf("delete rerun source trigger: %v", err)
 	}
 
-	rerun, err := testHandler.TaskService.RerunIssue(ctx, parseUUID(fixture.issueID), parseUUID(fixture.taskID), pgtype.UUID{}, pgtype.UUID{}, nil)
+	rerun, err := testHandler.TaskService.RerunIssue(ctx, parseUUID(fixture.issueID), parseUUID(fixture.taskID), "", "", nil)
 	if err != nil {
 		t.Fatalf("RerunIssue: %v", err)
 	}
-	if got := uuidToString(rerun.TriggerCommentID); got != fixture.commentID[1] {
+	if got := uuidToString(rerun.TriggerCommentID.String); got != fixture.commentID[1] {
 		t.Fatalf("rerun promoted trigger = %s, want newest survivor %s", got, fixture.commentID[1])
 	}
 	if got := uuidsToStrings(rerun.CoalescedCommentIds); !slices.Equal(got, []string{fixture.commentID[0]}) {
@@ -833,7 +834,7 @@ func testRerunPromotesSurvivorAfterTriggerDeleted(t *testing.T, deleteTriggerSQL
 	if len(rerun.DeliveredCommentIds) != 0 {
 		t.Fatalf("rerun inherited delivery receipt: %v", uuidsToStrings(rerun.DeliveredCommentIds))
 	}
-	if got := uuidToString(rerun.OriginatorUserID); got != testUserID {
+	if got := uuidToString(rerun.OriginatorUserID.String); got != testUserID {
 		t.Fatalf("rerun originator = %s, want promoted comment author %s", got, testUserID)
 	}
 }
@@ -877,7 +878,7 @@ func TestSetTaskDeliveredCommentIDs_CASAndSubset(t *testing.T) {
 	}
 
 	params := db.SetTaskDeliveredCommentIDsParams{
-		DeliveredCommentIds:      []pgtype.UUID{util.MustParseUUID(commentIDs[1])},
+		DeliveredCommentIds:      []string{util.MustParseUUID(commentIDs[1])},
 		TaskID:                   task.ID,
 		RuntimeID:                task.RuntimeID,
 		DispatchedAt:             task.DispatchedAt,
@@ -886,26 +887,26 @@ func TestSetTaskDeliveredCommentIDs_CASAndSubset(t *testing.T) {
 	if got, err := testHandler.Queries.SetTaskDeliveredCommentIDs(ctx, params); err != nil || len(got) != 1 {
 		t.Fatalf("valid receipt = %v, %v; want one id", got, err)
 	}
-	params.DeliveredCommentIds = []pgtype.UUID{}
+	params.DeliveredCommentIds = []string{}
 	if got, err := testHandler.Queries.SetTaskDeliveredCommentIDs(ctx, params); err != nil || len(got) != 0 {
 		t.Fatalf("empty receipt = %v, %v; want authoritative empty array", got, err)
 	}
 
-	params.DeliveredCommentIds = []pgtype.UUID{util.MustParseUUID("00000000-0000-0000-0000-000000000099")}
-	if _, err := testHandler.Queries.SetTaskDeliveredCommentIDs(ctx, params); !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("foreign receipt id error = %v, want pgx.ErrNoRows", err)
+	params.DeliveredCommentIds = []string{util.MustParseUUID("00000000-0000-0000-0000-000000000099")}
+	if _, err := testHandler.Queries.SetTaskDeliveredCommentIDs(ctx, params); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("foreign receipt id error = %v, want sql.ErrNoRows", err)
 	}
-	params.DeliveredCommentIds = []pgtype.UUID{util.MustParseUUID(commentIDs[1])}
-	params.RuntimeID = util.MustParseUUID(otherRuntimeID)
-	if _, err := testHandler.Queries.SetTaskDeliveredCommentIDs(ctx, params); !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("wrong runtime error = %v, want pgx.ErrNoRows", err)
+	params.DeliveredCommentIds = []string{util.MustParseUUID(commentIDs[1])}
+	params.RuntimeID = nullString(util.MustParseUUID(otherRuntimeID))
+	if _, err := testHandler.Queries.SetTaskDeliveredCommentIDs(ctx, params); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("wrong runtime error = %v, want sql.ErrNoRows", err)
 	}
 	params.RuntimeID = task.RuntimeID
 	if _, err := testPool.Exec(ctx, `UPDATE agent_task_queue SET status = 'running', started_at = now() WHERE id = $1`, taskID); err != nil {
 		t.Fatalf("mark task running: %v", err)
 	}
-	if _, err := testHandler.Queries.SetTaskDeliveredCommentIDs(ctx, params); !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("running task receipt error = %v, want pgx.ErrNoRows", err)
+	if _, err := testHandler.Queries.SetTaskDeliveredCommentIDs(ctx, params); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("running task receipt error = %v, want sql.ErrNoRows", err)
 	}
 }
 
@@ -1002,12 +1003,12 @@ func TestFinalizeTaskClaim_ReceiptCASFailureRollsBackInsertedToken(t *testing.T)
 		AgentID:     task.AgentID,
 		WorkspaceID: parseUUID(testWorkspaceID),
 		UserID:      parseUUID(testUserID),
-		ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
-	}, []pgtype.UUID{parseUUID("00000000-0000-0000-0000-000000000099")}, true, nil, nil, db.CreateDaemonTokenParams{
+		ExpiresAt:   time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano),
+	}, []string{parseUUID("00000000-0000-0000-0000-000000000099")}, true, nil, nil, db.CreateDaemonTokenParams{
 		TokenHash:   daemonTokenHash,
 		WorkspaceID: parseUUID(testWorkspaceID),
 		DaemonID:    "daemon-claim-rollback",
-		ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
+		ExpiresAt:   time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano),
 	})
 	if err == nil {
 		t.Fatalf("FinalizeTaskClaim accepted an out-of-plan receipt")
@@ -1055,8 +1056,8 @@ func TestFinalizeTaskClaim_TriggerDeletedAfterClaimRejectsStaleProvenance(t *tes
 		AgentID:     task.AgentID,
 		WorkspaceID: parseUUID(testWorkspaceID),
 		UserID:      parseUUID(testUserID),
-		ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
-	}, []pgtype.UUID{parseUUID(fixture.commentID[0]), parseUUID(fixture.commentID[1])}, true, nil, nil)
+		ExpiresAt:   time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano),
+	}, []string{parseUUID(fixture.commentID[0]), parseUUID(fixture.commentID[1])}, true, nil, nil)
 	if err == nil {
 		t.Fatalf("FinalizeTaskClaim accepted a receipt after persisted trigger changed")
 	}

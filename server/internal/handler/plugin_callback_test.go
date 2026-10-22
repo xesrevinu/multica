@@ -91,8 +91,8 @@ func TestCallbackFromAUserTriggeredHookWritesAsTheUser(t *testing.T) {
 	if uuidToString(comment.AuthorID) != testUserID {
 		t.Fatalf("author_id = %s, want the triggering user %s", uuidToString(comment.AuthorID), testUserID)
 	}
-	if uuidToString(comment.ViaPluginID) != installationID {
-		t.Fatalf("via_plugin_id = %s, want %s: the plugin must stay traceable", uuidToString(comment.ViaPluginID), installationID)
+	if uuidToString(comment.ViaPluginID.String) != installationID {
+		t.Fatalf("via_plugin_id = %s, want %s: the plugin must stay traceable", uuidToString(comment.ViaPluginID.String), installationID)
 	}
 }
 

@@ -7,15 +7,14 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const createGitHubInstallation = `-- name: CreateGitHubInstallation :one
 INSERT INTO github_installation (
     workspace_id, installation_id, account_login, account_type, account_avatar_url, connected_by_id
 ) VALUES (
-    $1, $2, $3, $4, $5, $6
+    ?1, ?2, ?3, ?4, ?5, ?6
 )
 ON CONFLICT (workspace_id, installation_id) DO UPDATE SET
     account_login = EXCLUDED.account_login,
@@ -27,16 +26,16 @@ RETURNING id, workspace_id, installation_id, account_login, account_type, accoun
 `
 
 type CreateGitHubInstallationParams struct {
-	WorkspaceID      pgtype.UUID `json:"workspace_id"`
-	InstallationID   int64       `json:"installation_id"`
-	AccountLogin     string      `json:"account_login"`
-	AccountType      string      `json:"account_type"`
-	AccountAvatarUrl pgtype.Text `json:"account_avatar_url"`
-	ConnectedByID    pgtype.UUID `json:"connected_by_id"`
+	WorkspaceID      string         `json:"workspace_id"`
+	InstallationID   int64          `json:"installation_id"`
+	AccountLogin     string         `json:"account_login"`
+	AccountType      string         `json:"account_type"`
+	AccountAvatarUrl sql.NullString `json:"account_avatar_url"`
+	ConnectedByID    sql.NullString `json:"connected_by_id"`
 }
 
 func (q *Queries) CreateGitHubInstallation(ctx context.Context, arg CreateGitHubInstallationParams) (GithubInstallation, error) {
-	row := q.db.QueryRow(ctx, createGitHubInstallation,
+	row := q.db.QueryRowContext(ctx, createGitHubInstallation,
 		arg.WorkspaceID,
 		arg.InstallationID,
 		arg.AccountLogin,
@@ -60,34 +59,34 @@ func (q *Queries) CreateGitHubInstallation(ctx context.Context, arg CreateGitHub
 }
 
 const deleteGitHubInstallation = `-- name: DeleteGitHubInstallation :exec
-DELETE FROM github_installation WHERE id = $1 AND workspace_id = $2
+DELETE FROM github_installation WHERE id = ?1 AND workspace_id = ?2
 `
 
 type DeleteGitHubInstallationParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 func (q *Queries) DeleteGitHubInstallation(ctx context.Context, arg DeleteGitHubInstallationParams) error {
-	_, err := q.db.Exec(ctx, deleteGitHubInstallation, arg.ID, arg.WorkspaceID)
+	_, err := q.db.ExecContext(ctx, deleteGitHubInstallation, arg.ID, arg.WorkspaceID)
 	return err
 }
 
 const deleteGitHubInstallationByInstallationID = `-- name: DeleteGitHubInstallationByInstallationID :many
-DELETE FROM github_installation WHERE installation_id = $1
+DELETE FROM github_installation WHERE installation_id = ?1
 RETURNING id, workspace_id
 `
 
 type DeleteGitHubInstallationByInstallationIDRow struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // GitHub-side uninstall/suspend removes trust in the installation entirely, so
 // drop every workspace binding. Returns one row per deleted binding so the
 // handler can broadcast to each affected workspace.
 func (q *Queries) DeleteGitHubInstallationByInstallationID(ctx context.Context, installationID int64) ([]DeleteGitHubInstallationByInstallationIDRow, error) {
-	rows, err := q.db.Query(ctx, deleteGitHubInstallationByInstallationID, installationID)
+	rows, err := q.db.QueryContext(ctx, deleteGitHubInstallationByInstallationID, installationID)
 	if err != nil {
 		return nil, err
 	}
@@ -100,6 +99,9 @@ func (q *Queries) DeleteGitHubInstallationByInstallationID(ctx context.Context, 
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -107,31 +109,31 @@ func (q *Queries) DeleteGitHubInstallationByInstallationID(ctx context.Context, 
 }
 
 const deletePendingGitHubInstallation = `-- name: DeletePendingGitHubInstallation :exec
-DELETE FROM github_pending_installation WHERE installation_id = $1
+DELETE FROM github_pending_installation WHERE installation_id = ?1
 `
 
 func (q *Queries) DeletePendingGitHubInstallation(ctx context.Context, installationID int64) error {
-	_, err := q.db.Exec(ctx, deletePendingGitHubInstallation, installationID)
+	_, err := q.db.ExecContext(ctx, deletePendingGitHubInstallation, installationID)
 	return err
 }
 
 const findGitHubPullRequestByURL = `-- name: FindGitHubPullRequestByURL :one
 SELECT id, workspace_id, installation_id, repo_owner, repo_name, pr_number, title, state, html_url, branch, author_login, author_avatar_url, merged_at, closed_at, pr_created_at, pr_updated_at, created_at, updated_at, head_sha, mergeable_state, additions, deletions, changed_files, api_mergeable, api_merge_state_status, checks_rollup_state, snapshot_head_sha, snapshot_fetched_at FROM github_pull_request
-WHERE workspace_id = $1
-  AND lower(rtrim(html_url, '/')) = lower($2::text)
+WHERE workspace_id = ?1
+  AND lower(rtrim(html_url, '/')) = lower(?2)
 ORDER BY pr_updated_at DESC
 LIMIT 1
 `
 
 type FindGitHubPullRequestByURLParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	HtmlUrl     string      `json:"html_url"`
+	WorkspaceID string `json:"workspace_id"`
+	HtmlUrl     string `json:"html_url"`
 }
 
 // Resolves a pasted PR URL to a mirrored PR. The caller normalizes the URL to
 // scheme://host/owner/repo/pull/N; html_url is stored in that shape.
 func (q *Queries) FindGitHubPullRequestByURL(ctx context.Context, arg FindGitHubPullRequestByURLParams) (GithubPullRequest, error) {
-	row := q.db.QueryRow(ctx, findGitHubPullRequestByURL, arg.WorkspaceID, arg.HtmlUrl)
+	row := q.db.QueryRowContext(ctx, findGitHubPullRequestByURL, arg.WorkspaceID, arg.HtmlUrl)
 	var i GithubPullRequest
 	err := row.Scan(
 		&i.ID,
@@ -168,11 +170,11 @@ func (q *Queries) FindGitHubPullRequestByURL(ctx context.Context, arg FindGitHub
 
 const getGitHubInstallationByID = `-- name: GetGitHubInstallationByID :one
 SELECT id, workspace_id, installation_id, account_login, account_type, account_avatar_url, connected_by_id, created_at, updated_at FROM github_installation
-WHERE id = $1
+WHERE id = ?1
 `
 
-func (q *Queries) GetGitHubInstallationByID(ctx context.Context, id pgtype.UUID) (GithubInstallation, error) {
-	row := q.db.QueryRow(ctx, getGitHubInstallationByID, id)
+func (q *Queries) GetGitHubInstallationByID(ctx context.Context, id string) (GithubInstallation, error) {
+	row := q.db.QueryRowContext(ctx, getGitHubInstallationByID, id)
 	var i GithubInstallation
 	err := row.Scan(
 		&i.ID,
@@ -190,18 +192,18 @@ func (q *Queries) GetGitHubInstallationByID(ctx context.Context, id pgtype.UUID)
 
 const getGitHubPullRequest = `-- name: GetGitHubPullRequest :one
 SELECT id, workspace_id, installation_id, repo_owner, repo_name, pr_number, title, state, html_url, branch, author_login, author_avatar_url, merged_at, closed_at, pr_created_at, pr_updated_at, created_at, updated_at, head_sha, mergeable_state, additions, deletions, changed_files, api_mergeable, api_merge_state_status, checks_rollup_state, snapshot_head_sha, snapshot_fetched_at FROM github_pull_request
-WHERE workspace_id = $1 AND repo_owner = $2 AND repo_name = $3 AND pr_number = $4
+WHERE workspace_id = ?1 AND repo_owner = ?2 AND repo_name = ?3 AND pr_number = ?4
 `
 
 type GetGitHubPullRequestParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	RepoOwner   string      `json:"repo_owner"`
-	RepoName    string      `json:"repo_name"`
-	PrNumber    int32       `json:"pr_number"`
+	WorkspaceID string `json:"workspace_id"`
+	RepoOwner   string `json:"repo_owner"`
+	RepoName    string `json:"repo_name"`
+	PrNumber    int64  `json:"pr_number"`
 }
 
 func (q *Queries) GetGitHubPullRequest(ctx context.Context, arg GetGitHubPullRequestParams) (GithubPullRequest, error) {
-	row := q.db.QueryRow(ctx, getGitHubPullRequest,
+	row := q.db.QueryRowContext(ctx, getGitHubPullRequest,
 		arg.WorkspaceID,
 		arg.RepoOwner,
 		arg.RepoName,
@@ -243,16 +245,16 @@ func (q *Queries) GetGitHubPullRequest(ctx context.Context, arg GetGitHubPullReq
 
 const getGitHubPullRequestInWorkspace = `-- name: GetGitHubPullRequestInWorkspace :one
 SELECT id, workspace_id, installation_id, repo_owner, repo_name, pr_number, title, state, html_url, branch, author_login, author_avatar_url, merged_at, closed_at, pr_created_at, pr_updated_at, created_at, updated_at, head_sha, mergeable_state, additions, deletions, changed_files, api_mergeable, api_merge_state_status, checks_rollup_state, snapshot_head_sha, snapshot_fetched_at FROM github_pull_request
-WHERE id = $1 AND workspace_id = $2
+WHERE id = ?1 AND workspace_id = ?2
 `
 
 type GetGitHubPullRequestInWorkspaceParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 func (q *Queries) GetGitHubPullRequestInWorkspace(ctx context.Context, arg GetGitHubPullRequestInWorkspaceParams) (GithubPullRequest, error) {
-	row := q.db.QueryRow(ctx, getGitHubPullRequestInWorkspace, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, getGitHubPullRequestInWorkspace, arg.ID, arg.WorkspaceID)
 	var i GithubPullRequest
 	err := row.Scan(
 		&i.ID,
@@ -292,12 +294,12 @@ SELECT head_sha FROM (
     SELECT pr.head_sha AS head_sha, pr.state AS state, pr.pr_updated_at AS pr_updated_at
     FROM github_pull_request pr
     JOIN issue_pull_request ipr ON ipr.pull_request_id = pr.id
-    WHERE ipr.issue_id = $1 AND pr.head_sha <> ''
+    WHERE ipr.issue_id = ?1 AND pr.head_sha <> ''
     UNION ALL
     SELECT pr.head_sha AS head_sha, pr.state AS state, pr.pr_updated_at AS pr_updated_at
     FROM vcs_pull_request pr
     JOIN issue_vcs_pull_request ipr ON ipr.pull_request_id = pr.id
-    WHERE ipr.issue_id = $1 AND pr.head_sha <> ''
+    WHERE ipr.issue_id = ?1 AND pr.head_sha <> ''
 ) combined
 ORDER BY (state IN ('open', 'draft')) DESC, pr_updated_at DESC
 LIMIT 1
@@ -310,25 +312,25 @@ LIMIT 1
 // advanced. Prefers in-flight PRs (open/draft) over merged/closed ones so a
 // stale merged sibling can't shadow the live review target; falls back to the
 // newest linked PR with a head_sha when none are open. Returns no rows (empty
-// string) when the issue has no linked PR — callers treat that as "no SHA key"
+// string) when the issue has no linked PR - callers treat that as "no SHA key"
 // and dedup on (issue_id, agent_id) alone, preserving pre-TEN-356 behavior.
 //
 // Spans both GitHub and self-hosted VCS PRs: a self-hosted PR pushing a new
 // commit must move the dedup head SHA the same way a GitHub PR does, otherwise
 // a fresh review round could be merged away against a stale key.
-func (q *Queries) GetIssueReviewHeadSha(ctx context.Context, issueID pgtype.UUID) (string, error) {
-	row := q.db.QueryRow(ctx, getIssueReviewHeadSha, issueID)
+func (q *Queries) GetIssueReviewHeadSha(ctx context.Context, issueID string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getIssueReviewHeadSha, issueID)
 	var head_sha string
 	err := row.Scan(&head_sha)
 	return head_sha, err
 }
 
 const getPendingGitHubInstallation = `-- name: GetPendingGitHubInstallation :one
-SELECT installation_id, account_login, account_type, account_avatar_url, received_at, updated_at FROM github_pending_installation WHERE installation_id = $1
+SELECT installation_id, account_login, account_type, account_avatar_url, received_at, updated_at FROM github_pending_installation WHERE installation_id = ?1
 `
 
 func (q *Queries) GetPendingGitHubInstallation(ctx context.Context, installationID int64) (GithubPendingInstallation, error) {
-	row := q.db.QueryRow(ctx, getPendingGitHubInstallation, installationID)
+	row := q.db.QueryRowContext(ctx, getPendingGitHubInstallation, installationID)
 	var i GithubPendingInstallation
 	err := row.Scan(
 		&i.InstallationID,
@@ -346,18 +348,18 @@ const linkIssueToPullRequest = `-- name: LinkIssueToPullRequest :execrows
 INSERT INTO issue_pull_request (
     issue_id, pull_request_id, linked_by_type, linked_by_id
 ) VALUES (
-    $1, $2, 'system', NULL
+    ?1, ?2, 'system', NULL
 )
 ON CONFLICT (issue_id, pull_request_id) DO NOTHING
 `
 
 type LinkIssueToPullRequestParams struct {
-	IssueID       pgtype.UUID `json:"issue_id"`
-	PullRequestID pgtype.UUID `json:"pull_request_id"`
+	IssueID       string `json:"issue_id"`
+	PullRequestID string `json:"pull_request_id"`
 }
 
 // =====================
-// Issue ↔ Pull Request link
+// Issue   Pull Request link
 // =====================
 // Automatic link from a PR title, branch, or closing keyword. Returns 1 only
 // when the link is new, so the webhook evaluates the merge automation on the
@@ -365,63 +367,66 @@ type LinkIssueToPullRequestParams struct {
 // manual) is left untouched. close_intent is no longer read or written
 // (MUL-7726).
 func (q *Queries) LinkIssueToPullRequest(ctx context.Context, arg LinkIssueToPullRequestParams) (int64, error) {
-	result, err := q.db.Exec(ctx, linkIssueToPullRequest, arg.IssueID, arg.PullRequestID)
+	result, err := q.db.ExecContext(ctx, linkIssueToPullRequest, arg.IssueID, arg.PullRequestID)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const linkIssueToPullRequestManually = `-- name: LinkIssueToPullRequestManually :execrows
 INSERT INTO issue_pull_request (
     issue_id, pull_request_id, linked_by_type, linked_by_id
 ) VALUES (
-    $1, $2, 'member', $3
+    ?1, ?2, 'member', ?3
 )
 ON CONFLICT (issue_id, pull_request_id) DO UPDATE SET
     linked_by_type = 'member',
     linked_by_id = EXCLUDED.linked_by_id
-WHERE issue_pull_request.linked_by_type IS DISTINCT FROM 'member'
+WHERE issue_pull_request.linked_by_type IS NOT 'member'
 `
 
 type LinkIssueToPullRequestManuallyParams struct {
-	IssueID       pgtype.UUID `json:"issue_id"`
-	PullRequestID pgtype.UUID `json:"pull_request_id"`
-	LinkedByID    pgtype.UUID `json:"linked_by_id"`
+	IssueID       string         `json:"issue_id"`
+	PullRequestID string         `json:"pull_request_id"`
+	LinkedByID    sql.NullString `json:"linked_by_id"`
 }
 
 // A member linked this PR by hand. Marking an existing automatic link as
 // manual keeps a later title edit from removing it. Returns 1 when the row was
 // inserted or converted.
 func (q *Queries) LinkIssueToPullRequestManually(ctx context.Context, arg LinkIssueToPullRequestManuallyParams) (int64, error) {
-	result, err := q.db.Exec(ctx, linkIssueToPullRequestManually, arg.IssueID, arg.PullRequestID, arg.LinkedByID)
+	result, err := q.db.ExecContext(ctx, linkIssueToPullRequestManually, arg.IssueID, arg.PullRequestID, arg.LinkedByID)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const listAutoLinkedIssueIDsForPullRequest = `-- name: ListAutoLinkedIssueIDsForPullRequest :many
 SELECT issue_id FROM issue_pull_request
-WHERE pull_request_id = $1
+WHERE pull_request_id = ?1
   AND COALESCE(linked_by_type, 'system') <> 'member'
 `
 
 // Issues this PR is linked to automatically. Manual links are not listed: the
 // webhook reconciles only what it created itself.
-func (q *Queries) ListAutoLinkedIssueIDsForPullRequest(ctx context.Context, pullRequestID pgtype.UUID) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listAutoLinkedIssueIDsForPullRequest, pullRequestID)
+func (q *Queries) ListAutoLinkedIssueIDsForPullRequest(ctx context.Context, pullRequestID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listAutoLinkedIssueIDsForPullRequest, pullRequestID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []string{}
 	for rows.Next() {
-		var issue_id pgtype.UUID
+		var issue_id string
 		if err := rows.Scan(&issue_id); err != nil {
 			return nil, err
 		}
 		items = append(items, issue_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -431,7 +436,7 @@ func (q *Queries) ListAutoLinkedIssueIDsForPullRequest(ctx context.Context, pull
 
 const listGitHubInstallationsByInstallationID = `-- name: ListGitHubInstallationsByInstallationID :many
 SELECT id, workspace_id, installation_id, account_login, account_type, account_avatar_url, connected_by_id, created_at, updated_at FROM github_installation
-WHERE installation_id = $1
+WHERE installation_id = ?1
 ORDER BY created_at ASC, id ASC
 `
 
@@ -439,7 +444,7 @@ ORDER BY created_at ASC, id ASC
 // every binding and fans the event out to each bound workspace. Ordered oldest
 // first so processing is deterministic and replay-stable.
 func (q *Queries) ListGitHubInstallationsByInstallationID(ctx context.Context, installationID int64) ([]GithubInstallation, error) {
-	rows, err := q.db.Query(ctx, listGitHubInstallationsByInstallationID, installationID)
+	rows, err := q.db.QueryContext(ctx, listGitHubInstallationsByInstallationID, installationID)
 	if err != nil {
 		return nil, err
 	}
@@ -461,6 +466,9 @@ func (q *Queries) ListGitHubInstallationsByInstallationID(ctx context.Context, i
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -471,15 +479,15 @@ func (q *Queries) ListGitHubInstallationsByInstallationID(ctx context.Context, i
 const listGitHubInstallationsByWorkspace = `-- name: ListGitHubInstallationsByWorkspace :many
 
 SELECT id, workspace_id, installation_id, account_login, account_type, account_avatar_url, connected_by_id, created_at, updated_at FROM github_installation
-WHERE workspace_id = $1
+WHERE workspace_id = ?1
 ORDER BY created_at ASC
 `
 
 // =====================
 // GitHub Installation
 // =====================
-func (q *Queries) ListGitHubInstallationsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]GithubInstallation, error) {
-	rows, err := q.db.Query(ctx, listGitHubInstallationsByWorkspace, workspaceID)
+func (q *Queries) ListGitHubInstallationsByWorkspace(ctx context.Context, workspaceID string) ([]GithubInstallation, error) {
+	rows, err := q.db.QueryContext(ctx, listGitHubInstallationsByWorkspace, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -502,6 +510,9 @@ func (q *Queries) ListGitHubInstallationsByWorkspace(ctx context.Context, worksp
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -510,22 +521,25 @@ func (q *Queries) ListGitHubInstallationsByWorkspace(ctx context.Context, worksp
 
 const listIssueIDsForPullRequest = `-- name: ListIssueIDsForPullRequest :many
 SELECT issue_id FROM issue_pull_request
-WHERE pull_request_id = $1
+WHERE pull_request_id = ?1
 `
 
-func (q *Queries) ListIssueIDsForPullRequest(ctx context.Context, pullRequestID pgtype.UUID) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listIssueIDsForPullRequest, pullRequestID)
+func (q *Queries) ListIssueIDsForPullRequest(ctx context.Context, pullRequestID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listIssueIDsForPullRequest, pullRequestID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []string{}
 	for rows.Next() {
-		var issue_id pgtype.UUID
+		var issue_id string
 		if err := rows.Scan(&issue_id); err != nil {
 			return nil, err
 		}
 		items = append(items, issue_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -538,25 +552,25 @@ WITH issue_prs AS (
     SELECT pr.id, pr.snapshot_head_sha
     FROM github_pull_request pr
     JOIN issue_pull_request ipr ON ipr.pull_request_id = pr.id
-    WHERE ipr.issue_id = $1
+    WHERE ipr.issue_id = ?1
 ),
 checks AS (
     SELECT
         cr.pr_id,
-        COUNT(*)::bigint AS total,
+        COUNT(*) AS total,
         SUM(CASE WHEN cr.status = 'completed' AND cr.conclusion IN
                 ('failure','cancelled','timed_out','action_required','startup_failure','stale','error')
-            THEN 1 ELSE 0 END)::bigint AS failed,
+            THEN 1 ELSE 0 END) AS failed,
         SUM(CASE WHEN cr.status = 'completed' AND cr.conclusion IN
                 ('success','neutral','skipped')
-            THEN 1 ELSE 0 END)::bigint AS passed,
+            THEN 1 ELSE 0 END) AS passed,
         SUM(CASE WHEN cr.status <> 'completed' OR cr.conclusion IS NULL
-            THEN 1 ELSE 0 END)::bigint AS running,
+            THEN 1 ELSE 0 END) AS running,
         COALESCE(
             array_agg(cr.name) FILTER (WHERE cr.status = 'completed' AND cr.conclusion IN
                 ('failure','cancelled','timed_out','action_required','startup_failure','stale','error')),
             '{}'
-        )::text[] AS failed_names
+        ) AS failed_names
     FROM github_pull_request_check_run cr
     JOIN issue_prs ip ON ip.id = cr.pr_id
     WHERE cr.head_sha = ip.snapshot_head_sha AND ip.snapshot_head_sha <> ''
@@ -571,68 +585,68 @@ SELECT
     pr.api_mergeable, pr.api_merge_state_status, pr.checks_rollup_state,
     pr.snapshot_head_sha, pr.snapshot_fetched_at,
     pr.created_at, pr.updated_at,
-    COALESCE(ipr.linked_by_type, 'system')::text AS linked_by_type,
-    COALESCE(c.total, 0)::bigint   AS checks_total,
-    COALESCE(c.passed, 0)::bigint  AS checks_passed,
-    COALESCE(c.failed, 0)::bigint  AS checks_failed,
-    COALESCE(c.running, 0)::bigint AS checks_running,
-    COALESCE(c.failed_names, '{}')::text[] AS failed_check_names
+    COALESCE(ipr.linked_by_type, 'system') AS linked_by_type,
+    COALESCE(c.total, 0)   AS checks_total,
+    COALESCE(c.passed, 0)  AS checks_passed,
+    COALESCE(c.failed, 0)  AS checks_failed,
+    COALESCE(c.running, 0) AS checks_running,
+    COALESCE(c.failed_names, '{}') AS failed_check_names
 FROM github_pull_request pr
 JOIN issue_pull_request ipr ON ipr.pull_request_id = pr.id
 LEFT JOIN checks c ON c.pr_id = pr.id
-WHERE ipr.issue_id = $1
+WHERE ipr.issue_id = ?1
 ORDER BY pr.pr_created_at DESC
 `
 
 type ListPullRequestsByIssueRow struct {
-	ID                  pgtype.UUID        `json:"id"`
-	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
-	InstallationID      int64              `json:"installation_id"`
-	RepoOwner           string             `json:"repo_owner"`
-	RepoName            string             `json:"repo_name"`
-	PrNumber            int32              `json:"pr_number"`
-	Title               string             `json:"title"`
-	State               string             `json:"state"`
-	HtmlUrl             string             `json:"html_url"`
-	Branch              pgtype.Text        `json:"branch"`
-	AuthorLogin         pgtype.Text        `json:"author_login"`
-	AuthorAvatarUrl     pgtype.Text        `json:"author_avatar_url"`
-	MergedAt            pgtype.Timestamptz `json:"merged_at"`
-	ClosedAt            pgtype.Timestamptz `json:"closed_at"`
-	PrCreatedAt         pgtype.Timestamptz `json:"pr_created_at"`
-	PrUpdatedAt         pgtype.Timestamptz `json:"pr_updated_at"`
-	HeadSha             string             `json:"head_sha"`
-	MergeableState      pgtype.Text        `json:"mergeable_state"`
-	Additions           int32              `json:"additions"`
-	Deletions           int32              `json:"deletions"`
-	ChangedFiles        int32              `json:"changed_files"`
-	ApiMergeable        pgtype.Text        `json:"api_mergeable"`
-	ApiMergeStateStatus pgtype.Text        `json:"api_merge_state_status"`
-	ChecksRollupState   pgtype.Text        `json:"checks_rollup_state"`
-	SnapshotHeadSha     string             `json:"snapshot_head_sha"`
-	SnapshotFetchedAt   pgtype.Timestamptz `json:"snapshot_fetched_at"`
-	CreatedAt           pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
-	LinkedByType        string             `json:"linked_by_type"`
-	ChecksTotal         int64              `json:"checks_total"`
-	ChecksPassed        int64              `json:"checks_passed"`
-	ChecksFailed        int64              `json:"checks_failed"`
-	ChecksRunning       int64              `json:"checks_running"`
-	FailedCheckNames    []string           `json:"failed_check_names"`
+	ID                  string         `json:"id"`
+	WorkspaceID         string         `json:"workspace_id"`
+	InstallationID      int64          `json:"installation_id"`
+	RepoOwner           string         `json:"repo_owner"`
+	RepoName            string         `json:"repo_name"`
+	PrNumber            int64          `json:"pr_number"`
+	Title               string         `json:"title"`
+	State               string         `json:"state"`
+	HtmlUrl             string         `json:"html_url"`
+	Branch              sql.NullString `json:"branch"`
+	AuthorLogin         sql.NullString `json:"author_login"`
+	AuthorAvatarUrl     sql.NullString `json:"author_avatar_url"`
+	MergedAt            sql.NullString `json:"merged_at"`
+	ClosedAt            sql.NullString `json:"closed_at"`
+	PrCreatedAt         string         `json:"pr_created_at"`
+	PrUpdatedAt         string         `json:"pr_updated_at"`
+	HeadSha             string         `json:"head_sha"`
+	MergeableState      sql.NullString `json:"mergeable_state"`
+	Additions           int64          `json:"additions"`
+	Deletions           int64          `json:"deletions"`
+	ChangedFiles        int64          `json:"changed_files"`
+	ApiMergeable        sql.NullString `json:"api_mergeable"`
+	ApiMergeStateStatus sql.NullString `json:"api_merge_state_status"`
+	ChecksRollupState   sql.NullString `json:"checks_rollup_state"`
+	SnapshotHeadSha     string         `json:"snapshot_head_sha"`
+	SnapshotFetchedAt   sql.NullString `json:"snapshot_fetched_at"`
+	CreatedAt           string         `json:"created_at"`
+	UpdatedAt           string         `json:"updated_at"`
+	LinkedByType        string         `json:"linked_by_type"`
+	ChecksTotal         int64          `json:"checks_total"`
+	ChecksPassed        float64        `json:"checks_passed"`
+	ChecksFailed        float64        `json:"checks_failed"`
+	ChecksRunning       float64        `json:"checks_running"`
+	FailedCheckNames    interface{}    `json:"failed_check_names"`
 }
 
 // Returns the issue's linked PRs with the GitHub API snapshot (MUL-5265): the
 // mergeability verdict, the CI rollup, and per-check counts for the PR's
 // CURRENT snapshot head SHA. Checks are aggregated from
-// github_pull_request_check_run — the run-level snapshot written by the API
-// refresh pipeline — NOT the legacy suite-level webhook aggregation, which is
+// github_pull_request_check_run - the run-level snapshot written by the API
+// refresh pipeline - NOT the legacy suite-level webhook aggregation, which is
 // removed. The `issue_prs` CTE narrows to this issue's PR ids first so the
 // aggregation only touches check rows for those PRs. Rows for an OLD head are
 // excluded by the snapshot_head_sha filter. Every link row is a delivery PR:
 // the webhook links an identifier it read from the PR title or branch name, and
 // a member can link one by hand (linked_by_type = 'member'). MUL-7429.
-func (q *Queries) ListPullRequestsByIssue(ctx context.Context, issueID pgtype.UUID) ([]ListPullRequestsByIssueRow, error) {
-	rows, err := q.db.Query(ctx, listPullRequestsByIssue, issueID)
+func (q *Queries) ListPullRequestsByIssue(ctx context.Context, issueID string) ([]ListPullRequestsByIssueRow, error) {
+	rows, err := q.db.QueryContext(ctx, listPullRequestsByIssue, issueID)
 	if err != nil {
 		return nil, err
 	}
@@ -680,6 +694,9 @@ func (q *Queries) ListPullRequestsByIssue(ctx context.Context, issueID pgtype.UU
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -688,44 +705,44 @@ func (q *Queries) ListPullRequestsByIssue(ctx context.Context, issueID pgtype.UU
 
 const unlinkIssueFromPullRequest = `-- name: UnlinkIssueFromPullRequest :execrows
 DELETE FROM issue_pull_request
-WHERE issue_id = $1 AND pull_request_id = $2
+WHERE issue_id = ?1 AND pull_request_id = ?2
 `
 
 type UnlinkIssueFromPullRequestParams struct {
-	IssueID       pgtype.UUID `json:"issue_id"`
-	PullRequestID pgtype.UUID `json:"pull_request_id"`
+	IssueID       string `json:"issue_id"`
+	PullRequestID string `json:"pull_request_id"`
 }
 
 func (q *Queries) UnlinkIssueFromPullRequest(ctx context.Context, arg UnlinkIssueFromPullRequestParams) (int64, error) {
-	result, err := q.db.Exec(ctx, unlinkIssueFromPullRequest, arg.IssueID, arg.PullRequestID)
+	result, err := q.db.ExecContext(ctx, unlinkIssueFromPullRequest, arg.IssueID, arg.PullRequestID)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const updateGitHubInstallationAccountByInstallationID = `-- name: UpdateGitHubInstallationAccountByInstallationID :many
 UPDATE github_installation
-SET account_login = $2,
-    account_type = $3,
-    account_avatar_url = $4,
+SET account_login = ?2,
+    account_type = ?3,
+    account_avatar_url = ?4,
     updated_at = now()
-WHERE installation_id = $1
+WHERE installation_id = ?1
 RETURNING id, workspace_id, installation_id, account_login, account_type, account_avatar_url, connected_by_id, created_at, updated_at
 `
 
 type UpdateGitHubInstallationAccountByInstallationIDParams struct {
-	InstallationID   int64       `json:"installation_id"`
-	AccountLogin     string      `json:"account_login"`
-	AccountType      string      `json:"account_type"`
-	AccountAvatarUrl pgtype.Text `json:"account_avatar_url"`
+	InstallationID   int64          `json:"installation_id"`
+	AccountLogin     string         `json:"account_login"`
+	AccountType      string         `json:"account_type"`
+	AccountAvatarUrl sql.NullString `json:"account_avatar_url"`
 }
 
 // Refresh the GitHub account display metadata across every workspace binding of
 // an installation (fired by installation.created/new_permissions_accepted/
 // unsuspend). Leaves workspace_id and connected_by_id untouched.
 func (q *Queries) UpdateGitHubInstallationAccountByInstallationID(ctx context.Context, arg UpdateGitHubInstallationAccountByInstallationIDParams) ([]GithubInstallation, error) {
-	rows, err := q.db.Query(ctx, updateGitHubInstallationAccountByInstallationID,
+	rows, err := q.db.QueryContext(ctx, updateGitHubInstallationAccountByInstallationID,
 		arg.InstallationID,
 		arg.AccountLogin,
 		arg.AccountType,
@@ -753,6 +770,9 @@ func (q *Queries) UpdateGitHubInstallationAccountByInstallationID(ctx context.Co
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -760,6 +780,8 @@ func (q *Queries) UpdateGitHubInstallationAccountByInstallationID(ctx context.Co
 }
 
 const upsertGitHubPullRequest = `-- name: UpsertGitHubPullRequest :one
+;
+
 
 INSERT INTO github_pull_request (
     workspace_id, installation_id, repo_owner, repo_name, pr_number,
@@ -768,11 +790,11 @@ INSERT INTO github_pull_request (
     head_sha, mergeable_state,
     additions, deletions, changed_files
 ) VALUES (
-    $1, $2, $3, $4, $5,
-    $6, $7, $8, $15, $16, $17,
-    $18, $19, $9, $10,
-    $11, $20,
-    $12, $13, $14
+    ?1, ?2, ?3, ?4, ?5,
+    ?6, ?7, ?8, ?15, ?16, ?17,
+    ?18, ?19, ?9, ?10,
+    ?11, ?20,
+    ?12, ?13, ?14
 )
 ON CONFLICT (workspace_id, repo_owner, repo_name, pr_number) DO UPDATE SET
     installation_id = EXCLUDED.installation_id,
@@ -787,7 +809,7 @@ ON CONFLICT (workspace_id, repo_owner, repo_name, pr_number) DO UPDATE SET
     pr_updated_at = EXCLUDED.pr_updated_at,
     head_sha = EXCLUDED.head_sha,
     mergeable_state = CASE
-        WHEN COALESCE($21::boolean, FALSE) THEN NULL
+        WHEN COALESCE(sqlc.narg('clear_mergeable_state'), FALSE) THEN NULL
         WHEN EXCLUDED.mergeable_state IS NOT NULL THEN EXCLUDED.mergeable_state
         ELSE github_pull_request.mergeable_state
     END,
@@ -800,37 +822,36 @@ RETURNING id, workspace_id, installation_id, repo_owner, repo_name, pr_number, t
 `
 
 type UpsertGitHubPullRequestParams struct {
-	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
-	InstallationID      int64              `json:"installation_id"`
-	RepoOwner           string             `json:"repo_owner"`
-	RepoName            string             `json:"repo_name"`
-	PrNumber            int32              `json:"pr_number"`
-	Title               string             `json:"title"`
-	State               string             `json:"state"`
-	HtmlUrl             string             `json:"html_url"`
-	PrCreatedAt         pgtype.Timestamptz `json:"pr_created_at"`
-	PrUpdatedAt         pgtype.Timestamptz `json:"pr_updated_at"`
-	HeadSha             string             `json:"head_sha"`
-	Additions           int32              `json:"additions"`
-	Deletions           int32              `json:"deletions"`
-	ChangedFiles        int32              `json:"changed_files"`
-	Branch              pgtype.Text        `json:"branch"`
-	AuthorLogin         pgtype.Text        `json:"author_login"`
-	AuthorAvatarUrl     pgtype.Text        `json:"author_avatar_url"`
-	MergedAt            pgtype.Timestamptz `json:"merged_at"`
-	ClosedAt            pgtype.Timestamptz `json:"closed_at"`
-	MergeableState      pgtype.Text        `json:"mergeable_state"`
-	ClearMergeableState pgtype.Bool        `json:"clear_mergeable_state"`
+	WorkspaceID     string         `json:"workspace_id"`
+	InstallationID  int64          `json:"installation_id"`
+	RepoOwner       string         `json:"repo_owner"`
+	RepoName        string         `json:"repo_name"`
+	PrNumber        int64          `json:"pr_number"`
+	Title           string         `json:"title"`
+	State           string         `json:"state"`
+	HtmlUrl         string         `json:"html_url"`
+	PrCreatedAt     string         `json:"pr_created_at"`
+	PrUpdatedAt     string         `json:"pr_updated_at"`
+	HeadSha         string         `json:"head_sha"`
+	Additions       int64          `json:"additions"`
+	Deletions       int64          `json:"deletions"`
+	ChangedFiles    int64          `json:"changed_files"`
+	Branch          sql.NullString `json:"branch"`
+	AuthorLogin     sql.NullString `json:"author_login"`
+	AuthorAvatarUrl sql.NullString `json:"author_avatar_url"`
+	MergedAt        sql.NullString `json:"merged_at"`
+	ClosedAt        sql.NullString `json:"closed_at"`
+	MergeableState  sql.NullString `json:"mergeable_state"`
 }
 
 // =====================
 // GitHub Pull Request
 // =====================
 // mergeable_state has three-state semantics on UPDATE:
-//  1. clear_mergeable_state=true → write NULL (state-changing actions like
+//  1. clear_mergeable_state=true -> write NULL (state-changing actions like
 //     opened/synchronize/reopened/edited(base) invalidate the prior verdict).
-//  2. clear_mergeable_state=false, mergeable_state non-null → write the value.
-//  3. clear_mergeable_state=false, mergeable_state null → preserve existing
+//  2. clear_mergeable_state=false, mergeable_state non-null -> write the value.
+//  3. clear_mergeable_state=false, mergeable_state null -> preserve existing
 //     column. Metadata events (labeled/assigned/etc.) ship payloads without
 //     mergeability, and silently clobbering a known clean/dirty would lose
 //     information that GitHub only re-computes lazily.
@@ -839,9 +860,9 @@ type UpsertGitHubPullRequestParams struct {
 //
 // GitHub may deliver events out of order. An event older than the stored row
 // (pr_updated_at) updates nothing and returns no row, so a late "opened" can't
-// roll a merged PR back to open — the same guard UpsertVCSPullRequest has.
+// roll a merged PR back to open - the same guard UpsertVCSPullRequest has.
 func (q *Queries) UpsertGitHubPullRequest(ctx context.Context, arg UpsertGitHubPullRequestParams) (GithubPullRequest, error) {
-	row := q.db.QueryRow(ctx, upsertGitHubPullRequest,
+	row := q.db.QueryRowContext(ctx, upsertGitHubPullRequest,
 		arg.WorkspaceID,
 		arg.InstallationID,
 		arg.RepoOwner,
@@ -862,7 +883,6 @@ func (q *Queries) UpsertGitHubPullRequest(ctx context.Context, arg UpsertGitHubP
 		arg.MergedAt,
 		arg.ClosedAt,
 		arg.MergeableState,
-		arg.ClearMergeableState,
 	)
 	var i GithubPullRequest
 	err := row.Scan(
@@ -902,7 +922,7 @@ const upsertPendingGitHubInstallation = `-- name: UpsertPendingGitHubInstallatio
 INSERT INTO github_pending_installation (
     installation_id, account_login, account_type, account_avatar_url
 ) VALUES (
-    $1, $2, $3, $4
+    ?1, ?2, ?3, ?4
 )
 ON CONFLICT (installation_id) DO UPDATE SET
     account_login = EXCLUDED.account_login,
@@ -913,14 +933,14 @@ RETURNING installation_id, account_login, account_type, account_avatar_url, rece
 `
 
 type UpsertPendingGitHubInstallationParams struct {
-	InstallationID   int64       `json:"installation_id"`
-	AccountLogin     string      `json:"account_login"`
-	AccountType      string      `json:"account_type"`
-	AccountAvatarUrl pgtype.Text `json:"account_avatar_url"`
+	InstallationID   int64          `json:"installation_id"`
+	AccountLogin     string         `json:"account_login"`
+	AccountType      string         `json:"account_type"`
+	AccountAvatarUrl sql.NullString `json:"account_avatar_url"`
 }
 
 func (q *Queries) UpsertPendingGitHubInstallation(ctx context.Context, arg UpsertPendingGitHubInstallationParams) (GithubPendingInstallation, error) {
-	row := q.db.QueryRow(ctx, upsertPendingGitHubInstallation,
+	row := q.db.QueryRowContext(ctx, upsertPendingGitHubInstallation,
 		arg.InstallationID,
 		arg.AccountLogin,
 		arg.AccountType,

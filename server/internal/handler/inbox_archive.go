@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -46,7 +45,8 @@ func parseArchivedInboxFilters(w http.ResponseWriter, r *http.Request) (db.Archi
 	}
 	p.RecipientID = parseUUID(userID)
 	q := r.URL.Query()
-	for name, target := range map[string]*[]string{"statuses": &p.Statuses, "priorities": &p.Priorities, "actors": &p.Actors} {
+	var statuses, priorities, actors []string
+	for name, target := range map[string]*[]string{"statuses": &statuses, "priorities": &priorities, "actors": &actors} {
 		*target = []string{}
 		if raw := q.Get(name); raw != "" {
 			if len(raw) > 8192 {
@@ -68,6 +68,8 @@ func parseArchivedInboxFilters(w http.ResponseWriter, r *http.Request) (db.Archi
 			*target = slices.Compact(*target)
 		}
 	}
+	p.Statuses, p.Priorities, p.Actors = jsonText(statuses), jsonText(priorities), jsonText(actors)
+	p.UnreadOnly = false
 	if raw := q.Get("unread_only"); raw != "" {
 		if raw != "true" && raw != "false" {
 			writeError(w, http.StatusBadRequest, "invalid unread_only")
@@ -80,10 +82,10 @@ func parseArchivedInboxFilters(w http.ResponseWriter, r *http.Request) (db.Archi
 
 // A cursor is tied to the recipient and filters, so it cannot accidentally
 // continue a different archive or a changed filter selection.
-func archivedInboxScope(p db.ArchivedInboxFacetsParams, groupID pgtype.UUID) string {
+func archivedInboxScope(p db.ArchivedInboxFacetsParams, groupID string) string {
 	encoded, _ := json.Marshal(struct {
 		Filters db.ArchivedInboxFacetsParams
-		Group   pgtype.UUID
+		Group   string
 	}{p, groupID})
 	return fmt.Sprintf("%x", sha256.Sum256(encoded))
 }
@@ -97,6 +99,7 @@ func (h *Handler) ListArchivedInboxPage(w http.ResponseWriter, r *http.Request) 
 		WorkspaceID: filters.WorkspaceID, RecipientID: filters.RecipientID,
 		Statuses: filters.Statuses, Priorities: filters.Priorities, Actors: filters.Actors, UnreadOnly: filters.UnreadOnly,
 	}
+	var groupID string
 	limit := 50
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		var err error
@@ -107,12 +110,13 @@ func (h *Handler) ListArchivedInboxPage(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	if raw := r.URL.Query().Get("group_id"); raw != "" {
-		p.GroupID, ok = parseUUIDOrBadRequest(w, raw, "group_id")
+		groupID, ok = parseUUIDOrBadRequest(w, raw, "group_id")
 		if !ok {
 			return
 		}
+		p.GroupID = groupID
 	}
-	scope := archivedInboxScope(filters, p.GroupID)
+	scope := archivedInboxScope(filters, groupID)
 	if raw := r.URL.Query().Get("cursor"); raw != "" {
 		if len(raw) > 2048 {
 			writeError(w, http.StatusBadRequest, "invalid archive cursor")
@@ -129,13 +133,15 @@ func (h *Handler) ListArchivedInboxPage(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusBadRequest, "invalid archive cursor time")
 			return
 		}
-		p.BeforeID, ok = parseUUIDOrBadRequest(w, cursor.ID, "cursor id")
+		var beforeID string
+		beforeID, ok = parseUUIDOrBadRequest(w, cursor.ID, "cursor id")
 		if !ok {
 			return
 		}
-		p.BeforeTime = pgtype.Timestamptz{Time: before, Valid: true}
+		p.BeforeID = nullString(beforeID)
+		p.BeforeTime = before.UTC().Format(time.RFC3339Nano)
 	}
-	p.PageLimit = int32(limit + 1)
+	p.PageLimit = int64(int32(limit + 1))
 	rows, err := h.Queries.ListArchivedInboxPage(r.Context(), p)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load archived inbox page")
@@ -147,7 +153,7 @@ func (h *Handler) ListArchivedInboxPage(w http.ResponseWriter, r *http.Request) 
 	}
 	for _, row := range rows {
 		item := inboxToResponse(row.InboxItem)
-		item.Body = inboxListBody(row.InboxItem.Type, row.InboxItem.IssueID, row.InboxItem.Body)
+		item.Body = inboxListBody(row.InboxItem.Type, row.InboxItem.IssueID.String, row.InboxItem.Body)
 		item.IssueStatus, item.IssuePriority = textToPtr(row.IssueStatus), textToPtr(row.IssuePriority)
 		if row.CommentID != "" {
 			var details map[string]json.RawMessage
@@ -164,7 +170,7 @@ func (h *Handler) ListArchivedInboxPage(w http.ResponseWriter, r *http.Request) 
 	}
 	if resp.HasMore {
 		last := rows[len(rows)-1].InboxItem
-		encoded, _ := json.Marshal(archivedInboxCursor{Time: last.CreatedAt.Time.Format(time.RFC3339Nano), ID: uuidToString(last.ID), Scope: scope})
+		encoded, _ := json.Marshal(archivedInboxCursor{Time: parseDBTime(last.CreatedAt).Format(time.RFC3339Nano), ID: uuidToString(last.ID), Scope: scope})
 		cursor := base64.RawURLEncoding.EncodeToString(encoded)
 		resp.NextCursor = &cursor
 	}
@@ -185,13 +191,13 @@ func (h *Handler) GetArchivedInboxFacets(w http.ResponseWriter, r *http.Request)
 	for _, row := range rows {
 		switch row.Dimension {
 		case "statuses":
-			resp.Statuses[row.Key] = row.Count
+			resp.Statuses[row.Key.String] = int64(row.Count.Float64)
 		case "priorities":
-			resp.Priorities[row.Key] = row.Count
+			resp.Priorities[row.Key.String] = int64(row.Count.Float64)
 		case "actors":
-			resp.Actors[row.Key] = row.Count
+			resp.Actors[row.Key.String] = int64(row.Count.Float64)
 		case "unread":
-			resp.UnreadCount = row.Count
+			resp.UnreadCount = int64(row.Count.Float64)
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)

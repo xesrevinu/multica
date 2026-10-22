@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/testutil"
 )
 
@@ -45,14 +44,14 @@ func TestStartClaimLostResponseAndOwnership(t *testing.T) {
 			testutil.Call(t, testHandler.StartTask, startClaimRequest(id, "00000000-0000-0000-0000-000000000001", generation)).Want(http.StatusConflict)
 			// Commit the first request, then discard its response (lost acknowledgement).
 			testutil.Call(t, testHandler.StartTask, startClaimRequest(id, runtimeID, generation)).Want(http.StatusOK)
-			var before pgtype.Timestamptz
+			var before string
 			dbfx.QueryRow(t, `SELECT started_at FROM agent_task_queue WHERE id=$1`, id).Scan(&before)
 			testutil.Call(t, testHandler.StartTask, startClaimRequest(id, runtimeID, generation)).Want(http.StatusOK)
 			testutil.Call(t, testHandler.StartTask, startClaimRequest(id, runtimeID, generation.Add(-time.Microsecond))).Want(http.StatusConflict)
 			testutil.Call(t, testHandler.StartTask, startClaimRequest(id, "00000000-0000-0000-0000-000000000001", generation)).Want(http.StatusConflict)
-			var after pgtype.Timestamptz
+			var after string
 			dbfx.QueryRow(t, `SELECT started_at FROM agent_task_queue WHERE id=$1`, id).Scan(&after)
-			if !before.Valid || !before.Time.Equal(after.Time) {
+			if !(before != "") || !parseDBTime(before).Equal(parseDBTime(after)) {
 				t.Fatalf("replay changed started_at: %v -> %v", before, after)
 			}
 		})
@@ -195,7 +194,7 @@ func TestStartClaimWirePrecision(t *testing.T) {
 	for _, zone := range []*time.Location{time.UTC, time.FixedZone("UTC+08", 8*60*60), time.FixedZone("UTC-07", -7*60*60)} {
 		t.Run(zone.String(), func(t *testing.T) {
 			claimed := task
-			claimed.DispatchedAt.Time = task.DispatchedAt.Time.In(zone)
+			parseDBTime(claimed.DispatchedAt.String) = parseDBTime(task.DispatchedAt.String).In(zone)
 			resp, _, _, _, _, failure := testHandler.buildClaimedTaskResponse(req, &claimed, runtime, runtimeID, testWorkspaceID)
 			if failure != nil {
 				t.Fatalf("build claim: %+v", failure)

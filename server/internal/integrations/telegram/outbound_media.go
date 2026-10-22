@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -85,11 +85,11 @@ func (o *Outbound) deliverAttachments(ctx context.Context, reply *terminalReply)
 		return
 	}
 	messageID, err := util.ParseUUID(chatDoneMessageID(reply.event.Payload))
-	if err != nil || !messageID.Valid {
+	if err != nil || messageID == "" {
 		return // a turn with no assistant message has nothing bound to it
 	}
 	workspaceID, err := util.ParseUUID(reply.event.WorkspaceID)
-	if err != nil || !workspaceID.Valid {
+	if err != nil || workspaceID == "" {
 		return
 	}
 	target := *reply.target
@@ -128,7 +128,7 @@ func (o *Outbound) deliverAttachments(ctx context.Context, reply *terminalReply)
 // read a few times. Each attempt is detached from the call budget the text
 // delivery ran under, which may have just about run out, and bounded on its
 // own; the spacing goes through o.wait so a test does not sleep.
-func (o *Outbound) lookupAttachments(ctx context.Context, messageID, workspaceID pgtype.UUID) ([]db.Attachment, error) {
+func (o *Outbound) lookupAttachments(ctx context.Context, messageID, workspaceID string) ([]db.Attachment, error) {
 	var err error
 	for attempt := 0; attempt < attachmentLookupAttempts; attempt++ {
 		if attempt > 0 && o.wait(ctx, attachmentLookupRetryDelay) != nil {
@@ -137,7 +137,7 @@ func (o *Outbound) lookupAttachments(ctx context.Context, messageID, workspaceID
 		readCtx, cancel := o.recordContext(ctx)
 		var rows []db.Attachment
 		rows, err = o.q.ListAttachmentsByChatMessage(readCtx, db.ListAttachmentsByChatMessageParams{
-			ChatMessageID: messageID, WorkspaceID: workspaceID,
+			ChatMessageID: sql.NullString{String: messageID, Valid: messageID != ""}, WorkspaceID: workspaceID,
 		})
 		cancel()
 		if err == nil {

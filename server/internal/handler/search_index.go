@@ -15,10 +15,10 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/featureflags"
 	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -137,7 +137,7 @@ func decodeSearchIndexCursor(s string) (searchIndexCursor, error) {
 	if err := json.Unmarshal(raw, &c); err != nil || c.Version != searchIndexCursorVersion {
 		return c, errors.New("invalid cursor")
 	}
-	if !validPGSnapshotText(c.Since) {
+	if !validChangeSeqText(c.Since) {
 		return c, errors.New("invalid cursor")
 	}
 	if c.Target == "" {
@@ -146,7 +146,7 @@ func decodeSearchIndexCursor(s string) (searchIndexCursor, error) {
 		}
 		return c, nil
 	}
-	if !validPGSnapshotText(c.Target) {
+	if !validChangeSeqText(c.Target) {
 		return c, errors.New("invalid cursor")
 	}
 	if _, err := strconv.ParseUint(c.AfterXid, 10, 64); err != nil {
@@ -163,13 +163,21 @@ func decodeSearchIndexCursor(s string) (searchIndexCursor, error) {
 	return c, nil
 }
 
-func parseUUIDStrict(s string) (pgtype.UUID, error) {
-	var u pgtype.UUID
-	if err := u.Scan(s); err != nil {
-		return u, err
+func validChangeSeqText(s string) bool {
+	if s == "" || len(s) > 20 {
+		return false
 	}
-	if !u.Valid {
-		return u, errors.New("invalid uuid")
+	_, err := strconv.ParseUint(s, 10, 64)
+	return err == nil
+}
+
+func parseUUIDStrict(s string) (string, error) {
+	u, err := util.ParseUUID(s)
+	if err != nil {
+		return "", err
+	}
+	if u == "" {
+		return "", errors.New("invalid uuid")
 	}
 	return u, nil
 }
@@ -246,24 +254,24 @@ func (h *Handler) RequireLocalSearchIndex(next http.Handler) http.Handler {
 // runSearchIndexRead runs fn in a read-only REPEATABLE READ transaction, so the
 // snapshot returned by pg_current_snapshot() is exactly the one fn reads under.
 func (h *Handler) runSearchIndexRead(ctx context.Context, fn func(q *db.Queries) error) error {
-	tx, err := h.TxStarter.Begin(ctx)
+	tx, err := h.TxStarter.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin search index tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
+	defer func() { _ = tx.Rollback() }()
 	// Must be the first statement: the isolation level cannot change once the
 	// transaction has taken its snapshot.
-	if _, err := tx.Exec(ctx, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"); err != nil {
+	if _, err := tx.ExecContext(ctx, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"); err != nil {
 		return fmt.Errorf("set search index isolation: %w", err)
 	}
 	timeoutMs := int(searchIndexStatementLimit / time.Millisecond)
-	if _, err := tx.Exec(ctx, fmt.Sprintf("SET LOCAL statement_timeout = %d", timeoutMs)); err != nil {
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL statement_timeout = %d", timeoutMs)); err != nil {
 		return fmt.Errorf("set search index statement_timeout: %w", err)
 	}
 	if err := fn(h.Queries.WithTx(tx)); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return tx.Commit()
 }
 
 func (h *Handler) writeSearchIndexError(w http.ResponseWriter, r *http.Request, op string, err error) {
@@ -299,11 +307,11 @@ func (h *Handler) GetSearchIndexManifest(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, SearchIndexManifestResponse{
-		Cursor:       encodeSearchIndexCursor(searchIndexCursor{Since: row.Snapshot}),
+		Cursor:       encodeSearchIndexCursor(searchIndexCursor{Since: strconv.FormatInt(row.ChangeSeq, 10)}),
 		IssueCount:   row.IssueCount,
 		CommentCount: row.CommentCount,
 		ProjectCount: row.ProjectCount,
-		TextBytes:    row.IssueBytes + row.CommentBytes + row.ProjectBytes,
+		TextBytes:    ifaceInt64(row.IssueBytes) + ifaceInt64(row.CommentBytes) + ifaceInt64(row.ProjectBytes),
 	})
 }
 
@@ -349,14 +357,14 @@ func (h *Handler) GetSearchIndexSnapshot(w http.ResponseWriter, r *http.Request)
 		var err error
 		issues, err = q.ListSearchIndexIssuesPage(ctx, db.ListSearchIndexIssuesPageParams{
 			WorkspaceID: wsUUID,
-			AfterNumber: int32(afterNumber),
-			PageLimit:   int32(limit),
+			AfterNumber: int64(int32(afterNumber)),
+			PageLimit:   int64(int32(limit)),
 		})
 		if err != nil {
 			return err
 		}
 		if len(issues) > 0 {
-			ids := make([]pgtype.UUID, len(issues))
+			ids := make([]string, len(issues))
 			for i, is := range issues {
 				ids[i] = is.ID
 			}
@@ -389,7 +397,7 @@ func (h *Handler) GetSearchIndexSnapshot(w http.ResponseWriter, r *http.Request)
 		resp.Comments = append(resp.Comments, searchIndexComment(c.ID, c.IssueID, c.Content, c.CreatedAt))
 	}
 	if n := len(issues); n > 0 {
-		resp.NextAfterNumber = issues[n-1].Number
+		resp.NextAfterNumber = int32(issues[n-1].Number)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -422,37 +430,50 @@ func (h *Handler) ListSearchIndexChanges(w http.ResponseWriter, r *http.Request)
 		limit = min(req.Limit, searchIndexChangesMaxLimit)
 	}
 
+	sinceSeq, err := strconv.ParseInt(cur.Since, 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid cursor")
+		return
+	}
 	var (
 		pruned   bool
-		target   = cur.Target
+		target   int64
 		changes  []db.ListSearchIndexChangesRow
 		issues   []db.Issue
 		comments []db.ListSearchIndexCommentsByIDsRow
 		projects []db.Project
 	)
+	if cur.Target != "" {
+		target, err = strconv.ParseInt(cur.Target, 10, 64)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid cursor")
+			return
+		}
+	}
 	err = h.runSearchIndexRead(ctx, func(q *db.Queries) error {
 		var err error
-		if pruned, err = q.SearchIndexSinceIsPruned(ctx, cur.Since); err != nil || pruned {
+		if pruned, err = q.SearchIndexSinceIsPruned(ctx, sinceSeq); err != nil || pruned {
 			return err
 		}
-		if target == "" {
+		if cur.Target == "" {
 			if target, err = q.GetSearchIndexCurrentSnapshot(ctx); err != nil {
 				return err
 			}
 		}
-		params := db.ListSearchIndexChangesParams{
-			WorkspaceID:    wsUUID,
-			SinceSnapshot:  cur.Since,
-			TargetSnapshot: target,
-			AfterXid:       "0",
-			AfterType:      "",
-			AfterID:        pgtype.UUID{Valid: true},
-			PageLimit:      int32(limit + 1),
-		}
+		var afterSeq, afterType, afterID int64
 		if cur.Target != "" {
-			params.AfterXid = cur.AfterXid
-			params.AfterType = cur.AfterType
-			params.AfterID, _ = parseUUIDStrict(cur.AfterID)
+			afterSeq, _ = strconv.ParseInt(cur.AfterXid, 10, 64)
+			afterType, _ = strconv.ParseInt(cur.AfterType, 10, 64)
+			afterID, _ = strconv.ParseInt(cur.AfterID, 10, 64)
+		}
+		params := db.ListSearchIndexChangesParams{
+			WorkspaceID: wsUUID,
+			Since:       sinceSeq,
+			Target:      target,
+			AfterSeq:    afterSeq,
+			AfterType:   afterType,
+			AfterID:     afterID,
+			PageLimit:   int64(int32(limit + 1)),
 		}
 		if changes, err = q.ListSearchIndexChanges(ctx, params); err != nil {
 			return err
@@ -460,7 +481,7 @@ func (h *Handler) ListSearchIndexChanges(w http.ResponseWriter, r *http.Request)
 		if len(changes) > limit {
 			changes = changes[:limit]
 		}
-		var issueIDs, commentIDs, projectIDs []pgtype.UUID
+		var issueIDs, commentIDs, projectIDs []string
 		for _, c := range changes {
 			switch c.EntityType {
 			case "issue":
@@ -514,15 +535,15 @@ func (h *Handler) ListSearchIndexChanges(w http.ResponseWriter, r *http.Request)
 			Projects: []string{},
 		},
 	}
-	liveIssues := make(map[pgtype.UUID]bool, len(issues))
+	liveIssues := make(map[string]bool, len(issues))
 	for _, is := range issues {
 		liveIssues[is.ID] = true
 	}
-	liveProjects := make(map[pgtype.UUID]bool, len(projects))
+	liveProjects := make(map[string]bool, len(projects))
 	for _, p := range projects {
 		liveProjects[p.ID] = true
 	}
-	liveComments := make(map[pgtype.UUID]bool, len(comments))
+	liveComments := make(map[string]bool, len(comments))
 	for _, c := range comments {
 		if c.DeletedAt.Valid {
 			continue
@@ -554,26 +575,26 @@ func (h *Handler) ListSearchIndexChanges(w http.ResponseWriter, r *http.Request)
 		resp.HasMore = true
 		resp.Cursor = encodeSearchIndexCursor(searchIndexCursor{
 			Since:     cur.Since,
-			Target:    target,
-			AfterXid:  last.ChangeXid,
+			Target:    strconv.FormatInt(target, 10),
+			AfterXid:  strconv.FormatInt(last.ChangeSeq, 10),
 			AfterType: last.EntityType,
 			AfterID:   uuidToString(last.EntityID),
 		})
 	} else {
-		resp.Cursor = encodeSearchIndexCursor(searchIndexCursor{Since: target})
+		resp.Cursor = encodeSearchIndexCursor(searchIndexCursor{Since: strconv.FormatInt(target, 10)})
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (h *Handler) searchIndexIssues(ctx context.Context, wsUUID pgtype.UUID, issues []db.Issue) []SearchIndexIssue {
+func (h *Handler) searchIndexIssues(ctx context.Context, wsUUID string, issues []db.Issue) []SearchIndexIssue {
 	out := make([]SearchIndexIssue, 0, len(issues))
 	if len(issues) == 0 {
 		return out
 	}
 	prefix := h.getIssuePrefix(ctx, wsUUID)
-	var originals []pgtype.UUID
+	var originals []string
 	for _, is := range issues {
-		originals = appendDuplicateOriginal(originals, is.Status, is.DuplicateOfIssueID)
+		originals = appendDuplicateOriginal(originals, is.Status, is.DuplicateOfIssueID.String)
 	}
 	fill := h.newStatusCategoryFiller(ctx, wsUUID, originals...)
 	for _, is := range issues {
@@ -581,7 +602,7 @@ func (h *Handler) searchIndexIssues(ctx context.Context, wsUUID pgtype.UUID, iss
 		fill(&resp)
 		out = append(out, SearchIndexIssue{
 			IssueResponse:   resp,
-			SearchUpdatedAt: is.UpdatedAt.Time.UTC().Format(time.RFC3339Nano),
+			SearchUpdatedAt: parseDBTime(is.UpdatedAt).UTC().Format(time.RFC3339Nano),
 		})
 	}
 	return out
@@ -592,17 +613,17 @@ func searchIndexProjects(projects []db.Project) []SearchIndexProject {
 	for _, p := range projects {
 		out = append(out, SearchIndexProject{
 			ProjectResponse: projectToResponse(p),
-			SearchUpdatedAt: p.UpdatedAt.Time.UTC().Format(time.RFC3339Nano),
+			SearchUpdatedAt: parseDBTime(p.UpdatedAt).UTC().Format(time.RFC3339Nano),
 		})
 	}
 	return out
 }
 
-func searchIndexComment(id, issueID pgtype.UUID, content string, createdAt pgtype.Timestamptz) SearchIndexComment {
+func searchIndexComment(id, issueID string, content string, createdAt string) SearchIndexComment {
 	return SearchIndexComment{
 		ID:        uuidToString(id),
 		IssueID:   uuidToString(issueID),
 		Content:   content,
-		CreatedAt: createdAt.Time.UTC().Format(time.RFC3339Nano),
+		CreatedAt: parseDBTime(createdAt).UTC().Format(time.RFC3339Nano),
 	}
 }

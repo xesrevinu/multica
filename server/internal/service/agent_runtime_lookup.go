@@ -2,10 +2,8 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -48,10 +46,10 @@ type RuntimeLookup struct {
 // Get reads one agent_runtime row and counts it against the lookup's source.
 //
 // The row and error are returned untouched: callers already distinguish
-// pgx.ErrNoRows (the runtime was deleted — the daemon reads that as "drop your
+// sql.ErrNoRows (the runtime was deleted — the daemon reads that as "drop your
 // local registration") from a transient database failure, and collapsing the
 // two here would turn a hiccup into a spurious self-heal.
-func (l RuntimeLookup) Get(ctx context.Context, id pgtype.UUID) (db.AgentRuntime, error) {
+func (l RuntimeLookup) Get(ctx context.Context, id string) (db.AgentRuntime, error) {
 	rt, err := l.Queries.GetAgentRuntime(ctx, id)
 	l.Metrics.RecordAgentRuntimeLookup(l.Source, runtimeLookupResult(err))
 	return rt, err
@@ -68,7 +66,7 @@ func (l RuntimeLookup) Get(ctx context.Context, id pgtype.UUID) (db.AgentRuntime
 // it did not — so multica_agent_runtime_lookup_total keeps the same shape it
 // had before batching. The read error is returned untouched so callers can fail
 // closed instead of treating a hiccup as "every runtime is gone".
-func (l RuntimeLookup) GetMany(ctx context.Context, ids []pgtype.UUID) (map[string]db.AgentRuntime, error) {
+func (l RuntimeLookup) GetMany(ctx context.Context, ids []string) (map[string]db.AgentRuntime, error) {
 	rows, err := l.Queries.GetAgentRuntimes(ctx, ids)
 	if err != nil {
 		for range ids {
@@ -94,7 +92,7 @@ func runtimeLookupResult(err error) string {
 	switch {
 	case err == nil:
 		return obsmetrics.RuntimeLookupResultOK
-	case errors.Is(err, pgx.ErrNoRows):
+	case errors.Is(err, sql.ErrNoRows):
 		return obsmetrics.RuntimeLookupResultNotFound
 	default:
 		return obsmetrics.RuntimeLookupResultError

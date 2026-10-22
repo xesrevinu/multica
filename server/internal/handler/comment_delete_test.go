@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"mime/multipart"
 	"net/http"
@@ -10,9 +11,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/service"
@@ -42,7 +40,7 @@ func loadCommentRowState(t *testing.T, id string) commentRowState {
 	err := testPool.QueryRow(context.Background(),
 		`SELECT content, parent_id::text, deleted_at, resolved_at FROM comment WHERE id = $1`, id,
 	).Scan(&state.content, &parentID, &deletedAt, &resolvedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return commentRowState{}
 	}
 	if err != nil {
@@ -238,7 +236,7 @@ func TestCommentTombstoneIsNotTriggerInput(t *testing.T) {
 		n, err := testHandler.Queries.CountNewCommentsSince(ctx, db.CountNewCommentsSinceParams{
 			IssueID:     parseUUID(issueID),
 			WorkspaceID: parseUUID(testWorkspaceID),
-			Since:       pgtype.Timestamptz{Time: since, Valid: true},
+			Since:       since.UTC().Format(time.RFC3339Nano),
 			// Neither id may be NULL: the query compares against both.
 			AnchorID: parseUUID("00000000-0000-0000-0000-000000000001"),
 			AuthorID: parseUUID(testUserID),
@@ -260,8 +258,8 @@ func TestCommentTombstoneIsNotTriggerInput(t *testing.T) {
 	}
 	reconcilable, err := testHandler.Queries.ListReconcilableCommentsForIssueSince(ctx, db.ListReconcilableCommentsForIssueSinceParams{
 		IssueID:           parseUUID(issueID),
-		PlannedCommentIds: []pgtype.UUID{parseUUID(root)},
-		Since:             pgtype.Timestamptz{Time: since, Valid: true},
+		PlannedCommentIds: []string{parseUUID(root)},
+		Since:             since.UTC().Format(time.RFC3339Nano),
 	})
 	if err != nil {
 		t.Fatalf("ListReconcilableCommentsForIssueSince: %v", err)
@@ -296,7 +294,7 @@ func TestReplyUnderDeletedAgentCommentWakesNoOne(t *testing.T) {
 	body := map[string]any{"content": "please follow up", "parent_id": root}
 	requirePreviewAgents(t, previewCommentTriggersForTest(t, issueID, body))
 	postCommentForTriggerPreviewTest(t, issueID, body)
-	tasks, err := testHandler.Queries.ListTasksByIssue(ctx, parseUUID(issueID))
+	tasks, err := testHandler.Queries.ListTasksByIssue(ctx, nullString(parseUUID(issueID)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +345,7 @@ func TestPublicPluginCommentExposesTombstone(t *testing.T) {
 		t.Fatalf("live comment deleted_at = %q, want empty", live.DeletedAt)
 	}
 	deletedAt := time.Date(2026, time.September, 11, 8, 0, 0, 0, time.UTC)
-	tombstone := publicPluginComment(db.Comment{DeletedAt: pgtype.Timestamptz{Time: deletedAt, Valid: true}})
+	tombstone := publicPluginComment(db.Comment{DeletedAt: nullString(deletedAt.UTC().Format(time.RFC3339Nano))})
 	if tombstone.DeletedAt == "" || tombstone.Content != "" {
 		t.Fatalf("tombstone = %+v, want deleted_at set and empty content", tombstone)
 	}

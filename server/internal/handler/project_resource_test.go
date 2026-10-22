@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -972,8 +972,8 @@ func TestProjectResourceLabelConvergence(t *testing.T) {
 	futureRef := json.RawMessage(`{"local_path":"/Users/dev/work/game-client","daemon_id":"daemon-label-convergence","label":"Renamed On Old Desktop","execution_mode":"in_place","future_field":{"keep":"me"}}`)
 	if _, err := testHandler.Queries.UpdateProjectResource(context.Background(), db.UpdateProjectResourceParams{
 		ID:          parseUUID(created.ID),
-		ResourceRef: futureRef,
-		Label:       pgtype.Text{String: "Renamed On Old Desktop", Valid: true},
+		ResourceRef: string(futureRef),
+		Label:       sql.NullString{String: "Renamed On Old Desktop", Valid: true},
 		Position:    0,
 	}); err != nil {
 		t.Fatalf("plant future ref: %v", err)
@@ -1005,8 +1005,8 @@ func TestProjectResourceLabelConvergence(t *testing.T) {
 	// the documented normalize contract for provided refs, not label code.)
 	if _, err := testHandler.Queries.UpdateProjectResource(context.Background(), db.UpdateProjectResourceParams{
 		ID:          parseUUID(created.ID),
-		ResourceRef: json.RawMessage(`{"local_path":"/Users/dev/work/game-client","daemon_id":"daemon-label-convergence","label":"Stale Ref Copy","execution_mode":"in_place"}`),
-		Label:       pgtype.Text{String: "Column Rename", Valid: true},
+		ResourceRef: string(json.RawMessage(`{"local_path":"/Users/dev/work/game-client","daemon_id":"daemon-label-convergence","label":"Stale Ref Copy","execution_mode":"in_place"}`)),
+		Label:       sql.NullString{String: "Column Rename", Valid: true},
 		Position:    0,
 	}); err != nil {
 		t.Fatalf("plant diverged row: %v", err)
@@ -1045,8 +1045,8 @@ func TestProjectResourceLabelConvergence(t *testing.T) {
 	// "never set", not "cleared".
 	if _, err := testHandler.Queries.UpdateProjectResource(context.Background(), db.UpdateProjectResourceParams{
 		ID:          parseUUID(created.ID),
-		ResourceRef: json.RawMessage(`{"local_path":"/Users/dev/work/game-client","daemon_id":"daemon-label-convergence","label":"Ref Only Name","execution_mode":"in_place"}`),
-		Label:       pgtype.Text{},
+		ResourceRef: string(json.RawMessage(`{"local_path":"/Users/dev/work/game-client","daemon_id":"daemon-label-convergence","label":"Ref Only Name","execution_mode":"in_place"}`)),
+		Label:       sql.NullString{},
 		Position:    0,
 	}); err != nil {
 		t.Fatalf("plant legacy row: %v", err)
@@ -1392,11 +1392,11 @@ func TestValidateLocalDirectoryRefExecutionMode(t *testing.T) {
 func TestLatestDaemonCLIVersion(t *testing.T) {
 	row := func(daemonID, version string, seen time.Time) db.AgentRuntime {
 		rt := db.AgentRuntime{
-			DaemonID:   pgtype.Text{String: daemonID, Valid: daemonID != ""},
-			LastSeenAt: pgtype.Timestamptz{Time: seen, Valid: !seen.IsZero()},
+			DaemonID:   sql.NullString{String: daemonID, Valid: daemonID != ""},
+			LastSeenAt: nullString(formatTS(seen, !seen.IsZero())),
 		}
 		if version != "" {
-			rt.Metadata = []byte(`{"cli_version":"` + version + `"}`)
+			rt.Metadata = string([]byte(`{"cli_version":"` + version + `"}`))
 		}
 		return rt
 	}
@@ -1658,8 +1658,8 @@ func TestProjectResourceLegacyRenameSkipsWorktreeGate(t *testing.T) {
 	// correctly) be refused for a daemon with no capable runtime row.
 	if _, err := testHandler.Queries.UpdateProjectResource(context.Background(), db.UpdateProjectResourceParams{
 		ID:          parseUUID(created.ID),
-		ResourceRef: json.RawMessage(`{"local_path":"/Users/dev/work/game-client","daemon_id":"` + daemonID + `","label":"Game Client","execution_mode":"worktree"}`),
-		Label:       pgtype.Text{String: "Game Client", Valid: true},
+		ResourceRef: string(json.RawMessage(`{"local_path":"/Users/dev/work/game-client","daemon_id":"` + daemonID + `","label":"Game Client","execution_mode":"worktree"}`)),
+		Label:       sql.NullString{String: "Game Client", Valid: true},
 		Position:    0,
 	}); err != nil {
 		t.Fatalf("plant worktree row: %v", err)

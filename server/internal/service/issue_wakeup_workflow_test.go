@@ -2,9 +2,9 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -27,7 +27,7 @@ func TestWakeupRunKeepsTheRegisteringRunsStep(t *testing.T) {
 		f.Exec(t, "UPDATE issue_wakeup SET next_fire_at=now()-interval '1 second' WHERE id=$1", w.ID)
 		wakeDispatch(t, s, w)
 		got, _ := f.q.GetIssueWakeup(ctx, db.GetIssueWakeupParams{ID: w.ID, WorkspaceID: w.WorkspaceID})
-		task, err := f.q.GetAgentTask(ctx, got.LastTaskID)
+		task, err := f.q.GetAgentTask(ctx, got.LastTaskID.String)
 		if err != nil {
 			t.Fatalf("wakeup did not queue a run: %v", err)
 		}
@@ -70,7 +70,7 @@ func TestRetryKeepsWorkflowHandoffBrief(t *testing.T) {
 		f.Exec(t, "UPDATE agent_task_queue SET status='cancelled' WHERE id=$1", child.ID)
 		return child
 	}
-	if got := retry(testutil.Cols{"handoff_note": "This project's workflow — Delivery", "workflow_step": "in_progress"}); got.HandoffNote != (pgtype.Text{String: "This project's workflow — Delivery", Valid: true}) || got.WorkflowStep.String != "in_progress" {
+	if got := retry(testutil.Cols{"handoff_note": "This project's workflow — Delivery", "workflow_step": "in_progress"}); got.HandoffNote != (sql.NullString{String: "This project's workflow — Delivery", Valid: true}) || got.WorkflowStep.String != "in_progress" {
 		t.Fatalf("retry lost the handoff brief or step: %+v / %+v", got.HandoffNote, got.WorkflowStep)
 	}
 	if got := retry(testutil.Cols{"handoff_note": "retired assignment note"}); got.HandoffNote.Valid {

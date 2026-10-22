@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,7 +12,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -28,9 +28,9 @@ func localDirRef(t *testing.T, path, daemonID, mode string) json.RawMessage {
 }
 
 func runtimeWithVersion(daemonID, cliVersion string) db.AgentRuntime {
-	rt := db.AgentRuntime{DaemonID: pgtype.Text{String: daemonID, Valid: daemonID != ""}}
+	rt := db.AgentRuntime{DaemonID: sql.NullString{String: daemonID, Valid: daemonID != ""}}
 	if cliVersion != "" {
-		rt.Metadata, _ = json.Marshal(map[string]string{"cli_version": cliVersion})
+		rt.Metadata, _ = string(json.Marshal(map[string]string{"cli_version": cliVersion}))
 	}
 	return rt
 }
@@ -180,7 +180,7 @@ func TestWorktreeDeliveryMetadataRoundTripsThroughBothTerminalPaths(t *testing.T
 
 	readBranch := func(t *testing.T, taskID string) string {
 		t.Helper()
-		var branch pgtype.Text
+		var branch sql.NullString
 		if err := testPool.QueryRow(ctx,
 			`SELECT branch_name FROM agent_task_queue WHERE id = $1`, taskID).Scan(&branch); err != nil {
 			t.Fatalf("read branch_name: %v", err)
@@ -189,7 +189,7 @@ func TestWorktreeDeliveryMetadataRoundTripsThroughBothTerminalPaths(t *testing.T
 	}
 	readDurableWorkDir := func(t *testing.T, taskID string) string {
 		t.Helper()
-		var durableWorkDir pgtype.Text
+		var durableWorkDir sql.NullString
 		if err := testPool.QueryRow(ctx,
 			`SELECT durable_work_dir FROM agent_task_queue WHERE id = $1`, taskID).Scan(&durableWorkDir); err != nil {
 			t.Fatalf("read durable_work_dir: %v", err)
@@ -291,7 +291,7 @@ func TestWorktreeDeliveryMetadataSurvivesEveryTerminalPath(t *testing.T) {
 	}
 	readBranch := func(t *testing.T, taskID string) string {
 		t.Helper()
-		var branch pgtype.Text
+		var branch sql.NullString
 		if err := testPool.QueryRow(ctx,
 			`SELECT branch_name FROM agent_task_queue WHERE id = $1`, taskID).Scan(&branch); err != nil {
 			t.Fatalf("read branch_name: %v", err)
@@ -300,7 +300,7 @@ func TestWorktreeDeliveryMetadataSurvivesEveryTerminalPath(t *testing.T) {
 	}
 	readDurableWorkDir := func(t *testing.T, taskID string) string {
 		t.Helper()
-		var durableWorkDir pgtype.Text
+		var durableWorkDir sql.NullString
 		if err := testPool.QueryRow(ctx,
 			`SELECT durable_work_dir FROM agent_task_queue WHERE id = $1`, taskID).Scan(&durableWorkDir); err != nil {
 			t.Fatalf("read durable_work_dir: %v", err)
@@ -377,7 +377,7 @@ func TestWorktreeDeliveryMetadataSurvivesEveryTerminalPath(t *testing.T) {
 
 	readError := func(t *testing.T, taskID string) (string, string) {
 		t.Helper()
-		var errText, failureReason pgtype.Text
+		var errText, failureReason sql.NullString
 		if err := testPool.QueryRow(ctx,
 			`SELECT error, failure_reason FROM agent_task_queue WHERE id = $1`, taskID).Scan(&errText, &failureReason); err != nil {
 			t.Fatalf("read error columns: %v", err)
@@ -521,14 +521,14 @@ func TestWorktreeClaimGateCancelPersistsReason(t *testing.T) {
 	const reason = "worktree mode needs a newer runtime on that machine"
 	if _, err := testHandler.Queries.CancelAgentTaskWithReason(ctx, db.CancelAgentTaskWithReasonParams{
 		ID:            parseUUID(taskID),
-		Error:         pgtype.Text{String: reason, Valid: true},
-		FailureReason: pgtype.Text{String: "local_directory_error", Valid: true},
+		Error:         sql.NullString{String: reason, Valid: true},
+		FailureReason: sql.NullString{String: "local_directory_error", Valid: true},
 	}); err != nil {
 		t.Fatalf("CancelAgentTaskWithReason: %v", err)
 	}
 
 	var status string
-	var errText, failureReason pgtype.Text
+	var errText, failureReason sql.NullString
 	if err := testPool.QueryRow(ctx,
 		`SELECT status, error, failure_reason FROM agent_task_queue WHERE id = $1`,
 		taskID).Scan(&status, &errText, &failureReason); err != nil {
@@ -631,7 +631,7 @@ func seedWorktreeGateClaimFixture(t *testing.T, ctx context.Context, label, daem
 func assertWorktreeGateCancelled(t *testing.T, ctx context.Context, taskID string) {
 	t.Helper()
 	var status string
-	var errText, failureReason pgtype.Text
+	var errText, failureReason sql.NullString
 	if err := testPool.QueryRow(ctx,
 		`SELECT status, error, failure_reason FROM agent_task_queue WHERE id = $1`,
 		taskID).Scan(&status, &errText, &failureReason); err != nil {
@@ -898,14 +898,14 @@ func TestRuntimeHasCapability(t *testing.T) {
 
 func runtimeRow(daemonID string, seenAt time.Time, caps ...string) db.AgentRuntime {
 	rt := db.AgentRuntime{
-		DaemonID:   pgtype.Text{String: daemonID, Valid: daemonID != ""},
-		LastSeenAt: pgtype.Timestamptz{Time: seenAt, Valid: !seenAt.IsZero()},
+		DaemonID:   sql.NullString{String: daemonID, Valid: daemonID != ""},
+		LastSeenAt: nullString(formatTS(seenAt, !seenAt.IsZero())),
 	}
 	payload := map[string]any{"cli_version": "9.9.9"}
 	if len(caps) > 0 {
 		payload["capabilities"] = caps
 	}
-	rt.Metadata, _ = json.Marshal(payload)
+	rt.Metadata, _ = string(json.Marshal(payload))
 	return rt
 }
 

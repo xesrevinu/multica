@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
+
 	"github.com/multica-ai/multica/server/internal/featureflags"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -29,12 +29,12 @@ const (
 )
 
 type pluginHookScheduleConfig struct {
-	ID             pgtype.UUID
-	InstallationID pgtype.UUID
+	ID             string
+	InstallationID string
 	HookKey        string
 	CronExpression string
 	Timezone       string
-	Generation     pgtype.UUID
+	Generation     string
 	ActivatedAt    time.Time
 }
 
@@ -133,7 +133,8 @@ func pluginHookScheduleScopes(
 		scopes := make([]Scope, 0, len(rows))
 		for _, row := range rows {
 			scopeID := pluginHookScheduleScopeID(row.ID, row.Generation)
-			if scopeID == "" || !row.ActivatedAt.Valid {
+			activatedAt, activatedErr := time.Parse(time.RFC3339, row.ActivatedAt)
+			if scopeID == "" || activatedErr != nil {
 				continue
 			}
 			configs[scopeID] = pluginHookScheduleConfig{
@@ -143,7 +144,7 @@ func pluginHookScheduleScopes(
 				CronExpression: row.CronExpression,
 				Timezone:       row.Timezone,
 				Generation:     row.Generation,
-				ActivatedAt:    row.ActivatedAt.Time.UTC(),
+				ActivatedAt:    activatedAt.UTC(),
 			}
 			scopes = append(scopes, Scope{Kind: ScopeKindPluginHookSchedule, ID: scopeID})
 		}
@@ -235,23 +236,23 @@ func pluginHookScheduleHandler(
 
 		row, err := queries.GetPluginHookSchedule(ctx, scheduleID)
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+			if errors.Is(err, sql.ErrNoRows) {
 				return pluginHookScheduleSkipped("schedule_not_found"), nil
 			}
 			return HandlerResult{}, fmt.Errorf("load plugin hook schedule: %w", err)
 		}
-		if !row.Enabled || row.Generation != generation {
+		if row.Enabled == 0 || row.Generation != generation {
 			return pluginHookScheduleSkipped("schedule_generation_changed"), nil
 		}
 
 		installation, err := queries.GetPluginInstallation(ctx, row.InstallationID)
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+			if errors.Is(err, sql.ErrNoRows) {
 				return pluginHookScheduleSkipped("installation_not_found"), nil
 			}
 			return HandlerResult{}, fmt.Errorf("load plugin installation: %w", err)
 		}
-		if !installation.Enabled {
+		if installation.Enabled == 0 {
 			return pluginHookScheduleSkipped("installation_disabled"), nil
 		}
 		hook, err := service.FindHook(installation, row.HookKey)
@@ -277,7 +278,7 @@ func pluginHookScheduleHandler(
 			Trigger:      plugincontract.TriggerSchedule,
 			Actor:        service.HookActor{Type: "plugin", ID: installation.ID},
 			DeliveryID:   deliveryID,
-			PlannedAt:    pgtype.Timestamptz{Time: in.PlanTime.UTC(), Valid: true},
+			PlannedAt:    sql.NullString{String: formatDBTime(in.PlanTime), Valid: true},
 		}, in.Attempt)
 		if err != nil {
 			if in.Job != nil && in.Attempt >= in.Job.MaxAttempts {
@@ -308,11 +309,11 @@ func advancePluginHookNextRun(ctx context.Context, queries *db.Queries, row db.P
 	_, _ = queries.UpdatePluginHookScheduleNextRun(ctx, db.UpdatePluginHookScheduleNextRunParams{
 		ID:         row.ID,
 		Generation: row.Generation,
-		NextRunAt:  pgtype.Timestamptz{Time: next.UTC(), Valid: true},
+		NextRunAt:  sql.NullString{String: next.UTC().Format(time.RFC3339Nano), Valid: true},
 	})
 }
 
-func pluginHookScheduleScopeID(id, generation pgtype.UUID) string {
+func pluginHookScheduleScopeID(id, generation string) string {
 	idString := util.UUIDToString(id)
 	generationString := util.UUIDToString(generation)
 	if idString == "" || generationString == "" {
@@ -321,26 +322,26 @@ func pluginHookScheduleScopeID(id, generation pgtype.UUID) string {
 	return idString + ":" + generationString
 }
 
-func parsePluginHookScheduleScopeID(scopeID string) (pgtype.UUID, pgtype.UUID, error) {
+func parsePluginHookScheduleScopeID(scopeID string) (string, string, error) {
 	parts := strings.Split(scopeID, ":")
 	if len(parts) != 2 {
-		return pgtype.UUID{}, pgtype.UUID{}, errors.New("expected schedule:generation scope")
+		return "", "", errors.New("expected schedule:generation scope")
 	}
 	id, err := util.ParseUUID(parts[0])
 	if err != nil {
-		return pgtype.UUID{}, pgtype.UUID{}, err
+		return "", "", err
 	}
 	generation, err := util.ParseUUID(parts[1])
 	if err != nil {
-		return pgtype.UUID{}, pgtype.UUID{}, err
+		return "", "", err
 	}
 	return id, generation, nil
 }
 
 func pluginHookScheduleDeliveryID(
-	installationID pgtype.UUID,
+	installationID string,
 	hookKey string,
-	generation pgtype.UUID,
+	generation string,
 	plan time.Time,
 ) string {
 	digest := sha256.Sum256([]byte(strings.Join([]string{

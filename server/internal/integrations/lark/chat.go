@@ -2,8 +2,6 @@ package lark
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // The chat-session ensure/append/`/issue` machinery that used to live here (and
@@ -20,7 +18,7 @@ type AuditLogger interface {
 }
 
 type AuditDropParams struct {
-	InstallationID pgtype.UUID // may be invalid for installation-less events
+	InstallationID string // may be invalid for installation-less events
 	ChatID         ChatID
 	EventType      string
 	LarkEventID    string

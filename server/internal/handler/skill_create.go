@@ -2,18 +2,17 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	skillpkg "github.com/multica-ai/multica/server/internal/skill"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 type skillCreateInput struct {
-	WorkspaceID pgtype.UUID
-	CreatorID   pgtype.UUID
+	WorkspaceID string
+	CreatorID   string
 	Name        string
 	Description string
 	Content     string
@@ -40,8 +39,8 @@ func createSkillWithFilesInTx(ctx context.Context, qtx *db.Queries, input skillC
 		Name:        sanitizeNullBytes(input.Name),
 		Description: sanitizeNullBytes(input.Description),
 		Content:     sanitizeNullBytes(input.Content),
-		Config:      config,
-		CreatedBy:   input.CreatorID,
+		Config:      string(config),
+		CreatedBy:   nullString(input.CreatorID),
 	})
 	if err != nil {
 		return SkillWithFilesResponse{}, err
@@ -72,11 +71,11 @@ func createSkillWithFilesInTx(ctx context.Context, qtx *db.Queries, input skillC
 }
 
 func (h *Handler) createSkillWithFiles(ctx context.Context, input skillCreateInput) (SkillWithFilesResponse, error) {
-	tx, err := h.TxStarter.Begin(ctx)
+	tx, err := h.TxStarter.BeginTx(ctx, nil)
 	if err != nil {
 		return SkillWithFilesResponse{}, err
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 
 	qtx := h.Queries.WithTx(tx)
 
@@ -85,7 +84,7 @@ func (h *Handler) createSkillWithFiles(ctx context.Context, input skillCreateInp
 		return SkillWithFilesResponse{}, err
 	}
 
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return SkillWithFilesResponse{}, err
 	}
 
@@ -105,8 +104,8 @@ var (
 )
 
 type skillOverwriteInput struct {
-	WorkspaceID   pgtype.UUID
-	TargetSkillID pgtype.UUID
+	WorkspaceID   string
+	TargetSkillID string
 	UserID        string // re-checked against the skill creator inside the tx
 	// ExpectedName, when non-empty, must equal the target's current name. Guards
 	// against a client sending the wrong target_skill_id and overwriting a
@@ -147,11 +146,11 @@ func (h *Handler) overwriteSkillWithFiles(ctx context.Context, input skillOverwr
 		config = []byte("{}")
 	}
 
-	tx, err := h.TxStarter.Begin(ctx)
+	tx, err := h.TxStarter.BeginTx(ctx, nil)
 	if err != nil {
 		return SkillWithFilesResponse{}, err
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 
 	qtx := h.Queries.WithTx(tx)
 
@@ -160,7 +159,7 @@ func (h *Handler) overwriteSkillWithFiles(ctx context.Context, input skillOverwr
 		WorkspaceID: input.WorkspaceID,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return SkillWithFilesResponse{}, errSkillOverwriteNotFound
 		}
 		return SkillWithFilesResponse{}, err
@@ -184,22 +183,22 @@ func (h *Handler) overwriteSkillWithFiles(ctx context.Context, input skillOverwr
 	// import-conflict overwrite targets the same-name skill, so preserving it
 	// avoids any unique-name churn. Refresh-from-source passes NewName to adopt
 	// an upstream rename.
-	var newName pgtype.Text
+	var newName sql.NullString
 	if n := sanitizeNullBytes(input.NewName); n != "" && n != existing.Name {
-		newName = pgtype.Text{String: n, Valid: true}
+		newName = sql.NullString{String: n, Valid: true}
 	}
 	skill, err := qtx.UpdateSkill(ctx, db.UpdateSkillParams{
 		ID:          existing.ID,
 		Name:        newName,
-		Description: pgtype.Text{String: sanitizeNullBytes(input.Description), Valid: true},
-		Content:     pgtype.Text{String: sanitizeNullBytes(input.Content), Valid: true},
-		Config:      config,
+		Description: sql.NullString{String: sanitizeNullBytes(input.Description), Valid: true},
+		Content:     sql.NullString{String: sanitizeNullBytes(input.Content), Valid: true},
+		Config:      nullString(string(config)),
 	})
 	if err != nil {
 		// A committed concurrent DELETE can land between the read above and this
 		// UPDATE (READ COMMITTED), so UpdateSkill matches 0 rows. Classify it as
 		// the same "target gone" terminal case rather than a generic failure.
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return SkillWithFilesResponse{}, errSkillOverwriteNotFound
 		}
 		if newName.Valid && isUniqueViolation(err) {
@@ -226,7 +225,7 @@ func (h *Handler) overwriteSkillWithFiles(ctx context.Context, input skillOverwr
 		fileResps = append(fileResps, skillFileToResponse(sf))
 	}
 
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return SkillWithFilesResponse{}, err
 	}
 

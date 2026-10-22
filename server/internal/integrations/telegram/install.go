@@ -11,9 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
 	"github.com/multica-ai/multica/server/internal/util/secretbox"
@@ -57,9 +55,9 @@ var (
 // installQueries is the slice of generated queries InstallService needs,
 // interface-shaped so tests inject a fake (same adapter pattern as Slack).
 type installQueries interface {
-	WithTx(tx pgx.Tx) installQueries
+	WithTx(tx *sql.Tx) installQueries
 	UpsertChannelInstallation(ctx context.Context, arg db.UpsertChannelInstallationParams) (db.ChannelInstallation, error)
-	ReclaimDeadChannelInstallationByAppID(ctx context.Context, arg db.ReclaimDeadChannelInstallationByAppIDParams) (pgtype.UUID, error)
+	ReclaimDeadChannelInstallationByAppID(ctx context.Context, arg db.ReclaimDeadChannelInstallationByAppIDParams) (string, error)
 	GetChannelInstallationOwnerByAppID(ctx context.Context, arg db.GetChannelInstallationOwnerByAppIDParams) (db.GetChannelInstallationOwnerByAppIDRow, error)
 	ListChannelInstallationsByWorkspace(ctx context.Context, arg db.ListChannelInstallationsByWorkspaceParams) ([]db.ChannelInstallation, error)
 	GetChannelInstallationInWorkspace(ctx context.Context, arg db.GetChannelInstallationInWorkspaceParams) (db.ChannelInstallation, error)
@@ -68,7 +66,7 @@ type installQueries interface {
 
 type dbInstallQueries struct{ *db.Queries }
 
-func (q dbInstallQueries) WithTx(tx pgx.Tx) installQueries {
+func (q dbInstallQueries) WithTx(tx *sql.Tx) installQueries {
 	return dbInstallQueries{q.Queries.WithTx(tx)}
 }
 
@@ -121,9 +119,9 @@ func newInstallService(q installQueries, tx engine.TxStarter, box *secretbox.Box
 // RegisterParams are the inputs for a bot install: the agent this bot
 // represents, who is installing, and the pasted BotFather token.
 type RegisterParams struct {
-	WorkspaceID pgtype.UUID
-	AgentID     pgtype.UUID
-	InitiatorID pgtype.UUID
+	WorkspaceID string
+	AgentID     string
+	InitiatorID string
 	BotToken    string
 }
 
@@ -188,14 +186,12 @@ func classifyCredentialVerificationError(err error) error {
 
 // installPersist carries the resolved fields persistInstall writes.
 type installPersist struct {
-	wsID        pgtype.UUID
-	agentID     pgtype.UUID
-	installerID pgtype.UUID
+	wsID        string
+	agentID     string
+	installerID string
 	appIDKey    string
 	configJSON  []byte
 }
-
-const pgUniqueViolation = "23505"
 
 const credentialVerificationTimeout = 15 * time.Second
 
@@ -213,7 +209,7 @@ func (s *InstallService) persistInstall(ctx context.Context, p installPersist) (
 	if err != nil {
 		return db.ChannelInstallation{}, fmt.Errorf("begin install tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { _ = tx.Rollback() }()
 	qtx := s.q.WithTx(tx)
 
 	// Free the routing slot from any DEAD prior owner before the upsert.
@@ -222,7 +218,7 @@ func (s *InstallService) persistInstall(ctx context.Context, p installPersist) (
 		AppID:       p.appIDKey,
 		WorkspaceID: p.wsID,
 		AgentID:     p.agentID,
-	}); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	}); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return db.ChannelInstallation{}, fmt.Errorf("reclaim dead telegram installation: %w", err)
 	}
 
@@ -230,17 +226,16 @@ func (s *InstallService) persistInstall(ctx context.Context, p installPersist) (
 		WorkspaceID:     p.wsID,
 		AgentID:         p.agentID,
 		ChannelType:     string(TypeTelegram),
-		Config:          p.configJSON,
+		Config:          string(p.configJSON),
 		InstallerUserID: p.installerID,
 	})
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			return db.ChannelInstallation{}, s.liveOwnerConflictErr(ctx, p.wsID, p.appIDKey)
 		}
 		return db.ChannelInstallation{}, fmt.Errorf("upsert telegram installation: %w", err)
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return db.ChannelInstallation{}, fmt.Errorf("commit telegram install: %w", err)
 	}
 	return inst, nil
@@ -248,7 +243,7 @@ func (s *InstallService) persistInstall(ctx context.Context, p installPersist) (
 
 // liveOwnerConflictErr classifies who holds the routing slot so the handler
 // renders an accurate message.
-func (s *InstallService) liveOwnerConflictErr(ctx context.Context, requestingWorkspaceID pgtype.UUID, appID string) error {
+func (s *InstallService) liveOwnerConflictErr(ctx context.Context, requestingWorkspaceID string, appID string) error {
 	owner, err := s.q.GetChannelInstallationOwnerByAppID(ctx, db.GetChannelInstallationOwnerByAppIDParams{
 		ChannelType: string(TypeTelegram),
 		AppID:       appID,
@@ -268,7 +263,7 @@ func (s *InstallService) liveOwnerConflictErr(ctx context.Context, requestingWor
 
 // ListByWorkspace returns every Telegram installation in the workspace, for
 // the management surface.
-func (s *InstallService) ListByWorkspace(ctx context.Context, wsID pgtype.UUID) ([]db.ChannelInstallation, error) {
+func (s *InstallService) ListByWorkspace(ctx context.Context, wsID string) ([]db.ChannelInstallation, error) {
 	return s.q.ListChannelInstallationsByWorkspace(ctx, db.ListChannelInstallationsByWorkspaceParams{
 		WorkspaceID: wsID,
 		ChannelType: string(TypeTelegram),
@@ -277,14 +272,14 @@ func (s *InstallService) ListByWorkspace(ctx context.Context, wsID pgtype.UUID) 
 
 // GetInWorkspace is the workspace-scoped lookup so a forged installation id
 // from another workspace returns NotFound instead of leaking existence.
-func (s *InstallService) GetInWorkspace(ctx context.Context, id, wsID pgtype.UUID) (db.ChannelInstallation, error) {
+func (s *InstallService) GetInWorkspace(ctx context.Context, id, wsID string) (db.ChannelInstallation, error) {
 	inst, err := s.q.GetChannelInstallationInWorkspace(ctx, db.GetChannelInstallationInWorkspaceParams{
 		ID:          id,
 		WorkspaceID: wsID,
 		ChannelType: string(TypeTelegram),
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return db.ChannelInstallation{}, ErrInstallationNotFound
 		}
 		return db.ChannelInstallation{}, err
@@ -295,7 +290,7 @@ func (s *InstallService) GetInWorkspace(ctx context.Context, id, wsID pgtype.UUI
 // Revoke flips status to 'revoked'. The row is preserved for audit; existing
 // chat sessions stay in Multica. The Supervisor stops supervising the
 // installation, so its polling loop winds down and outbound drops too.
-func (s *InstallService) Revoke(ctx context.Context, id pgtype.UUID) error {
+func (s *InstallService) Revoke(ctx context.Context, id string) error {
 	return s.q.SetChannelInstallationStatus(ctx, db.SetChannelInstallationStatusParams{
 		ID:     id,
 		Status: "revoked",

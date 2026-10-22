@@ -107,7 +107,7 @@ func (h *Handler) SetAgentRuntimeSkillEnabled(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	if !agent.RuntimeID.Valid || agent.RuntimeID != runtimeID {
+	if !agent.RuntimeID.Valid || agent.RuntimeID.String != runtimeID {
 		writeError(w, http.StatusConflict, "agent is no longer assigned to this runtime")
 		return
 	}
@@ -131,19 +131,19 @@ func (h *Handler) SetAgentRuntimeSkillEnabled(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to begin transaction")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 	locked, err := qtx.GetAgentForUpdate(r.Context(), agent.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load agent")
 		return
 	}
-	if !locked.RuntimeID.Valid || locked.RuntimeID != runtimeID {
+	if !locked.RuntimeID.Valid || locked.RuntimeID.String != runtimeID {
 		writeError(w, http.StatusConflict, "agent is no longer assigned to this runtime")
 		return
 	}
@@ -156,7 +156,7 @@ func (h *Handler) SetAgentRuntimeSkillEnabled(w http.ResponseWriter, r *http.Req
 		Name:      name,
 		Plugin:    plugin,
 	}
-	current := decodeDisabledRuntimeSkills(locked.DisabledRuntimeSkills)
+	current := decodeDisabledRuntimeSkills([]byte(locked.DisabledRuntimeSkills))
 	next := make([]DisabledRuntimeSkill, 0, len(current)+1)
 	for _, skill := range current {
 		if sameDisabledRuntimeSkill(skill, target) {
@@ -174,12 +174,12 @@ func (h *Handler) SetAgentRuntimeSkillEnabled(w http.ResponseWriter, r *http.Req
 	}
 	if _, err := qtx.UpdateAgentDisabledRuntimeSkills(r.Context(), db.UpdateAgentDisabledRuntimeSkillsParams{
 		ID:                    locked.ID,
-		DisabledRuntimeSkills: payload,
+		DisabledRuntimeSkills: string(payload),
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update runtime skill")
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit")
 		return
 	}
@@ -190,7 +190,7 @@ func (h *Handler) SetAgentRuntimeSkillEnabled(w http.ResponseWriter, r *http.Req
 	// writeUpdatedAgentSkills (skill.go); the realtime layer keys off the
 	// "agent:status" event to invalidate workspaceKeys.agents. Without this only
 	// the initiating tab refreshes and other clients keep showing stale toggles.
-	locked.DisabledRuntimeSkills = payload
+	locked.DisabledRuntimeSkills = string(payload)
 	resp := h.agentToResponse(locked)
 	if err := h.enrichAgentResponseWithTargets(r.Context(), &resp, locked.ID); err != nil {
 		slog.Warn("runtime skill toggle: load invocation targets for broadcast failed",

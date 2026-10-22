@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -170,19 +169,19 @@ func TestAutopilotCreateIssuePositionBelowCurrentMinimum(t *testing.T) {
 	}
 	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM autopilot WHERE id = $1`, autopilot.ID) })
 
-	queries := db.New(testPool)
+	queries := db.New(testSQLite)
 	ap, err := queries.GetAutopilot(ctx, parseUUID(autopilot.ID))
 	if err != nil {
 		t.Fatalf("GetAutopilot: %v", err)
 	}
-	run, _, err := testHandler.AutopilotService.DispatchAutopilotManual(ctx, ap, pgtype.UUID{}, nil, parseUUID(testUserID))
+	run, _, err := testHandler.AutopilotService.DispatchAutopilotManual(ctx, ap, "", nil, parseUUID(testUserID))
 	if err != nil {
 		t.Fatalf("DispatchAutopilot: %v", err)
 	}
 	if run == nil || !run.IssueID.Valid {
 		t.Fatalf("dispatch run = %+v, want linked issue", run)
 	}
-	issueID := uuidToString(run.IssueID)
+	issueID := uuidToString(run.IssueID.String)
 	t.Cleanup(func() { deleteTestIssue(t, issueID) })
 
 	var createdPos float64

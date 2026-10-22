@@ -7,22 +7,21 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const deletePullRequestExclusion = `-- name: DeletePullRequestExclusion :exec
 DELETE FROM issue_pull_request_exclusion
-WHERE issue_id = $1 AND pull_request_id = $2
+WHERE issue_id = ?1 AND pull_request_id = ?2
 `
 
 type DeletePullRequestExclusionParams struct {
-	IssueID       pgtype.UUID `json:"issue_id"`
-	PullRequestID pgtype.UUID `json:"pull_request_id"`
+	IssueID       string `json:"issue_id"`
+	PullRequestID string `json:"pull_request_id"`
 }
 
 func (q *Queries) DeletePullRequestExclusion(ctx context.Context, arg DeletePullRequestExclusionParams) error {
-	_, err := q.db.Exec(ctx, deletePullRequestExclusion, arg.IssueID, arg.PullRequestID)
+	_, err := q.db.ExecContext(ctx, deletePullRequestExclusion, arg.IssueID, arg.PullRequestID)
 	return err
 }
 
@@ -30,7 +29,7 @@ const excludePullRequestFromIssue = `-- name: ExcludePullRequestFromIssue :exec
 INSERT INTO issue_pull_request_exclusion (
     issue_id, pull_request_id, workspace_id, excluded_by_type, excluded_by_id
 ) VALUES (
-    $1, $2, $3, $4, $5
+    ?1, ?2, ?3, ?4, ?5
 )
 ON CONFLICT (issue_id, pull_request_id) DO UPDATE SET
     excluded_by_type = EXCLUDED.excluded_by_type,
@@ -39,15 +38,15 @@ ON CONFLICT (issue_id, pull_request_id) DO UPDATE SET
 `
 
 type ExcludePullRequestFromIssueParams struct {
-	IssueID        pgtype.UUID `json:"issue_id"`
-	PullRequestID  pgtype.UUID `json:"pull_request_id"`
-	WorkspaceID    pgtype.UUID `json:"workspace_id"`
-	ExcludedByType pgtype.Text `json:"excluded_by_type"`
-	ExcludedByID   pgtype.UUID `json:"excluded_by_id"`
+	IssueID        string         `json:"issue_id"`
+	PullRequestID  string         `json:"pull_request_id"`
+	WorkspaceID    string         `json:"workspace_id"`
+	ExcludedByType sql.NullString `json:"excluded_by_type"`
+	ExcludedByID   sql.NullString `json:"excluded_by_id"`
 }
 
 func (q *Queries) ExcludePullRequestFromIssue(ctx context.Context, arg ExcludePullRequestFromIssueParams) error {
-	_, err := q.db.Exec(ctx, excludePullRequestFromIssue,
+	_, err := q.db.ExecContext(ctx, excludePullRequestFromIssue,
 		arg.IssueID,
 		arg.PullRequestID,
 		arg.WorkspaceID,
@@ -61,15 +60,15 @@ const getIssuePRAutoCompleteDisabled = `-- name: GetIssuePRAutoCompleteDisabled 
 
 SELECT EXISTS (
     SELECT 1 FROM issue_pr_automation
-    WHERE issue_id = $1 AND auto_complete_disabled
-)::boolean AS disabled
+    WHERE issue_id = ?1 AND auto_complete_disabled
+) AS disabled
 `
 
 // =====================
 // PR auto-complete (MUL-7429)
 // =====================
-func (q *Queries) GetIssuePRAutoCompleteDisabled(ctx context.Context, issueID pgtype.UUID) (bool, error) {
-	row := q.db.QueryRow(ctx, getIssuePRAutoCompleteDisabled, issueID)
+func (q *Queries) GetIssuePRAutoCompleteDisabled(ctx context.Context, issueID string) (bool, error) {
+	row := q.db.QueryRowContext(ctx, getIssuePRAutoCompleteDisabled, issueID)
 	var disabled bool
 	err := row.Scan(&disabled)
 	return disabled, err
@@ -78,46 +77,46 @@ func (q *Queries) GetIssuePRAutoCompleteDisabled(ctx context.Context, issueID pg
 const isPullRequestExcludedFromIssue = `-- name: IsPullRequestExcludedFromIssue :one
 SELECT EXISTS (
     SELECT 1 FROM issue_pull_request_exclusion
-    WHERE issue_id = $1 AND pull_request_id = $2
-)::boolean AS excluded
+    WHERE issue_id = ?1 AND pull_request_id = ?2
+) AS excluded
 `
 
 type IsPullRequestExcludedFromIssueParams struct {
-	IssueID       pgtype.UUID `json:"issue_id"`
-	PullRequestID pgtype.UUID `json:"pull_request_id"`
+	IssueID       string `json:"issue_id"`
+	PullRequestID string `json:"pull_request_id"`
 }
 
 func (q *Queries) IsPullRequestExcludedFromIssue(ctx context.Context, arg IsPullRequestExcludedFromIssueParams) (bool, error) {
-	row := q.db.QueryRow(ctx, isPullRequestExcludedFromIssue, arg.IssueID, arg.PullRequestID)
+	row := q.db.QueryRowContext(ctx, isPullRequestExcludedFromIssue, arg.IssueID, arg.PullRequestID)
 	var excluded bool
 	err := row.Scan(&excluded)
 	return excluded, err
 }
 
 const listIssueLinkedPullRequestStates = `-- name: ListIssueLinkedPullRequestStates :many
-SELECT pr.id, 'github'::text AS provider, pr.pr_number, pr.state
+SELECT pr.id, 'github' AS provider, pr.pr_number, pr.state
 FROM github_pull_request pr
 JOIN issue_pull_request ipr ON ipr.pull_request_id = pr.id
-WHERE ipr.issue_id = $1
+WHERE ipr.issue_id = ?1
 UNION ALL
 SELECT pr.id, pr.provider AS provider, pr.pr_number, pr.state
 FROM vcs_pull_request pr
 JOIN issue_vcs_pull_request ipr ON ipr.pull_request_id = pr.id
-WHERE ipr.issue_id = $1
+WHERE ipr.issue_id = ?1
 ORDER BY pr_number
 `
 
 type ListIssueLinkedPullRequestStatesRow struct {
-	ID       pgtype.UUID `json:"id"`
-	Provider string      `json:"provider"`
-	PrNumber int32       `json:"pr_number"`
-	State    string      `json:"state"`
+	ID       string `json:"id"`
+	Provider string `json:"provider"`
+	PrNumber int64  `json:"pr_number"`
+	State    string `json:"state"`
 }
 
 // Every PR linked to the issue across GitHub and self-hosted providers, for
 // the merge decision. Ordered by number so reasons read stably.
-func (q *Queries) ListIssueLinkedPullRequestStates(ctx context.Context, issueID pgtype.UUID) ([]ListIssueLinkedPullRequestStatesRow, error) {
-	rows, err := q.db.Query(ctx, listIssueLinkedPullRequestStates, issueID)
+func (q *Queries) ListIssueLinkedPullRequestStates(ctx context.Context, issueID string) ([]ListIssueLinkedPullRequestStatesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listIssueLinkedPullRequestStates, issueID)
 	if err != nil {
 		return nil, err
 	}
@@ -135,6 +134,9 @@ func (q *Queries) ListIssueLinkedPullRequestStates(ctx context.Context, issueID 
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -142,45 +144,45 @@ func (q *Queries) ListIssueLinkedPullRequestStates(ctx context.Context, issueID 
 }
 
 const moveIssueFromPullRequests = `-- name: MoveIssueFromPullRequests :one
-UPDATE issue AS i SET
-    status = $3::text,
+UPDATE issue SET
+    status = ?3,
     duplicate_of_issue_id = NULL,
     position = (
         SELECT COALESCE(MIN(target.position), 0) - 1
         FROM issue AS target
-        WHERE target.workspace_id = i.workspace_id
-          AND target.status = $3::text
+        WHERE target.workspace_id = issue.workspace_id
+          AND target.status = ?3
     ),
-    revision = i.revision + 1,
-    last_activity_at = GREATEST(COALESCE(i.last_activity_at, i.updated_at), now()),
+    revision = issue.revision + 1,
+    last_activity_at = GREATEST(COALESCE(issue.last_activity_at, issue.updated_at), now()),
     updated_at = now()
-WHERE i.id = $1
-  AND i.workspace_id = $2
-  AND i.status = $4::text
-  AND i.status <> $3::text
+WHERE issue.id = ?1
+  AND issue.workspace_id = ?2
+  AND issue.status = ?4
+  AND issue.status <> ?3
   AND EXISTS (
-      SELECT 1 FROM issue_pull_request ipr WHERE ipr.issue_id = i.id
+      SELECT 1 FROM issue_pull_request ipr WHERE ipr.issue_id = issue.id
       UNION ALL
-      SELECT 1 FROM issue_vcs_pull_request ipr WHERE ipr.issue_id = i.id
+      SELECT 1 FROM issue_vcs_pull_request ipr WHERE ipr.issue_id = issue.id
   )
   AND NOT EXISTS (
       SELECT 1 FROM issue_pull_request ipr
       JOIN github_pull_request pr ON pr.id = ipr.pull_request_id
-      WHERE ipr.issue_id = i.id AND pr.state <> 'merged'
+      WHERE ipr.issue_id = issue.id AND pr.state <> 'merged'
   )
   AND NOT EXISTS (
       SELECT 1 FROM issue_vcs_pull_request ipr
       JOIN vcs_pull_request pr ON pr.id = ipr.pull_request_id
-      WHERE ipr.issue_id = i.id AND pr.state <> 'merged'
+      WHERE ipr.issue_id = issue.id AND pr.state <> 'merged'
   )
-RETURNING i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id
 `
 
 type MoveIssueFromPullRequestsParams struct {
-	ID             pgtype.UUID `json:"id"`
-	WorkspaceID    pgtype.UUID `json:"workspace_id"`
-	TargetStatus   string      `json:"target_status"`
-	ExpectedStatus string      `json:"expected_status"`
+	ID             string `json:"id"`
+	WorkspaceID    string `json:"workspace_id"`
+	TargetStatus   string `json:"target_status"`
+	ExpectedStatus string `json:"expected_status"`
 }
 
 // Conditional status write for the PR merge automation. It lands only if the
@@ -190,7 +192,7 @@ type MoveIssueFromPullRequestsParams struct {
 // keeps the issue where it is). Repositions and clears a duplicate mark like
 // UpdateIssueStatus does; the target is never cancelled.
 func (q *Queries) MoveIssueFromPullRequests(ctx context.Context, arg MoveIssueFromPullRequestsParams) (Issue, error) {
-	row := q.db.QueryRow(ctx, moveIssueFromPullRequests,
+	row := q.db.QueryRowContext(ctx, moveIssueFromPullRequests,
 		arg.ID,
 		arg.WorkspaceID,
 		arg.TargetStatus,
@@ -236,7 +238,7 @@ const setIssuePRAutoCompleteDisabled = `-- name: SetIssuePRAutoCompleteDisabled 
 INSERT INTO issue_pr_automation (
     issue_id, workspace_id, auto_complete_disabled, updated_by_type, updated_by_id
 ) VALUES (
-    $1, $2, $3, $4, $5
+    ?1, ?2, ?3, ?4, ?5
 )
 ON CONFLICT (issue_id) DO UPDATE SET
     auto_complete_disabled = EXCLUDED.auto_complete_disabled,
@@ -246,15 +248,15 @@ ON CONFLICT (issue_id) DO UPDATE SET
 `
 
 type SetIssuePRAutoCompleteDisabledParams struct {
-	IssueID              pgtype.UUID `json:"issue_id"`
-	WorkspaceID          pgtype.UUID `json:"workspace_id"`
-	AutoCompleteDisabled bool        `json:"auto_complete_disabled"`
-	UpdatedByType        pgtype.Text `json:"updated_by_type"`
-	UpdatedByID          pgtype.UUID `json:"updated_by_id"`
+	IssueID              string         `json:"issue_id"`
+	WorkspaceID          string         `json:"workspace_id"`
+	AutoCompleteDisabled int64          `json:"auto_complete_disabled"`
+	UpdatedByType        sql.NullString `json:"updated_by_type"`
+	UpdatedByID          sql.NullString `json:"updated_by_id"`
 }
 
 func (q *Queries) SetIssuePRAutoCompleteDisabled(ctx context.Context, arg SetIssuePRAutoCompleteDisabledParams) error {
-	_, err := q.db.Exec(ctx, setIssuePRAutoCompleteDisabled,
+	_, err := q.db.ExecContext(ctx, setIssuePRAutoCompleteDisabled,
 		arg.IssueID,
 		arg.WorkspaceID,
 		arg.AutoCompleteDisabled,

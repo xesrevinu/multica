@@ -7,22 +7,20 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const getNotificationPreference = `-- name: GetNotificationPreference :one
 SELECT id, workspace_id, user_id, preferences, updated_at FROM notification_preference
-WHERE workspace_id = $1 AND user_id = $2
+WHERE workspace_id = ?1 AND user_id = ?2
 `
 
 type GetNotificationPreferenceParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	UserID      pgtype.UUID `json:"user_id"`
+	WorkspaceID string `json:"workspace_id"`
+	UserID      string `json:"user_id"`
 }
 
 func (q *Queries) GetNotificationPreference(ctx context.Context, arg GetNotificationPreferenceParams) (NotificationPreference, error) {
-	row := q.db.QueryRow(ctx, getNotificationPreference, arg.WorkspaceID, arg.UserID)
+	row := q.db.QueryRowContext(ctx, getNotificationPreference, arg.WorkspaceID, arg.UserID)
 	var i NotificationPreference
 	err := row.Scan(
 		&i.ID,
@@ -36,16 +34,16 @@ func (q *Queries) GetNotificationPreference(ctx context.Context, arg GetNotifica
 
 const listNotificationPreferencesByUsers = `-- name: ListNotificationPreferencesByUsers :many
 SELECT id, workspace_id, user_id, preferences, updated_at FROM notification_preference
-WHERE workspace_id = $1 AND user_id = ANY($2::uuid[])
+WHERE workspace_id = ?1 AND user_id IN (SELECT value FROM json_each(?2))
 `
 
 type ListNotificationPreferencesByUsersParams struct {
-	WorkspaceID pgtype.UUID   `json:"workspace_id"`
-	UserIds     []pgtype.UUID `json:"user_ids"`
+	WorkspaceID string      `json:"workspace_id"`
+	UserIds     interface{} `json:"user_ids"`
 }
 
 func (q *Queries) ListNotificationPreferencesByUsers(ctx context.Context, arg ListNotificationPreferencesByUsersParams) ([]NotificationPreference, error) {
-	rows, err := q.db.Query(ctx, listNotificationPreferencesByUsers, arg.WorkspaceID, arg.UserIds)
+	rows, err := q.db.QueryContext(ctx, listNotificationPreferencesByUsers, arg.WorkspaceID, arg.UserIds)
 	if err != nil {
 		return nil, err
 	}
@@ -64,6 +62,9 @@ func (q *Queries) ListNotificationPreferencesByUsers(ctx context.Context, arg Li
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -72,7 +73,7 @@ func (q *Queries) ListNotificationPreferencesByUsers(ctx context.Context, arg Li
 
 const patchNotificationPreference = `-- name: PatchNotificationPreference :one
 INSERT INTO notification_preference (workspace_id, user_id, preferences)
-VALUES ($1, $2, $3)
+VALUES (?1, ?2, ?3)
 ON CONFLICT (workspace_id, user_id)
 DO UPDATE SET
     preferences = notification_preference.preferences || EXCLUDED.preferences,
@@ -81,13 +82,13 @@ RETURNING id, workspace_id, user_id, preferences, updated_at
 `
 
 type PatchNotificationPreferenceParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	UserID      pgtype.UUID `json:"user_id"`
-	Preferences []byte      `json:"preferences"`
+	WorkspaceID string `json:"workspace_id"`
+	UserID      string `json:"user_id"`
+	Preferences string `json:"preferences"`
 }
 
 func (q *Queries) PatchNotificationPreference(ctx context.Context, arg PatchNotificationPreferenceParams) (NotificationPreference, error) {
-	row := q.db.QueryRow(ctx, patchNotificationPreference, arg.WorkspaceID, arg.UserID, arg.Preferences)
+	row := q.db.QueryRowContext(ctx, patchNotificationPreference, arg.WorkspaceID, arg.UserID, arg.Preferences)
 	var i NotificationPreference
 	err := row.Scan(
 		&i.ID,
@@ -101,20 +102,20 @@ func (q *Queries) PatchNotificationPreference(ctx context.Context, arg PatchNoti
 
 const upsertNotificationPreference = `-- name: UpsertNotificationPreference :one
 INSERT INTO notification_preference (workspace_id, user_id, preferences)
-VALUES ($1, $2, $3)
+VALUES (?1, ?2, ?3)
 ON CONFLICT (workspace_id, user_id)
-DO UPDATE SET preferences = $3, updated_at = now()
+DO UPDATE SET preferences = ?3, updated_at = now()
 RETURNING id, workspace_id, user_id, preferences, updated_at
 `
 
 type UpsertNotificationPreferenceParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	UserID      pgtype.UUID `json:"user_id"`
-	Preferences []byte      `json:"preferences"`
+	WorkspaceID string `json:"workspace_id"`
+	UserID      string `json:"user_id"`
+	Preferences string `json:"preferences"`
 }
 
 func (q *Queries) UpsertNotificationPreference(ctx context.Context, arg UpsertNotificationPreferenceParams) (NotificationPreference, error) {
-	row := q.db.QueryRow(ctx, upsertNotificationPreference, arg.WorkspaceID, arg.UserID, arg.Preferences)
+	row := q.db.QueryRowContext(ctx, upsertNotificationPreference, arg.WorkspaceID, arg.UserID, arg.Preferences)
 	var i NotificationPreference
 	err := row.Scan(
 		&i.ID,

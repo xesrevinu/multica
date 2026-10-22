@@ -8,8 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"database/sql"
+
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/tracing"
 )
 
@@ -34,7 +35,7 @@ type Options struct {
 // Manager is the per-process scheduler. Register one or more jobs and
 // call Run with a cancellable context.
 type Manager struct {
-	pool   *pgxpool.Pool
+	pool   *sql.DB
 	opts   Options
 	jobs   map[string]*JobSpec
 	mu     sync.RWMutex
@@ -44,7 +45,7 @@ type Manager struct {
 // NewManager constructs a Manager. The pool MUST point at the database
 // containing the sys_cron_executions table. The manager does not start
 // any goroutine until Run is called.
-func NewManager(pool *pgxpool.Pool, opts Options) *Manager {
+func NewManager(pool *sql.DB, opts Options) *Manager {
 	if opts.RunnerID == "" {
 		opts.RunnerID = uuid.NewString()
 	}

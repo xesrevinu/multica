@@ -6,7 +6,6 @@ import (
 	"math"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/entitlement"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -31,11 +30,11 @@ type IssueCountPolicy struct {
 	PolicyRevision int64
 }
 
-func ResolveIssueCountPolicy(ctx context.Context, provider entitlement.Provider, workspaceID pgtype.UUID) IssueCountPolicy {
-	if provider == nil || !workspaceID.Valid {
+func ResolveIssueCountPolicy(ctx context.Context, provider entitlement.Provider, workspaceID string) IssueCountPolicy {
+	if provider == nil || (workspaceID == "") {
 		return IssueCountPolicy{Action: entitlement.ActionOff}
 	}
-	decision := provider.Gate(ctx, uuid.UUID(workspaceID.Bytes), entitlement.GateIssueCount)
+	decision := provider.Gate(ctx, uuid.MustParse(workspaceID), entitlement.GateIssueCount)
 	policy := IssueCountPolicy{
 		Action:         decision.Gate.Action,
 		PolicyRevision: decision.PolicyRevision,
@@ -64,7 +63,7 @@ func ResolveIssueCountPolicy(ctx context.Context, provider entitlement.Provider,
 // It is deliberately not a reservation: callers must still use
 // AllocateIssueNumber in the final create transaction to serialize concurrent
 // admissions against the workspace row.
-func CheckIssueCreateCapacity(ctx context.Context, q *db.Queries, provider entitlement.Provider, workspaceID pgtype.UUID) error {
+func CheckIssueCreateCapacity(ctx context.Context, q *db.Queries, provider entitlement.Provider, workspaceID string) error {
 	policy := ResolveIssueCountPolicy(ctx, provider, workspaceID)
 	if policy.Action != entitlement.ActionEnforce {
 		return nil
@@ -84,13 +83,13 @@ func CheckIssueCreateCapacity(ctx context.Context, q *db.Queries, provider entit
 // roll the transaction back on IssueLimitReachedError; that also rolls back
 // the counter increment. Deleting an issue frees capacity because
 // issue_counter is deliberately not used as quota usage.
-func AllocateIssueNumber(ctx context.Context, q *db.Queries, workspaceID pgtype.UUID, policy IssueCountPolicy) (int32, error) {
+func AllocateIssueNumber(ctx context.Context, q *db.Queries, workspaceID string, policy IssueCountPolicy) (int32, error) {
 	number, err := q.IncrementIssueCounter(ctx, workspaceID)
 	if err != nil {
 		return 0, err
 	}
 	if policy.Action != entitlement.ActionEnforce {
-		return number, nil
+		return int32(number), nil
 	}
 	used, err := q.CountIssuesUpTo(ctx, db.CountIssuesUpToParams{
 		WorkspaceID: workspaceID,
@@ -102,13 +101,13 @@ func AllocateIssueNumber(ctx context.Context, q *db.Queries, workspaceID pgtype.
 	if used >= policy.Limit {
 		return 0, &IssueLimitReachedError{Limit: policy.Limit, PolicyRevision: policy.PolicyRevision}
 	}
-	return number, nil
+	return int32(number), nil
 }
 
 // CountIssueUsage performs a bounded read for a limited policy. The returned
 // value is exact while below the limit and capped at the limit once the
 // workspace is full.
-func CountIssueUsage(ctx context.Context, q *db.Queries, workspaceID pgtype.UUID, policy IssueCountPolicy) (int64, error) {
+func CountIssueUsage(ctx context.Context, q *db.Queries, workspaceID string, policy IssueCountPolicy) (int64, error) {
 	if policy.Action != entitlement.ActionEnforce {
 		return 0, nil
 	}

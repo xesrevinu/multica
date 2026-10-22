@@ -33,7 +33,6 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
@@ -227,7 +226,7 @@ func TestEnqueueOnAnActiveSessionStillWorks(t *testing.T) {
 	if task.Status != "queued" {
 		t.Fatalf("task status on a live session = %q, want queued", task.Status)
 	}
-	var owner pgtype.UUID
+	var owner string
 	if err := testPool.QueryRow(ctx, `SELECT task_id FROM chat_message WHERE id = $1`, messageID).Scan(&owner); err != nil {
 		t.Fatalf("load the message owner: %v", err)
 	}

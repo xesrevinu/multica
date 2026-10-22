@@ -7,17 +7,16 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const countIssuesByProject = `-- name: CountIssuesByProject :one
 SELECT count(*) FROM issue
-WHERE project_id = $1
+WHERE project_id = ?1
 `
 
-func (q *Queries) CountIssuesByProject(ctx context.Context, projectID pgtype.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countIssuesByProject, projectID)
+func (q *Queries) CountIssuesByProject(ctx context.Context, projectID sql.NullString) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countIssuesByProject, projectID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -28,26 +27,26 @@ INSERT INTO project (
     workspace_id, title, description, icon, status,
     lead_type, lead_id, priority, start_date, due_date, workflow_id
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
 ) RETURNING id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, start_date, due_date, workflow_id
 `
 
 type CreateProjectParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Title       string      `json:"title"`
-	Description pgtype.Text `json:"description"`
-	Icon        pgtype.Text `json:"icon"`
-	Status      string      `json:"status"`
-	LeadType    pgtype.Text `json:"lead_type"`
-	LeadID      pgtype.UUID `json:"lead_id"`
-	Priority    string      `json:"priority"`
-	StartDate   pgtype.Date `json:"start_date"`
-	DueDate     pgtype.Date `json:"due_date"`
-	WorkflowID  pgtype.UUID `json:"workflow_id"`
+	WorkspaceID string         `json:"workspace_id"`
+	Title       string         `json:"title"`
+	Description sql.NullString `json:"description"`
+	Icon        sql.NullString `json:"icon"`
+	Status      string         `json:"status"`
+	LeadType    sql.NullString `json:"lead_type"`
+	LeadID      sql.NullString `json:"lead_id"`
+	Priority    string         `json:"priority"`
+	StartDate   sql.NullString `json:"start_date"`
+	DueDate     sql.NullString `json:"due_date"`
+	WorkflowID  sql.NullString `json:"workflow_id"`
 }
 
 func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error) {
-	row := q.db.QueryRow(ctx, createProject,
+	row := q.db.QueryRowContext(ctx, createProject,
 		arg.WorkspaceID,
 		arg.Title,
 		arg.Description,
@@ -81,32 +80,32 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 }
 
 const deleteProject = `-- name: DeleteProject :exec
-DELETE FROM project WHERE id = $1 AND workspace_id = $2
+DELETE FROM project WHERE id = ?1 AND workspace_id = ?2
 `
 
 type DeleteProjectParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // Defense-in-depth: workspace_id is a SQL-layer tenant guard. See DeleteIssue.
 func (q *Queries) DeleteProject(ctx context.Context, arg DeleteProjectParams) error {
-	_, err := q.db.Exec(ctx, deleteProject, arg.ID, arg.WorkspaceID)
+	_, err := q.db.ExecContext(ctx, deleteProject, arg.ID, arg.WorkspaceID)
 	return err
 }
 
 const getProjectInWorkspace = `-- name: GetProjectInWorkspace :one
 SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, start_date, due_date, workflow_id FROM project
-WHERE id = $1 AND workspace_id = $2
+WHERE id = ?1 AND workspace_id = ?2
 `
 
 type GetProjectInWorkspaceParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 func (q *Queries) GetProjectInWorkspace(ctx context.Context, arg GetProjectInWorkspaceParams) (Project, error) {
-	row := q.db.QueryRow(ctx, getProjectInWorkspace, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, getProjectInWorkspace, arg.ID, arg.WorkspaceID)
 	var i Project
 	err := row.Scan(
 		&i.ID,
@@ -129,28 +128,28 @@ func (q *Queries) GetProjectInWorkspace(ctx context.Context, arg GetProjectInWor
 
 const getProjectIssueStats = `-- name: GetProjectIssueStats :many
 SELECT project_id,
-       count(*)::bigint AS total_count,
-       count(*) FILTER (WHERE status = ANY($1::text[]))::bigint AS done_count
+       count(*) AS total_count,
+       SUM(CASE WHEN status IN (SELECT value FROM json_each(?1)) THEN 1 ELSE 0 END) AS done_count
 FROM issue
-WHERE workspace_id = $2::uuid
-  AND project_id = ANY($3::uuid[])
+WHERE workspace_id = ?2
+  AND project_id IN (SELECT value FROM json_each(?3))
 GROUP BY project_id
 `
 
 type GetProjectIssueStatsParams struct {
-	TerminalStatusKeys []string      `json:"terminal_status_keys"`
-	WorkspaceID        pgtype.UUID   `json:"workspace_id"`
-	ProjectIds         []pgtype.UUID `json:"project_ids"`
+	TerminalStatusKeys interface{} `json:"terminal_status_keys"`
+	WorkspaceID        string      `json:"workspace_id"`
+	ProjectIds         interface{} `json:"project_ids"`
 }
 
 type GetProjectIssueStatsRow struct {
-	ProjectID  pgtype.UUID `json:"project_id"`
-	TotalCount int64       `json:"total_count"`
-	DoneCount  int64       `json:"done_count"`
+	ProjectID  sql.NullString  `json:"project_id"`
+	TotalCount int64           `json:"total_count"`
+	DoneCount  sql.NullFloat64 `json:"done_count"`
 }
 
 func (q *Queries) GetProjectIssueStats(ctx context.Context, arg GetProjectIssueStatsParams) ([]GetProjectIssueStatsRow, error) {
-	rows, err := q.db.Query(ctx, getProjectIssueStats, arg.TerminalStatusKeys, arg.WorkspaceID, arg.ProjectIds)
+	rows, err := q.db.QueryContext(ctx, getProjectIssueStats, arg.TerminalStatusKeys, arg.WorkspaceID, arg.ProjectIds)
 	if err != nil {
 		return nil, err
 	}
@@ -163,6 +162,9 @@ func (q *Queries) GetProjectIssueStats(ctx context.Context, arg GetProjectIssueS
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -171,20 +173,20 @@ func (q *Queries) GetProjectIssueStats(ctx context.Context, arg GetProjectIssueS
 
 const listProjects = `-- name: ListProjects :many
 SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, start_date, due_date, workflow_id FROM project
-WHERE workspace_id = $1
-  AND ($2::text IS NULL OR status = $2)
-  AND ($3::text IS NULL OR priority = $3)
+WHERE workspace_id = ?1
+  AND (?2 IS NULL OR status = ?2)
+  AND (?3 IS NULL OR priority = ?3)
 ORDER BY created_at DESC
 `
 
 type ListProjectsParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Status      pgtype.Text `json:"status"`
-	Priority    pgtype.Text `json:"priority"`
+	WorkspaceID string      `json:"workspace_id"`
+	Status      interface{} `json:"status"`
+	Priority    interface{} `json:"priority"`
 }
 
 func (q *Queries) ListProjects(ctx context.Context, arg ListProjectsParams) ([]Project, error) {
-	rows, err := q.db.Query(ctx, listProjects, arg.WorkspaceID, arg.Status, arg.Priority)
+	rows, err := q.db.QueryContext(ctx, listProjects, arg.WorkspaceID, arg.Status, arg.Priority)
 	if err != nil {
 		return nil, err
 	}
@@ -212,6 +214,9 @@ func (q *Queries) ListProjects(ctx context.Context, arg ListProjectsParams) ([]P
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -220,81 +225,79 @@ func (q *Queries) ListProjects(ctx context.Context, arg ListProjectsParams) ([]P
 
 const lockProjectForChatSessionCreate = `-- name: LockProjectForChatSessionCreate :one
 SELECT id FROM project
-WHERE id = $1 AND workspace_id = $2
-FOR KEY SHARE
+WHERE id = ?1 AND workspace_id = ?2
 `
 
 type LockProjectForChatSessionCreateParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // Conflicts with project deletion so a chat session cannot commit a soft
 // project reference after the delete transaction has swept existing sessions.
-func (q *Queries) LockProjectForChatSessionCreate(ctx context.Context, arg LockProjectForChatSessionCreateParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, lockProjectForChatSessionCreate, arg.ID, arg.WorkspaceID)
-	var id pgtype.UUID
+func (q *Queries) LockProjectForChatSessionCreate(ctx context.Context, arg LockProjectForChatSessionCreateParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, lockProjectForChatSessionCreate, arg.ID, arg.WorkspaceID)
+	var id string
 	err := row.Scan(&id)
 	return id, err
 }
 
 const lockProjectForDelete = `-- name: LockProjectForDelete :one
 SELECT id FROM project
-WHERE id = $1 AND workspace_id = $2
-FOR UPDATE
+WHERE id = ?1 AND workspace_id = ?2
 `
 
 type LockProjectForDeleteParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // Serializes project deletion with chat-session creation. The handler locks,
 // clears every soft chat reference, and deletes the project in one transaction.
-func (q *Queries) LockProjectForDelete(ctx context.Context, arg LockProjectForDeleteParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, lockProjectForDelete, arg.ID, arg.WorkspaceID)
-	var id pgtype.UUID
+func (q *Queries) LockProjectForDelete(ctx context.Context, arg LockProjectForDeleteParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, lockProjectForDelete, arg.ID, arg.WorkspaceID)
+	var id string
 	err := row.Scan(&id)
 	return id, err
 }
 
 const updateProject = `-- name: UpdateProject :one
 UPDATE project SET
-    title = COALESCE($2, title),
-    description = CASE WHEN $3::boolean THEN $4 ELSE description END,
-    icon = CASE WHEN $5::boolean THEN $6 ELSE icon END,
-    status = COALESCE($7, status),
-    priority = COALESCE($8, priority),
-    lead_type = CASE WHEN $9::boolean THEN $10 ELSE lead_type END,
-    lead_id = CASE WHEN $11::boolean THEN $12 ELSE lead_id END,
-    start_date = CASE WHEN $13::boolean THEN $14 ELSE start_date END,
-    due_date = CASE WHEN $15::boolean THEN $16 ELSE due_date END,
+    title = COALESCE(?2, title),
+    description = CASE WHEN ?3 THEN ?4 ELSE description END,
+    icon = CASE WHEN ?5 THEN ?6 ELSE icon END,
+    status = COALESCE(?7, status),
+    priority = COALESCE(?8, priority),
+    lead_type = CASE WHEN ?9 THEN ?10 ELSE lead_type END,
+    lead_id = CASE WHEN ?11 THEN ?12 ELSE lead_id END,
+    start_date = CASE WHEN ?13 THEN ?14 ELSE start_date END,
+    due_date = CASE WHEN ?15 THEN ?16 ELSE due_date END,
     updated_at = now()
-WHERE id = $1
+WHERE id = ?1
 RETURNING id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, start_date, due_date, workflow_id
 `
 
 type UpdateProjectParams struct {
-	ID             pgtype.UUID `json:"id"`
-	Title          pgtype.Text `json:"title"`
-	DescriptionSet bool        `json:"description_set"`
-	Description    pgtype.Text `json:"description"`
-	IconSet        bool        `json:"icon_set"`
-	Icon           pgtype.Text `json:"icon"`
-	Status         pgtype.Text `json:"status"`
-	Priority       pgtype.Text `json:"priority"`
-	LeadTypeSet    bool        `json:"lead_type_set"`
-	LeadType       pgtype.Text `json:"lead_type"`
-	LeadIDSet      bool        `json:"lead_id_set"`
-	LeadID         pgtype.UUID `json:"lead_id"`
-	StartDateSet   bool        `json:"start_date_set"`
-	StartDate      pgtype.Date `json:"start_date"`
-	DueDateSet     bool        `json:"due_date_set"`
-	DueDate        pgtype.Date `json:"due_date"`
+	ID             string         `json:"id"`
+	Title          sql.NullString `json:"title"`
+	DescriptionSet sql.NullString `json:"description_set"`
+	Description    sql.NullString `json:"description"`
+	IconSet        sql.NullString `json:"icon_set"`
+	Icon           sql.NullString `json:"icon"`
+	Status         sql.NullString `json:"status"`
+	Priority       sql.NullString `json:"priority"`
+	LeadTypeSet    sql.NullString `json:"lead_type_set"`
+	LeadType       sql.NullString `json:"lead_type"`
+	LeadIDSet      sql.NullString `json:"lead_id_set"`
+	LeadID         sql.NullString `json:"lead_id"`
+	StartDateSet   sql.NullString `json:"start_date_set"`
+	StartDate      sql.NullString `json:"start_date"`
+	DueDateSet     sql.NullString `json:"due_date_set"`
+	DueDate        sql.NullString `json:"due_date"`
 }
 
 func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (Project, error) {
-	row := q.db.QueryRow(ctx, updateProject,
+	row := q.db.QueryRowContext(ctx, updateProject,
 		arg.ID,
 		arg.Title,
 		arg.DescriptionSet,

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,8 +15,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/seatcapacity"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -94,22 +93,22 @@ func (h *Handler) CreateShareLink(w http.ResponseWriter, r *http.Request) {
 	// outright. max_uses is stored as int32, and expires_in is multiplied by
 	// time.Hour into a time.Duration, so both need an explicit upper bound to
 	// avoid wrapping or overflow before conversion.
-	var expiresAt pgtype.Timestamptz
+	var expiresAt string
 	if req.ExpiresIn != nil {
 		if *req.ExpiresIn <= 0 || int64(*req.ExpiresIn) > expiresInMaxHours {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("expires_in must be between 1 and %d hours", expiresInMaxHours))
 			return
 		}
-		expiresAt = pgtype.Timestamptz{Time: time.Now().Add(time.Duration(*req.ExpiresIn) * time.Hour), Valid: true}
+		expiresAt = time.Now().Add(time.Duration(*req.ExpiresIn) * time.Hour).UTC().Format(time.RFC3339Nano)
 	}
 
-	var maxUses pgtype.Int4
+	var maxUses sql.NullInt64
 	if req.MaxUses != nil {
 		if *req.MaxUses <= 0 || *req.MaxUses > math.MaxInt32 {
 			writeError(w, http.StatusBadRequest, "max_uses must be between 1 and 2147483647")
 			return
 		}
-		maxUses = pgtype.Int4{Int32: int32(*req.MaxUses), Valid: true}
+		maxUses = sql.NullInt64{Int64: int64(int32(*req.MaxUses)), Valid: true}
 	}
 
 	// Rotating to a new link and deactivating the previous one must be atomic:
@@ -117,12 +116,12 @@ func (h *Handler) CreateShareLink(w http.ResponseWriter, r *http.Request) {
 	// working link if the insert fails, and ignoring deactivation errors could
 	// leave multiple active links. The partial unique index on
 	// (workspace_id) WHERE is_active also fails closed on concurrent creates.
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create share link")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 
 	qtx := h.Queries.WithTx(tx)
 
@@ -144,7 +143,7 @@ func (h *Handler) CreateShareLink(w http.ResponseWriter, r *http.Request) {
 		Code:        code,
 		CreatedBy:   requester.UserID,
 		Role:        role,
-		ExpiresAt:   expiresAt,
+		ExpiresAt:   nullString(expiresAt),
 		MaxUses:     maxUses,
 	})
 	if err != nil {
@@ -157,7 +156,7 @@ func (h *Handler) CreateShareLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		slog.Warn("commit share link failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "failed to create share link")
 		return
@@ -295,14 +294,14 @@ func (h *Handler) JoinByShareLink(w http.ResponseWriter, r *http.Request) {
 	}); memberErr == nil {
 		writeError(w, http.StatusConflict, "you are already a member of this workspace")
 		return
-	} else if !errors.Is(memberErr, pgx.ErrNoRows) {
+	} else if !errors.Is(memberErr, sql.ErrNoRows) {
 		writeError(w, http.StatusInternalServerError, "failed to join workspace")
 		return
 	}
 
 	var capacityToken uuid.UUID
 	if h.seatCapacityEnabled() {
-		capacityToken, err = h.beginShareJoinCapacity(r.Context(), uuid.UUID(linkPreview.WorkspaceID.Bytes), uuid.UUID(linkPreview.ID.Bytes), uuid.UUID(user.ID.Bytes))
+		capacityToken, err = h.beginShareJoinCapacity(r.Context(), uuid.MustParse(linkPreview.WorkspaceID), uuid.MustParse(linkPreview.ID), uuid.MustParse(user.ID))
 		if err != nil {
 			writeSeatCapacityError(w, err)
 			return
@@ -313,12 +312,12 @@ func (h *Handler) JoinByShareLink(w http.ResponseWriter, r *http.Request) {
 	// a conditional UPDATE that revalidates active/not-expired/below-max_uses
 	// and increments use_count in one statement, so concurrent joins cannot
 	// exceed max_uses and a join cannot race past a revocation/expiry.
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to join workspace")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 
 	qtx := h.Queries.WithTx(tx)
 
@@ -347,7 +346,7 @@ func (h *Handler) JoinByShareLink(w http.ResponseWriter, r *http.Request) {
 	// and the invitation row is only settled, its role left untouched.
 	// idx_invitation_unique_pending guarantees at most one pending row per
 	// (workspace, email).
-	var settledInvitationID pgtype.UUID
+	var settledInvitationID string
 	pendingInv, pendingErr := qtx.GetPendingInvitationByEmail(r.Context(), db.GetPendingInvitationByEmailParams{
 		WorkspaceID:  link.WorkspaceID,
 		InviteeEmail: strings.ToLower(user.Email),
@@ -361,13 +360,13 @@ func (h *Handler) JoinByShareLink(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case settleErr == nil:
 			settledInvitationID = settled.ID
-		case errors.Is(settleErr, pgx.ErrNoRows):
+		case errors.Is(settleErr, sql.ErrNoRows):
 			// Concluded elsewhere in between; its own path released the seat.
 		default:
 			writeError(w, http.StatusInternalServerError, "failed to join workspace")
 			return
 		}
-	case errors.Is(pendingErr, pgx.ErrNoRows):
+	case errors.Is(pendingErr, sql.ErrNoRows):
 		// No pending invitation for this email — the common case.
 	default:
 		writeError(w, http.StatusInternalServerError, "failed to join workspace")
@@ -396,34 +395,34 @@ func (h *Handler) JoinByShareLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if capacityToken != uuid.Nil {
-		if err := transitionCapacityIntentToConfirm(r.Context(), qtx, capacityToken, uuid.UUID(member.ID.Bytes), seatcapacity.ActionClaimShareJoin); err != nil {
+		if err := transitionCapacityIntentToConfirm(r.Context(), qtx, capacityToken, uuid.MustParse(member.ID), seatcapacity.ActionClaimShareJoin); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to join workspace")
 			return
 		}
 	}
-	if settledInvitationID.Valid && h.seatCapacityEnabled() {
+	if (settledInvitationID != "") && h.seatCapacityEnabled() {
 		// The settled invitation was holding a seat reservation (managed
 		// mode); the share join's own confirmed claim now covers the seat,
 		// so release the invitation's reservation instead of double-charging
 		// the workspace for one joining user.
-		if err := enqueueCapacityRelease(r.Context(), qtx, uuid.UUID(link.WorkspaceID.Bytes), uuid.UUID(settledInvitationID.Bytes)); err != nil {
+		if err := enqueueCapacityRelease(r.Context(), qtx, uuid.MustParse(link.WorkspaceID), uuid.MustParse(settledInvitationID)); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to join workspace")
 			return
 		}
 	}
 
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to join workspace")
 		return
 	}
 	if capacityToken != uuid.Nil {
-		h.confirmCapacityIntent(r.Context(), uuid.UUID(link.WorkspaceID.Bytes), capacityToken, uuid.UUID(member.ID.Bytes))
+		h.confirmCapacityIntent(r.Context(), uuid.MustParse(link.WorkspaceID), capacityToken, uuid.MustParse(member.ID))
 	}
-	if settledInvitationID.Valid && h.seatCapacityEnabled() {
+	if (settledInvitationID != "") && h.seatCapacityEnabled() {
 		// Best-effort immediate release of the settled invitation's
 		// reservation; if the capacity service is unavailable the enqueued
 		// release above is retried by the outbox worker.
-		h.compensateCapacityIntent(r.Context(), uuid.UUID(settledInvitationID.Bytes))
+		h.compensateCapacityIntent(r.Context(), uuid.MustParse(settledInvitationID))
 	}
 
 	wsID := uuidToString(link.WorkspaceID)
@@ -439,7 +438,7 @@ func (h *Handler) JoinByShareLink(w http.ResponseWriter, r *http.Request) {
 	h.publish(protocol.EventMemberAdded, wsID, "member", userID, map[string]any{
 		"member": memberResp,
 	})
-	if settledInvitationID.Valid {
+	if settledInvitationID != "" {
 		// Same signal the accept path sends: workspace admins refresh their
 		// pending-invitation list, and the joiner's own clients converge.
 		h.publish(protocol.EventInvitationAccepted, wsID, "member", userID, map[string]any{
@@ -459,12 +458,13 @@ func (h *Handler) JoinByShareLink(w http.ResponseWriter, r *http.Request) {
 func shareLinkToResponse(link db.WorkspaceShareLink) ShareLinkResponse {
 	var expiresAt *string
 	if link.ExpiresAt.Valid {
-		s := timestampToString(link.ExpiresAt)
+		s := timestampToString(link.ExpiresAt.String)
 		expiresAt = &s
 	}
 	var maxUses *int32
 	if link.MaxUses.Valid {
-		maxUses = &link.MaxUses.Int32
+		v := int32(link.MaxUses.Int64)
+		maxUses = &v
 	}
 	return ShareLinkResponse{
 		ID:          uuidToString(link.ID),
@@ -474,8 +474,8 @@ func shareLinkToResponse(link db.WorkspaceShareLink) ShareLinkResponse {
 		Role:        link.Role,
 		ExpiresAt:   expiresAt,
 		MaxUses:     maxUses,
-		UseCount:    link.UseCount,
-		IsActive:    link.IsActive,
+		UseCount:    int32(link.UseCount),
+		IsActive:    int64ToBool(link.IsActive),
 		CreatedAt:   timestampToString(link.CreatedAt),
 	}
 }
@@ -483,12 +483,13 @@ func shareLinkToResponse(link db.WorkspaceShareLink) ShareLinkResponse {
 func shareLinkListToResponse(row db.ListShareLinksByWorkspaceRow) ShareLinkResponse {
 	var expiresAt *string
 	if row.ExpiresAt.Valid {
-		s := timestampToString(row.ExpiresAt)
+		s := timestampToString(row.ExpiresAt.String)
 		expiresAt = &s
 	}
 	var maxUses *int32
 	if row.MaxUses.Valid {
-		maxUses = &row.MaxUses.Int32
+		v := int32(row.MaxUses.Int64)
+		maxUses = &v
 	}
 	return ShareLinkResponse{
 		ID:           uuidToString(row.ID),
@@ -498,8 +499,8 @@ func shareLinkListToResponse(row db.ListShareLinksByWorkspaceRow) ShareLinkRespo
 		Role:         row.Role,
 		ExpiresAt:    expiresAt,
 		MaxUses:      maxUses,
-		UseCount:     row.UseCount,
-		IsActive:     row.IsActive,
+		UseCount:     int32(row.UseCount),
+		IsActive:     int64ToBool(row.IsActive),
 		CreatedAt:    timestampToString(row.CreatedAt),
 		CreatorName:  row.CreatorName,
 		CreatorEmail: row.CreatorEmail,

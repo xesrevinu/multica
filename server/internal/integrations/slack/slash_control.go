@@ -2,13 +2,12 @@ package slack
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/slack-go/slack"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
@@ -18,8 +17,8 @@ import (
 )
 
 type slashControlTasks interface {
-	PrepareChatTaskEnqueue(ctx context.Context, agentID, initiator pgtype.UUID) (service.PreparedChatTaskEnqueue, error)
-	EnqueuePreparedChannelChatTaskInTx(ctx context.Context, tx pgx.Tx, session db.ChatSession, initiator pgtype.UUID, forceFresh bool, contextRevision int64, prepared service.PreparedChatTaskEnqueue) (db.AgentTaskQueue, error)
+	PrepareChatTaskEnqueue(ctx context.Context, agentID, initiator string) (service.PreparedChatTaskEnqueue, error)
+	EnqueuePreparedChannelChatTaskInTx(ctx context.Context, tx *sql.Tx, session db.ChatSession, initiator string, forceFresh bool, contextRevision int64, prepared service.PreparedChatTaskEnqueue) (db.AgentTaskQueue, error)
 	FinalizeChatTaskEnqueue(ctx context.Context, task db.AgentTaskQueue)
 }
 
@@ -39,7 +38,7 @@ func NewSlackDMControlStarter(q *db.Queries, tx engine.TxStarter, tasks slashCon
 	}
 }
 
-func (s *slackDMControlStarter) StartSlackDMChat(ctx context.Context, inst engine.ResolvedInstallation, userID pgtype.UUID, cmd slack.SlashCommand, envelopeID string) error {
+func (s *slackDMControlStarter) StartSlackDMChat(ctx context.Context, inst engine.ResolvedInstallation, userID string, cmd slack.SlashCommand, envelopeID string) error {
 	if envelopeID == "" {
 		return errors.New("slack /new: missing socket envelope id")
 	}
@@ -75,7 +74,7 @@ func (s *slackDMControlStarter) StartSlackDMChat(ctx context.Context, inst engin
 			Initiator: userID,
 			Body:      body, CommandText: body, DedupMessageID: envelopeID, ClaimToken: claim,
 			PersistMessage: body != "", HistoryBoundaryPending: true,
-			BeforeCommit: func(ctx context.Context, tx pgx.Tx, session db.ChatSession) error {
+			BeforeCommit: func(ctx context.Context, tx *sql.Tx, session db.ChatSession) error {
 				if body == "" {
 					return nil
 				}
@@ -117,7 +116,7 @@ func (s *slackDMControlStarter) StartSlackDMChat(ctx context.Context, inst engin
 	return nil
 }
 
-func (s *slackDMControlStarter) ClearSlackDMContext(ctx context.Context, inst engine.ResolvedInstallation, userID pgtype.UUID, cmd slack.SlashCommand, envelopeID string) error {
+func (s *slackDMControlStarter) ClearSlackDMContext(ctx context.Context, inst engine.ResolvedInstallation, userID string, cmd slack.SlashCommand, envelopeID string) error {
 	if envelopeID == "" {
 		return errors.New("slack /clear: missing socket envelope id")
 	}
@@ -160,7 +159,7 @@ func (s *slackDMControlStarter) ClearSlackDMContext(ctx context.Context, inst en
 				SessionID: sessionID, Sender: userID, InstallationID: inst.ID,
 				Body: body, CommandText: clearSlashCommand + " " + body,
 				DedupMessageID: envelopeID, ClaimToken: claim, ForceFresh: true,
-				BeforeCommit: func(ctx context.Context, tx pgx.Tx, session db.ChatSession, contextRevision int64, _ pgtype.UUID, _ int64) error {
+				BeforeCommit: func(ctx context.Context, tx *sql.Tx, session db.ChatSession, contextRevision int64, _ string, _ int64) error {
 					var enqueueErr error
 					task, enqueueErr = s.tasks.EnqueuePreparedChannelChatTaskInTx(
 						ctx, tx, session, userID, true, contextRevision, prepared,
@@ -184,7 +183,7 @@ func (s *slackDMControlStarter) ClearSlackDMContext(ctx context.Context, inst en
 		return err
 	}
 	committed = true
-	if task.ID.Valid {
+	if task.ID != "" {
 		s.tasks.FinalizeChatTaskEnqueue(ctx, task)
 	}
 	return nil

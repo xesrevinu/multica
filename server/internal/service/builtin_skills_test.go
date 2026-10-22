@@ -195,7 +195,7 @@ func TestBuiltinSkillPayloadCarriesNoSourceReferences(t *testing.T) {
 		re   *regexp.Regexp
 	}{
 		{"a path into this repository", regexp.MustCompile(`(?:server|packages|apps|e2e)/[A-Za-z0-9_-]+/`)},
-		{"a source file name", regexp.MustCompile(`[A-Za-z0-9_./-]*\.(?:go|ts|tsx|sql)\b`)},
+		{"a source file name", regexp.MustCompile(`[A-Za-z0-9_./-]*\.(?:go|ts|tsx|query)\b`)},
 		{"a command that only runs in this repository", regexp.MustCompile(`\bgo (?:test|build|vet|run)\b`)},
 		{"a migration ordinal", regexp.MustCompile(`\bmigrations?/[0-9]`)},
 		{"a Go package-qualified identifier", regexp.MustCompile(`\b(?:util|service|handler|db|protocol|skillpkg|repocache|execenv|daemon)\.[A-Z][A-Za-z0-9]*`)},

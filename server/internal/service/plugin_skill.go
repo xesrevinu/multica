@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/skill"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/plugincontract"
@@ -30,7 +29,7 @@ import (
 //
 // Called inside the install transaction: a plugin that half-installs its skills
 // is worse than one that fails, because the missing half is invisible.
-func (s *PluginService) InstallSkillResources(ctx context.Context, queries *db.Queries, installation db.PluginInstallation, manifest plugincontract.Manifest, userID pgtype.UUID) error {
+func (s *PluginService) InstallSkillResources(ctx context.Context, queries *db.Queries, installation db.PluginInstallation, manifest plugincontract.Manifest, userID string) error {
 	resources := skillResources(manifest)
 
 	// Prune first, so a rename frees its old name before the new one is
@@ -41,7 +40,7 @@ func (s *PluginService) InstallSkillResources(ctx context.Context, queries *db.Q
 		keep = append(keep, resource.Key)
 	}
 	if err := queries.DeletePluginSkillsNotIn(ctx, db.DeletePluginSkillsNotInParams{
-		PluginInstallationID: installation.ID,
+		PluginInstallationID: nullString(installation.ID),
 		KeepNames:            keep,
 	}); err != nil {
 		return &PluginError{Kind: PluginErrorUnavailable, Message: "prune plugin skills", Err: err}
@@ -70,8 +69,8 @@ func (s *PluginService) InstallSkillResources(ctx context.Context, queries *db.Q
 			Name:                 name,
 			Description:          description,
 			Content:              content,
-			CreatedBy:            userID,
-			PluginInstallationID: installation.ID,
+			CreatedBy:            nullString(userID),
+			PluginInstallationID: nullString(installation.ID),
 		}); err != nil {
 			if isUniqueViolation(err) {
 				return pluginErrf(PluginErrorConflict,

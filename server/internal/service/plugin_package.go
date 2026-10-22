@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -11,8 +12,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/plugincontract"
@@ -57,7 +56,7 @@ type PluginPackageSummary struct {
 const pluginTimeFormat = "2006-01-02T15:04:05Z07:00"
 
 // PublishBundle stores an uploaded artifact bundle as a new immutable version.
-func (s *PluginService) PublishBundle(ctx context.Context, workspaceID, userID pgtype.UUID, archive []byte) (PluginPackageSummary, error) {
+func (s *PluginService) PublishBundle(ctx context.Context, workspaceID, userID string, archive []byte) (PluginPackageSummary, error) {
 	bundle, err := plugincontract.ParseBundle(archive)
 	if err != nil {
 		// The wrapped text names the file or field at fault, and it is written
@@ -78,7 +77,7 @@ func (s *PluginService) PublishBundle(ctx context.Context, workspaceID, userID p
 // ambiguity this change removes. Re-publishing an unchanged version string is
 // what a dev loop does constantly, so those get a `+dev.N` build suffix instead
 // of a conflict.
-func (s *PluginService) PublishLocalBundle(ctx context.Context, workspaceID, userID pgtype.UUID, name string) (PluginPackageSummary, error) {
+func (s *PluginService) PublishLocalBundle(ctx context.Context, workspaceID, userID string, name string) (PluginPackageSummary, error) {
 	if s.LocalDir == "" {
 		return PluginPackageSummary{}, pluginErrf(PluginErrorInvalid, "local plugin sources require MULTICA_PLUGIN_DIR")
 	}
@@ -111,16 +110,16 @@ func (s *PluginService) PublishLocalBundle(ctx context.Context, workspaceID, use
 // updated by a publish that then conflicted claims to describe a version that
 // was never stored; and a first publish that failed after creating the package
 // leaves a plugin with zero versions in the list.
-func (s *PluginService) publish(ctx context.Context, workspaceID, userID pgtype.UUID, bundle plugincontract.Bundle, devLoop bool) (PluginPackageSummary, error) {
+func (s *PluginService) publish(ctx context.Context, workspaceID, userID string, bundle plugincontract.Bundle, devLoop bool) (PluginPackageSummary, error) {
 	if err := bundle.Manifest.CheckCapabilities(s.Host); err != nil {
 		return PluginPackageSummary{}, &PluginError{Kind: PluginErrorIncompatible, Message: capabilityMessage(err), Err: err}
 	}
 
-	tx, err := s.TxStarter.Begin(ctx)
+	tx, err := s.TxStarter.BeginTx(ctx, nil)
 	if err != nil {
 		return PluginPackageSummary{}, &PluginError{Kind: PluginErrorUnavailable, Message: "begin publish", Err: err}
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { _ = tx.Rollback() }()
 	queries := s.Queries.WithTx(tx)
 
 	if err := lockPluginPackageKey(ctx, queries, workspaceID, bundle.Manifest.Key); err != nil {
@@ -143,10 +142,10 @@ func (s *PluginService) publish(ctx context.Context, workspaceID, userID pgtype.
 		PackageID:   pkg.ID,
 		WorkspaceID: workspaceID,
 		Version:     version,
-		Manifest:    bundle.Canonical,
+		Manifest:    string(bundle.Canonical),
 		Digest:      BundleDigest(bundle),
 		SizeBytes:   int64(bundle.TotalSize()),
-		PublishedBy: userID,
+		PublishedBy: nullString(userID),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -166,7 +165,7 @@ func (s *PluginService) publish(ctx context.Context, workspaceID, userID pgtype.
 			return PluginPackageSummary{}, &PluginError{Kind: PluginErrorUnavailable, Message: "store plugin package file", Err: err}
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return PluginPackageSummary{}, &PluginError{Kind: PluginErrorUnavailable, Message: "commit publish", Err: err}
 	}
 	return s.packageSummary(ctx, workspaceID, pkg)
@@ -222,8 +221,8 @@ func resolvePublishVersion(version string, existing []db.PluginPackageVersion, d
 // lockPluginPackageKey takes the transaction-scoped lock that serializes
 // publish, install and delete for one plugin. Every caller must already be in a
 // transaction — the lock is released by its commit or rollback.
-func lockPluginPackageKey(ctx context.Context, queries *db.Queries, workspaceID pgtype.UUID, pluginKey string) error {
-	if err := queries.LockPluginPackageKey(ctx, uuidString(workspaceID)+":"+pluginKey); err != nil {
+func lockPluginPackageKey(ctx context.Context, queries *db.Queries, workspaceID string, pluginKey string) error {
+	if err := queries.LockPluginPackageKey(ctx); err != nil {
 		return &PluginError{Kind: PluginErrorUnavailable, Message: "lock plugin package", Err: err}
 	}
 	return nil
@@ -232,7 +231,7 @@ func lockPluginPackageKey(ctx context.Context, queries *db.Queries, workspaceID 
 // upsertPackage takes `queries` rather than reading s.Queries so it runs inside
 // its caller's transaction: the display name must move only if the version that
 // carries it is actually stored.
-func upsertPackage(ctx context.Context, queries *db.Queries, workspaceID, userID pgtype.UUID, manifest plugincontract.Manifest) (db.PluginPackage, error) {
+func upsertPackage(ctx context.Context, queries *db.Queries, workspaceID, userID string, manifest plugincontract.Manifest) (db.PluginPackage, error) {
 	existing, err := queries.GetWorkspacePluginPackageByKey(ctx, db.GetWorkspacePluginPackageByKeyParams{
 		WorkspaceID: workspaceID,
 		PluginKey:   manifest.Key,
@@ -251,14 +250,14 @@ func upsertPackage(ctx context.Context, queries *db.Queries, workspaceID, userID
 		}
 		return updated, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sql.ErrNoRows) {
 		return db.PluginPackage{}, &PluginError{Kind: PluginErrorUnavailable, Message: "load plugin package", Err: err}
 	}
 	created, err := queries.CreatePluginPackage(ctx, db.CreatePluginPackageParams{
 		WorkspaceID: workspaceID,
 		PluginKey:   manifest.Key,
 		Name:        manifest.Name,
-		CreatedBy:   userID,
+		CreatedBy:   nullString(userID),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -272,7 +271,7 @@ func upsertPackage(ctx context.Context, queries *db.Queries, workspaceID, userID
 }
 
 // ListPackages returns everything published in this workspace with its versions.
-func (s *PluginService) ListPackages(ctx context.Context, workspaceID pgtype.UUID) ([]PluginPackageSummary, error) {
+func (s *PluginService) ListPackages(ctx context.Context, workspaceID string) ([]PluginPackageSummary, error) {
 	packages, err := s.Queries.ListWorkspacePluginPackages(ctx, workspaceID)
 	if err != nil {
 		return nil, &PluginError{Kind: PluginErrorUnavailable, Message: "list plugin packages", Err: err}
@@ -288,7 +287,7 @@ func (s *PluginService) ListPackages(ctx context.Context, workspaceID pgtype.UUI
 	return summaries, nil
 }
 
-func (s *PluginService) packageSummary(ctx context.Context, workspaceID pgtype.UUID, pkg db.PluginPackage) (PluginPackageSummary, error) {
+func (s *PluginService) packageSummary(ctx context.Context, workspaceID string, pkg db.PluginPackage) (PluginPackageSummary, error) {
 	versions, err := s.Queries.ListPluginPackageVersions(ctx, pkg.ID)
 	if err != nil {
 		return PluginPackageSummary{}, &PluginError{Kind: PluginErrorUnavailable, Message: "list published versions", Err: err}
@@ -303,7 +302,7 @@ func (s *PluginService) packageSummary(ctx context.Context, workspaceID pgtype.U
 	})
 	if err == nil {
 		installedVersionID = uuidString(installation.PackageVersionID)
-	} else if !errors.Is(err, pgx.ErrNoRows) {
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		return PluginPackageSummary{}, &PluginError{Kind: PluginErrorUnavailable, Message: "load plugin installation", Err: err}
 	}
 
@@ -315,7 +314,7 @@ func (s *PluginService) packageSummary(ctx context.Context, workspaceID pgtype.U
 			Version:     version.Version,
 			Digest:      version.Digest,
 			SizeBytes:   version.SizeBytes,
-			PublishedAt: version.CreatedAt.Time.UTC().Format(pluginTimeFormat),
+			PublishedAt: asTime(version.CreatedAt).UTC().Format(pluginTimeFormat),
 			Installed:   id != "" && id == installedVersionID,
 		})
 	}
@@ -324,7 +323,7 @@ func (s *PluginService) packageSummary(ctx context.Context, workspaceID pgtype.U
 		PluginKey: pkg.PluginKey,
 		Name:      pkg.Name,
 		Versions:  rendered,
-		CreatedAt: pkg.CreatedAt.Time.UTC().Format(pluginTimeFormat),
+		CreatedAt: asTime(pkg.CreatedAt).UTC().Format(pluginTimeFormat),
 	}, nil
 }
 
@@ -333,7 +332,7 @@ func (s *PluginService) packageSummary(ctx context.Context, workspaceID pgtype.U
 // Refused while any installation still runs one of those versions: deleting them
 // would leave an installed panel with no code to load, and an installation is
 // the administrator's decision to unwind, not the publisher's.
-func (s *PluginService) DeletePackage(ctx context.Context, workspaceID pgtype.UUID, packageID string) error {
+func (s *PluginService) DeletePackage(ctx context.Context, workspaceID string, packageID string) error {
 	parsed, err := util.ParseUUID(packageID)
 	if err != nil {
 		return pluginErrf(PluginErrorNotFound, "plugin package not found")
@@ -344,18 +343,18 @@ func (s *PluginService) DeletePackage(ctx context.Context, workspaceID pgtype.UU
 		WorkspaceID: workspaceID,
 		ID:          parsed,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return pluginErrf(PluginErrorNotFound, "plugin package not found")
 	}
 	if err != nil {
 		return &PluginError{Kind: PluginErrorUnavailable, Message: "load plugin package", Err: err}
 	}
 
-	tx, err := s.TxStarter.Begin(ctx)
+	tx, err := s.TxStarter.BeginTx(ctx, nil)
 	if err != nil {
 		return &PluginError{Kind: PluginErrorUnavailable, Message: "begin delete", Err: err}
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { _ = tx.Rollback() }()
 	queries := s.Queries.WithTx(tx)
 
 	if err := lockPluginPackageKey(ctx, queries, workspaceID, pkg.PluginKey); err != nil {
@@ -383,7 +382,7 @@ func (s *PluginService) DeletePackage(ctx context.Context, workspaceID pgtype.UU
 	if err := queries.DeletePluginPackage(ctx, pkg.ID); err != nil {
 		return &PluginError{Kind: PluginErrorUnavailable, Message: "delete plugin package", Err: err}
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return &PluginError{Kind: PluginErrorUnavailable, Message: "commit delete", Err: err}
 	}
 	return nil
@@ -397,12 +396,12 @@ func (s *PluginService) DeletePackage(ctx context.Context, workspaceID pgtype.UU
 // work that does not need it. So the version is confirmed once more after the
 // lock is held, which is the point at which a concurrent delete can no longer
 // slip in between.
-func requireVersionStillPublished(ctx context.Context, queries *db.Queries, workspaceID, versionID pgtype.UUID) error {
+func requireVersionStillPublished(ctx context.Context, queries *db.Queries, workspaceID, versionID string) error {
 	_, err := queries.GetWorkspacePluginPackageVersion(ctx, db.GetWorkspacePluginPackageVersionParams{
 		WorkspaceID: workspaceID,
 		ID:          versionID,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return pluginErrf(PluginErrorConflict, "this version was deleted while the install was being confirmed; publish or pick another version")
 	}
 	if err != nil {
@@ -414,7 +413,7 @@ func requireVersionStillPublished(ctx context.Context, queries *db.Queries, work
 // VersionForWorkspace loads a published version and confirms it belongs to the
 // workspace in the URL. Publishing is workspace-private, so a version id from
 // another workspace must not be installable here.
-func (s *PluginService) VersionForWorkspace(ctx context.Context, workspaceID pgtype.UUID, versionID string) (db.PluginPackageVersion, error) {
+func (s *PluginService) VersionForWorkspace(ctx context.Context, workspaceID string, versionID string) (db.PluginPackageVersion, error) {
 	parsed, err := util.ParseUUID(strings.TrimSpace(versionID))
 	if err != nil {
 		return db.PluginPackageVersion{}, pluginErrf(PluginErrorNotFound, "published plugin version not found")
@@ -423,7 +422,7 @@ func (s *PluginService) VersionForWorkspace(ctx context.Context, workspaceID pgt
 		WorkspaceID: workspaceID,
 		ID:          parsed,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return db.PluginPackageVersion{}, pluginErrf(PluginErrorNotFound, "published plugin version not found")
 	}
 	if err != nil {
@@ -466,7 +465,7 @@ func (s *PluginService) SurfaceScript(ctx context.Context, installation db.Plugi
 		VersionID: installation.PackageVersionID,
 		Path:      entry,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return PluginSurfaceScript{}, pluginErrf(PluginErrorNotFound, "the installed version does not contain %q", entry)
 	}
 	if err != nil {
@@ -481,12 +480,12 @@ func (s *PluginService) SurfaceScript(ctx context.Context, installation db.Plugi
 
 // packageFile reads one file of a published version, for install-time work such
 // as skill resources.
-func (s *PluginService) packageFile(ctx context.Context, queries *db.Queries, versionID pgtype.UUID, entry string) ([]byte, error) {
+func (s *PluginService) packageFile(ctx context.Context, queries *db.Queries, versionID string, entry string) ([]byte, error) {
 	file, err := queries.GetPluginPackageFile(ctx, db.GetPluginPackageFileParams{
 		VersionID: versionID,
 		Path:      entry,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, pluginErrf(PluginErrorInvalid, "the published version does not contain %q", entry)
 	}
 	if err != nil {

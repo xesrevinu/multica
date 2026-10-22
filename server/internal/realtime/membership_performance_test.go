@@ -8,9 +8,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	redismock "github.com/go-redis/redismock/v9"
-	"github.com/redis/go-redis/v9"
 )
 
 // Regression adapted from the independent review probe: every identity is valid and
@@ -152,67 +149,5 @@ func TestMembershipQueryUsesRemainingCallerBudget(t *testing.T) {
 	hub.runMembershipChecks()
 	if <-request.result || observed.IsZero() || observed.After(deadline) {
 		t.Fatal("query outlived its callers or granted an expired authorization")
-	}
-}
-
-// Use the actual shard reader with a mocked XREAD. A workspace with no local
-// subscribers should not make another workspace wait for its removal lookup.
-func TestMembershipRemovalWithoutSubscribersDoesNotQuery(t *testing.T) {
-	hub := NewHub()
-	const latency = 300 * time.Millisecond
-	var calls atomic.Int32
-	hub.SetMembershipChecker(membershipFunc(func(ctx context.Context, _, _ string) (bool, error) {
-		calls.Add(1)
-		timer := time.NewTimer(latency)
-		defer timer.Stop()
-		select {
-		case <-timer.C:
-			return false, nil
-		case <-ctx.Done():
-			return false, ctx.Err()
-		}
-	}))
-	rdb, mock := redismock.NewClientMock()
-	t.Cleanup(func() { _ = rdb.Close() })
-	relay := NewShardedStreamRelay(hub, rdb, rdb, ShardedStreamRelayConfig{})
-	removedWorkspace := "workspace-with-no-local-clients"
-	shard := relay.shardFor(ScopeWorkspace, removedWorkspace)
-	var otherWorkspace string
-	for i := 0; ; i++ {
-		otherWorkspace = fmt.Sprintf("other-workspace-%d", i)
-		if relay.shardFor(ScopeWorkspace, otherWorkspace) == shard {
-			break
-		}
-	}
-	client := attachRealtimeTestClient(hub, ScopeWorkspace, otherWorkspace)
-	client.workspaceID = otherWorkspace
-	stream, lastID := ShardedStreamKey(shard), "0-0"
-	mock.ExpectXRead(&redis.XReadArgs{
-		Streams: []string{stream, lastID}, Count: relay.config.ReadCount, Block: relay.config.ReadBlock,
-	}).SetVal([]redis.XStream{{Stream: stream, Messages: []redis.XMessage{
-		{ID: "1-0", Values: envelopeRedisValues(envelope{
-			EventID: "removal-event", Scope: ScopeWorkspace, ScopeID: removedWorkspace,
-			PayloadJSON: fmt.Sprintf(`{"type":"member:removed","payload":{"workspace_id":%q,"user_id":"removed-user"}}`, removedWorkspace),
-		})},
-		{ID: "2-0", Values: envelopeRedisValues(envelope{
-			EventID: "unrelated-update", Scope: ScopeWorkspace, ScopeID: otherWorkspace,
-			PayloadJSON: `{"type":"issue:updated"}`,
-		})},
-	}}})
-	finished := make(chan struct{})
-	begin := time.Now()
-	go func() { relay.readShardOnce(context.Background(), shard, stream, &lastID); close(finished) }()
-	select {
-	case <-client.send:
-		t.Logf("unrelated workspace enqueue delay=%s; removal queries with no local subscriber=%d", time.Since(begin).Round(time.Millisecond), calls.Load())
-		if calls.Load() != 0 {
-			t.Error("removal queried membership without local recipients")
-		}
-	case <-time.After(3 * time.Second):
-		t.Error("unrelated workspace update was not delivered")
-	}
-	<-finished
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
 	}
 }

@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -70,7 +69,7 @@ func TestListAgentTasksHydratesUsage(t *testing.T) {
 
 	usageRows, err := testHandler.Queries.ListAgentTaskUsage(ctx, db.ListAgentTaskUsageParams{
 		AgentID: parseUUID(agentID),
-		TaskIds: []pgtype.UUID{parseUUID(usageTask), parseUUID(noUsageTask)},
+		TaskIds: []string{parseUUID(usageTask), parseUUID(noUsageTask)},
 	})
 	if err != nil {
 		t.Fatalf("list agent task usage: %v", err)

@@ -553,15 +553,15 @@ func TestListCommentsForIssue_KeepsNewestWindow(t *testing.T) {
 	// Newest window: the last `limit` rows of the seeded range.
 	wantFirst := start.Add(time.Duration(total-limit) * time.Second)
 	wantLast := start.Add(time.Duration(total-1) * time.Second)
-	if got := rows[0].CreatedAt.Time.UTC(); !got.Equal(wantFirst) {
+	if got := parseDBTime(rows[0].CreatedAt).UTC(); !got.Equal(wantFirst) {
 		t.Errorf("first row created_at = %s, want %s (newest window, ascending)", got, wantFirst)
 	}
-	if got := rows[len(rows)-1].CreatedAt.Time.UTC(); !got.Equal(wantLast) {
+	if got := parseDBTime(rows[len(rows)-1].CreatedAt).UTC(); !got.Equal(wantLast) {
 		t.Errorf("last row created_at = %s, want %s (newest row)", got, wantLast)
 	}
 	// Ascending order preserved for every existing caller.
 	for i := 1; i < len(rows); i++ {
-		if rows[i].CreatedAt.Time.Before(rows[i-1].CreatedAt.Time) {
+		if parseDBTime(rows[i].CreatedAt).Before(parseDBTime(rows[i-1].CreatedAt)) {
 			t.Fatalf("row %d is older than row %d: ascending contract broken", i, i-1)
 		}
 	}

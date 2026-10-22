@@ -9,7 +9,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/featureflags"
 	"github.com/multica-ai/multica/server/internal/issueworkflow"
 	"github.com/multica-ai/multica/server/internal/service"
@@ -349,7 +348,7 @@ func TestStatusChangeHandsOffOnDefaultProject(t *testing.T) {
 	if assigneeType != "agent" || assigneeID != agentID {
 		t.Fatalf("assignee = %s/%s, want the column's agent %s", assigneeType, assigneeID, agentID)
 	}
-	tasks, err := testHandler.Queries.ListTasksByIssue(context.Background(), util.MustParseUUID(issueID))
+	tasks, err := testHandler.Queries.ListTasksByIssue(context.Background(), nullString(util.MustParseUUID(issueID)))
 	if err != nil || len(tasks) != 1 {
 		t.Fatalf("tasks = %d (%v), want one handoff run", len(tasks), err)
 	}
@@ -368,7 +367,7 @@ func TestStatusChangeHandsOffOnDefaultProject(t *testing.T) {
 	// A caller-written note rides beside the step's brief.
 	back := dbfx.Issue(t, "explicit note", testutil.Cols{"project_id": projectID, "status": "todo"})
 	updateIssueForTest(t, back, map[string]any{"status": "in_progress", "handoff_note": "Only the login flow."}).Want(http.StatusOK)
-	backTasks, _ := testHandler.Queries.ListTasksByIssue(context.Background(), util.MustParseUUID(back))
+	backTasks, _ := testHandler.Queries.ListTasksByIssue(context.Background(), nullString(util.MustParseUUID(back)))
 	if len(backTasks) != 1 || backTasks[0].HandoffNote.String != "Only the login flow." {
 		t.Fatalf("explicit handoff note was not kept: %+v", backTasks)
 	}
@@ -607,7 +606,7 @@ func TestCreateIssueHandsOffItsStartingColumn(t *testing.T) {
 	if created.AssigneeID == nil || *created.AssigneeID != agentID {
 		t.Fatalf("assignee = %v, want the todo column's agent", created.AssigneeID)
 	}
-	tasks, _ := testHandler.Queries.ListTasksByIssue(context.Background(), util.MustParseUUID(created.ID))
+	tasks, _ := testHandler.Queries.ListTasksByIssue(context.Background(), nullString(util.MustParseUUID(created.ID)))
 	if len(tasks) != 1 || !strings.Contains(claimBriefForTest(t, created.ID, tasks[0]), "Triage it.") {
 		t.Fatalf("create did not start the column's run with its brief: %+v", tasks)
 	}
@@ -960,8 +959,7 @@ func TestWorkflowSwitchIntoDoneEndsWakeups(t *testing.T) {
 	projectID := createWorkflowTestProject(t, "Workflow switch wakeups project")
 	issueID := dbfx.Issue(t, "wakeups end with the issue", testutil.Cols{"project_id": projectID, "status": "in_review"})
 	svc := service.IssueWakeupService{Tasks: testHandler.TaskService}
-	wakeup, err := svc.Create(context.Background(), parseUUID(issueID), parseUUID(testUserID), pgtype.UUID{},
-		service.WakeupInput{AgentID: agentID, Kind: "at", AfterSeconds: 600, Instruction: "check the PR"})
+	wakeup, err := svc.Create(context.Background(), parseUUID(issueID), parseUUID(testUserID), "", service.WakeupInput{AgentID: agentID, Kind: "at", AfterSeconds: 600, Instruction: "check the PR"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1001,7 +999,7 @@ func TestHandoffDoesNotAlsoWakeTheHandler(t *testing.T) {
 	svc := service.IssueWakeupService{Tasks: testHandler.TaskService}
 	subscribe := func(issueID, agentID string) string {
 		t.Helper()
-		w, err := svc.Create(context.Background(), parseUUID(issueID), parseUUID(testUserID), pgtype.UUID{}, service.WakeupInput{
+		w, err := svc.Create(context.Background(), parseUUID(issueID), parseUUID(testUserID), "", service.WakeupInput{
 			AgentID: agentID, Kind: "event", EventTypes: []string{"issue.status_changed", "issue.assignee_changed"}, Instruction: "look again",
 		})
 		if err != nil {

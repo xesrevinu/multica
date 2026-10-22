@@ -192,7 +192,7 @@ func TestGetPendingChatTask_ReturnsActiveHeadAndFIFOQueue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list compatibility transcript: %v", err)
 	}
-	if len(transcript) != 1 || util.UUIDToString(transcript[0].TaskID) != activeID {
+	if len(transcript) != 1 || util.UUIDToString(transcript[0].TaskID.String) != activeID {
 		t.Fatalf("legacy full-list transcript exposed queued prompts: %+v", transcript)
 	}
 	page, err := testHandler.Queries.ListChatMessagesPage(
@@ -205,7 +205,7 @@ func TestGetPendingChatTask_ReturnsActiveHeadAndFIFOQueue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list paged compatibility transcript: %v", err)
 	}
-	if len(page) != 1 || util.UUIDToString(page[0].TaskID) != activeID {
+	if len(page) != 1 || util.UUIDToString(page[0].TaskID.String) != activeID {
 		t.Fatalf("paged transcript exposed queued prompts: %+v", page)
 	}
 
@@ -216,7 +216,7 @@ func TestGetPendingChatTask_ReturnsActiveHeadAndFIFOQueue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list legacy task input: %v", err)
 	}
-	if len(legacy) != 1 || util.UUIDToString(legacy[0].TaskID) != activeID {
+	if len(legacy) != 1 || util.UUIDToString(legacy[0].TaskID.String) != activeID {
 		t.Fatalf("legacy task input leaked queued successor: %+v", legacy)
 	}
 
@@ -427,7 +427,7 @@ func TestPendingQueueHeadMatchesClaimForEqualCreatedAt(t *testing.T) {
 		}
 	}
 
-	pending, err := testHandler.Queries.ListPendingChatTasksForSession(ctx, parseUUID(sessionID))
+	pending, err := testHandler.Queries.ListPendingChatTasksForSession(ctx, nullString(parseUUID(sessionID)))
 	if err != nil {
 		t.Fatalf("list pending tasks: %v", err)
 	}
@@ -545,7 +545,7 @@ func TestPrioritizeQueuedChatTask_RejectsWhileVisibleHeadIsUnclaimed(t *testing.
 		t.Fatalf("unclaimed-head error = %q", conflictBody.Error)
 	}
 
-	pending, err := testHandler.Queries.ListPendingChatTasksForSession(ctx, parseUUID(sessionID))
+	pending, err := testHandler.Queries.ListPendingChatTasksForSession(ctx, nullString(parseUUID(sessionID)))
 	if err != nil {
 		t.Fatalf("list preserved queue: %v", err)
 	}

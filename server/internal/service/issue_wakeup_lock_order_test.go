@@ -2,11 +2,12 @@ package service
 
 import (
 	"context"
-	"github.com/jackc/pgx/v5"
-	"github.com/multica-ai/multica/server/internal/util"
+	"database/sql"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/util"
 )
 
 type wakeupTaskLockProbe struct {
@@ -14,24 +15,24 @@ type wakeupTaskLockProbe struct {
 	beforeTaskLock func()
 }
 
-func (s wakeupTaskLockProbe) Begin(ctx context.Context) (pgx.Tx, error) {
-	tx, err := s.TxStarter.Begin(ctx)
+func (s wakeupTaskLockProbe) BeginTx(ctx context.Context, _ *sql.TxOptions) (*sql.Tx, error) {
+	tx, err := s.TxStarter.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	return wakeupProbeTx{Tx: tx, beforeTaskLock: s.beforeTaskLock}, nil
+	return tx, nil
 }
 
 type wakeupProbeTx struct {
-	pgx.Tx
+	*sql.Tx
 	beforeTaskLock func()
 }
 
-func (tx wakeupProbeTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	if strings.Contains(sql, "-- name: FindPendingWakeupTask") {
+func (tx wakeupProbeTx) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	if strings.Contains(query, "-- name: FindPendingWakeupTask") {
 		tx.beforeTaskLock()
 	}
-	return tx.Tx.QueryRow(ctx, sql, args...)
+	return tx.Tx.QueryRowContext(ctx, query, args...)
 }
 
 func TestIssueWakeupTaskLockWaitDoesNotHoldReceipt(t *testing.T) {
@@ -47,7 +48,7 @@ func TestIssueWakeupTaskLockWaitDoesNotHoldReceipt(t *testing.T) {
 		// reorder this blocks on a receipt already locked by dispatch.
 		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 		defer cancel()
-		_, err := f.Pool.Exec(ctx, `INSERT INTO comment(issue_id,workspace_id,author_type,author_id,content,type) VALUES($1,$2,'member',$3,'concurrent','comment')`, issue, f.WorkspaceID, f.UserID)
+		_, err := f.Pool.ExecContext(ctx, `INSERT INTO comment(issue_id,workspace_id,author_type,author_id,content,type) VALUES($1,$2,'member',$3,'concurrent','comment')`, issue, f.WorkspaceID, f.UserID)
 		if err != nil {
 			t.Errorf("comment capture blocked behind task-lock wait: %v", err)
 		}

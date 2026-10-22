@@ -2,10 +2,10 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/testutil"
 )
 
@@ -35,7 +35,7 @@ func issueStatusOf(t *testing.T, issueID string) string {
 
 func triageStateOf(t *testing.T, issueID string) string {
 	t.Helper()
-	var state pgtype.Text
+	var state sql.NullString
 	dbfx.QueryRow(t, `SELECT triage_state FROM issue WHERE id = $1`, issueID).Scan(&state)
 	return state.String
 }

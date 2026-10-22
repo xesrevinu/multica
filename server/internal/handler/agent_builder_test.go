@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,9 +10,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -247,7 +245,7 @@ func TestSwitchAgentBuilderRuntimeRebindsCarrier(t *testing.T) {
 	// The carrier is what stamps a chat task's runtime, so this row — not the
 	// client's local selection — is the fix.
 	var boundRuntimeID, boundRuntimeMode string
-	var boundModel pgtype.Text
+	var boundModel sql.NullString
 	if err := testPool.QueryRow(ctx, `
 		SELECT runtime_id::text, runtime_mode, model FROM agent WHERE id = $1
 	`, session.BuilderAgentID).Scan(&boundRuntimeID, &boundRuntimeMode, &boundModel); err != nil {
@@ -824,8 +822,8 @@ func TestSendDirectChatMessageUsesCurrentlyBoundRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load builder carrier: %v", err)
 	}
-	if uuidToString(staleAgent.RuntimeID) != testRuntimeID {
-		t.Fatalf("carrier should start on %q, got %q", testRuntimeID, uuidToString(staleAgent.RuntimeID))
+	if uuidToString(staleAgent.RuntimeID.String) != testRuntimeID {
+		t.Fatalf("carrier should start on %q, got %q", testRuntimeID, uuidToString(staleAgent.RuntimeID.String))
 	}
 
 	if w := switchBuilderRuntime(t, created.SessionID, target); w.Code != http.StatusOK {
@@ -841,17 +839,17 @@ func TestSendDirectChatMessageUsesCurrentlyBoundRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendDirectChatMessage: %v", err)
 	}
-	if got := uuidToString(sent.Task.RuntimeID); got != target {
+	if got := uuidToString(sent.Task.RuntimeID.String); got != target {
 		t.Fatalf("task runtime = %q, want the rebound runtime %q — a stale in-flight send must not resurrect the old runtime", got, target)
 	}
 }
 
 // holderBackendPID returns the server-side PID of the backend serving tx, so a
 // waiter can later be attributed to this specific lock holder.
-func holderBackendPID(t *testing.T, ctx context.Context, tx pgx.Tx) int {
+func holderBackendPID(t *testing.T, ctx context.Context, tx *sql.Tx) int {
 	t.Helper()
 	var pid int
-	if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
 		t.Fatalf("read holder backend pid: %v", err)
 	}
 	return pid
@@ -934,7 +932,7 @@ func TestSendDirectChatMessageWaitsForUncommittedRebind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin rebind tx: %v", err)
 	}
-	defer tx.Rollback(context.Background())
+	defer tx.Rollback(ctx)
 	holderPID := holderBackendPID(t, ctx, tx)
 	qtx := testHandler.Queries.WithTx(tx)
 	if _, err := qtx.LockChatSessionForRuntimeBind(ctx, session.ID); err != nil {
@@ -949,7 +947,7 @@ func TestSendDirectChatMessageWaitsForUncommittedRebind(t *testing.T) {
 	}
 	if _, err := qtx.RebindAgentBuilderRuntime(ctx, db.RebindAgentBuilderRuntimeParams{
 		ID:          staleAgent.ID,
-		RuntimeID:   targetRuntime.ID,
+		RuntimeID:   nullString(targetRuntime.ID),
 		RuntimeMode: targetRuntime.RuntimeMode,
 	}); err != nil {
 		t.Fatalf("rebind carrier: %v", err)
@@ -962,8 +960,7 @@ func TestSendDirectChatMessageWaitsForUncommittedRebind(t *testing.T) {
 	results := make(chan sendResult, 1)
 	go func() {
 		sent, err := testHandler.TaskService.SendDirectChatMessage(
-			context.Background(), session, staleAgent, parseUUID(testUserID),
-			"sent while the rebind was still open", nil, "member", parseUUID(testUserID),
+			context.Background(), session, staleAgent, parseUUID(testUserID), "sent while the rebind was still open", nil, "member", parseUUID(testUserID),
 		)
 		if err != nil {
 			results <- sendResult{err: err}
@@ -976,7 +973,7 @@ func TestSendDirectChatMessageWaitsForUncommittedRebind(t *testing.T) {
 		select {
 		case got := <-results:
 			t.Fatalf("send completed (err=%v, runtime=%q) while an uncommitted rebind held the chat_session lock; the send path is not taking the lock",
-				got.err, uuidToString(got.task.RuntimeID))
+				got.err, uuidToString(got.task.RuntimeID.String))
 		default:
 			t.Fatalf("send never blocked on the chat_session lock held by pid %d; the send path is not taking the lock", holderPID)
 		}
@@ -996,7 +993,7 @@ func TestSendDirectChatMessageWaitsForUncommittedRebind(t *testing.T) {
 		if got.err != nil {
 			t.Fatalf("SendDirectChatMessage after commit: %v", got.err)
 		}
-		if runtimeID := uuidToString(got.task.RuntimeID); runtimeID != target {
+		if runtimeID := uuidToString(got.task.RuntimeID.String); runtimeID != target {
 			t.Fatalf("task runtime = %q, want the rebound runtime %q", runtimeID, target)
 		}
 	case <-time.After(10 * time.Second):
@@ -1024,7 +1021,7 @@ func TestSendDirectChatMessageRejectsSessionArchivedWhileWaitingForLock(t *testi
 	if err != nil {
 		t.Fatalf("begin archive tx: %v", err)
 	}
-	defer tx.Rollback(context.Background())
+	defer tx.Rollback(ctx)
 	holderPID := holderBackendPID(t, ctx, tx)
 	if _, err := tx.Exec(ctx, `
 		UPDATE chat_session SET status = 'archived' WHERE id = $1
@@ -1035,8 +1032,7 @@ func TestSendDirectChatMessageRejectsSessionArchivedWhileWaitingForLock(t *testi
 	results := make(chan error, 1)
 	go func() {
 		_, err := testHandler.TaskService.SendDirectChatMessage(
-			context.Background(), session, agent, parseUUID(testUserID),
-			"must not enqueue after archive", nil, "member", parseUUID(testUserID),
+			context.Background(), session, agent, parseUUID(testUserID), "must not enqueue after archive", nil, "member", parseUUID(testUserID),
 		)
 		results <- err
 	}()
@@ -1088,7 +1084,7 @@ func TestDeleteBuilderSessionLocksAgentBeforeTasks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin claim tx: %v", err)
 	}
-	defer claimTx.Rollback(context.Background())
+	defer claimTx.Rollback(ctx)
 	qtx := testHandler.Queries.WithTx(claimTx)
 	agent, err := qtx.GetAgentForClaimUpdate(ctx, parseUUID(created.BuilderAgentID))
 	if err != nil {
@@ -1160,7 +1156,7 @@ func TestSwitchAgentBuilderRuntimeWaitsForUncommittedSend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin send tx: %v", err)
 	}
-	defer tx.Rollback(context.Background())
+	defer tx.Rollback(ctx)
 	holderPID := holderBackendPID(t, ctx, tx)
 	qtx := testHandler.Queries.WithTx(tx)
 	if _, err := qtx.LockChatSessionForRuntimeBind(ctx, parseUUID(created.SessionID)); err != nil {
@@ -1338,7 +1334,7 @@ func TestWaitForWaiterBlockedByIgnoresUnrelatedWaiters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin holder tx: %v", err)
 	}
-	defer holderTx.Rollback(context.Background())
+	defer holderTx.Rollback(ctx)
 	holderPID := holderBackendPID(t, ctx, holderTx)
 	if _, err := holderTx.Exec(ctx, `SELECT id FROM chat_session WHERE id = $1 FOR UPDATE`, mine.SessionID); err != nil {
 		t.Fatalf("hold our own session lock: %v", err)
@@ -1350,7 +1346,7 @@ func TestWaitForWaiterBlockedByIgnoresUnrelatedWaiters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin unrelated holder tx: %v", err)
 	}
-	defer otherTx.Rollback(context.Background())
+	defer otherTx.Rollback(ctx)
 	otherPID := holderBackendPID(t, ctx, otherTx)
 	if _, err := otherTx.Exec(ctx, `SELECT id FROM chat_session WHERE id = $1 FOR UPDATE`, theirs.SessionID); err != nil {
 		t.Fatalf("hold unrelated session lock: %v", err)
@@ -1363,7 +1359,7 @@ func TestWaitForWaiterBlockedByIgnoresUnrelatedWaiters(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer waiterTx.Rollback(context.Background())
+		defer waiterTx.Rollback(ctx)
 		_, _ = waiterTx.Exec(context.Background(), `SELECT id FROM chat_session WHERE id = $1 FOR UPDATE`, theirs.SessionID)
 	}()
 

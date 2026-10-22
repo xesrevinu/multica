@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -11,8 +12,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/logger"
@@ -61,7 +60,7 @@ func (h *Handler) CreateChatSession(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	projectID := pgtype.UUID{Valid: false}
+	projectID := ""
 	if req.ProjectID != nil && strings.TrimSpace(*req.ProjectID) != "" {
 		projectID, ok = parseUUIDOrBadRequest(w, strings.TrimSpace(*req.ProjectID), "project_id")
 		if !ok {
@@ -96,28 +95,28 @@ func (h *Handler) CreateChatSession(w http.ResponseWriter, r *http.Request) {
 	// created into a workspace whose delete is in progress and then be orphaned by
 	// the finalizer after the delete's sweep (#5219 create/delete protocol; see
 	// LockWorkspaceForChatSessionCreate).
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start transaction")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	if _, err := qtx.LockWorkspaceForChatSessionCreate(r.Context(), workspaceUUID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "workspace not found")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "failed to lock workspace")
 		return
 	}
-	if projectID.Valid {
+	if projectID != "" {
 		if _, err := qtx.LockProjectForChatSessionCreate(r.Context(), db.LockProjectForChatSessionCreateParams{
 			ID:          projectID,
 			WorkspaceID: workspaceUUID,
 		}); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+			if errors.Is(err, sql.ErrNoRows) {
 				writeError(w, http.StatusNotFound, "project not found")
 				return
 			}
@@ -132,7 +131,7 @@ func (h *Handler) CreateChatSession(w http.ResponseWriter, r *http.Request) {
 		AgentID:     agentID,
 		CreatorID:   parseUUID(userID),
 		Title:       req.Title,
-		ProjectID:   projectID,
+		ProjectID:   nullString(projectID),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create chat session")
@@ -144,7 +143,7 @@ func (h *Handler) CreateChatSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit chat session create")
 		return
 	}
@@ -195,6 +194,7 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 			if _, ok := allowed[uuidToString(s.AgentID)]; !ok {
 				continue
 			}
+			unread := int(sqliteIfaceInt64(s.UnreadCount))
 			resp = append(resp, ChatSessionResponse{
 				ID:          uuidToString(s.ID),
 				WorkspaceID: uuidToString(s.WorkspaceID),
@@ -203,9 +203,9 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 				ProjectID:   uuidToPtr(s.ProjectID),
 				Title:       s.Title,
 				Status:      s.Status,
-				HasUnread:   s.UnreadCount > 0,
-				UnreadCount: int(s.UnreadCount),
-				LastMessage: buildChatLastMessage(s.LastMessageAt, s.LastMessageContent, s.LastMessageRole, s.LastMessageFailureReason, s.LastMessageKind),
+				HasUnread:   unread > 0,
+				UnreadCount: unread,
+				LastMessage: buildChatLastMessage(s.LastMessageAt.String, s.LastMessageContent, s.LastMessageRole, s.LastMessageFailureReason, s.LastMessageKind),
 				Pinned:      s.PinnedAt.Valid,
 				CreatedAt:   timestampToString(s.CreatedAt),
 				UpdatedAt:   timestampToString(s.UpdatedAt),
@@ -235,7 +235,7 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 				Status:      s.Status,
 				HasUnread:   s.UnreadCount > 0,
 				UnreadCount: int(s.UnreadCount),
-				LastMessage: buildChatLastMessage(s.LastMessageAt, s.LastMessageContent, s.LastMessageRole, s.LastMessageFailureReason, s.LastMessageKind),
+				LastMessage: buildChatLastMessage(s.LastMessageAt.String, s.LastMessageContent, s.LastMessageRole, s.LastMessageFailureReason, s.LastMessageKind),
 				Pinned:      s.PinnedAt.Valid,
 				CreatedAt:   timestampToString(s.CreatedAt),
 				UpdatedAt:   timestampToString(s.UpdatedAt),
@@ -397,7 +397,7 @@ func (h *Handler) UpdateChatSession(w http.ResponseWriter, r *http.Request) {
 			Title: title,
 		})
 	} else {
-		projectID := pgtype.UUID{Valid: false}
+		projectID := ""
 		if string(req.ProjectID) != "null" {
 			var rawProjectID string
 			if err := json.Unmarshal(req.ProjectID, &rawProjectID); err != nil {
@@ -415,20 +415,20 @@ func (h *Handler) UpdateChatSession(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		tx, txErr := h.TxStarter.Begin(r.Context())
+		tx, txErr := h.TxStarter.BeginTx(r.Context(), nil)
 		if txErr != nil {
 			writeError(w, http.StatusInternalServerError, "failed to start transaction")
 			return
 		}
-		defer tx.Rollback(r.Context())
+		defer tx.Rollback()
 		qtx := h.Queries.WithTx(tx)
 
-		if projectID.Valid {
+		if projectID != "" {
 			if _, lockErr := qtx.LockProjectForChatSessionCreate(r.Context(), db.LockProjectForChatSessionCreateParams{
 				ID:          projectID,
 				WorkspaceID: session.WorkspaceID,
 			}); lockErr != nil {
-				if errors.Is(lockErr, pgx.ErrNoRows) {
+				if errors.Is(lockErr, sql.ErrNoRows) {
 					writeError(w, http.StatusNotFound, "project not found")
 					return
 				}
@@ -440,10 +440,10 @@ func (h *Handler) UpdateChatSession(w http.ResponseWriter, r *http.Request) {
 		updated, err = qtx.UpdateChatSessionProject(r.Context(), db.UpdateChatSessionProjectParams{
 			ID:          session.ID,
 			WorkspaceID: session.WorkspaceID,
-			ProjectID:   projectID,
+			ProjectID:   nullString(projectID),
 		})
 		if err == nil {
-			err = tx.Commit(r.Context())
+			err = tx.Commit()
 		}
 		projectIDChanged = true
 	}
@@ -496,7 +496,7 @@ func (h *Handler) SetChatSessionPinned(w http.ResponseWriter, r *http.Request) {
 
 	updated, err := h.Queries.SetChatSessionPinned(r.Context(), db.SetChatSessionPinnedParams{
 		ID:     session.ID,
-		Pinned: req.Pinned,
+		Pinned: sqliteBoolNull(req.Pinned),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update chat session")
@@ -563,17 +563,17 @@ func (h *Handler) SetChatSessionArchived(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start transaction")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	updated, err := qtx.SetChatSessionArchived(r.Context(), db.SetChatSessionArchivedParams{
 		ID:       session.ID,
-		Archived: req.Archived,
+		Archived: sqliteBoolArg(req.Archived),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update chat session")
@@ -609,7 +609,7 @@ func (h *Handler) SetChatSessionArchived(w http.ResponseWriter, r *http.Request)
 			// dispatched, running, waiting_local_directory and deferred, which
 			// is why the returned rows have to reach the post-commit broadcast
 			// below rather than being discarded.
-			cancelled, err = qtx.CancelAgentTasksByChatSession(r.Context(), session.ID)
+			cancelled, err = qtx.CancelAgentTasksByChatSession(r.Context(), nullString(session.ID))
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, "failed to cancel queued tasks for the archived session")
 				return
@@ -618,7 +618,7 @@ func (h *Handler) SetChatSessionArchived(w http.ResponseWriter, r *http.Request)
 				writeError(w, http.StatusInternalServerError, "failed to settle terminal task state")
 				return
 			}
-		case errors.Is(bindingErr, pgx.ErrNoRows):
+		case errors.Is(bindingErr, sql.ErrNoRows):
 			// A web-only chat has no room, no adapter and nowhere for a late
 			// answer to land, so there is nothing here to protect anyone from
 			// and archiving stays what the UI already says it is: the
@@ -648,7 +648,7 @@ func (h *Handler) SetChatSessionArchived(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		slog.Warn("commit chat session archive failed", "session_id", sessionID, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to commit chat session update")
 		return
@@ -693,12 +693,12 @@ func (h *Handler) DeleteChatSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start transaction")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	// FOR UPDATE on the chat_session row blocks any concurrent INSERT into
@@ -706,7 +706,7 @@ func (h *Handler) DeleteChatSession(w http.ResponseWriter, r *http.Request) {
 	// KEY SHARE lock). After we commit the delete, the blocked INSERT
 	// fails its FK check, so it can't land an orphaned task.
 	if _, err := qtx.LockChatSessionForDelete(r.Context(), session.ID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			// Already gone — treat as idempotent success.
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -723,7 +723,7 @@ func (h *Handler) DeleteChatSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cancelled, err := qtx.CancelAgentTasksByChatSession(r.Context(), session.ID)
+	cancelled, err := qtx.CancelAgentTasksByChatSession(r.Context(), nullString(session.ID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to cancel chat session tasks")
 		return
@@ -787,7 +787,7 @@ func (h *Handler) DeleteChatSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		slog.Warn("commit chat session delete failed", "session_id", sessionID, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to commit chat session delete")
 		return
@@ -936,7 +936,7 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 	if !hadUserMessage {
 		if _, err := h.Queries.GetChannelChatSessionBindingBySessionAny(r.Context(), session.ID); err == nil {
 			channelBacked = true
-		} else if !errors.Is(err, pgx.ErrNoRows) {
+		} else if !errors.Is(err, sql.ErrNoRows) {
 			// Title generation is optional. If source authority is unavailable,
 			// skip it rather than risk treating a channel manual rename as an
 			// auto-generated fallback and overwriting it.
@@ -1055,12 +1055,12 @@ type ChatMessagesPageResponse struct {
 	NextCursor *ChatMessagesCursorResponse `json:"next_cursor,omitempty"`
 }
 
-func parseChatMessagesPageParams(r *http.Request) (int, pgtype.Timestamptz, pgtype.UUID, error) {
+func parseChatMessagesPageParams(r *http.Request) (int, string, string, error) {
 	limit := 50
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed < 1 || parsed > 100 {
-			return 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid limit")
+			return 0, "", "", errors.New("invalid limit")
 		}
 		limit = parsed
 	}
@@ -1068,20 +1068,20 @@ func parseChatMessagesPageParams(r *http.Request) (int, pgtype.Timestamptz, pgty
 	rawBeforeCreatedAt := r.URL.Query().Get("before_created_at")
 	rawBeforeID := r.URL.Query().Get("before_id")
 	if rawBeforeCreatedAt == "" && rawBeforeID == "" {
-		return limit, pgtype.Timestamptz{}, pgtype.UUID{}, nil
+		return limit, "", "", nil
 	}
 	if rawBeforeCreatedAt == "" || rawBeforeID == "" {
-		return 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid cursor")
+		return 0, "", "", errors.New("invalid cursor")
 	}
 	beforeTime, err := time.Parse(time.RFC3339Nano, rawBeforeCreatedAt)
 	if err != nil {
-		return 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid cursor")
+		return 0, "", "", errors.New("invalid cursor")
 	}
 	beforeID, err := util.ParseUUID(rawBeforeID)
 	if err != nil {
-		return 0, pgtype.Timestamptz{}, pgtype.UUID{}, errors.New("invalid cursor")
+		return 0, "", "", errors.New("invalid cursor")
 	}
-	return limit, pgtype.Timestamptz{Time: beforeTime, Valid: true}, beforeID, nil
+	return limit, beforeTime.UTC().Format(time.RFC3339Nano), beforeID, nil
 }
 
 // RegenerateChatQuickActionsResponse acknowledges an accepted refresh request.
@@ -1202,7 +1202,7 @@ func (h *Handler) ListChatMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	messages = visibleChatMessages(messages)
 
-	messageIDs := make([]pgtype.UUID, len(messages))
+	messageIDs := make([]string, len(messages))
 	for i, m := range messages {
 		messageIDs[i] = m.ID
 	}
@@ -1239,9 +1239,9 @@ func (h *Handler) ListChatMessagesPage(w http.ResponseWriter, r *http.Request) {
 	// page appear shorter or lose its next cursor.
 	messages, err := h.Queries.ListChatMessagesPage(r.Context(), db.ListChatMessagesPageParams{
 		ChatSessionID:   session.ID,
-		Limit:           int32(limit + 2),
+		Limit:           int64(int32(limit + 2)),
 		BeforeCreatedAt: beforeCreatedAt,
-		BeforeID:        beforeID,
+		BeforeID:        nullString(beforeID),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list chat messages")
@@ -1256,7 +1256,7 @@ func (h *Handler) ListChatMessagesPage(w http.ResponseWriter, r *http.Request) {
 	if hasMore && len(messages) > 0 {
 		oldest := messages[len(messages)-1]
 		nextCursor = &ChatMessagesCursorResponse{
-			CreatedAt: oldest.CreatedAt.Time.Format(time.RFC3339Nano),
+			CreatedAt: parseDBTime(oldest.CreatedAt).Format(time.RFC3339Nano),
 			ID:        uuidToString(oldest.ID),
 		}
 	}
@@ -1267,7 +1267,7 @@ func (h *Handler) ListChatMessagesPage(w http.ResponseWriter, r *http.Request) {
 		messages[i], messages[j] = messages[j], messages[i]
 	}
 
-	messageIDs := make([]pgtype.UUID, len(messages))
+	messageIDs := make([]string, len(messages))
 	for i, m := range messages {
 		messageIDs[i] = m.ID
 	}
@@ -1310,7 +1310,7 @@ type PendingChatTaskResponse struct {
 // wait_reason is never cleared when a task resumes — the daemon writes it once
 // on the way into the hold — so returning it unconditionally would attach "held
 // by task abc12345" to a task that has been running for ten minutes.
-func waitReasonForStatus(status string, reason pgtype.Text) string {
+func waitReasonForStatus(status string, reason sql.NullString) string {
 	if status != "waiting_local_directory" || !reason.Valid {
 		return ""
 	}
@@ -1402,14 +1402,14 @@ func (h *Handler) ListChatDraftRestores(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var attachmentIDs []pgtype.UUID
+	var attachmentIDs []string
 	for _, row := range rows {
-		attachmentIDs = append(attachmentIDs, row.AttachmentIds...)
+		attachmentIDs = append(attachmentIDs, parseIDList(row.AttachmentIds)...)
 	}
 	attachmentsByID := map[string]AttachmentResponse{}
 	if len(attachmentIDs) > 0 {
 		attRows, err := h.Queries.ListAttachmentsByIDs(r.Context(), db.ListAttachmentsByIDsParams{
-			AttachmentIds: attachmentIDs,
+			AttachmentIds: jsonText(attachmentIDs),
 			WorkspaceID:   session.WorkspaceID,
 		})
 		if err != nil {
@@ -1431,7 +1431,7 @@ func (h *Handler) ListChatDraftRestores(w http.ResponseWriter, r *http.Request) 
 			Content:       row.Content,
 			CreatedAt:     timestampToString(row.CreatedAt),
 		}
-		for _, attID := range row.AttachmentIds {
+		for _, attID := range parseIDList(row.AttachmentIds) {
 			if a, ok := attachmentsByID[uuidToString(attID)]; ok {
 				item.Attachments = append(item.Attachments, a)
 			}
@@ -1547,7 +1547,7 @@ func (h *Handler) ListPendingChatTasks(w http.ResponseWriter, r *http.Request) {
 		items = append(items, PendingChatTaskItem{
 			TaskID:        uuidToString(row.TaskID),
 			Status:        row.Status,
-			ChatSessionID: uuidToString(row.ChatSessionID),
+			ChatSessionID: uuidToString(row.ChatSessionID.String),
 		})
 	}
 	writeJSON(w, http.StatusOK, PendingChatTasksResponse{Tasks: items})
@@ -1595,7 +1595,7 @@ func (h *Handler) HasPendingChatTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agentIDs := make([]pgtype.UUID, 0, len(allowed))
+	agentIDs := make([]string, 0, len(allowed))
 	for id := range allowed {
 		agentIDs = append(agentIDs, parseUUID(id))
 	}
@@ -1629,7 +1629,7 @@ func (h *Handler) GetPendingChatTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tasks, err := h.Queries.ListPendingChatTasksForSession(r.Context(), session.ID)
+	tasks, err := h.Queries.ListPendingChatTasksForSession(r.Context(), nullString(session.ID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list pending chat tasks")
 		return
@@ -1649,7 +1649,7 @@ func (h *Handler) GetPendingChatTask(w http.ResponseWriter, r *http.Request) {
 			TaskID:    uuidToString(task.ID),
 			Status:    task.Status,
 			CreatedAt: timestampToString(task.CreatedAt),
-			MessageID: uuidToString(task.MessageID),
+			MessageID: uuidToString(task.MessageID.String),
 			Content:   task.Content,
 		})
 	}
@@ -1683,12 +1683,12 @@ func (h *Handler) PrioritizeQueuedChatTask(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start prioritize transaction")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	// ClaimTask takes this same row lock before selecting work. Holding it here
@@ -1700,21 +1700,21 @@ func (h *Handler) PrioritizeQueuedChatTask(w http.ResponseWriter, r *http.Reques
 	}
 	prioritized, err := qtx.PrioritizeQueuedChatTask(
 		r.Context(),
-		db.PrioritizeQueuedChatTaskParams{ID: taskID, ChatSessionID: session.ID},
+		db.PrioritizeQueuedChatTaskParams{ID: taskID, ChatSessionID: nullString(session.ID)},
 	)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		// The compare-and-set rejects both a stale queue row and a still-valid
 		// follow-up that has no claimed reply to replace. Distinguish them for
 		// current clients while preserving the same 409 compatibility contract.
 		queuedTask, loadErr := qtx.GetAgentTask(r.Context(), taskID)
-		if loadErr != nil && !errors.Is(loadErr, pgx.ErrNoRows) {
+		if loadErr != nil && !errors.Is(loadErr, sql.ErrNoRows) {
 			writeError(w, http.StatusInternalServerError, "failed to load queued task")
 			return
 		}
 		if loadErr == nil &&
 			queuedTask.Status == "queued" &&
 			queuedTask.ChatSessionID.Valid &&
-			uuidToString(queuedTask.ChatSessionID) == uuidToString(session.ID) {
+			uuidToString(queuedTask.ChatSessionID.String) == uuidToString(session.ID) {
 			writeError(w, http.StatusConflict, "there is no active reply to replace")
 			return
 		}
@@ -1730,15 +1730,15 @@ func (h *Handler) PrioritizeQueuedChatTask(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to load prioritized task")
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit queued task priority")
 		return
 	}
 	h.TaskService.BroadcastTaskQueued(r.Context(), queuedTask)
 
 	writeJSON(w, http.StatusOK, PrioritizeQueuedChatTaskResponse{
-		TaskID:       uuidToString(prioritized.TaskID),
-		ActiveTaskID: uuidToString(prioritized.ActiveTaskID),
+		TaskID:       uuidToString(prioritized.ID),
+		ActiveTaskID: uuidToString(prioritized.ID_2),
 	})
 }
 
@@ -1812,7 +1812,7 @@ func (h *Handler) CancelTaskByUser(w http.ResponseWriter, r *http.Request) {
 
 	var (
 		queuedOnly      bool
-		expectedSession pgtype.UUID
+		expectedSession string
 		queueAction     string
 	)
 	if expectedStatus := r.URL.Query().Get("expected_status"); expectedStatus != "" {
@@ -1826,7 +1826,7 @@ func (h *Handler) CancelTaskByUser(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		if !task.ChatSessionID.Valid || task.ChatSessionID != expectedSession {
+		if !task.ChatSessionID.Valid || task.ChatSessionID.String != expectedSession {
 			writeError(w, http.StatusConflict, "task does not belong to the expected chat session")
 			return
 		}
@@ -1842,7 +1842,7 @@ func (h *Handler) CancelTaskByUser(w http.ResponseWriter, r *http.Request) {
 		// Chat privacy: only the member who opened the conversation may
 		// cancel its task, even though the workspace is shared.
 		cs, err := h.Queries.GetChatSessionInWorkspace(r.Context(), db.GetChatSessionInWorkspaceParams{
-			ID:          task.ChatSessionID,
+			ID:          task.ChatSessionID.String,
 			WorkspaceID: wsUUID,
 		})
 		if err != nil {
@@ -1947,7 +1947,7 @@ func (h *Handler) hydrateChatSessionChannelMetadata(ctx context.Context, session
 	if len(sessions) == 0 {
 		return nil
 	}
-	ids := make([]pgtype.UUID, 0, len(sessions))
+	ids := make([]string, 0, len(sessions))
 	for _, session := range sessions {
 		ids = append(ids, parseUUID(session.ID))
 	}
@@ -1988,8 +1988,8 @@ type ChatLastMessage struct {
 
 // buildChatLastMessage assembles the preview from list-row columns; returns nil
 // when there is no last message (the LEFT JOIN produced a NULL timestamp).
-func buildChatLastMessage(at pgtype.Timestamptz, content, role string, failure pgtype.Text, kind string) *ChatLastMessage {
-	if !at.Valid || kind == protocol.ChatMessageKindOnboardingKickoff {
+func buildChatLastMessage(at string, content, role string, failure sql.NullString, kind string) *ChatLastMessage {
+	if !(at != "") || kind == protocol.ChatMessageKindOnboardingKickoff {
 		return nil
 	}
 	return &ChatLastMessage{
@@ -2054,7 +2054,7 @@ func chatMessageToResponse(m db.ChatMessage, attachments []AttachmentResponse) C
 		FailureReason: textToPtr(m.FailureReason),
 		ElapsedMs:     int8ToPtr(m.ElapsedMs),
 		MessageKind:   normalizeMessageKind(m.MessageKind),
-		QuickActions:  decodeChatQuickActions(m.QuickActions),
+		QuickActions:  decodeChatQuickActions([]byte(m.QuickActions)),
 		Attachments:   attachments,
 	}
 }

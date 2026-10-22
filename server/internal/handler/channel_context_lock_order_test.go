@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"sync"
 	"testing"
@@ -29,7 +30,7 @@ type contextLockTestStarter struct {
 	observed      chan struct{}
 }
 
-func (s *contextLockTestStarter) Begin(ctx context.Context) (pgx.Tx, error) {
+func (s *contextLockTestStarter) BeginTx(ctx context.Context, _ *sql.TxOptions) (*sql.Tx, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -38,7 +39,8 @@ func (s *contextLockTestStarter) Begin(ctx context.Context) (pgx.Tx, error) {
 }
 
 type contextLockTestTx struct {
-	pgx.Tx
+	*sql.Tx
+
 	starter *contextLockTestStarter
 }
 
@@ -82,7 +84,7 @@ func TestChannelContextLockOrder(t *testing.T) {
 
 	ctx := context.Background()
 	agentID, _, _ := createRuntimeGuardAgent(t, ctx)
-	queries := db.New(testPool)
+	queries := db.New(testSQLite)
 	installationID := uuid.NewString()
 	if _, err := testPool.Exec(ctx, `
 		INSERT INTO channel_installation (
@@ -94,10 +96,10 @@ func TestChannelContextLockOrder(t *testing.T) {
 
 	session := engine.NewChatSession(queries, testPool, channel.Type("slack"), engine.SessionTitles{Direct: "Lock order test"})
 	sessionID, err := session.EnsureSession(ctx, engine.EnsureSessionInput{
-		WorkspaceID:    util.MustParseUUID(testWorkspaceID),
-		AgentID:        util.MustParseUUID(agentID),
-		InstallationID: util.MustParseUUID(installationID),
-		Sender:         util.MustParseUUID(testUserID),
+		WorkspaceID:    toPGUUID(util.MustParseUUID(testWorkspaceID)),
+		AgentID:        toPGUUID(util.MustParseUUID(agentID)),
+		InstallationID: toPGUUID(util.MustParseUUID(installationID)),
+		Sender:         toPGUUID(util.MustParseUUID(testUserID)),
 		BindingKey:     "lock-order-" + uuid.NewString(),
 		ChatType:       channel.ChatTypeP2P,
 	})
@@ -116,16 +118,16 @@ func TestChannelContextLockOrder(t *testing.T) {
 	}
 	initiator := util.MustParseUUID(testUserID)
 	if _, err := session.AppendUserMessage(ctx, engine.AppendInput{
-		SessionID: sessionID, Sender: initiator, InstallationID: util.MustParseUUID(installationID),
+		SessionID: sessionID, Sender: toPGUUID(initiator), InstallationID: toPGUUID(util.MustParseUUID(installationID)),
 		Body: "first post-new message", MessageID: "first-" + uuid.NewString(),
 	}); err != nil {
 		t.Fatalf("append first post-new message: %v", err)
 	}
-	chatSession, err := queries.GetChatSession(ctx, sessionID)
+	chatSession, err := queries.GetChatSession(ctx, fromPGUUID(sessionID))
 	if err != nil {
 		t.Fatalf("load chat session: %v", err)
 	}
-	binding, err := queries.GetChannelChatSessionBindingBySessionAny(ctx, sessionID)
+	binding, err := queries.GetChannelChatSessionBindingBySessionAny(ctx, fromPGUUID(sessionID))
 	if err != nil {
 		t.Fatalf("load channel route: %v", err)
 	}
@@ -157,7 +159,7 @@ func TestChannelContextLockOrder(t *testing.T) {
 	appendResult := make(chan error, 1)
 	go func() {
 		_, err := appendSession.AppendUserMessage(ctx, engine.AppendInput{
-			SessionID: sessionID, Sender: initiator, InstallationID: util.MustParseUUID(installationID),
+			SessionID: sessionID, Sender: toPGUUID(initiator), InstallationID: toPGUUID(util.MustParseUUID(installationID)),
 			Body: "racing append", MessageID: "racing-" + uuid.NewString(),
 		})
 		appendResult <- err

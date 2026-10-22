@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -11,8 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -44,7 +43,7 @@ const (
 // Returned in plaintext exactly once. There is no endpoint that reads it back —
 // an admin who loses it rotates rather than recovers, which is the same trade
 // every other bearer credential in the product makes.
-func (s *PluginService) IssueInstallToken(ctx context.Context, installationID pgtype.UUID) (string, error) {
+func (s *PluginService) IssueInstallToken(ctx context.Context, installationID string) (string, error) {
 	raw := make([]byte, callbackTokenEntropy)
 	if _, err := rand.Read(raw); err != nil {
 		return "", &PluginError{Kind: PluginErrorUnavailable, Message: "generate install token", Err: err}
@@ -52,7 +51,7 @@ func (s *PluginService) IssueInstallToken(ctx context.Context, installationID pg
 	token := installTokenPrefix + base64.RawURLEncoding.EncodeToString(raw)
 	if err := s.Queries.SetPluginInstallationToken(ctx, db.SetPluginInstallationTokenParams{
 		ID:        installationID,
-		TokenHash: pgtype.Text{String: hashToken(token), Valid: true},
+		TokenHash: sql.NullString{String: hashToken(token), Valid: true},
 	}); err != nil {
 		return "", &PluginError{Kind: PluginErrorUnavailable, Message: "store install token", Err: err}
 	}
@@ -71,7 +70,7 @@ type InstallCredentials struct {
 // stored token hash. This keeps an optional hook-signing configuration failure
 // from invalidating the previous token after the response has already become
 // impossible to complete.
-func (s *PluginService) RotateInstallCredentials(ctx context.Context, installationID pgtype.UUID) (InstallCredentials, error) {
+func (s *PluginService) RotateInstallCredentials(ctx context.Context, installationID string) (InstallCredentials, error) {
 	var signingSecret string
 	if len(s.DeploymentKey) > 0 {
 		secret, err := s.HookSigningSecret(installationID)
@@ -89,10 +88,10 @@ func (s *PluginService) RotateInstallCredentials(ctx context.Context, installati
 
 // RevokeInstallToken drops the stored hash, so nothing presented afterwards
 // matches. Rotation is IssueInstallToken, which overwrites in place.
-func (s *PluginService) RevokeInstallToken(ctx context.Context, installationID pgtype.UUID) error {
+func (s *PluginService) RevokeInstallToken(ctx context.Context, installationID string) error {
 	if err := s.Queries.SetPluginInstallationToken(ctx, db.SetPluginInstallationTokenParams{
 		ID:        installationID,
-		TokenHash: pgtype.Text{},
+		TokenHash: sql.NullString{},
 	}); err != nil {
 		return &PluginError{Kind: PluginErrorUnavailable, Message: "revoke install token", Err: err}
 	}
@@ -105,14 +104,14 @@ func (s *PluginService) AuthenticateInstallToken(ctx context.Context, token stri
 	if !strings.HasPrefix(token, installTokenPrefix) {
 		return db.PluginInstallation{}, pluginErrf(PluginErrorForbidden, "invalid plugin token")
 	}
-	installation, err := s.Queries.GetPluginInstallationByTokenHash(ctx, pgtype.Text{String: hashToken(token), Valid: true})
-	if errors.Is(err, pgx.ErrNoRows) {
+	installation, err := s.Queries.GetPluginInstallationByTokenHash(ctx, sql.NullString{String: hashToken(token), Valid: true})
+	if errors.Is(err, sql.ErrNoRows) {
 		return db.PluginInstallation{}, pluginErrf(PluginErrorForbidden, "invalid plugin token")
 	}
 	if err != nil {
 		return db.PluginInstallation{}, &PluginError{Kind: PluginErrorUnavailable, Message: "load plugin installation", Err: err}
 	}
-	if !installation.Enabled {
+	if installation.Enabled == 0 {
 		return db.PluginInstallation{}, pluginErrf(PluginErrorForbidden, "this Plugin is disabled")
 	}
 	return installation, nil
@@ -129,8 +128,8 @@ func hashToken(token string) string {
 // handler can finish the job it was called for, not so an out-of-band request
 // can do more than the surface could.
 type CallbackGrant struct {
-	InstallationID pgtype.UUID
-	WorkspaceID    pgtype.UUID
+	InstallationID string
+	WorkspaceID    string
 	HookKey        string
 	Trigger        string
 	// Actor is who the resulting writes belong to, decided when the hook was
@@ -138,7 +137,7 @@ type CallbackGrant struct {
 	Actor HookActor
 	// IssueID narrows an event callback to the issue that produced it. Zero
 	// when the invocation had no issue.
-	IssueID   pgtype.UUID
+	IssueID   string
 	ExpiresAt time.Time
 }
 

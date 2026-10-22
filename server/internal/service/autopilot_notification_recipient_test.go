@@ -14,7 +14,7 @@ func TestResolveAutopilotNotificationRecipientRejectsFormerMember(t *testing.T) 
 	if err != nil {
 		t.Fatalf("load autopilot: %v", err)
 	}
-	if _, err := fixture.pool.Exec(ctx, `
+	if _, err := fixture.pool.ExecContext(ctx, `
 		DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`,
 		fixture.workspaceID, fixture.publisherID,
 	); err != nil {

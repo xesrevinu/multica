@@ -43,7 +43,7 @@ func TestDeleteWorkspace_RetainsTypingCleanupUntilAcknowledged(t *testing.T) {
 				"channel_message_id": "remote-input", "installation_snapshot": snapshot,
 				"reaction_id": "remote-reaction", "add_finished": true,
 			})
-			queries := db.New(testPool)
+			queries := db.New(testSQLite)
 			rows, err := queries.ClaimChannelTypingReactionCleanup(ctx, parseUUID(sessionID))
 			if err != nil || len(rows) != 0 {
 				t.Fatalf("active input must not be claimed: rows=%d err=%v", len(rows), err)
@@ -63,7 +63,7 @@ func TestDeleteWorkspace_RetainsTypingCleanupUntilAcknowledged(t *testing.T) {
 
 			// A fresh worker can claim without joining to the now-deleted workspace,
 			// session or installation. The external anchor and encrypted snapshot survive.
-			queries = db.New(testPool)
+			queries = db.New(testSQLite)
 			rows, err = queries.ClaimChannelTypingReactionCleanup(ctx, parseUUID(sessionID))
 			if err != nil || len(rows) != 1 {
 				t.Fatalf("deleted workspace cleanup: rows=%d err=%v", len(rows), err)

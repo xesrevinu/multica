@@ -7,16 +7,15 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const countProjectResources = `-- name: CountProjectResources :one
-SELECT count(*) FROM project_resource WHERE project_id = $1
+SELECT count(*) FROM project_resource WHERE project_id = ?1
 `
 
-func (q *Queries) CountProjectResources(ctx context.Context, projectID pgtype.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countProjectResources, projectID)
+func (q *Queries) CountProjectResources(ctx context.Context, projectID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countProjectResources, projectID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -26,22 +25,22 @@ const createProjectResource = `-- name: CreateProjectResource :one
 INSERT INTO project_resource (
     project_id, workspace_id, resource_type, resource_ref, label, position, created_by
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7
+    ?1, ?2, ?3, ?4, ?5, ?6, ?7
 ) RETURNING id, project_id, workspace_id, resource_type, resource_ref, label, position, created_at, created_by
 `
 
 type CreateProjectResourceParams struct {
-	ProjectID    pgtype.UUID `json:"project_id"`
-	WorkspaceID  pgtype.UUID `json:"workspace_id"`
-	ResourceType string      `json:"resource_type"`
-	ResourceRef  []byte      `json:"resource_ref"`
-	Label        pgtype.Text `json:"label"`
-	Position     int32       `json:"position"`
-	CreatedBy    pgtype.UUID `json:"created_by"`
+	ProjectID    string         `json:"project_id"`
+	WorkspaceID  string         `json:"workspace_id"`
+	ResourceType string         `json:"resource_type"`
+	ResourceRef  string         `json:"resource_ref"`
+	Label        sql.NullString `json:"label"`
+	Position     int64          `json:"position"`
+	CreatedBy    sql.NullString `json:"created_by"`
 }
 
 func (q *Queries) CreateProjectResource(ctx context.Context, arg CreateProjectResourceParams) (ProjectResource, error) {
-	row := q.db.QueryRow(ctx, createProjectResource,
+	row := q.db.QueryRowContext(ctx, createProjectResource,
 		arg.ProjectID,
 		arg.WorkspaceID,
 		arg.ResourceType,
@@ -66,21 +65,21 @@ func (q *Queries) CreateProjectResource(ctx context.Context, arg CreateProjectRe
 }
 
 const deleteProjectResource = `-- name: DeleteProjectResource :exec
-DELETE FROM project_resource WHERE id = $1
+DELETE FROM project_resource WHERE id = ?1
 `
 
-func (q *Queries) DeleteProjectResource(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteProjectResource, id)
+func (q *Queries) DeleteProjectResource(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteProjectResource, id)
 	return err
 }
 
 const getProjectResource = `-- name: GetProjectResource :one
 SELECT id, project_id, workspace_id, resource_type, resource_ref, label, position, created_at, created_by FROM project_resource
-WHERE id = $1
+WHERE id = ?1
 `
 
-func (q *Queries) GetProjectResource(ctx context.Context, id pgtype.UUID) (ProjectResource, error) {
-	row := q.db.QueryRow(ctx, getProjectResource, id)
+func (q *Queries) GetProjectResource(ctx context.Context, id string) (ProjectResource, error) {
+	row := q.db.QueryRowContext(ctx, getProjectResource, id)
 	var i ProjectResource
 	err := row.Scan(
 		&i.ID,
@@ -97,19 +96,19 @@ func (q *Queries) GetProjectResource(ctx context.Context, id pgtype.UUID) (Proje
 }
 
 const getProjectResourceCounts = `-- name: GetProjectResourceCounts :many
-SELECT project_id, count(*)::bigint AS resource_count
+SELECT project_id, count(*) AS resource_count
 FROM project_resource
-WHERE project_id = ANY($1::uuid[])
+WHERE project_id IN (SELECT value FROM json_each(?1))
 GROUP BY project_id
 `
 
 type GetProjectResourceCountsRow struct {
-	ProjectID     pgtype.UUID `json:"project_id"`
-	ResourceCount int64       `json:"resource_count"`
+	ProjectID     string `json:"project_id"`
+	ResourceCount int64  `json:"resource_count"`
 }
 
-func (q *Queries) GetProjectResourceCounts(ctx context.Context, projectIds []pgtype.UUID) ([]GetProjectResourceCountsRow, error) {
-	rows, err := q.db.Query(ctx, getProjectResourceCounts, projectIds)
+func (q *Queries) GetProjectResourceCounts(ctx context.Context, projectIds interface{}) ([]GetProjectResourceCountsRow, error) {
+	rows, err := q.db.QueryContext(ctx, getProjectResourceCounts, projectIds)
 	if err != nil {
 		return nil, err
 	}
@@ -122,6 +121,9 @@ func (q *Queries) GetProjectResourceCounts(ctx context.Context, projectIds []pgt
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -130,16 +132,16 @@ func (q *Queries) GetProjectResourceCounts(ctx context.Context, projectIds []pgt
 
 const getProjectResourceInWorkspace = `-- name: GetProjectResourceInWorkspace :one
 SELECT id, project_id, workspace_id, resource_type, resource_ref, label, position, created_at, created_by FROM project_resource
-WHERE id = $1 AND workspace_id = $2
+WHERE id = ?1 AND workspace_id = ?2
 `
 
 type GetProjectResourceInWorkspaceParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 func (q *Queries) GetProjectResourceInWorkspace(ctx context.Context, arg GetProjectResourceInWorkspaceParams) (ProjectResource, error) {
-	row := q.db.QueryRow(ctx, getProjectResourceInWorkspace, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, getProjectResourceInWorkspace, arg.ID, arg.WorkspaceID)
 	var i ProjectResource
 	err := row.Scan(
 		&i.ID,
@@ -157,12 +159,12 @@ func (q *Queries) GetProjectResourceInWorkspace(ctx context.Context, arg GetProj
 
 const listProjectResources = `-- name: ListProjectResources :many
 SELECT id, project_id, workspace_id, resource_type, resource_ref, label, position, created_at, created_by FROM project_resource
-WHERE project_id = $1
+WHERE project_id = ?1
 ORDER BY position ASC, created_at ASC
 `
 
-func (q *Queries) ListProjectResources(ctx context.Context, projectID pgtype.UUID) ([]ProjectResource, error) {
-	rows, err := q.db.Query(ctx, listProjectResources, projectID)
+func (q *Queries) ListProjectResources(ctx context.Context, projectID string) ([]ProjectResource, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectResources, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -184,6 +186,9 @@ func (q *Queries) ListProjectResources(ctx context.Context, projectID pgtype.UUI
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -193,12 +198,12 @@ func (q *Queries) ListProjectResources(ctx context.Context, projectID pgtype.UUI
 
 const listProjectResourcesForProjects = `-- name: ListProjectResourcesForProjects :many
 SELECT id, project_id, workspace_id, resource_type, resource_ref, label, position, created_at, created_by FROM project_resource
-WHERE project_id = ANY($1::uuid[])
+WHERE project_id IN (SELECT value FROM json_each(?1))
 ORDER BY project_id, position ASC, created_at ASC
 `
 
-func (q *Queries) ListProjectResourcesForProjects(ctx context.Context, projectIds []pgtype.UUID) ([]ProjectResource, error) {
-	rows, err := q.db.Query(ctx, listProjectResourcesForProjects, projectIds)
+func (q *Queries) ListProjectResourcesForProjects(ctx context.Context, projectIds interface{}) ([]ProjectResource, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectResourcesForProjects, projectIds)
 	if err != nil {
 		return nil, err
 	}
@@ -220,6 +225,9 @@ func (q *Queries) ListProjectResourcesForProjects(ctx context.Context, projectId
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -229,20 +237,20 @@ func (q *Queries) ListProjectResourcesForProjects(ctx context.Context, projectId
 
 const listProjectResourcesInWorkspace = `-- name: ListProjectResourcesInWorkspace :many
 SELECT id, project_id, workspace_id, resource_type, resource_ref, label, position, created_at, created_by FROM project_resource
-WHERE project_id = $1 AND workspace_id = $2
+WHERE project_id = ?1 AND workspace_id = ?2
 ORDER BY position ASC, created_at ASC
 `
 
 type ListProjectResourcesInWorkspaceParams struct {
-	ProjectID   pgtype.UUID `json:"project_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ProjectID   string `json:"project_id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // Workspace-scoped read for the daemon claim path. project_resource carries its
 // own workspace_id, so a corrupt project reference cannot pull another tenant's
 // repository URLs or local paths into a claim response.
 func (q *Queries) ListProjectResourcesInWorkspace(ctx context.Context, arg ListProjectResourcesInWorkspaceParams) ([]ProjectResource, error) {
-	rows, err := q.db.Query(ctx, listProjectResourcesInWorkspace, arg.ProjectID, arg.WorkspaceID)
+	rows, err := q.db.QueryContext(ctx, listProjectResourcesInWorkspace, arg.ProjectID, arg.WorkspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -265,6 +273,9 @@ func (q *Queries) ListProjectResourcesInWorkspace(ctx context.Context, arg ListP
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -273,22 +284,22 @@ func (q *Queries) ListProjectResourcesInWorkspace(ctx context.Context, arg ListP
 
 const updateProjectResource = `-- name: UpdateProjectResource :one
 UPDATE project_resource
-SET resource_ref = $2,
-    label        = $3,
-    position     = $4
-WHERE id = $1
+SET resource_ref = ?2,
+    label        = ?3,
+    position     = ?4
+WHERE id = ?1
 RETURNING id, project_id, workspace_id, resource_type, resource_ref, label, position, created_at, created_by
 `
 
 type UpdateProjectResourceParams struct {
-	ID          pgtype.UUID `json:"id"`
-	ResourceRef []byte      `json:"resource_ref"`
-	Label       pgtype.Text `json:"label"`
-	Position    int32       `json:"position"`
+	ID          string         `json:"id"`
+	ResourceRef string         `json:"resource_ref"`
+	Label       sql.NullString `json:"label"`
+	Position    int64          `json:"position"`
 }
 
 func (q *Queries) UpdateProjectResource(ctx context.Context, arg UpdateProjectResourceParams) (ProjectResource, error) {
-	row := q.db.QueryRow(ctx, updateProjectResource,
+	row := q.db.QueryRowContext(ctx, updateProjectResource,
 		arg.ID,
 		arg.ResourceRef,
 		arg.Label,

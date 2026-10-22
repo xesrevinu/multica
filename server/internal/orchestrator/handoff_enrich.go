@@ -73,7 +73,7 @@ func (s *Service) reviewerComments(ctx context.Context, t *Team, row *issueRow) 
 	if err != nil {
 		return nil
 	}
-	rows, err := s.opt.Pool.Query(ctx, `SELECT content FROM comment WHERE issue_id=$1 AND author_type='agent' AND author_id=$2 AND deleted_at IS NULL
+	rows, err := s.opt.Pool.QueryContext(ctx, `SELECT content FROM comment WHERE issue_id=$1 AND author_type='agent' AND author_id=$2 AND deleted_at IS NULL
 		AND created_at >= COALESCE((SELECT max(created_at) FROM orchestrator_transition WHERE issue_id=$1 AND tid IN ('T2_review','T3b_rereview')), 'epoch')
 		ORDER BY created_at DESC LIMIT 5`, row.ID, rid)
 	if err != nil {
@@ -164,7 +164,7 @@ func (s *Service) HandoffBrief(ctx context.Context, issueID, agentName string) s
 		return ""
 	}
 	var raw []byte
-	err := s.opt.Pool.QueryRow(ctx, `SELECT decision FROM orchestrator_transition WHERE issue_id=$1 AND state IN ('started','done')
+	err := s.opt.Pool.QueryRowContext(ctx, `SELECT decision FROM orchestrator_transition WHERE issue_id=$1 AND state IN ('started','done')
 		AND (decision->>'rerun' = 'true' OR decision->>'assignee_kind' = 'agent') ORDER BY id DESC LIMIT 1`, issueID).Scan(&raw)
 	if err != nil {
 		return ""

@@ -1,6 +1,6 @@
 -- name: CreateChatSession :one
 INSERT INTO chat_session (workspace_id, agent_id, creator_id, title, runtime_id, is_agent_intro, project_id, id)
-VALUES ($1, $2, $3, $4, (SELECT runtime_id FROM agent WHERE id = $2), $5, sqlc.narg('project_id'), COALESCE(sqlc.narg('id')::uuid, gen_random_uuid()))
+VALUES (?1, ?2, ?3, ?4, (SELECT runtime_id FROM agent WHERE id = ?2), ?5, sqlc.narg('project_id'), COALESCE(sqlc.narg('id'), gen_random_uuid()))
 RETURNING *;
 
 -- name: ClearChatSessionProjectByProject :exec
@@ -9,15 +9,15 @@ RETURNING *;
 -- Do not touch updated_at: context cleanup is not chat activity.
 UPDATE chat_session
 SET project_id = NULL
-WHERE project_id = $1 AND workspace_id = $2;
+WHERE project_id = ?1 AND workspace_id = ?2;
 
 -- name: GetChatSession :one
 SELECT * FROM chat_session
-WHERE id = $1;
+WHERE id = ?1;
 
 -- name: GetChatSessionInWorkspace :one
 SELECT * FROM chat_session
-WHERE id = $1 AND workspace_id = $2;
+WHERE id = ?1 AND workspace_id = ?2;
 
 -- name: GetPublicChatSessionInWorkspace :one
 -- A channel command is a durable control-plane record, not a public chat turn.
@@ -26,8 +26,8 @@ WHERE id = $1 AND workspace_id = $2;
 -- open a newly-created Web Chat and send its first message. The explicit marker
 -- is durable, so removing an installation cannot change list visibility.
 SELECT cs.* FROM chat_session AS cs
-WHERE cs.id = $1
-  AND cs.workspace_id = $2
+WHERE cs.id = ?1
+  AND cs.workspace_id = ?2
   AND (
     cs.explicitly_created_at IS NOT NULL
     OR
@@ -46,22 +46,22 @@ SELECT cs.*,
        (SELECT count(*) FROM chat_message m
           WHERE m.chat_session_id = cs.id
             AND m.role = 'assistant'
-            AND m.created_at > cs.last_read_at)::int AS unread_count,
+            AND m.created_at > cs.last_read_at) AS unread_count,
        COALESCE(lm.content, '') AS last_message_content,
        COALESCE(lm.role, '') AS last_message_role,
        lm.created_at AS last_message_at,
        lm.failure_reason AS last_message_failure_reason,
        COALESCE(lm.message_kind, '') AS last_message_kind
 FROM chat_session cs
-LEFT JOIN LATERAL (
-  SELECT content, role, created_at, failure_reason, message_kind
+LEFT JOIN chat_message lm ON lm.id = (
+  SELECT m.id
     FROM chat_message m
    WHERE m.chat_session_id = cs.id
      AND m.message_kind != 'channel_command'
    ORDER BY m.created_at DESC
    LIMIT 1
-) lm ON true
-WHERE cs.workspace_id = $1 AND cs.creator_id = $2 AND cs.status = 'active'
+)
+WHERE cs.workspace_id = ?1 AND cs.creator_id = ?2 AND cs.status = 'active'
   AND (
     cs.explicitly_created_at IS NOT NULL
     OR
@@ -76,29 +76,29 @@ ORDER BY (cs.pinned_at IS NOT NULL) DESC, cs.pinned_at DESC, COALESCE(lm.created
 -- unread state), but an archived session is read-only and hidden from history,
 -- so any residual unread is uncleanable and must not light up any badge. Gating
 -- on status here is the single source of truth for all unread surfaces (FAB,
--- sidebar Chat tab, chat-window header) — see MUL-4360.
+-- sidebar Chat tab, chat-window header) - see MUL-4360.
 SELECT cs.*,
        CASE WHEN cs.status = 'archived' THEN 0
             ELSE (SELECT count(*) FROM chat_message m
                     WHERE m.chat_session_id = cs.id
                       AND m.role = 'assistant'
                       AND m.created_at > cs.last_read_at)
-       END::int AS unread_count,
+       END AS unread_count,
        COALESCE(lm.content, '') AS last_message_content,
        COALESCE(lm.role, '') AS last_message_role,
        lm.created_at AS last_message_at,
        lm.failure_reason AS last_message_failure_reason,
        COALESCE(lm.message_kind, '') AS last_message_kind
 FROM chat_session cs
-LEFT JOIN LATERAL (
-  SELECT content, role, created_at, failure_reason, message_kind
+LEFT JOIN chat_message lm ON lm.id = (
+  SELECT m.id
     FROM chat_message m
    WHERE m.chat_session_id = cs.id
      AND m.message_kind != 'channel_command'
    ORDER BY m.created_at DESC
    LIMIT 1
-) lm ON true
-WHERE cs.workspace_id = $1 AND cs.creator_id = $2
+)
+WHERE cs.workspace_id = ?1 AND cs.creator_id = ?2
   AND (
     cs.explicitly_created_at IS NOT NULL
     OR
@@ -110,8 +110,8 @@ ORDER BY (cs.pinned_at IS NOT NULL) DESC, cs.pinned_at DESC, COALESCE(lm.created
 -- The caller's unfinished agent-creation conversations.
 --
 -- These never appear in ListChatSessionsByCreator: that list is filtered
--- against ListAllAgents, which is `kind = 'user'` only, so a builder session —
--- whose agent is the hidden `kind = 'system'` carrier — is invisible to every
+-- against ListAllAgents, which is `kind = 'user'` only, so a builder session -
+-- whose agent is the hidden `kind = 'system'` carrier - is invisible to every
 -- chat surface by construction. This statement is the only way back to one,
 -- which is why the studio may stop deleting them on navigation.
 --
@@ -120,11 +120,11 @@ ORDER BY (cs.pinned_at IS NOT NULL) DESC, cs.pinned_at DESC, COALESCE(lm.created
 -- truthful answer to "where does this conversation run". Deliberately NOT
 -- cs.runtime_id: that is the daemon's resume pointer, left stale on purpose
 -- after a runtime switch (see RebindAgentBuilderRuntime), so resuming from it
--- would put the picker on a runtime that no longer executes anything — the
+-- would put the picker on a runtime that no longer executes anything - the
 -- exact split MUL-5163 removed.
 --
 -- A conversation qualifies once it holds something the user would miss: a
--- message, or a saved configuration. Requiring a message alone was wrong — the
+-- message, or a saved configuration. Requiring a message alone was wrong - the
 -- form on the right is editable from the moment the session exists and
 -- autosaves, so someone can open the builder, type a name, and leave before the
 -- first turn. That session has real work in it and was unreachable. Requiring
@@ -136,7 +136,7 @@ ORDER BY (cs.pinned_at IS NOT NULL) DESC, cs.pinned_at DESC, COALESCE(lm.created
 -- renders this list beside the conversation it is switching between, so the
 -- configuration for the row the user picks has to be in hand at click time.
 -- LEFT JOIN because a conversation that has only ever been driven by the AI has
--- no saved draft — the client replays the last <agent_draft> block in that case.
+-- no saved draft - the client replays the last <agent_draft> block in that case.
 SELECT cs.id,
        cs.title,
        cs.created_at,
@@ -149,15 +149,15 @@ SELECT cs.id,
 FROM chat_session cs
 JOIN agent a ON a.id = cs.agent_id
 LEFT JOIN agent_builder_draft d ON d.chat_session_id = cs.id
-LEFT JOIN LATERAL (
-  SELECT content, role, created_at
+LEFT JOIN chat_message lm ON lm.id = (
+  SELECT m.id
     FROM chat_message m
    WHERE m.chat_session_id = cs.id
    ORDER BY m.created_at DESC
    LIMIT 1
-) lm ON true
-WHERE cs.workspace_id = $1
-  AND cs.creator_id = $2
+)
+WHERE cs.workspace_id = ?1
+  AND cs.creator_id = ?2
   AND cs.status = 'active'
   AND a.kind = 'system'
   AND a.system_key LIKE 'agent_builder:%'
@@ -167,24 +167,24 @@ WHERE cs.workspace_id = $1
 ORDER BY COALESCE(lm.created_at, d.updated_at, cs.updated_at) DESC;
 
 -- name: UpdateChatSessionTitle :one
-UPDATE chat_session SET title = $2, updated_at = now()
-WHERE id = $1
+UPDATE chat_session SET title = ?2, updated_at = now()
+WHERE id = ?1
 RETURNING *;
 
 -- name: MarkChatSessionExplicitlyCreated :one
 UPDATE chat_session
 SET explicitly_created_at = COALESCE(explicitly_created_at, now())
-WHERE id = $1
+WHERE id = ?1
 RETURNING *;
 
 -- name: InitializeChatSessionTitle :one
-UPDATE chat_session AS session
+UPDATE chat_session
 SET title = @title
-WHERE session.id = @id
-  AND session.title = ''
+WHERE chat_session.id = @id
+  AND chat_session.title = ''
   AND NOT EXISTS (
     SELECT 1 FROM chat_message AS message
-    WHERE message.chat_session_id = session.id
+    WHERE message.chat_session_id = chat_session.id
       AND message.role = 'user'
       AND message.message_kind != 'channel_command'
   )
@@ -195,33 +195,33 @@ RETURNING *;
 -- their first ordinary turn. Replace the legacy platform-generic title (or the
 -- new empty placeholder) under the append transaction's route fence. An empty
 -- title deliberately prepares a media-only first turn for attachment naming.
-UPDATE chat_session AS session
+UPDATE chat_session
 SET title = @title
-WHERE session.id = @id
-  AND session.explicitly_created_at IS NULL
+WHERE chat_session.id = @id
+  AND chat_session.explicitly_created_at IS NULL
   AND NOT EXISTS (
     SELECT 1 FROM chat_message AS message
-    WHERE message.chat_session_id = session.id
+    WHERE message.chat_session_id = chat_session.id
       AND message.role = 'user'
       AND message.message_kind != 'channel_command'
   )
 RETURNING *;
 
 -- name: InitializeChatSessionMediaTitle :one
-UPDATE chat_session AS session
+UPDATE chat_session
 SET title = @title
-WHERE session.id = @id
-  AND session.title = ''
+WHERE chat_session.id = @id
+  AND chat_session.title = ''
   AND EXISTS (
     SELECT 1 FROM chat_message AS message
     WHERE message.id = @message_id
-      AND message.chat_session_id = session.id
+      AND message.chat_session_id = chat_session.id
       AND message.role = 'user'
       AND message.message_kind != 'channel_command'
   )
   AND NOT EXISTS (
     SELECT 1 FROM chat_message AS other_message
-    WHERE other_message.chat_session_id = session.id
+    WHERE other_message.chat_session_id = chat_session.id
       AND other_message.role = 'user'
       AND other_message.message_kind != 'channel_command'
       AND other_message.id != @message_id
@@ -243,7 +243,7 @@ RETURNING *;
 -- captures the session's current (default/original) title before calling the
 -- model, and this write lands only if a manual rename or a competing writer
 -- has not changed the title in the meantime. A mismatch returns pgx.ErrNoRows
--- (zero rows updated), which the caller treats as "someone renamed it — leave
+-- (zero rows updated), which the caller treats as "someone renamed it - leave
 -- it alone", NOT as an error.
 UPDATE chat_session SET title = @new_title, updated_at = now()
 WHERE id = @id AND title = @expected_title
@@ -256,8 +256,8 @@ RETURNING *;
 -- pinned = true stamps pinned_at only when it was NULL, so re-pinning keeps
 -- the original pin order; pinned = false clears it.
 UPDATE chat_session
-SET pinned_at = CASE WHEN @pinned::bool THEN COALESCE(pinned_at, now()) ELSE NULL END
-WHERE id = $1
+SET pinned_at = CASE WHEN @pinned THEN COALESCE(pinned_at, now()) ELSE NULL END
+WHERE id = ?1
 RETURNING *;
 
 -- name: SetChatSessionArchived :one
@@ -266,9 +266,9 @@ RETURNING *;
 -- send-message path refuses archived sessions (see SendChatMessage), so the
 -- conversation is effectively read-only until it is unarchived.
 UPDATE chat_session
-SET status = CASE WHEN @archived::bool THEN 'archived' ELSE 'active' END,
+SET status = CASE WHEN @archived THEN 'archived' ELSE 'active' END,
     updated_at = now()
-WHERE id = $1
+WHERE id = ?1
 RETURNING *;
 
 -- name: UpdateChatSessionSession :exec
@@ -291,13 +291,13 @@ WHERE id = sqlc.arg('id');
 -- The claim handler reads chat_session.session_id FIRST and only falls back to
 -- GetLastChatTaskSession when it is empty, so a poisoned pointer here bypasses
 -- every filter that query applies. Declining to OVERWRITE the pointer on a
--- resume-unsafe failure — which is all the fail path used to do — leaves the
+-- resume-unsafe failure - which is all the fail path used to do - leaves the
 -- dead session in place and the next turn resumes it (GH #6066).
 --
 -- The session_id + runtime_id predicate is what makes this safe to run in the
 -- fail transaction: a concurrent turn that has already written a NEW pointer
 -- does not match, so its healthy session survives instead of being cleared by
--- a slower sibling's failure. work_dir is deliberately left alone — the
+-- a slower sibling's failure. work_dir is deliberately left alone - the
 -- directory is still reusable, only the conversation is not.
 UPDATE chat_session
 SET session_id = NULL,
@@ -313,7 +313,7 @@ WHERE id = sqlc.arg('id')
 --
 -- Cancellation is the one terminal state that never reports back: the daemon
 -- discards its result and only sends a cancel-ack, so neither CompleteTask nor
--- FailTask — the only other writers of chat_session.session_id — ever runs. The
+-- FailTask - the only other writers of chat_session.session_id - ever runs. The
 -- claim handler reads this pointer BEFORE falling back to
 -- GetLastChatTaskSession, so on a chat that already has history a pointer left
 -- on the previous turn shadows the cancelled turn's session no matter what the
@@ -323,7 +323,7 @@ WHERE id = sqlc.arg('id')
 -- the cancel path runs it inside the status-flip transaction (so no follow-up
 -- can observe `cancelled` while the pointer still names the older session), and
 -- the pin path runs it after a mid-flight pin lands on an already-cancelled row
--- (Codex waits for its rollout, so the pin routinely arrives after the cancel —
+-- (Codex waits for its rollout, so the pin routinely arrives after the cancel -
 -- at which point the cancel path saw no session to publish).
 --
 -- Everything it decides on is read from the task row inside the statement, so
@@ -337,13 +337,7 @@ WHERE id = sqlc.arg('id')
 -- nor chat_terminal_resume can replace it: this guard spans both in-flight and
 -- terminal tasks and compares created_at; the broader index also serves the
 -- chat_session foreign-key delete lookup.
-UPDATE chat_session cs
-SET session_id = t.session_id,
-    runtime_id = t.runtime_id,
-    work_dir   = COALESCE(t.work_dir, cs.work_dir),
-    updated_at = now()
-FROM agent_task_queue t
-WHERE t.id = sqlc.arg('task_id')
+UPDATE chat_session AS cs SET  session_id = (SELECT t.session_id FROM agent_task_queue t WHERE t.id = sqlc.arg('task_id')
   AND t.chat_session_id = cs.id
   AND t.status = 'cancelled'
   AND t.session_id IS NOT NULL
@@ -354,37 +348,82 @@ WHERE t.id = sqlc.arg('task_id')
         AND newer.id <> t.id
         AND newer.session_id IS NOT NULL
         AND newer.created_at > t.created_at
-  );
+  )),
+    runtime_id = (SELECT t.runtime_id FROM agent_task_queue t WHERE t.id = sqlc.arg('task_id')
+  AND t.chat_session_id = cs.id
+  AND t.status = 'cancelled'
+  AND t.session_id IS NOT NULL
+  AND t.runtime_id IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM agent_task_queue newer
+      WHERE newer.chat_session_id = t.chat_session_id
+        AND newer.id <> t.id
+        AND newer.session_id IS NOT NULL
+        AND newer.created_at > t.created_at
+  )),
+    work_dir   = (SELECT COALESCE(t.work_dir, cs.work_dir) FROM agent_task_queue t WHERE t.id = sqlc.arg('task_id')
+  AND t.chat_session_id = cs.id
+  AND t.status = 'cancelled'
+  AND t.session_id IS NOT NULL
+  AND t.runtime_id IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM agent_task_queue newer
+      WHERE newer.chat_session_id = t.chat_session_id
+        AND newer.id <> t.id
+        AND newer.session_id IS NOT NULL
+        AND newer.created_at > t.created_at
+  )),
+    updated_at = (SELECT now() FROM agent_task_queue t WHERE t.id = sqlc.arg('task_id')
+  AND t.chat_session_id = cs.id
+  AND t.status = 'cancelled'
+  AND t.session_id IS NOT NULL
+  AND t.runtime_id IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM agent_task_queue newer
+      WHERE newer.chat_session_id = t.chat_session_id
+        AND newer.id <> t.id
+        AND newer.session_id IS NOT NULL
+        AND newer.created_at > t.created_at
+  )) WHERE EXISTS (SELECT 1 FROM agent_task_queue t WHERE t.id = sqlc.arg('task_id')
+  AND t.chat_session_id = cs.id
+  AND t.status = 'cancelled'
+  AND t.session_id IS NOT NULL
+  AND t.runtime_id IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM agent_task_queue newer
+      WHERE newer.chat_session_id = t.chat_session_id
+        AND newer.id <> t.id
+        AND newer.session_id IS NOT NULL
+        AND newer.created_at > t.created_at
+  ));
 
 -- name: LockChatSessionForDelete :one
--- Acquires an exclusive (FOR UPDATE) row lock on chat_session(id). Used by
+-- Acquires an exclusive (row lock) row lock on chat_session(id). Used by
 -- the delete path so that a concurrent SendChatMessage cannot enqueue a new
 -- agent_task_queue row referencing this session between our cancel and
 -- delete steps. The FK from agent_task_queue.chat_session_id takes a
 -- KEY SHARE lock on the parent row during INSERT validation, which
--- conflicts with FOR UPDATE — concurrent inserts block here and then fail
+-- conflicts with - concurrent inserts block here and then fail
 -- their FK check after we commit the delete.
 SELECT id FROM chat_session
-WHERE id = $1
-FOR UPDATE;
+WHERE id = ?1;
 
 -- name: LockChatSessionForAppend :one
--- The append transaction's first lock. FOR KEY SHARE remains compatible with
--- task enqueue's FOR NO KEY UPDATE while establishing chat_session -> binding
+-- The append transaction's first lock. remains compatible with
+-- task enqueue's while establishing chat_session -> binding
 -- -> generation order before the later TouchChatSession update.
 SELECT id FROM chat_session
-WHERE id = $1
-FOR KEY SHARE;
+WHERE id = ?1;
 
 -- name: LockChatSessionForRuntimeBind :one
--- Acquires an exclusive (FOR UPDATE) row lock on chat_session(id), serialising
+-- Acquires an exclusive (row lock) row lock on chat_session(id), serialising
 -- "which runtime does this session execute on" against "enqueue the next task".
 --
 -- Both SendDirectChatMessage and the agent-builder runtime switch take this lock
 -- for their whole transaction. Without it the two are a read-then-write race: a
 -- send reads the carrier agent's runtime_id, the switch then passes its
 -- pending-task check and rebinds the carrier, and the send finally inserts a task
--- still stamped with the pre-switch runtime — so the user is told the switch
+-- still stamped with the pre-switch runtime - so the user is told the switch
 -- succeeded while their message runs on the old runtime (MUL-5163).
 --
 -- The lock alone is not sufficient: the send path must also re-read the agent
@@ -394,8 +433,7 @@ FOR KEY SHARE;
 -- Same row and same lock mode as LockChatSessionForDelete, and both take it as
 -- their first statement, so the delete path and this one cannot deadlock.
 SELECT id FROM chat_session
-WHERE id = $1
-FOR UPDATE;
+WHERE id = ?1;
 
 -- name: LockChatSessionForEnqueue :one
 -- The chat-task enqueue's answer to archiving, and the one lock on this row
@@ -403,7 +441,7 @@ FOR UPDATE;
 --
 -- The channel run trigger is debounced, so the message is persisted the moment
 -- it arrives and the task row is created a window later. An archive committing
--- inside that window cancels the tasks it can see — there are none yet — and
+-- inside that window cancels the tasks it can see - there are none yet - and
 -- deletes the channel binding, and the flush then enqueues onto a conversation
 -- the user closed. ClaimAgentTask does not read chat_session.status, so the
 -- daemon runs it. Taking this lock as the enqueue transaction's first
@@ -411,17 +449,17 @@ FOR UPDATE;
 -- enqueue-then-archive is caught by the archive's cancel, archive-then-enqueue
 -- is refused here.
 --
--- FOR NO KEY UPDATE, not the FOR UPDATE the delete / runtime-bind / draft locks
+--, not the the delete / runtime-bind / draft locks
 -- take, and the difference is the point. Those three want to block concurrent
--- INSERTs that reference this row: FOR UPDATE conflicts with the FOR KEY SHARE
+-- INSERTs that reference this row: conflicts with the
 -- an FK insert takes on its parent, which is exactly how LockChatSessionForDelete
 -- stops a send from slipping a task in between its cancel and its delete. This
 -- lock wants the opposite. Every inbound channel message is an INSERT into
 -- chat_message, FK'd to this same row, and the flush it eventually triggers
--- holds this lock for the whole enqueue — under FOR UPDATE the room's next
--- message would block behind the previous message's enqueue. FOR NO KEY UPDATE
--- does not conflict with FOR KEY SHARE, so appends keep flowing, while it still
--- conflicts with FOR UPDATE and with FOR NO KEY UPDATE — which is what
+-- holds this lock for the whole enqueue - under the room's next
+-- message would block behind the previous message's enqueue.
+-- does not conflict with, so appends keep flowing, while it still
+-- conflicts with and with - which is what
 -- SetChatSessionArchived's UPDATE (status is not a key column) and the delete
 -- path's lock take. So the archive and the delete still serialise against this
 -- enqueue in both directions, which is all this guard needs.
@@ -429,14 +467,13 @@ FOR UPDATE;
 -- Returns the whole row, not just the id, for the same reason
 -- LockChatSessionForDraftWrite does: the caller must re-check status INSIDE the
 -- transaction, because an enqueue blocked here resumes holding the row it read
--- before blocking — and the archive is what it was blocked on.
+-- before blocking - and the archive is what it was blocked on.
 --
 -- Same row and same position (first statement) as the other three, so the
 -- repo-wide chat_session -> agent_task_queue order is unchanged and no new
 -- deadlock edge is introduced.
 SELECT * FROM chat_session
-WHERE id = $1
-FOR NO KEY UPDATE;
+WHERE id = ?1;
 
 -- name: LockChatSessionForDraftWrite :one
 -- The autosave half of the agent_builder_draft protocol, and the writer's
@@ -445,7 +482,7 @@ FOR NO KEY UPDATE;
 -- agent_builder_draft carries no chat_session FK (repo rule), so an INSERT into
 -- it takes no lock on the parent row and nothing stops a draft from landing
 -- after its conversation is gone: the save path read the session, the delete
--- transaction then committed, and the upsert still succeeded — leaving a row
+-- transaction then committed, and the upsert still succeeded - leaving a row
 -- the user explicitly discarded, invisible to the UI and unreachable by every
 -- prune except the workspace teardown. The FK that would have rejected that
 -- INSERT is the one we are not allowed to have, so the lock replaces it.
@@ -460,8 +497,7 @@ FOR NO KEY UPDATE;
 -- no ordering against the repo-wide chat_session -> agent_task_queue sequence is
 -- introduced and none of the three can deadlock against each other.
 SELECT * FROM chat_session
-WHERE id = $1
-FOR UPDATE;
+WHERE id = ?1;
 
 -- name: DeleteChatSession :exec
 -- Hard delete. chat_message rows cascade via FK ON DELETE CASCADE; the
@@ -472,11 +508,11 @@ FOR UPDATE;
 -- so the daemon does not keep running work whose result has nowhere to
 -- land. workspace_id in the WHERE clause is a SQL-layer tenant guard; see
 -- DeleteIssue.
-DELETE FROM chat_session WHERE id = $1 AND workspace_id = $2;
+DELETE FROM chat_session WHERE id = ?1 AND workspace_id = ?2;
 
 -- name: TouchChatSession :exec
 UPDATE chat_session SET updated_at = now()
-WHERE id = $1;
+WHERE id = ?1;
 
 -- name: CreateChatMessage :one
 -- message_kind and quick_actions default via COALESCE so every existing caller
@@ -488,20 +524,20 @@ INSERT INTO chat_message (
     channel_context_revision, id
 )
 VALUES (
-    $1, $2, $3, sqlc.narg(task_id), sqlc.narg(failure_reason), sqlc.narg(elapsed_ms),
-    COALESCE(sqlc.narg(message_kind)::text, 'message'),
-    COALESCE(sqlc.narg(quick_actions)::jsonb, '[]'::jsonb),
+    ?1, ?2, ?3, sqlc.narg(task_id), sqlc.narg(failure_reason), sqlc.narg(elapsed_ms),
+    COALESCE(sqlc.narg(message_kind), 'message'),
+    COALESCE(sqlc.narg(quick_actions), '[]'),
     -- The media deadline is DB-clock time: every consumer compares it against
     -- SQL now() (GetChannelMediaPendingUntil, the deferred promote, the
     -- trailing-message guard), so the writer must use the same clock. The
     -- caller passes a relative budget in seconds; an application-clock
     -- timestamp here would let a skewed app node shrink or stretch the
     -- fallback window.
-    CASE WHEN sqlc.narg(channel_media_pending_secs)::float8 IS NULL THEN NULL
-         ELSE now() + make_interval(secs => sqlc.narg(channel_media_pending_secs)::float8) END,
-    COALESCE(sqlc.narg(channel_ingested)::boolean, FALSE),
+    CASE WHEN sqlc.narg(channel_media_pending_secs) IS NULL THEN NULL
+         ELSE datetime(now(), '+' || (sqlc.narg(channel_media_pending_secs) || ' seconds')) END,
+    COALESCE(sqlc.narg(channel_ingested), FALSE),
     sqlc.narg(channel_context_revision),
-    COALESCE(sqlc.narg('id')::uuid, gen_random_uuid())
+    COALESCE(sqlc.narg('id'), gen_random_uuid())
 )
 RETURNING *;
 
@@ -512,12 +548,12 @@ RETURNING *;
 -- rebinds that delete the channel_chat_session_binding row. Callers pass the
 -- batch OWNER id (chat_input_task_id, which auto-retry clones inherit), not
 -- necessarily the task's own id. The cancel restore-delete and the
--- empty-completion silent-drop both gate on this — a channel sender has no
+-- empty-completion silent-drop both gate on this - a channel sender has no
 -- Multica composer for a restored draft, and the no_response fallback body
 -- must never be pushed to an external channel.
 SELECT EXISTS (
     SELECT 1 FROM chat_message
-    WHERE task_id = $1
+    WHERE task_id = ?1
       AND role = 'user'
       AND channel_ingested
 ) AS channel_ingested;
@@ -534,18 +570,18 @@ SELECT EXISTS (
 --   * A task with NO input batch owner is channel-ingested. Migration 158 left
 --     both legacy direct rows and channel tasks NULL here, so the owner cannot
 --     say which one a row was, and the adapters that read this deliver by
---     default — the behaviour #5645 shipped. Keying the EXISTS on the task's
+--     default - the behaviour #5645 shipped. Keying the EXISTS on the task's
 --     own id instead (COALESCE(chat_input_task_id, id)) silently stops
 --     delivering the auto-retry of a legacy channel task: CreateRetryTask
 --     copies a NULL owner verbatim, on purpose (see agent.sql), and the clone
---     owns no messages — so it reads as web UI while CopyChannelTaskDelivery
+--     owns no messages - so it reads as web UI while CopyChannelTaskDelivery
 --     has already given it the room's route.
 --   * Otherwise the verdict is the batch OWNER'S, not the task's. An auto-retry
 --     clone inherits its parent's chat_input_task_id while the user's message
 --     stays tagged with the parent, so reading the owner is what lets the clone
 --     reach the verdict its parent already has (MUL-4351).
 --
--- NO ROW means the task is gone — cancelled and reaped while its ending was in
+-- NO ROW means the task is gone - cancelled and reaped while its ending was in
 -- flight. Callers receive pgx.ErrNoRows and must not fold that into "asked in
 -- the web UI": it is the absence of a verdict, not a negative one, and the two
 -- are recorded differently.
@@ -561,7 +597,7 @@ SELECT EXISTS (
 -- one reader: the log level on a turn that has no delivery row.
 --
 -- channel_ingested above says "deliver this", and for a NULL owner it says so
--- without evidence — which is right, because delivering is the safe side and
+-- without evidence - which is right, because delivering is the safe side and
 -- the auto-retry of a legacy channel turn depends on it. Warning is the other
 -- direction: a missing route is worth paging an operator about only when
 -- something actually established the turn was a channel's. A NULL owner
@@ -584,10 +620,10 @@ SELECT (
           AND role = 'user'
           AND channel_ingested
     )
-)::boolean AS channel_ingested,
-    (task.chat_input_task_id IS NULL)::boolean AS batch_owner_unknown
+) AS channel_ingested,
+    (task.chat_input_task_id IS NULL) AS batch_owner_unknown
 FROM agent_task_queue AS task
-WHERE task.id = $1;
+WHERE task.id = ?1;
 
 -- name: SetChatMessageChannelOutboundProvenanceByTask :execrows
 -- The assistant row is committed before EventChatDone is published. Attach the
@@ -599,7 +635,7 @@ UPDATE chat_message
 SET channel_outbound_type = @channel_type,
     channel_outbound_installation_id = @installation_id,
     channel_outbound_chat_id = @channel_chat_id,
-    channel_outbound_message_ids = @message_ids::text[]
+    channel_outbound_message_ids = @message_ids
 WHERE task_id = @task_id
   AND role = 'assistant';
 
@@ -607,17 +643,24 @@ WHERE task_id = @task_id
 -- Assistant generation is inherited from its owning task, matching
 -- ListChatMessagesPageForChannelContext. Provider IDs are scoped by session,
 -- adapter, and immutable generation before being trusted as agent context.
-SELECT external.message_id::text
+WITH RECURSIVE nums(i) AS (
+    SELECT 0 AS i
+    UNION ALL
+    SELECT nums.i + 1 AS i FROM nums WHERE nums.i + 1 < 1000
+)
+SELECT json_extract(message.channel_outbound_message_ids, '$[' || nums.i || ']') AS message_id
 FROM chat_message AS message
 JOIN agent_task_queue AS owner ON owner.id = message.task_id
-CROSS JOIN LATERAL unnest(message.channel_outbound_message_ids) AS external(message_id)
+JOIN nums ON nums.i < COALESCE(json_array_length(message.channel_outbound_message_ids), 0)
 WHERE message.chat_session_id = @chat_session_id
   AND message.role = 'assistant'
   AND message.channel_outbound_type = @channel_type
   AND message.channel_outbound_installation_id = @installation_id
   AND message.channel_outbound_chat_id = @channel_chat_id
   AND message.channel_outbound_message_ids IS NOT NULL
-  AND external.message_id = ANY(@candidate_message_ids::text[])
+  AND json_extract(message.channel_outbound_message_ids, '$[' || nums.i || ']') IN (
+      SELECT value FROM json_each(@candidate_message_ids)
+  )
   AND (
       owner.channel_context_revision = @channel_context_revision
       OR (@channel_context_revision = 1 AND owner.channel_context_revision IS NULL)
@@ -632,14 +675,14 @@ WHERE message.chat_session_id = @chat_session_id
 -- command whose create failed never runs the binder that clears the marker).
 SELECT channel_media_pending_until
 FROM chat_message
-WHERE chat_session_id = $1
+WHERE chat_session_id = ?1
   AND role = 'user'
   AND message_kind != 'channel_command'
   AND (
-      sqlc.narg('channel_context_revision')::bigint IS NULL
-      OR channel_context_revision = sqlc.narg('channel_context_revision')::bigint
+      sqlc.narg('channel_context_revision') IS NULL
+      OR channel_context_revision = sqlc.narg('channel_context_revision')
       OR (
-          sqlc.narg('channel_context_revision')::bigint = 1
+          sqlc.narg('channel_context_revision') = 1
           AND channel_context_revision IS NULL
       )
   )
@@ -650,7 +693,7 @@ LIMIT 1;
 -- name: ClearChatMessageChannelMediaPending :exec
 UPDATE chat_message
 SET channel_media_pending_until = NULL
-WHERE id = $1 AND chat_session_id = $2;
+WHERE id = ?1 AND chat_session_id = ?2;
 
 -- name: UpdateChatMessageContentForChannelMedia :execrows
 -- Channel messages are immutable user turns. Media resolution may finish after
@@ -666,8 +709,8 @@ WHERE id = sqlc.arg(id)
 
 -- name: LinkChatMessageToTask :exec
 UPDATE chat_message
-SET task_id = $2
-WHERE id = $1 AND role = 'user';
+SET task_id = ?2
+WHERE id = ?1 AND role = 'user';
 
 -- name: LinkUnownedChannelChatMessagesToTask :exec
 -- Seals the trailing channel-message batch to its task. The task row and these
@@ -680,8 +723,8 @@ WHERE id = $1 AND role = 'user';
 -- The boundary is "already answered", not "something newer exists". A reply can
 -- only be a reply TO this message if the turn that wrote it started AFTER the
 -- message arrived; a turn already running when the message landed had sealed
--- its own input batch before the message existed, so its reply — however late
--- it lands — answers an earlier batch and must not become a boundary. Without
+-- its own input batch before the message existed, so its reply - however late
+-- it lands - answers an earlier batch and must not become a boundary. Without
 -- that qualifier, a predecessor completing inside the debounce window (message
 -- at 18:31:17.7, predecessor reply at 18:31:20.2, seal at 18:31:20.7) sealed
 -- ZERO rows: the new task owned an empty input batch and the claim path
@@ -691,22 +734,20 @@ WHERE id = $1 AND role = 'user';
 -- auto-retry clone gets a fresh id while inheriting the root's batch, and it is
 -- the ROOT's creation time that says which messages that batch could contain.
 -- A non-user row with no task (or whose task row is gone) still counts as a
--- boundary — unattributable output is treated as possibly answering, so the
+-- boundary - unattributable output is treated as possibly answering, so the
 -- pre-ownership rows of a legacy session are never swept into a new batch.
-UPDATE chat_message AS message
-SET task_id = @task_id
-FROM agent_task_queue AS task
-WHERE message.chat_session_id = @chat_session_id
+UPDATE chat_message
+SET  task_id = (SELECT @task_id AS task_id FROM agent_task_queue AS task WHERE chat_message.chat_session_id = @chat_session_id
   AND task.id = @task_id
-  AND message.role = 'user'
-  AND message.task_id IS NULL
-  AND message.message_kind != 'channel_command'
+  AND chat_message.role = 'user'
+  AND chat_message.task_id IS NULL
+  AND chat_message.message_kind != 'channel_command'
   AND (
       task.channel_context_revision IS NULL
-      OR message.channel_context_revision = task.channel_context_revision
+      OR chat_message.channel_context_revision = task.channel_context_revision
       OR (
           task.channel_context_revision = 1
-          AND message.channel_context_revision IS NULL
+          AND chat_message.channel_context_revision IS NULL
       )
   )
   AND NOT EXISTS (
@@ -718,9 +759,33 @@ WHERE message.chat_session_id = @chat_session_id
         ON prior_batch.id = COALESCE(prior_turn.chat_input_task_id, prior_turn.id)
       WHERE prior.chat_session_id = @chat_session_id
         AND prior.role != 'user'
-        AND (prior.created_at, prior.id) > (message.created_at, message.id)
-        AND (prior_batch.id IS NULL OR prior_batch.created_at > message.created_at)
-  );
+        AND (prior.created_at, prior.id) > (chat_message.created_at, chat_message.id)
+        AND (prior_batch.id IS NULL OR prior_batch.created_at > chat_message.created_at)
+  )) WHERE EXISTS (SELECT 1 FROM agent_task_queue AS task WHERE chat_message.chat_session_id = @chat_session_id
+  AND task.id = @task_id
+  AND chat_message.role = 'user'
+  AND chat_message.task_id IS NULL
+  AND chat_message.message_kind != 'channel_command'
+  AND (
+      task.channel_context_revision IS NULL
+      OR chat_message.channel_context_revision = task.channel_context_revision
+      OR (
+          task.channel_context_revision = 1
+          AND chat_message.channel_context_revision IS NULL
+      )
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM chat_message AS prior
+      LEFT JOIN agent_task_queue AS prior_turn
+        ON prior_turn.id = prior.task_id
+      LEFT JOIN agent_task_queue AS prior_batch
+        ON prior_batch.id = COALESCE(prior_turn.chat_input_task_id, prior_turn.id)
+      WHERE prior.chat_session_id = @chat_session_id
+        AND prior.role != 'user'
+        AND (prior.created_at, prior.id) > (chat_message.created_at, chat_message.id)
+        AND (prior_batch.id IS NULL OR prior_batch.created_at > chat_message.created_at)
+  ));
 
 -- name: ListUnownedChannelChatContextRevisions :many
 -- Returns every durable context generation that still has channel input without
@@ -728,9 +793,9 @@ WHERE message.chat_session_id = @chat_session_id
 -- inbound message uses this list to re-arm older generations instead of only
 -- recovering the current one. Legacy NULL revisions are generation 1.
 WITH pending AS (
-    SELECT DISTINCT COALESCE(channel_context_revision, 1)::bigint AS context_revision
+    SELECT DISTINCT COALESCE(channel_context_revision, 1) AS context_revision
     FROM chat_message
-    WHERE chat_session_id = $1
+    WHERE chat_session_id = ?1
       AND role = 'user'
       AND task_id IS NULL
       AND message_kind != 'channel_command'
@@ -738,7 +803,7 @@ WITH pending AS (
 SELECT pending.context_revision, generation.initiator_user_id
 FROM pending
 LEFT JOIN channel_chat_context_generation AS generation
-  ON generation.chat_session_id = $1
+  ON generation.chat_session_id = ?1
  AND generation.revision = pending.context_revision
 ORDER BY pending.context_revision;
 
@@ -749,26 +814,39 @@ ORDER BY pending.context_revision;
 -- 'queued'. Re-derive the deferral from the sealed batch itself, in the same
 -- transaction, so a task is never claimable while its own input still has an
 -- unexpired marker. No row (ErrNoRows) means no correction was needed.
-UPDATE agent_task_queue AS task
-SET status = 'deferred', fire_at = pending.max_until
-FROM (
+UPDATE agent_task_queue
+SET  status = (SELECT 'deferred' FROM (
     SELECT max(message.channel_media_pending_until) AS max_until
     FROM chat_message AS message
     WHERE message.task_id = @task_id
       AND message.role = 'user'
       AND message.channel_media_pending_until > now()
-) AS pending
-WHERE task.id = @task_id
+) AS pending WHERE agent_task_queue.id = @task_id
   AND pending.max_until IS NOT NULL
-  AND (task.fire_at IS NULL OR task.fire_at < pending.max_until)
-RETURNING task.*;
+  AND (agent_task_queue.fire_at IS NULL OR agent_task_queue.fire_at < pending.max_until)), fire_at = (SELECT pending.max_until FROM (
+    SELECT max(message.channel_media_pending_until) AS max_until
+    FROM chat_message AS message
+    WHERE message.task_id = @task_id
+      AND message.role = 'user'
+      AND message.channel_media_pending_until > now()
+) AS pending WHERE agent_task_queue.id = @task_id
+  AND pending.max_until IS NOT NULL
+  AND (agent_task_queue.fire_at IS NULL OR agent_task_queue.fire_at < pending.max_until)) WHERE EXISTS (SELECT 1 FROM (
+    SELECT max(message.channel_media_pending_until) AS max_until
+    FROM chat_message AS message
+    WHERE message.task_id = @task_id
+      AND message.role = 'user'
+      AND message.channel_media_pending_until > now()
+) AS pending WHERE agent_task_queue.id = @task_id
+  AND pending.max_until IS NOT NULL
+  AND (agent_task_queue.fire_at IS NULL OR agent_task_queue.fire_at < pending.max_until)) RETURNING *;
 
 -- name: DeleteUserChatMessageByTask :one
 -- Deletes the MEMBER-TYPED input of a cancelled/edited turn.
 --
 -- The kickoff exclusion is load-bearing since MUL-5827: an onboarding session's
--- first real turn owns two user rows — the member's message and the adopted
--- kickoff — so an unqualified delete would take the kickoff with it. That row
+-- first real turn owns two user rows - the member's message and the adopted
+-- kickoff - so an unqualified delete would take the kickoff with it. That row
 -- is the only copy of the onboarding context and of "you have already greeted
 -- them", so losing it makes Mika introduce herself a second time, and the
 -- RETURNING row would be an arbitrary one of the two: cancel could hand the
@@ -776,7 +854,7 @@ RETURNING task.*;
 -- drop what they actually typed. Callers release the kickoff separately
 -- (ReleaseOnboardingKickoffFromTask) so the next send re-adopts it.
 DELETE FROM chat_message
-WHERE task_id = $1
+WHERE task_id = ?1
   AND role = 'user'
   AND message_kind <> 'onboarding_kickoff'
 RETURNING *;
@@ -791,8 +869,8 @@ RETURNING *;
 -- queued WHILE the kickoff's turn was still running found nothing to adopt and
 -- never gets another chance: clearing to NULL would leave that already-sealed
 -- turn to execute with no onboarding skill, no profile block, and no record
--- that Mika had already greeted the member — exactly the double-introduction
--- this design exists to prevent — while a later message could pick the kickoff
+-- that Mika had already greeted the member - exactly the double-introduction
+-- this design exists to prevent - while a later message could pick the kickoff
 -- up instead, delivering the context to the wrong turn.
 --
 -- Target restrictions, each load-bearing:
@@ -815,11 +893,11 @@ SET task_id = (
       AND successor.status = 'queued'
       AND successor.chat_input_task_id = successor.id
       AND successor.regenerate_quick_actions_for IS NULL
-      AND successor.id <> $1
+      AND successor.id <> ?1
     ORDER BY successor.priority DESC, successor.created_at ASC, successor.id ASC
     LIMIT 1
 )
-WHERE task_id = $1
+WHERE task_id = ?1
   AND role = 'user'
   AND message_kind = 'onboarding_kickoff';
 
@@ -835,7 +913,7 @@ WHERE task_id = $1
 -- deferred rows are not claimable before promotion, so a queued row may be
 -- claimed during the backoff and then becomes the visible claimed head.
 SELECT message.* FROM chat_message AS message
-WHERE message.chat_session_id = $1
+WHERE message.chat_session_id = ?1
   AND message.message_kind != 'channel_command'
   AND NOT (
     message.role = 'user'
@@ -850,7 +928,7 @@ WHERE message.chat_session_id = $1
         AND task.id <> (
           SELECT head.id
           FROM agent_task_queue AS head
-          WHERE head.chat_session_id = $1
+          WHERE head.chat_session_id = ?1
             AND head.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'deferred')
             AND head.regenerate_quick_actions_for IS NULL
           ORDER BY
@@ -872,7 +950,7 @@ ORDER BY message.created_at ASC, message.id ASC;
 -- Legacy/reclaimed daemon tasks use trailing history, but must not absorb a
 -- newer queued successor that is already bound to its own user message.
 SELECT message.* FROM chat_message AS message
-WHERE message.chat_session_id = $1
+WHERE message.chat_session_id = ?1
   AND NOT (
     message.role = 'user'
     AND EXISTS (
@@ -884,7 +962,7 @@ WHERE message.chat_session_id = $1
         AND task.id <> (
           SELECT head.id
           FROM agent_task_queue AS head
-          WHERE head.chat_session_id = $1
+          WHERE head.chat_session_id = ?1
             AND head.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'deferred')
             AND head.regenerate_quick_actions_for IS NULL
           ORDER BY
@@ -906,12 +984,12 @@ ORDER BY message.created_at ASC, message.id ASC;
 -- Loads the immutable user-message input batch owned by a direct-chat task.
 -- The caller passes the task's chat_input_task_id (itself for an original send,
 -- the root task for an auto-retry child), so a claim reads exactly the messages
--- the user sent for this turn — and never absorbs a message that arrived after
+-- the user sent for this turn - and never absorbs a message that arrived after
 -- the batch was sealed, no matter what the assistant wrote or when. Only used
 -- for new task-owned direct-chat tasks; legacy/channel (chat_input_task_id
 -- NULL) tasks keep using ListChatMessagesForLegacyTask + trailingUserMessages.
 SELECT * FROM chat_message
-WHERE task_id = $1 AND role = 'user'
+WHERE task_id = ?1 AND role = 'user'
 ORDER BY created_at ASC, id ASC;
 
 -- name: ListChatMessagesPageForChannelContext :many
@@ -942,8 +1020,8 @@ WHERE message.chat_session_id = @chat_session_id
       )
   )
   AND (
-    sqlc.narg('before_created_at')::timestamptz IS NULL
-    OR (message.created_at, message.id) < (sqlc.narg('before_created_at')::timestamptz, sqlc.narg('before_id')::uuid)
+    sqlc.narg('before_created_at') IS NULL
+    OR (message.created_at, message.id) < (sqlc.narg('before_created_at'), sqlc.narg('before_id'))
   )
 ORDER BY message.created_at DESC, message.id DESC
 LIMIT @page_limit;
@@ -977,63 +1055,62 @@ WITH latest_visible AS (
     SELECT
         claimed_input.id AS claimed_input_id,
         claimed_input.created_at AS input_created_at,
-        prior.created_at AS prior_created_at
-    FROM chat_message AS claimed_input
-    CROSS JOIN LATERAL (
-        SELECT prior.created_at
-        FROM chat_message AS prior
-        WHERE prior.chat_session_id = claimed_input.chat_session_id
-          AND prior.id != claimed_input.id
-          AND NOT (
-            prior.role = 'user'
-            AND EXISTS (
-              SELECT 1
-              FROM agent_task_queue AS queued_task
-              WHERE queued_task.chat_session_id = prior.chat_session_id
-                AND queued_task.status = 'queued'
-                AND queued_task.id = prior.task_id
-                AND queued_task.id <> (
-                  SELECT head.id
-                  FROM agent_task_queue AS head
-                  WHERE head.chat_session_id = claimed_input.chat_session_id
-                    AND head.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'deferred')
-                    AND head.regenerate_quick_actions_for IS NULL
-                  ORDER BY
-                    CASE
-                      WHEN head.status IN ('dispatched', 'running', 'waiting_local_directory') THEN 0
-                      WHEN head.status = 'deferred' THEN 1
-                      ELSE 2
-                    END,
-                    head.priority DESC,
-                    head.created_at ASC,
-                    head.id ASC
-                  LIMIT 1
+        (
+            SELECT prior.created_at
+            FROM chat_message AS prior
+            WHERE prior.chat_session_id = claimed_input.chat_session_id
+              AND prior.id != claimed_input.id
+              AND NOT (
+                prior.role = 'user'
+                AND EXISTS (
+                  SELECT 1
+                  FROM agent_task_queue AS queued_task
+                  WHERE queued_task.chat_session_id = prior.chat_session_id
+                    AND queued_task.status = 'queued'
+                    AND queued_task.id = prior.task_id
+                    AND queued_task.id <> (
+                      SELECT head.id
+                      FROM agent_task_queue AS head
+                      WHERE head.chat_session_id = claimed_input.chat_session_id
+                        AND head.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'deferred')
+                        AND head.regenerate_quick_actions_for IS NULL
+                      ORDER BY
+                        CASE
+                          WHEN head.status IN ('dispatched', 'running', 'waiting_local_directory') THEN 0
+                          WHEN head.status = 'deferred' THEN 1
+                          ELSE 2
+                        END,
+                        head.priority DESC,
+                        head.created_at ASC,
+                        head.id ASC
+                      LIMIT 1
+                    )
                 )
-            )
-          )
-        ORDER BY prior.created_at DESC, prior.id DESC
-        LIMIT 1
-    ) AS prior
+              )
+            ORDER BY prior.created_at DESC, prior.id DESC
+            LIMIT 1
+        ) AS prior_created_at
+    FROM chat_message AS claimed_input
     WHERE claimed_input.task_id = @task_id
       AND claimed_input.role = 'user'
       AND NOT claimed_input.channel_ingested
-      -- The adopted onboarding kickoff is never a visible row, so it has no
-      -- turn boundary to correct — and reanchoring it would actively break the
-      -- one thing its position controls. It is deliberately older than the
-      -- member's message so the runtime reads "context, then their words";
-      -- moving it to dispatch time reverses that, and because the batch's two
-      -- rows would then share one timestamp, their order falls to random UUIDs
-      -- (MUL-5827).
       AND claimed_input.message_kind <> 'onboarding_kickoff'
 )
-UPDATE chat_message AS claimed_input
-SET created_at = GREATEST(
-    @dispatched_at::timestamptz,
-    latest_visible.prior_created_at + interval '1 microsecond'
+UPDATE chat_message
+SET created_at = (
+    SELECT GREATEST(
+        @dispatched_at,
+        strftime('%Y-%m-%dT%H:%M:%fZ', latest_visible.prior_created_at, '+0.000001 seconds')
+    ) AS created_at
+    FROM latest_visible
+    WHERE chat_message.id = latest_visible.claimed_input_id
+      AND latest_visible.prior_created_at >= latest_visible.input_created_at
 )
-FROM latest_visible
-WHERE claimed_input.id = latest_visible.claimed_input_id
-  AND latest_visible.prior_created_at >= latest_visible.input_created_at;
+WHERE EXISTS (
+    SELECT 1 FROM latest_visible
+    WHERE chat_message.id = latest_visible.claimed_input_id
+      AND latest_visible.prior_created_at >= latest_visible.input_created_at
+);
 
 -- name: ReanchorNextQueuedDirectChatInput :exec
 -- An assistant outcome can make the next queued direct task the positional
@@ -1041,32 +1118,32 @@ WHERE claimed_input.id = latest_visible.claimed_input_id
 -- this reply, so move that still-hidden single-row input just after the reply.
 -- Callers run this immediately after CreateChatMessage in the same transaction:
 -- readers see either the old active head without the reply, or the settled
--- reply followed by the newly-visible head — never user B before assistant A.
+-- reply followed by the newly-visible head - never user B before assistant A.
 -- Channel batches are excluded because their immutable provider ordering may
 -- contain multiple user rows. Direct chat currently owns exactly one row; if
 -- direct batching is added, assign stable per-row offsets here.
-UPDATE chat_message AS queued_input
-SET created_at = sqlc.arg('assistant_created_at')::timestamptz + interval '1 microsecond'
-WHERE queued_input.chat_session_id = $1
-  AND queued_input.role = 'user'
-  AND NOT queued_input.channel_ingested
+UPDATE chat_message
+SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', sqlc.arg('assistant_created_at'), '+0.000001 seconds')
+WHERE chat_message.chat_session_id = ?1
+  AND chat_message.role = 'user'
+  AND NOT chat_message.channel_ingested
   -- Same exclusion, same reason as ReanchorClaimedDirectChatInput: the hidden
   -- kickoff has no visible position to fix, and moving it would put the
   -- product's context after the member's message inside one input batch.
-  AND queued_input.message_kind <> 'onboarding_kickoff'
-  AND queued_input.created_at <= sqlc.arg('assistant_created_at')::timestamptz
+  AND chat_message.message_kind <> 'onboarding_kickoff'
+  AND chat_message.created_at <= sqlc.arg('assistant_created_at')
   AND EXISTS (
     SELECT 1
     FROM agent_task_queue AS queued_task
-    WHERE queued_task.id = queued_input.task_id
-      AND queued_task.chat_session_id = queued_input.chat_session_id
+    WHERE queued_task.id = chat_message.task_id
+      AND queued_task.chat_session_id = chat_message.chat_session_id
       AND queued_task.status = 'queued'
       AND queued_task.chat_input_task_id = queued_task.id
       AND queued_task.regenerate_quick_actions_for IS NULL
       AND queued_task.id = (
         SELECT head.id
         FROM agent_task_queue AS head
-        WHERE head.chat_session_id = queued_input.chat_session_id
+        WHERE head.chat_session_id = chat_message.chat_session_id
           AND head.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'deferred')
           AND head.regenerate_quick_actions_for IS NULL
         ORDER BY
@@ -1084,7 +1161,7 @@ WHERE queued_input.chat_session_id = $1
 
 -- name: ListChatMessagesPage :many
 SELECT message.* FROM chat_message AS message
-WHERE message.chat_session_id = $1
+WHERE message.chat_session_id = ?1
   AND message.message_kind != 'channel_command'
   AND NOT (
     message.role = 'user'
@@ -1097,7 +1174,7 @@ WHERE message.chat_session_id = $1
         AND task.id <> (
           SELECT head.id
           FROM agent_task_queue AS head
-          WHERE head.chat_session_id = $1
+          WHERE head.chat_session_id = ?1
             AND head.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'deferred')
             AND head.regenerate_quick_actions_for IS NULL
           ORDER BY
@@ -1114,24 +1191,24 @@ WHERE message.chat_session_id = $1
     )
   )
   AND (
-    sqlc.narg('before_created_at')::timestamptz IS NULL
-    OR (message.created_at, message.id) < (sqlc.narg('before_created_at')::timestamptz, sqlc.narg('before_id')::uuid)
+    sqlc.narg('before_created_at') IS NULL
+    OR (message.created_at, message.id) < (sqlc.narg('before_created_at'), sqlc.narg('before_id'))
   )
 ORDER BY message.created_at DESC, message.id DESC
-LIMIT $2;
+LIMIT ?2;
 
 -- name: GetChatMessage :one
 SELECT * FROM chat_message
-WHERE id = $1;
+WHERE id = ?1;
 
 -- name: CreateChatTask :one
--- Fenced against workspace teardown: lock_task_owner_rows (migration 284)
+-- Fenced against workspace teardown: owner-row fence (migration 284)
 -- locks the owners' workspace rows in the writer's own transaction and returns
 -- false once they are gone, so this statement writes no row instead of stranding
 -- a task in a workspace that has just been deleted (MUL-5999).
 -- The chat sender (initiator) is a direct_human originator and accountable;
 -- attribution provenance is stamped so this path is not a NULL-source enqueue
--- bypass (MUL-4302 §2).
+-- bypass (MUL-4302  2).
 INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, status, priority, chat_session_id,
     initiator_user_id, originator_user_id, accountable_user_id, force_fresh_session, runtime_mcp_overlay,
@@ -1139,21 +1216,25 @@ INSERT INTO agent_task_queue (
     fire_at, channel_context_revision, id
 )
 SELECT
-    $1, $2, NULL,
-    CASE WHEN sqlc.narg('fire_at')::timestamptz IS NULL THEN 'queued' ELSE 'deferred' END,
-    $3, $4, $5,
-    sqlc.narg(originator_user_id),
-    sqlc.narg(accountable_user_id),
-    COALESCE(sqlc.narg('force_fresh_session')::boolean, FALSE),
-    sqlc.narg(runtime_mcp_overlay),
-    sqlc.narg(runtime_connected_apps),
-    sqlc.narg(originator_source),
-    sqlc.narg(trigger_evidence_kind),
-    sqlc.narg(trigger_evidence_ref_id),
-    sqlc.narg('fire_at')::timestamptz,
-    sqlc.narg('channel_context_revision')::bigint,
-    COALESCE(sqlc.narg('id')::uuid, gen_random_uuid())
-WHERE lock_task_owner_rows($1, NULL, $2)
+    ?1 AS agent_id,
+    ?2 AS runtime_id,
+    NULL AS issue_id,
+    CASE WHEN sqlc.narg('fire_at') IS NULL THEN 'queued' ELSE 'deferred' END AS status,
+    ?3 AS priority,
+    ?4 AS chat_session_id,
+    ?5 AS initiator_user_id,
+    sqlc.narg(originator_user_id) AS originator_user_id,
+    sqlc.narg(accountable_user_id) AS accountable_user_id,
+    COALESCE(sqlc.narg('force_fresh_session'), FALSE) AS force_fresh_session,
+    sqlc.narg(runtime_mcp_overlay) AS runtime_mcp_overlay,
+    sqlc.narg(runtime_connected_apps) AS runtime_connected_apps,
+    sqlc.narg(originator_source) AS originator_source,
+    sqlc.narg(trigger_evidence_kind) AS trigger_evidence_kind,
+    sqlc.narg(trigger_evidence_ref_id) AS trigger_evidence_ref_id,
+    sqlc.narg('fire_at') AS fire_at,
+    sqlc.narg('channel_context_revision') AS channel_context_revision,
+    COALESCE(sqlc.narg('id'), gen_random_uuid()) AS id
+WHERE (?1 IS NULL OR EXISTS (SELECT 1 FROM agent WHERE id = ?1)) AND (NULL IS NULL OR EXISTS (SELECT 1 FROM issue WHERE id = NULL)) AND (?2 IS NULL OR EXISTS (SELECT 1 FROM agent_runtime WHERE id = ?2))
 RETURNING *;
 
 -- name: PromoteChannelChatTasksIfMediaReady :many
@@ -1163,21 +1244,21 @@ RETURNING *;
 -- marker scan uses the same population as GetChannelMediaPendingUntil and the
 -- seal: a channel_command turn belongs to no batch, so it must not hold a
 -- deferred task back either.
-UPDATE agent_task_queue AS task
+UPDATE agent_task_queue
 SET status = 'queued', fire_at = NULL
-WHERE task.chat_session_id = @chat_session_id
-  AND task.status = 'deferred'
-  AND task.issue_id IS NULL
-  AND task.parent_task_id IS NULL
-  AND task.escalation_for_task_id IS NULL
+WHERE agent_task_queue.chat_session_id = @chat_session_id
+  AND agent_task_queue.status = 'deferred'
+  AND agent_task_queue.issue_id IS NULL
+  AND agent_task_queue.parent_task_id IS NULL
+  AND agent_task_queue.escalation_for_task_id IS NULL
   AND NOT EXISTS (
       SELECT 1
       FROM chat_message AS message
-      WHERE message.task_id = task.id
+      WHERE message.task_id = agent_task_queue.id
         AND message.role = 'user'
         AND message.channel_media_pending_until > now()
   )
-RETURNING task.*;
+RETURNING *;
 
 -- name: SetChatTaskInputOwnerSelf :one
 -- Stamps a freshly-created direct-chat task as the owner of its own input batch
@@ -1189,7 +1270,7 @@ RETURNING task.*;
 -- the trailing-history fallback during rolling deploys.
 UPDATE agent_task_queue
 SET chat_input_task_id = id
-WHERE id = $1
+WHERE id = ?1
 RETURNING *;
 
 -- name: GetLastChatTaskSession :one
@@ -1212,12 +1293,12 @@ RETURNING *;
 -- the agent had already started answering, and the next message starts from
 -- nothing. A cancelled row only carries a session_id because the daemon pinned
 -- one mid-flight (UpdateAgentTaskSession), which means the provider really did
--- emit that session — either the resume loaded or it opened a fresh one. The
+-- emit that session - either the resume loaded or it opened a fresh one. The
 -- user interrupted it; the provider did not reject it, so it is no more
 -- suspect than a completed one. Cancellation records no failure_reason/error,
 -- so the poison filters below have nothing to match and cancelled rows pass
--- them the way completed rows do. The remaining risk — a transcript killed
--- mid-tool-call that the provider later refuses — is caught downstream by
+-- them the way completed rows do. The remaining risk - a transcript killed
+-- mid-tool-call that the provider later refuses - is caught downstream by
 -- taskfailure.UnresumableHistory and retires the session on the next turn.
 --
 -- The regex pair mirrors GetLastTaskSession's provider-agnostic guard for an
@@ -1225,7 +1306,7 @@ RETURNING *;
 -- both track emptyContentRe / historyMessageLocatorRe in
 -- pkg/taskfailure/resume.go (GH #6066).
 --
--- Selection is per-session, not per-row, and retired sessions are excluded —
+-- Selection is per-session, not per-row, and retired sessions are excluded -
 -- both mirroring GetLastTaskSession, which this query had drifted away from.
 -- A plain row-level filter reopens the poisoning wormhole GH #5975 closed on
 -- the issue side: it drops the newest poisoned row for a session and then
@@ -1238,8 +1319,8 @@ WITH retired_sessions AS (
     FROM agent_task_queue r
     WHERE r.chat_session_id = sqlc.arg('chat_session_id')
       AND (
-        sqlc.narg('channel_context_revision')::bigint IS NULL
-        OR COALESCE(r.channel_context_revision, 1) = sqlc.narg('channel_context_revision')::bigint
+        sqlc.narg('channel_context_revision') IS NULL
+        OR COALESCE(r.channel_context_revision, 1) = sqlc.narg('channel_context_revision')
       )
       AND r.retired_session_id IS NOT NULL
 ), resume_overflow_at AS (
@@ -1251,26 +1332,29 @@ WITH retired_sessions AS (
     FROM agent_task_queue t
     WHERE t.chat_session_id = sqlc.arg('chat_session_id')
       AND (
-        sqlc.narg('channel_context_revision')::bigint IS NULL
-        OR COALESCE(t.channel_context_revision, 1) = sqlc.narg('channel_context_revision')::bigint
+        sqlc.narg('channel_context_revision') IS NULL
+        OR COALESCE(t.channel_context_revision, 1) = sqlc.narg('channel_context_revision')
       )
       AND t.status = 'failed'
       AND (
         COALESCE(t.failure_reason, '') = 'codex_resume_oversized'
-        OR (COALESCE(t.error, '') ILIKE '%thread/resume failed%' AND COALESCE(t.error, '') ILIKE '%token too long%')
+        OR (lower(COALESCE(t.error, '')) LIKE lower('%thread/resume failed%') AND lower(COALESCE(t.error, '')) LIKE lower('%token too long%'))
       )
 ), latest_per_session AS (
-    SELECT DISTINCT ON (t.session_id)
-        t.session_id, t.work_dir, t.runtime_id, t.status, t.failure_reason, t.error, t.completed_at
-    FROM agent_task_queue t
-    WHERE t.chat_session_id = sqlc.arg('chat_session_id')
-      AND (
-        sqlc.narg('channel_context_revision')::bigint IS NULL
-        OR COALESCE(t.channel_context_revision, 1) = sqlc.narg('channel_context_revision')::bigint
-      )
-      AND t.session_id IS NOT NULL
-      AND t.status IN ('completed', 'failed', 'cancelled')
-    ORDER BY t.session_id, t.completed_at DESC
+    SELECT session_id, work_dir, runtime_id, status, failure_reason, error, completed_at
+    FROM (
+        SELECT t.session_id, t.work_dir, t.runtime_id, t.status, t.failure_reason, t.error, t.completed_at,
+               row_number() OVER (PARTITION BY t.session_id ORDER BY t.completed_at DESC) AS rn
+        FROM agent_task_queue t
+        WHERE t.chat_session_id = sqlc.arg('chat_session_id')
+          AND (
+            sqlc.narg('channel_context_revision') IS NULL
+            OR COALESCE(t.channel_context_revision, 1) = sqlc.narg('channel_context_revision')
+          )
+          AND t.session_id IS NOT NULL
+          AND t.status IN ('completed', 'failed', 'cancelled')
+    ) AS ranked
+    WHERE ranked.rn = 1
 )
 SELECT session_id, work_dir, runtime_id FROM latest_per_session
 WHERE session_id NOT IN (SELECT session_id FROM retired_sessions)
@@ -1279,7 +1363,7 @@ WHERE session_id NOT IN (SELECT session_id FROM retired_sessions)
     OR (
       status = 'failed'
       AND COALESCE(failure_reason, '') NOT IN ('iteration_limit', 'agent_fallback_message', 'api_invalid_request', 'codex_semantic_inactivity', 'agent_error.context_overflow', 'codex_resume_oversized')
-      AND NOT (COALESCE(error, '') ILIKE '%400%' AND COALESCE(error, '') ILIKE '%invalid_request_error%')
+      AND NOT (lower(COALESCE(error, '')) LIKE lower('%400%') AND lower(COALESCE(error, '')) LIKE lower('%invalid_request_error%'))
       -- Mirrors the GetLastTaskSession auth-resolution guard: a provider that
       -- cannot resolve its auth method fails deterministically on resume, and
       -- the classification is agent_error.unknown (resume-safe), so only this
@@ -1289,14 +1373,35 @@ WHERE session_id NOT IN (SELECT session_id FROM retired_sessions)
       -- The phrase itself lives in taskfailure.AuthMethodUnresolved, which the
       -- daemon's in-turn fresh-session retry reads (GH #6777). This guard stays
       -- because it is the only protection for rows an older daemon wrote.
-      AND NOT (COALESCE(error, '') ILIKE '%could not resolve authentication method%')
-      AND NOT (COALESCE(error, '') ~* 'must not be empty|must be non-?empty|must have non-?empty|non-?empty content|cannot be empty|should not be empty'
-               AND COALESCE(error, '') ~* 'role[^a-z0-9]{0,2}assistant|assistant message|message at position|messages\.[0-9]|messages\[[0-9]')
+      AND NOT (lower(COALESCE(error, '')) LIKE lower('%could not resolve authentication method%'))
+      AND NOT (
+        (
+            lower(COALESCE(error, '')) LIKE '%must not be empty%'
+            OR lower(COALESCE(error, '')) LIKE '%must be non-empty%'
+            OR lower(COALESCE(error, '')) LIKE '%must be nonempty%'
+            OR lower(COALESCE(error, '')) LIKE '%must be non empty%'
+            OR lower(COALESCE(error, '')) LIKE '%must have non-empty%'
+            OR lower(COALESCE(error, '')) LIKE '%must have nonempty%'
+            OR lower(COALESCE(error, '')) LIKE '%must have non empty%'
+            OR lower(COALESCE(error, '')) LIKE '%non-empty content%'
+            OR lower(COALESCE(error, '')) LIKE '%nonempty content%'
+            OR lower(COALESCE(error, '')) LIKE '%non empty content%'
+            OR lower(COALESCE(error, '')) LIKE '%cannot be empty%'
+            OR lower(COALESCE(error, '')) LIKE '%should not be empty%'
+        )
+        AND (
+            lower(COALESCE(error, '')) LIKE '%role%assistant%'
+            OR lower(COALESCE(error, '')) LIKE '%assistant message%'
+            OR lower(COALESCE(error, '')) LIKE '%message at position%'
+            OR lower(COALESCE(error, '')) LIKE '%messages.%'
+            OR lower(COALESCE(error, '')) LIKE '%messages[%'
+        )
+      )
     )
   )
   -- MUL-5722, mirroring GetLastTaskSession: an overflowed resume records no
   -- session, so exclude by time instead of by matching the failed row. Note
-  -- this only guards the FALLBACK for legacy tasks — the claim handler reads
+  -- this only guards the FALLBACK for legacy tasks - the claim handler reads
   -- chat_session.session_id first for them, so a pointer still naming the
   -- oversized thread has to be cleared at fail time (see FailTask) to be
   -- covered. Context-scoped channel tasks resolve directly from this query.
@@ -1308,24 +1413,24 @@ ORDER BY completed_at DESC
 LIMIT 1;
 
 -- name: HasActiveChatTaskForSession :one
--- True while ANY task — a normal user turn OR a background quick-actions
--- regenerate — is in flight for the session (contrast GetPendingChatTask, which
+-- True while ANY task - a normal user turn OR a background quick-actions
+-- regenerate - is in flight for the session (contrast GetPendingChatTask, which
 -- hides regenerate passes from the UI). A quick-actions refresh is refused when
 -- this is true: a running turn is about to change the latest reply, so the
 -- target we'd resume is already stale even before its assistant row lands; and a
 -- second concurrent regenerate would double-spend quota on the same turn. Read
 -- inside the same session lock as the enqueue so it cannot race a sibling insert
--- (MUL-5149 review §1/§2).
+-- (MUL-5149 review  1/ 2).
 --
 -- 'deferred' is included: an auto-retry armed with a backoff fire_at is inserted
 -- deferred (CreateRetryTask), and provider_network's final chat attempt waits
 -- ~5s that way. During that window the failed turn has written no assistant row,
--- so the latest-persisted check still points at the OLD turn — omitting deferred
+-- so the latest-persisted check still points at the OLD turn - omitting deferred
 -- would let a refresh resume a session the retry is about to advance and attach
--- the new turn's suggestions to the old one (MUL-5149 re-review §1).
+-- the new turn's suggestions to the old one (MUL-5149 re-review  1).
 SELECT EXISTS (
   SELECT 1 FROM agent_task_queue
-  WHERE chat_session_id = $1
+  WHERE chat_session_id = ?1
     AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'deferred')
 ) AS has_active;
 
@@ -1337,7 +1442,7 @@ SELECT EXISTS (
 -- Background quick-action regeneration owns no visible turn and is excluded.
 SELECT EXISTS (
   SELECT 1 FROM agent_task_queue
-  WHERE chat_session_id = $1
+  WHERE chat_session_id = ?1
     AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'deferred')
     AND regenerate_quick_actions_for IS NULL
 ) AS has_pending;
@@ -1349,7 +1454,7 @@ SELECT EXISTS (
 -- elapsed = now - task.created_at), so the pill survives refresh / reopen
 -- without "resetting to 0s".
 SELECT id, status, created_at FROM agent_task_queue
-WHERE chat_session_id = $1 AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+WHERE chat_session_id = ?1 AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
   -- Background quick-actions regeneration passes are invisible to the chat UI:
   -- they own no assistant turn and must not raise the StatusPill or disable the
   -- composer (MUL-5149 refresh follow-up).
@@ -1376,17 +1481,17 @@ SELECT
     -- renderer reads it only for the waiting one.
     task.wait_reason,
     message.id AS message_id,
-    COALESCE(message.content, '')::text AS content
+    COALESCE(message.content, '') AS content
 FROM agent_task_queue AS task
-LEFT JOIN LATERAL (
-    SELECT input.id, input.content
+LEFT JOIN chat_message AS message ON message.id = (
+    SELECT input.id
     FROM chat_message AS input
     WHERE input.task_id = COALESCE(task.chat_input_task_id, task.id)
       AND input.role = 'user'
     ORDER BY input.created_at ASC, input.id ASC
     LIMIT 1
-) AS message ON TRUE
-WHERE task.chat_session_id = $1
+)
+WHERE task.chat_session_id = ?1
   AND task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'deferred')
   AND task.regenerate_quick_actions_for IS NULL
 ORDER BY
@@ -1400,40 +1505,20 @@ ORDER BY
     task.id ASC;
 
 -- name: PrioritizeQueuedChatTask :one
-WITH target AS MATERIALIZED (
-  SELECT candidate.id
-  FROM agent_task_queue AS candidate
-  WHERE candidate.id = sqlc.arg('id')
-    AND candidate.chat_session_id = sqlc.arg('chat_session_id')
-    AND candidate.status = 'queued'
-    -- "Send now" is valid only while there is a visible claimed task for the
-    -- client to cancel. If the visible head is still queued (or deferred), the
-    -- selected row would otherwise replace it without any active_task_id.
-    AND EXISTS (
+-- Call in order: PrioritizeQueuedChatTask_Step2, PrioritizeQueuedChatTask.
+UPDATE agent_task_queue
+SET priority = 4
+WHERE agent_task_queue.id = sqlc.arg('id')
+  AND agent_task_queue.chat_session_id = sqlc.arg('chat_session_id')
+  AND agent_task_queue.status = 'queued'
+  AND EXISTS (
       SELECT 1
       FROM agent_task_queue AS active
       WHERE active.chat_session_id = sqlc.arg('chat_session_id')
         AND active.status IN ('dispatched', 'running', 'waiting_local_directory')
         AND active.regenerate_quick_actions_for IS NULL
-    )
-  FOR UPDATE
-), demoted AS (
-  UPDATE agent_task_queue AS queued
-  SET priority = 3
-  WHERE queued.chat_session_id = sqlc.arg('chat_session_id')
-    AND queued.id <> sqlc.arg('id')
-    AND queued.status = 'queued'
-    AND queued.priority >= 4
-    AND EXISTS (SELECT 1 FROM target)
-), prioritized AS (
-  UPDATE agent_task_queue AS selected
-  SET priority = 4
-  FROM target
-  WHERE selected.id = target.id
-  RETURNING selected.id
-)
-SELECT
-  prioritized.id AS task_id,
+  )
+RETURNING agent_task_queue.id AS task_id,
   (
     SELECT active.id
     FROM agent_task_queue AS active
@@ -1442,8 +1527,30 @@ SELECT
       AND active.regenerate_quick_actions_for IS NULL
     ORDER BY active.created_at ASC, active.id ASC
     LIMIT 1
-  )::uuid AS active_task_id
-FROM prioritized;
+  ) AS active_task_id;
+
+-- name: PrioritizeQueuedChatTask_Step2 :exec
+-- Call in order before PrioritizeQueuedChatTask.
+UPDATE agent_task_queue
+SET priority = 3
+WHERE agent_task_queue.chat_session_id = sqlc.arg('chat_session_id')
+  AND agent_task_queue.id <> sqlc.arg('id')
+  AND agent_task_queue.status = 'queued'
+  AND agent_task_queue.priority >= 4
+  AND EXISTS (
+    SELECT 1
+    FROM agent_task_queue AS candidate
+    WHERE candidate.id = sqlc.arg('id')
+      AND candidate.chat_session_id = sqlc.arg('chat_session_id')
+      AND candidate.status = 'queued'
+      AND EXISTS (
+        SELECT 1
+        FROM agent_task_queue AS active
+        WHERE active.chat_session_id = sqlc.arg('chat_session_id')
+          AND active.status IN ('dispatched', 'running', 'waiting_local_directory')
+          AND active.regenerate_quick_actions_for IS NULL
+      )
+  );
 
 -- name: ListPendingChatTasksByCreator :many
 -- Aggregate view of all in-flight chat tasks owned by a given creator in a
@@ -1452,7 +1559,7 @@ FROM prioritized;
 --
 -- Returns cs.agent_id so the handler can filter tasks belonging to private
 -- agents the caller has lost access to using the already-loaded `allowed`
--- set — no second ListAllChatSessionsByCreator scan on the hot path.
+-- set - no second ListAllChatSessionsByCreator scan on the hot path.
 --
 -- atq.chat_session_id IS NOT NULL is redundant given the JOIN, but stated
 -- explicitly so the planner can prove the query predicate is a subset of the
@@ -1465,8 +1572,8 @@ WHERE atq.chat_session_id IS NOT NULL
   -- Exclude background quick-actions regeneration passes: they own no assistant
   -- turn and must not surface as "running" chat work (MUL-5149 refresh follow-up).
   AND atq.regenerate_quick_actions_for IS NULL
-  AND cs.workspace_id = $1
-  AND cs.creator_id = $2
+  AND cs.workspace_id = ?1
+  AND cs.creator_id = ?2
 ORDER BY atq.created_at DESC;
 
 -- name: HasPendingChatTasksByCreator :one
@@ -1474,10 +1581,10 @@ ORDER BY atq.created_at DESC;
 -- EXISTS row instead of the full task list, so the planner can stop at the
 -- first matching in-flight task (LIMIT 1 semantics via EXISTS).
 --
--- Permission filtering is baked into the query: agent_id = ANY($3) restricts
+-- Permission filtering is baked into the query: agent_id IN (SELECT value FROM json_each(arg3)) restricts
 -- the result to the agents the caller may currently see, so a member who lost
 -- access to a private agent never gets a true from a task they can no longer
--- reach. The handler must pass its resolved accessible-agent id set as $3;
+-- reach. The handler must pass its resolved accessible-agent id set as arg3;
 -- an empty array yields false.
 SELECT EXISTS (
   SELECT 1
@@ -1490,13 +1597,13 @@ SELECT EXISTS (
     AND atq.regenerate_quick_actions_for IS NULL
     AND cs.workspace_id = sqlc.arg(workspace_id)
     AND cs.creator_id = sqlc.arg(creator_id)
-    AND cs.agent_id = ANY(sqlc.arg(agent_ids)::uuid[])
+    AND cs.agent_id IN (SELECT value FROM json_each(sqlc.arg(agent_ids)))
 ) AS has_pending;
 
 -- name: MarkChatSessionRead :exec
 -- Advances the read cursor to now, dropping the session's unread_count to 0.
 UPDATE chat_session SET last_read_at = now()
-WHERE id = $1;
+WHERE id = ?1;
 
 -- name: ChatSessionHasUserMessage :one
 -- Reports whether a session has any human (role='user') message yet. Used to
@@ -1507,13 +1614,13 @@ WHERE id = $1;
 -- instead of repeating the introduction every turn (MUL-4259).
 SELECT EXISTS (
     SELECT 1 FROM chat_message
-    WHERE chat_session_id = $1 AND role = 'user'
+    WHERE chat_session_id = ?1 AND role = 'user'
 ) AS has_user_message;
 
 -- name: ChatSessionHasPublicUserMessage :one
 SELECT EXISTS (
     SELECT 1 FROM chat_message
-    WHERE chat_session_id = $1
+    WHERE chat_session_id = ?1
       AND role = 'user'
       AND message_kind != 'channel_command'
 ) AS has_public_user_message;
@@ -1524,35 +1631,35 @@ SELECT EXISTS (
 -- broadcast is best-effort, so an offline client recovers the draft from
 -- this row instead. id is the deleted message's id.
 INSERT INTO chat_draft_restore (id, chat_session_id, task_id, content, attachment_ids)
-VALUES ($1, $2, $3, $4, $5)
+VALUES (?1, ?2, ?3, ?4, ?5)
 RETURNING *;
 
 -- name: ListChatDraftRestoresBySession :many
 SELECT * FROM chat_draft_restore
-WHERE chat_session_id = $1
+WHERE chat_session_id = ?1
 ORDER BY created_at ASC;
 
 -- name: DeleteChatDraftRestore :execrows
 -- Idempotent consume: deleting an already-consumed restore matches no row.
 DELETE FROM chat_draft_restore
-WHERE id = $1 AND chat_session_id = $2;
+WHERE id = ?1 AND chat_session_id = ?2;
 
 -- name: DeleteChatDraftRestoresBySession :exec
 -- chat_draft_restore carries no chat_session FK (MUL-3515), so DeleteChatSession
 -- prunes its pending restores in the same tx that deletes the session.
 DELETE FROM chat_draft_restore
-WHERE chat_session_id = $1;
+WHERE chat_session_id = ?1;
 
 -- The chat_session row lock is the mutual-exclusion protocol between the
 -- draft-restore writer (FinalizeDeferredCancelledChat) and every deleter of a
 -- chat_session or one of its cascade parents. Without an FK, an INSERT into
 -- chat_draft_restore takes no lock on its session, so a prune-then-delete would
--- otherwise miss a restore committed after its snapshot and strand it — with the
--- user's prompt in it — forever (#5219).
+-- otherwise miss a restore committed after its snapshot and strand it - with the
+-- user's prompt in it - forever (#5219).
 --
 -- The contract, held by all five paths below:
---   deleter:   lock the sessions FOR UPDATE -> prune restores -> delete the parent
---   finalizer: lock the session FOR UPDATE  -> insert the restore
+--   deleter:   lock the sessions -> prune restores -> delete the parent
+--   finalizer: lock the session  -> insert the restore
 -- Whoever locks first wins: a finalizer that got there first commits its row
 -- before the deleter's prune statement takes its snapshot, so the prune sweeps
 -- it; a deleter that got there first leaves no session for the finalizer to
@@ -1563,7 +1670,7 @@ WHERE chat_session_id = $1;
 -- agent_task_queue cannot deadlock against it.
 --
 -- The single-session delete path needs no new query: it already holds
--- LockChatSessionForDelete (same FOR UPDATE row lock) across its prune.
+-- LockChatSessionForDelete (same row lock) across its prune.
 
 -- name: LockChatSessionForTask :one
 -- The finalizer's half of the protocol. No rows means the session is already
@@ -1572,27 +1679,24 @@ WHERE chat_session_id = $1;
 SELECT cs.id
 FROM agent_task_queue t
 JOIN chat_session cs ON cs.id = t.chat_session_id
-WHERE t.id = $1
-FOR UPDATE OF cs;
+WHERE t.id = ?1;
 
 -- name: LockChatSessionsByWorkspace :many
 -- ORDER BY id: a stable lock order keeps two concurrent deleters from
 -- deadlocking against each other.
 SELECT id FROM chat_session
-WHERE workspace_id = $1
-ORDER BY id
-FOR UPDATE;
+WHERE workspace_id = ?1
+ORDER BY id;
 
 -- name: LockChatSessionsBySystemRuntimeAgents :many
 SELECT cs.id FROM chat_session cs
 JOIN agent a ON a.id = cs.agent_id
-WHERE a.runtime_id = $1 AND a.kind = 'system'
-ORDER BY cs.id
-FOR UPDATE OF cs;
+WHERE a.runtime_id = ?1 AND a.kind = 'system'
+ORDER BY cs.id;
 
 -- name: DeleteChatDraftRestoresBySystemRuntimeAgents :exec
 -- chat_session cascades from agent, so hard-deleting a runtime's system agents
--- silently drops their sessions — and, without an FK, would strand the pending
+-- silently drops their sessions - and, without an FK, would strand the pending
 -- restores (which still hold the user's prompt text) forever. Prune them in the
 -- same tx, BEFORE the agent rows go: the join below needs them. Mirrors
 -- DeleteChannelInstallationsBySystemRuntimeAgents.
@@ -1603,19 +1707,19 @@ DELETE FROM chat_draft_restore
 WHERE chat_session_id IN (
     SELECT cs.id FROM chat_session cs
     JOIN agent a ON a.id = cs.agent_id
-    WHERE a.runtime_id = $1 AND a.kind = 'system'
+    WHERE a.runtime_id = ?1 AND a.kind = 'system'
 );
 
 -- name: GetChatMessageByTaskAssistant :one
 -- The completed turn's assistant outcome row, for the quick-actions
 -- supplement path (daemon suggestion pass finishing after chat:done).
 SELECT * FROM chat_message
-WHERE task_id = $1 AND role = 'assistant'
+WHERE task_id = ?1 AND role = 'assistant'
 ORDER BY created_at DESC
 LIMIT 1;
 
 -- name: TaskInputIsOnboardingKickoffOnly :one
--- Whether this input batch is a kickoff and NOTHING else — the shape only a
+-- Whether this input batch is a kickoff and NOTHING else - the shape only a
 -- pre-MUL-5827 opening task has, where the kickoff was a turn of its own.
 --
 -- Reachable exclusively during a rolling deploy: a kickoff task enqueued by the
@@ -1631,8 +1735,8 @@ LIMIT 1;
 -- Delete this once no pre-deploy kickoff tasks can still be in flight; nothing
 -- creates this shape any more.
 --
--- $1 is the INPUT-OWNING task id — COALESCE(task.chat_input_task_id, task.id),
--- i.e. chatInputOwnerID — never a retry clone's own id, since the whole retry
+-- arg1 is the INPUT-OWNING task id - COALESCE(task.chat_input_task_id, task.id),
+-- i.e. chatInputOwnerID - never a retry clone's own id, since the whole retry
 -- chain consumes the root's input batch (MUL-4351).
 SELECT
     EXISTS (
@@ -1655,7 +1759,7 @@ SELECT
 -- timestamp, so both rows would land on the identical microsecond, and the
 -- session-list LATERAL picks the last message with `ORDER BY created_at DESC
 -- LIMIT 1` and no tiebreaker (ids are random UUIDs, not monotonic). A tie there
--- can select the kickoff, whose kind makes buildChatLastMessage return nil — so
+-- can select the kickoff, whose kind makes buildChatLastMessage return nil - so
 -- a session that onboarded perfectly reports no last message and the "Start
 -- with Mika" recovery card reappears. One microsecond makes the order total.
 --
@@ -1667,8 +1771,8 @@ VALUES (
     'assistant',
     sqlc.arg(content),
     'onboarding_opening',
-    sqlc.arg(kickoff_created_at)::timestamptz + interval '1 microsecond',
-    COALESCE(sqlc.narg('id')::uuid, gen_random_uuid())
+    strftime('%Y-%m-%dT%H:%M:%fZ', sqlc.arg(kickoff_created_at), '+0.000001 seconds'),
+    COALESCE(sqlc.narg('id'), gen_random_uuid())
 )
 RETURNING *;
 
@@ -1678,15 +1782,15 @@ RETURNING *;
 -- The kickoff is written with no task_id (nothing runs for the opening any
 -- more), so it would never reach a runtime on its own. Adopting it into the
 -- first send's input batch is what carries the onboarding skill instruction and
--- the profile block into the run that does the first real work — and, because
+-- the profile block into the run that does the first real work - and, because
 -- the kickoff quotes the opening the member already read, what stops Mika from
 -- introducing herself a second time.
 --
 -- Idempotent by construction: exactly one such row can exist per session, and
 -- the task_id IS NULL predicate means later sends adopt nothing.
 UPDATE chat_message
-SET task_id = $2
-WHERE chat_session_id = $1
+SET task_id = ?2
+WHERE chat_session_id = ?1
   AND role = 'user'
   AND message_kind = 'onboarding_kickoff'
   AND task_id IS NULL;
@@ -1694,19 +1798,19 @@ WHERE chat_session_id = $1
 -- name: GetLatestAssistantChatMessageForSession :one
 -- The session's most recent assistant turn, used as the regeneration target
 -- when the user clicks "refresh" on the quick-actions row (MUL-5149). Only rows
--- with a task_id qualify — the daemon suggest supplement keys off task_id and
+-- with a task_id qualify - the daemon suggest supplement keys off task_id and
 -- a resume needs a real completed turn to resume from.
 SELECT * FROM chat_message
-WHERE chat_session_id = $1 AND role = 'assistant' AND task_id IS NOT NULL
+WHERE chat_session_id = ?1 AND role = 'assistant' AND task_id IS NOT NULL
 ORDER BY created_at DESC
 LIMIT 1;
 
 -- name: SetChatMessageQuickActionsByTask :one
 UPDATE chat_message
-SET quick_actions = $2
+SET quick_actions = ?2
 WHERE id = (
     SELECT inner_msg.id FROM chat_message AS inner_msg
-    WHERE inner_msg.task_id = $1 AND inner_msg.role = 'assistant'
+    WHERE inner_msg.task_id = ?1 AND inner_msg.role = 'assistant'
     ORDER BY inner_msg.created_at DESC
     LIMIT 1
 )
@@ -1719,9 +1823,9 @@ RETURNING *;
 -- language-dependent. Oldest wins so the answer stays stable once a member
 -- has opened more than one session with the same agent.
 SELECT * FROM chat_session
-WHERE workspace_id = $1
-  AND creator_id = $2
-  AND agent_id = $3
+WHERE workspace_id = ?1
+  AND creator_id = ?2
+  AND agent_id = ?3
   AND status = 'active'
 ORDER BY created_at ASC
 LIMIT 1;

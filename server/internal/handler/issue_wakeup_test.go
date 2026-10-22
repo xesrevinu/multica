@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -33,7 +32,7 @@ func TestIssueWakeupAPIAndTrustedOrigin(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.SourceTaskID.Valid || uuidToString(result.CreatedBy) != testUserID {
+	if result.SourceTaskID.Valid || uuidToString(result.CreatedBy.String) != testUserID {
 		t.Fatal("untrusted source identity")
 	}
 	update := withURLParams(newRequest("PUT", "/", body), "id", issue, "wakeupID", uuidToString(result.ID))
@@ -116,7 +115,7 @@ func TestWorkspaceWakeupSummariesScopeAndBounds(t *testing.T) {
 			in.EventTypes = nil
 			in.AfterSeconds = 3600
 		}
-		w, err := svc.Create(context.Background(), parseUUID(issue), parseUUID(testUserID), pgtype.UUID{}, in)
+		w, err := svc.Create(context.Background(), parseUUID(issue), parseUUID(testUserID), "", in)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -234,7 +233,7 @@ func TestIssueWakeupMutationTrustedActor(t *testing.T) {
 	dbfx.Cleanup(t, "DELETE FROM issue_wakeup_receipt WHERE wakeup_id IN(SELECT id FROM issue_wakeup WHERE issue_id=$1)", issue)
 	comment := dbfx.Comment(t, issue, "agent original", testutil.Cols{"author_type": "agent", "author_id": agent})
 	svc := service.IssueWakeupService{Tasks: testHandler.TaskService}
-	w, err := svc.Create(context.Background(), parseUUID(issue), parseUUID(testUserID), pgtype.UUID{}, service.WakeupInput{AgentID: agent, Kind: "event", Mode: "continuous", EventTypes: []string{"comment.updated", "issue.metadata_changed", "reaction.added", "reaction.removed"}, Instruction: "inspect"})
+	w, err := svc.Create(context.Background(), parseUUID(issue), parseUUID(testUserID), "", service.WakeupInput{AgentID: agent, Kind: "event", Mode: "continuous", EventTypes: []string{"comment.updated", "issue.metadata_changed", "reaction.added", "reaction.removed"}, Instruction: "inspect"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +317,7 @@ func TestIssueWakeupActorFilterAPIAndProjection(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &rule); err != nil {
 			t.Fatal(err)
 		}
-		if rule.FilterActorType.String != actor.kind || uuidToString(rule.FilterActorID) != actor.id {
+		if rule.FilterActorType.String != actor.kind || uuidToString(rule.FilterActorID.String) != actor.id {
 			t.Fatal("actor filter not persisted")
 		}
 	}
@@ -345,7 +344,7 @@ func TestIssueWakeupInstructionAPI(t *testing.T) {
 	agent := dbfx.Agent(t, "edit prompt", testRuntimeID)
 	svc := service.IssueWakeupService{Tasks: testHandler.TaskService}
 	dbfx.Cleanup(t, "DELETE FROM issue_wakeup WHERE issue_id=$1", issue)
-	rule, err := svc.Create(context.Background(), parseUUID(issue), parseUUID(testUserID), pgtype.UUID{}, service.WakeupInput{AgentID: agent, Kind: "at", AfterSeconds: 600, Instruction: "old"})
+	rule, err := svc.Create(context.Background(), parseUUID(issue), parseUUID(testUserID), "", service.WakeupInput{AgentID: agent, Kind: "at", AfterSeconds: 600, Instruction: "old"})
 	if err != nil {
 		t.Fatal(err)
 	}

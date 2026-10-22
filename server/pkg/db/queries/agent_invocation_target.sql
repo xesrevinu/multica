@@ -3,13 +3,13 @@
 
 -- name: ListAgentInvocationTargets :many
 SELECT * FROM agent_invocation_target
-WHERE agent_id = $1
+WHERE agent_id = ?1
 ORDER BY target_type ASC, created_at ASC;
 
 -- name: ListAgentInvocationTargetsByAgentIDs :many
 -- Batch load for the agent list endpoint so we don't N+1 per agent.
 SELECT * FROM agent_invocation_target
-WHERE agent_id = ANY(@agent_ids::uuid[])
+WHERE agent_id IN (SELECT value FROM json_each(@agent_ids))
 ORDER BY agent_id, target_type ASC, created_at ASC;
 
 -- name: CreateAgentInvocationTarget :exec
@@ -18,7 +18,7 @@ ORDER BY agent_id, target_type ASC, created_at ASC;
 -- whole set via DeleteAgentInvocationTargets + a series of these, so the
 -- ON CONFLICT is belt-and-suspenders against races.
 INSERT INTO agent_invocation_target (agent_id, target_type, target_id, created_by)
-VALUES ($1, $2, $3, sqlc.narg('created_by'))
+VALUES (?1, ?2, ?3, sqlc.narg('created_by'))
 ON CONFLICT (agent_id, target_type, target_id) DO UPDATE SET
     created_by = EXCLUDED.created_by,
     created_at = now();
@@ -28,7 +28,7 @@ ON CONFLICT (agent_id, target_type, target_id) DO UPDATE SET
 -- the update is a wholesale replace, matching the composio_toolkit_allowlist
 -- write model.
 DELETE FROM agent_invocation_target
-WHERE agent_id = $1;
+WHERE agent_id = ?1;
 
 -- name: DeleteAgentInvocationTargetsByMember :exec
 -- Removes member-target grants pointing at a leaving user, SCOPED to a single
@@ -36,12 +36,12 @@ WHERE agent_id = $1;
 -- must NOT touch their invocation grants on agents in another workspace. Joins
 -- through agent (agent_invocation_target has no workspace_id column and no FK)
 -- to bound the delete to @workspace_id.
-DELETE FROM agent_invocation_target ait
-USING agent a
-WHERE ait.agent_id = a.id
-  AND a.workspace_id = @workspace_id
-  AND ait.target_type = 'member'
-  AND ait.target_id = @target_id;
+DELETE FROM agent_invocation_target
+WHERE target_type = 'member'
+  AND target_id = @target_id
+  AND agent_id IN (
+    SELECT a.id FROM agent a WHERE a.workspace_id = @workspace_id
+  );
 
 -- name: DeleteAgentInvocationTargetsBySystemRuntimeAgents :exec
 -- Application-layer replacement for the (deliberately absent) agent_id ON
@@ -56,5 +56,5 @@ WHERE ait.agent_id = a.id
 -- agent's allow-list.
 DELETE FROM agent_invocation_target
 WHERE agent_id IN (
-    SELECT id FROM agent WHERE runtime_id = $1 AND kind = 'system'
+    SELECT id FROM agent WHERE runtime_id = ?1 AND kind = 'system'
 );

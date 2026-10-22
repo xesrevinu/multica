@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/logger"
-	"github.com/redis/go-redis/v9"
 )
 
 const (
@@ -57,16 +56,6 @@ func NewMemoryInvitationRateLimiters(limits InvitationRateLimits) InvitationRate
 		Actor:     newMemorySlidingWindowRateLimiter(limits.Actor),
 		Workspace: newMemorySlidingWindowRateLimiter(limits.Workspace),
 		Recipient: newMemorySlidingWindowRateLimiter(limits.Recipient),
-	}
-}
-
-// NewRedisInvitationRateLimiters builds replica-shared gates with isolated key
-// namespaces for each dimension.
-func NewRedisInvitationRateLimiters(rdb redis.UniversalClient, limits InvitationRateLimits) InvitationRateLimiters {
-	return InvitationRateLimiters{
-		Actor:     newRedisSlidingWindowRateLimiter(rdb, limits.Actor, invitationActorLimiterKeyPrefix),
-		Workspace: newRedisSlidingWindowRateLimiter(rdb, limits.Workspace, invitationWorkspaceLimiterKeyPrefix),
-		Recipient: newRedisSlidingWindowRateLimiter(rdb, limits.Recipient, invitationRecipientLimiterKeyPrefix),
 	}
 }
 

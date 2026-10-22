@@ -157,7 +157,7 @@ func (h *Handler) StartMikaOnboarding(w http.ResponseWriter, r *http.Request) {
 	opening := buildMikaOnboardingOpening(req.Language, agent.Name, workspace.Name)
 
 	var answers questionnaireAnswers
-	_ = json.Unmarshal(user.OnboardingQuestionnaire, &answers)
+	_ = json.Unmarshal([]byte(user.OnboardingQuestionnaire), &answers)
 	prompt := buildMikaOnboardingKickoff(
 		languageName,
 		workspace.Name,

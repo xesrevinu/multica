@@ -7,61 +7,104 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const deleteVCSConnection = `-- name: DeleteVCSConnection :exec
-WITH target AS (
-    SELECT vcs_connection.id FROM vcs_connection WHERE vcs_connection.id = $1 AND vcs_connection.workspace_id = $2
-),
-cleared_links AS (
-    DELETE FROM issue_vcs_pull_request
-    WHERE pull_request_id IN (
-        SELECT vcs_pull_request.id FROM vcs_pull_request
-        WHERE vcs_pull_request.connection_id IN (SELECT target.id FROM target)
-    )
-),
-cleared_statuses AS (
-    DELETE FROM vcs_commit_status WHERE connection_id IN (SELECT target.id FROM target)
-),
-cleared_prs AS (
-    DELETE FROM vcs_pull_request WHERE connection_id IN (SELECT target.id FROM target)
-)
-DELETE FROM vcs_connection WHERE vcs_connection.id = $1 AND vcs_connection.workspace_id = $2
+DELETE FROM vcs_connection WHERE id = ?1 AND workspace_id = ?2
 `
 
 type DeleteVCSConnectionParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // These tables carry no FKs, so the cascade that once removed the connection's
 // mirrored PRs, their issue links, and CI statuses is gone (migration 213). Do
-// that cleanup explicitly here, in one statement so it commits or rolls back
-// atomically with the connection row. The target CTE also scopes every child
-// delete to a connection that actually belongs to the workspace, so a wrong
-// workspace_id is a no-op rather than deleting another tenant's child rows.
+// that cleanup explicitly here. The child deletes are scoped to a connection
+// that belongs to the workspace, so a wrong workspace_id is a no-op.
+// Order: DeleteVCSConnection_Step2, DeleteVCSConnection_Step3,
+// DeleteVCSConnection_Step4, then DeleteVCSConnection.
 func (q *Queries) DeleteVCSConnection(ctx context.Context, arg DeleteVCSConnectionParams) error {
-	_, err := q.db.Exec(ctx, deleteVCSConnection, arg.ID, arg.WorkspaceID)
+	_, err := q.db.ExecContext(ctx, deleteVCSConnection, arg.ID, arg.WorkspaceID)
+	return err
+}
+
+const deleteVCSConnection_Step2 = `-- name: DeleteVCSConnection_Step2 :exec
+DELETE FROM issue_vcs_pull_request
+WHERE pull_request_id IN (
+    SELECT vcs_pull_request.id FROM vcs_pull_request
+    WHERE vcs_pull_request.connection_id = ?1
+      AND EXISTS (
+          SELECT 1 FROM vcs_connection
+          WHERE vcs_connection.id = ?1 AND vcs_connection.workspace_id = ?2
+      )
+)
+`
+
+type DeleteVCSConnection_Step2Params struct {
+	ConnectionID string `json:"connection_id"`
+	WorkspaceID  string `json:"workspace_id"`
+}
+
+func (q *Queries) DeleteVCSConnection_Step2(ctx context.Context, arg DeleteVCSConnection_Step2Params) error {
+	_, err := q.db.ExecContext(ctx, deleteVCSConnection_Step2, arg.ConnectionID, arg.WorkspaceID)
+	return err
+}
+
+const deleteVCSConnection_Step3 = `-- name: DeleteVCSConnection_Step3 :exec
+DELETE FROM vcs_commit_status
+WHERE connection_id = ?1
+  AND EXISTS (
+      SELECT 1 FROM vcs_connection
+      WHERE vcs_connection.id = ?1 AND vcs_connection.workspace_id = ?2
+  )
+`
+
+type DeleteVCSConnection_Step3Params struct {
+	ConnectionID string `json:"connection_id"`
+	WorkspaceID  string `json:"workspace_id"`
+}
+
+func (q *Queries) DeleteVCSConnection_Step3(ctx context.Context, arg DeleteVCSConnection_Step3Params) error {
+	_, err := q.db.ExecContext(ctx, deleteVCSConnection_Step3, arg.ConnectionID, arg.WorkspaceID)
+	return err
+}
+
+const deleteVCSConnection_Step4 = `-- name: DeleteVCSConnection_Step4 :exec
+DELETE FROM vcs_pull_request
+WHERE connection_id = ?1
+  AND EXISTS (
+      SELECT 1 FROM vcs_connection
+      WHERE vcs_connection.id = ?1 AND vcs_connection.workspace_id = ?2
+  )
+`
+
+type DeleteVCSConnection_Step4Params struct {
+	ConnectionID string `json:"connection_id"`
+	WorkspaceID  string `json:"workspace_id"`
+}
+
+func (q *Queries) DeleteVCSConnection_Step4(ctx context.Context, arg DeleteVCSConnection_Step4Params) error {
+	_, err := q.db.ExecContext(ctx, deleteVCSConnection_Step4, arg.ConnectionID, arg.WorkspaceID)
 	return err
 }
 
 const findVCSPullRequestByURL = `-- name: FindVCSPullRequestByURL :one
 SELECT id, workspace_id, connection_id, provider, repo_owner, repo_name, pr_number, title, state, html_url, branch, head_sha, author_login, author_avatar_url, merged_at, closed_at, pr_created_at, pr_updated_at, additions, deletions, changed_files, created_at, updated_at FROM vcs_pull_request
-WHERE workspace_id = $1
-  AND lower(rtrim(html_url, '/')) = lower($2::text)
+WHERE workspace_id = ?1
+  AND lower(rtrim(html_url, '/')) = lower(?2)
 ORDER BY pr_updated_at DESC
 LIMIT 1
 `
 
 type FindVCSPullRequestByURLParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	HtmlUrl     string      `json:"html_url"`
+	WorkspaceID string `json:"workspace_id"`
+	HtmlUrl     string `json:"html_url"`
 }
 
 func (q *Queries) FindVCSPullRequestByURL(ctx context.Context, arg FindVCSPullRequestByURLParams) (VcsPullRequest, error) {
-	row := q.db.QueryRow(ctx, findVCSPullRequestByURL, arg.WorkspaceID, arg.HtmlUrl)
+	row := q.db.QueryRowContext(ctx, findVCSPullRequestByURL, arg.WorkspaceID, arg.HtmlUrl)
 	var i VcsPullRequest
 	err := row.Scan(
 		&i.ID,
@@ -93,11 +136,11 @@ func (q *Queries) FindVCSPullRequestByURL(ctx context.Context, arg FindVCSPullRe
 
 const getVCSConnectionByID = `-- name: GetVCSConnectionByID :one
 SELECT id, workspace_id, provider, instance_url, account_login, access_token_encrypted, webhook_secret_encrypted, connected_by_id, created_at, updated_at FROM vcs_connection
-WHERE id = $1
+WHERE id = ?1
 `
 
-func (q *Queries) GetVCSConnectionByID(ctx context.Context, id pgtype.UUID) (VcsConnection, error) {
-	row := q.db.QueryRow(ctx, getVCSConnectionByID, id)
+func (q *Queries) GetVCSConnectionByID(ctx context.Context, id string) (VcsConnection, error) {
+	row := q.db.QueryRowContext(ctx, getVCSConnectionByID, id)
 	var i VcsConnection
 	err := row.Scan(
 		&i.ID,
@@ -116,20 +159,20 @@ func (q *Queries) GetVCSConnectionByID(ctx context.Context, id pgtype.UUID) (Vcs
 
 const getVCSPullRequestByKey = `-- name: GetVCSPullRequestByKey :one
 SELECT id, workspace_id, connection_id, provider, repo_owner, repo_name, pr_number, title, state, html_url, branch, head_sha, author_login, author_avatar_url, merged_at, closed_at, pr_created_at, pr_updated_at, additions, deletions, changed_files, created_at, updated_at FROM vcs_pull_request
-WHERE connection_id = $1 AND repo_owner = $2 AND repo_name = $3 AND pr_number = $4
+WHERE connection_id = ?1 AND repo_owner = ?2 AND repo_name = ?3 AND pr_number = ?4
 `
 
 type GetVCSPullRequestByKeyParams struct {
-	ConnectionID pgtype.UUID `json:"connection_id"`
-	RepoOwner    string      `json:"repo_owner"`
-	RepoName     string      `json:"repo_name"`
-	PrNumber     int32       `json:"pr_number"`
+	ConnectionID string `json:"connection_id"`
+	RepoOwner    string `json:"repo_owner"`
+	RepoName     string `json:"repo_name"`
+	PrNumber     int64  `json:"pr_number"`
 }
 
 // The stored row before a webhook upsert, so the handler can tell a merge
 // transition apart from a later event on an already-merged PR.
 func (q *Queries) GetVCSPullRequestByKey(ctx context.Context, arg GetVCSPullRequestByKeyParams) (VcsPullRequest, error) {
-	row := q.db.QueryRow(ctx, getVCSPullRequestByKey,
+	row := q.db.QueryRowContext(ctx, getVCSPullRequestByKey,
 		arg.ConnectionID,
 		arg.RepoOwner,
 		arg.RepoName,
@@ -166,16 +209,16 @@ func (q *Queries) GetVCSPullRequestByKey(ctx context.Context, arg GetVCSPullRequ
 
 const getVCSPullRequestInWorkspace = `-- name: GetVCSPullRequestInWorkspace :one
 SELECT id, workspace_id, connection_id, provider, repo_owner, repo_name, pr_number, title, state, html_url, branch, head_sha, author_login, author_avatar_url, merged_at, closed_at, pr_created_at, pr_updated_at, additions, deletions, changed_files, created_at, updated_at FROM vcs_pull_request
-WHERE id = $1 AND workspace_id = $2
+WHERE id = ?1 AND workspace_id = ?2
 `
 
 type GetVCSPullRequestInWorkspaceParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 func (q *Queries) GetVCSPullRequestInWorkspace(ctx context.Context, arg GetVCSPullRequestInWorkspaceParams) (VcsPullRequest, error) {
-	row := q.db.QueryRow(ctx, getVCSPullRequestInWorkspace, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, getVCSPullRequestInWorkspace, arg.ID, arg.WorkspaceID)
 	var i VcsPullRequest
 	err := row.Scan(
 		&i.ID,
@@ -210,73 +253,76 @@ const linkIssueToVCSPullRequest = `-- name: LinkIssueToVCSPullRequest :execrows
 INSERT INTO issue_vcs_pull_request (
     issue_id, pull_request_id, linked_by_type, linked_by_id
 ) VALUES (
-    $1, $2, 'system', NULL
+    ?1, ?2, 'system', NULL
 )
 ON CONFLICT (issue_id, pull_request_id) DO NOTHING
 `
 
 type LinkIssueToVCSPullRequestParams struct {
-	IssueID       pgtype.UUID `json:"issue_id"`
-	PullRequestID pgtype.UUID `json:"pull_request_id"`
+	IssueID       string `json:"issue_id"`
+	PullRequestID string `json:"pull_request_id"`
 }
 
 // =====================
-// Issue ↔ VCS PR link
+// Issue   VCS PR link
 // =====================
 // Mirrors LinkIssueToPullRequest: automatic link, 1 only when new.
 func (q *Queries) LinkIssueToVCSPullRequest(ctx context.Context, arg LinkIssueToVCSPullRequestParams) (int64, error) {
-	result, err := q.db.Exec(ctx, linkIssueToVCSPullRequest, arg.IssueID, arg.PullRequestID)
+	result, err := q.db.ExecContext(ctx, linkIssueToVCSPullRequest, arg.IssueID, arg.PullRequestID)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const linkIssueToVCSPullRequestManually = `-- name: LinkIssueToVCSPullRequestManually :execrows
 INSERT INTO issue_vcs_pull_request (
     issue_id, pull_request_id, linked_by_type, linked_by_id
 ) VALUES (
-    $1, $2, 'member', $3
+    ?1, ?2, 'member', ?3
 )
 ON CONFLICT (issue_id, pull_request_id) DO UPDATE SET
     linked_by_type = 'member',
     linked_by_id = EXCLUDED.linked_by_id
-WHERE issue_vcs_pull_request.linked_by_type IS DISTINCT FROM 'member'
+WHERE issue_vcs_pull_request.linked_by_type IS NULL OR issue_vcs_pull_request.linked_by_type <> 'member'
 `
 
 type LinkIssueToVCSPullRequestManuallyParams struct {
-	IssueID       pgtype.UUID `json:"issue_id"`
-	PullRequestID pgtype.UUID `json:"pull_request_id"`
-	LinkedByID    pgtype.UUID `json:"linked_by_id"`
+	IssueID       string         `json:"issue_id"`
+	PullRequestID string         `json:"pull_request_id"`
+	LinkedByID    sql.NullString `json:"linked_by_id"`
 }
 
 func (q *Queries) LinkIssueToVCSPullRequestManually(ctx context.Context, arg LinkIssueToVCSPullRequestManuallyParams) (int64, error) {
-	result, err := q.db.Exec(ctx, linkIssueToVCSPullRequestManually, arg.IssueID, arg.PullRequestID, arg.LinkedByID)
+	result, err := q.db.ExecContext(ctx, linkIssueToVCSPullRequestManually, arg.IssueID, arg.PullRequestID, arg.LinkedByID)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const listAutoLinkedIssueIDsForVCSPullRequest = `-- name: ListAutoLinkedIssueIDsForVCSPullRequest :many
 SELECT issue_id FROM issue_vcs_pull_request
-WHERE pull_request_id = $1
+WHERE pull_request_id = ?1
   AND COALESCE(linked_by_type, 'system') <> 'member'
 `
 
-func (q *Queries) ListAutoLinkedIssueIDsForVCSPullRequest(ctx context.Context, pullRequestID pgtype.UUID) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listAutoLinkedIssueIDsForVCSPullRequest, pullRequestID)
+func (q *Queries) ListAutoLinkedIssueIDsForVCSPullRequest(ctx context.Context, pullRequestID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listAutoLinkedIssueIDsForVCSPullRequest, pullRequestID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []string{}
 	for rows.Next() {
-		var issue_id pgtype.UUID
+		var issue_id string
 		if err := rows.Scan(&issue_id); err != nil {
 			return nil, err
 		}
 		items = append(items, issue_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -288,29 +334,32 @@ const listIssueIDsForVCSPRHead = `-- name: ListIssueIDsForVCSPRHead :many
 SELECT DISTINCT ipr.issue_id
 FROM vcs_pull_request pr
 JOIN issue_vcs_pull_request ipr ON ipr.pull_request_id = pr.id
-WHERE pr.connection_id = $1 AND pr.head_sha = $2 AND pr.head_sha <> ''
+WHERE pr.connection_id = ?1 AND pr.head_sha = ?2 AND pr.head_sha <> ''
 `
 
 type ListIssueIDsForVCSPRHeadParams struct {
-	ConnectionID pgtype.UUID `json:"connection_id"`
-	HeadSha      string      `json:"head_sha"`
+	ConnectionID string `json:"connection_id"`
+	HeadSha      string `json:"head_sha"`
 }
 
 // Issues linked to any PR whose head sha matches the given status, so a
 // commit-status event can fan out a PR-card refresh to the right issues.
-func (q *Queries) ListIssueIDsForVCSPRHead(ctx context.Context, arg ListIssueIDsForVCSPRHeadParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listIssueIDsForVCSPRHead, arg.ConnectionID, arg.HeadSha)
+func (q *Queries) ListIssueIDsForVCSPRHead(ctx context.Context, arg ListIssueIDsForVCSPRHeadParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listIssueIDsForVCSPRHead, arg.ConnectionID, arg.HeadSha)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []string{}
 	for rows.Next() {
-		var issue_id pgtype.UUID
+		var issue_id string
 		if err := rows.Scan(&issue_id); err != nil {
 			return nil, err
 		}
 		items = append(items, issue_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -320,22 +369,25 @@ func (q *Queries) ListIssueIDsForVCSPRHead(ctx context.Context, arg ListIssueIDs
 
 const listIssueIDsForVCSPullRequest = `-- name: ListIssueIDsForVCSPullRequest :many
 SELECT issue_id FROM issue_vcs_pull_request
-WHERE pull_request_id = $1
+WHERE pull_request_id = ?1
 `
 
-func (q *Queries) ListIssueIDsForVCSPullRequest(ctx context.Context, pullRequestID pgtype.UUID) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listIssueIDsForVCSPullRequest, pullRequestID)
+func (q *Queries) ListIssueIDsForVCSPullRequest(ctx context.Context, pullRequestID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listIssueIDsForVCSPullRequest, pullRequestID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []string{}
 	for rows.Next() {
-		var issue_id pgtype.UUID
+		var issue_id string
 		if err := rows.Scan(&issue_id); err != nil {
 			return nil, err
 		}
 		items = append(items, issue_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -346,15 +398,15 @@ func (q *Queries) ListIssueIDsForVCSPullRequest(ctx context.Context, pullRequest
 const listVCSConnectionsByWorkspace = `-- name: ListVCSConnectionsByWorkspace :many
 
 SELECT id, workspace_id, provider, instance_url, account_login, access_token_encrypted, webhook_secret_encrypted, connected_by_id, created_at, updated_at FROM vcs_connection
-WHERE workspace_id = $1
+WHERE workspace_id = ?1
 ORDER BY created_at ASC
 `
 
 // =====================
 // VCS Connection (Forgejo / Gitea / GitLab)
 // =====================
-func (q *Queries) ListVCSConnectionsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]VcsConnection, error) {
-	rows, err := q.db.Query(ctx, listVCSConnectionsByWorkspace, workspaceID)
+func (q *Queries) ListVCSConnectionsByWorkspace(ctx context.Context, workspaceID string) ([]VcsConnection, error) {
+	rows, err := q.db.QueryContext(ctx, listVCSConnectionsByWorkspace, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -378,6 +430,9 @@ func (q *Queries) ListVCSConnectionsByWorkspace(ctx context.Context, workspaceID
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -388,62 +443,62 @@ const listVCSPullRequestsByIssue = `-- name: ListVCSPullRequestsByIssue :many
 WITH checks AS (
     SELECT
         pr.id AS pr_id,
-        COUNT(*)::bigint AS total,
-        SUM(CASE WHEN cs.state = 'failed'  THEN 1 ELSE 0 END)::bigint AS failed,
-        SUM(CASE WHEN cs.state = 'passed'  THEN 1 ELSE 0 END)::bigint AS passed,
-        SUM(CASE WHEN cs.state = 'pending' THEN 1 ELSE 0 END)::bigint AS pending
+        COUNT(*) AS total,
+        SUM(CASE WHEN cs.state = 'failed'  THEN 1 ELSE 0 END) AS failed,
+        SUM(CASE WHEN cs.state = 'passed'  THEN 1 ELSE 0 END) AS passed,
+        SUM(CASE WHEN cs.state = 'pending' THEN 1 ELSE 0 END) AS pending
     FROM vcs_pull_request pr
     JOIN issue_vcs_pull_request ipr ON ipr.pull_request_id = pr.id
     JOIN vcs_commit_status cs
         ON cs.connection_id = pr.connection_id
        AND cs.sha = pr.head_sha
        AND pr.head_sha <> ''
-    WHERE ipr.issue_id = $1
+    WHERE ipr.issue_id = ?1
     GROUP BY pr.id
 )
 SELECT
     pr.id, pr.workspace_id, pr.connection_id, pr.provider, pr.repo_owner, pr.repo_name, pr.pr_number, pr.title, pr.state, pr.html_url, pr.branch, pr.head_sha, pr.author_login, pr.author_avatar_url, pr.merged_at, pr.closed_at, pr.pr_created_at, pr.pr_updated_at, pr.additions, pr.deletions, pr.changed_files, pr.created_at, pr.updated_at,
-    COALESCE(ipr.linked_by_type, 'system')::text AS linked_by_type,
-    COALESCE(c.total, 0)::bigint   AS checks_total,
-    COALESCE(c.passed, 0)::bigint  AS checks_passed,
-    COALESCE(c.failed, 0)::bigint  AS checks_failed,
-    COALESCE(c.pending, 0)::bigint AS checks_pending
+    COALESCE(ipr.linked_by_type, 'system') AS linked_by_type,
+    COALESCE(c.total, 0)   AS checks_total,
+    COALESCE(c.passed, 0)  AS checks_passed,
+    COALESCE(c.failed, 0)  AS checks_failed,
+    COALESCE(c.pending, 0) AS checks_pending
 FROM vcs_pull_request pr
 JOIN issue_vcs_pull_request ipr ON ipr.pull_request_id = pr.id
 LEFT JOIN checks c ON c.pr_id = pr.id
-WHERE ipr.issue_id = $1
+WHERE ipr.issue_id = ?1
 ORDER BY pr.pr_created_at DESC
 `
 
 type ListVCSPullRequestsByIssueRow struct {
-	ID              pgtype.UUID        `json:"id"`
-	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
-	ConnectionID    pgtype.UUID        `json:"connection_id"`
-	Provider        string             `json:"provider"`
-	RepoOwner       string             `json:"repo_owner"`
-	RepoName        string             `json:"repo_name"`
-	PrNumber        int32              `json:"pr_number"`
-	Title           string             `json:"title"`
-	State           string             `json:"state"`
-	HtmlUrl         string             `json:"html_url"`
-	Branch          pgtype.Text        `json:"branch"`
-	HeadSha         string             `json:"head_sha"`
-	AuthorLogin     pgtype.Text        `json:"author_login"`
-	AuthorAvatarUrl pgtype.Text        `json:"author_avatar_url"`
-	MergedAt        pgtype.Timestamptz `json:"merged_at"`
-	ClosedAt        pgtype.Timestamptz `json:"closed_at"`
-	PrCreatedAt     pgtype.Timestamptz `json:"pr_created_at"`
-	PrUpdatedAt     pgtype.Timestamptz `json:"pr_updated_at"`
-	Additions       int32              `json:"additions"`
-	Deletions       int32              `json:"deletions"`
-	ChangedFiles    int32              `json:"changed_files"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
-	LinkedByType    string             `json:"linked_by_type"`
-	ChecksTotal     int64              `json:"checks_total"`
-	ChecksPassed    int64              `json:"checks_passed"`
-	ChecksFailed    int64              `json:"checks_failed"`
-	ChecksPending   int64              `json:"checks_pending"`
+	ID              string         `json:"id"`
+	WorkspaceID     string         `json:"workspace_id"`
+	ConnectionID    string         `json:"connection_id"`
+	Provider        string         `json:"provider"`
+	RepoOwner       string         `json:"repo_owner"`
+	RepoName        string         `json:"repo_name"`
+	PrNumber        int64          `json:"pr_number"`
+	Title           string         `json:"title"`
+	State           string         `json:"state"`
+	HtmlUrl         string         `json:"html_url"`
+	Branch          sql.NullString `json:"branch"`
+	HeadSha         string         `json:"head_sha"`
+	AuthorLogin     sql.NullString `json:"author_login"`
+	AuthorAvatarUrl sql.NullString `json:"author_avatar_url"`
+	MergedAt        sql.NullString `json:"merged_at"`
+	ClosedAt        sql.NullString `json:"closed_at"`
+	PrCreatedAt     string         `json:"pr_created_at"`
+	PrUpdatedAt     string         `json:"pr_updated_at"`
+	Additions       int64          `json:"additions"`
+	Deletions       int64          `json:"deletions"`
+	ChangedFiles    int64          `json:"changed_files"`
+	CreatedAt       string         `json:"created_at"`
+	UpdatedAt       string         `json:"updated_at"`
+	LinkedByType    string         `json:"linked_by_type"`
+	ChecksTotal     int64          `json:"checks_total"`
+	ChecksPassed    float64        `json:"checks_passed"`
+	ChecksFailed    float64        `json:"checks_failed"`
+	ChecksPending   float64        `json:"checks_pending"`
 }
 
 // Aggregates each PR's commit statuses for its CURRENT head sha into
@@ -451,8 +506,8 @@ type ListVCSPullRequestsByIssueRow struct {
 // (connection, sha, context) with a normalized state, so a count by state is
 // correct. Statuses for an old head sha stay stored but are excluded by the
 // head_sha join, so a stale run can't pollute the bar.
-func (q *Queries) ListVCSPullRequestsByIssue(ctx context.Context, issueID pgtype.UUID) ([]ListVCSPullRequestsByIssueRow, error) {
-	rows, err := q.db.Query(ctx, listVCSPullRequestsByIssue, issueID)
+func (q *Queries) ListVCSPullRequestsByIssue(ctx context.Context, issueID string) ([]ListVCSPullRequestsByIssueRow, error) {
+	rows, err := q.db.QueryContext(ctx, listVCSPullRequestsByIssue, issueID)
 	if err != nil {
 		return nil, err
 	}
@@ -494,6 +549,9 @@ func (q *Queries) ListVCSPullRequestsByIssue(ctx context.Context, issueID pgtype
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -502,20 +560,20 @@ func (q *Queries) ListVCSPullRequestsByIssue(ctx context.Context, issueID pgtype
 
 const rotateVCSConnectionWebhookSecret = `-- name: RotateVCSConnectionWebhookSecret :one
 UPDATE vcs_connection
-SET webhook_secret_encrypted = $3,
+SET webhook_secret_encrypted = ?3,
     updated_at = now()
-WHERE id = $1 AND workspace_id = $2
+WHERE id = ?1 AND workspace_id = ?2
 RETURNING id, workspace_id, provider, instance_url, account_login, access_token_encrypted, webhook_secret_encrypted, connected_by_id, created_at, updated_at
 `
 
 type RotateVCSConnectionWebhookSecretParams struct {
-	ID                     pgtype.UUID `json:"id"`
-	WorkspaceID            pgtype.UUID `json:"workspace_id"`
-	WebhookSecretEncrypted string      `json:"webhook_secret_encrypted"`
+	ID                     string `json:"id"`
+	WorkspaceID            string `json:"workspace_id"`
+	WebhookSecretEncrypted string `json:"webhook_secret_encrypted"`
 }
 
 func (q *Queries) RotateVCSConnectionWebhookSecret(ctx context.Context, arg RotateVCSConnectionWebhookSecretParams) (VcsConnection, error) {
-	row := q.db.QueryRow(ctx, rotateVCSConnectionWebhookSecret, arg.ID, arg.WorkspaceID, arg.WebhookSecretEncrypted)
+	row := q.db.QueryRowContext(ctx, rotateVCSConnectionWebhookSecret, arg.ID, arg.WorkspaceID, arg.WebhookSecretEncrypted)
 	var i VcsConnection
 	err := row.Scan(
 		&i.ID,
@@ -534,20 +592,20 @@ func (q *Queries) RotateVCSConnectionWebhookSecret(ctx context.Context, arg Rota
 
 const unlinkIssueFromVCSPullRequest = `-- name: UnlinkIssueFromVCSPullRequest :execrows
 DELETE FROM issue_vcs_pull_request
-WHERE issue_id = $1 AND pull_request_id = $2
+WHERE issue_id = ?1 AND pull_request_id = ?2
 `
 
 type UnlinkIssueFromVCSPullRequestParams struct {
-	IssueID       pgtype.UUID `json:"issue_id"`
-	PullRequestID pgtype.UUID `json:"pull_request_id"`
+	IssueID       string `json:"issue_id"`
+	PullRequestID string `json:"pull_request_id"`
 }
 
 func (q *Queries) UnlinkIssueFromVCSPullRequest(ctx context.Context, arg UnlinkIssueFromVCSPullRequestParams) (int64, error) {
-	result, err := q.db.Exec(ctx, unlinkIssueFromVCSPullRequest, arg.IssueID, arg.PullRequestID)
+	result, err := q.db.ExecContext(ctx, unlinkIssueFromVCSPullRequest, arg.IssueID, arg.PullRequestID)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const upsertVCSCommitStatus = `-- name: UpsertVCSCommitStatus :exec
@@ -555,7 +613,7 @@ const upsertVCSCommitStatus = `-- name: UpsertVCSCommitStatus :exec
 INSERT INTO vcs_commit_status (
     connection_id, sha, context, state, target_url, description, updated_at
 ) VALUES (
-    $1, $2, $3, $4, $6, $7, $5
+    ?1, ?2, ?3, ?4, ?6, ?7, ?5
 )
 ON CONFLICT (connection_id, sha, context) DO UPDATE SET
     state       = EXCLUDED.state,
@@ -566,13 +624,13 @@ WHERE EXCLUDED.updated_at >= vcs_commit_status.updated_at
 `
 
 type UpsertVCSCommitStatusParams struct {
-	ConnectionID pgtype.UUID        `json:"connection_id"`
-	Sha          string             `json:"sha"`
-	Context      string             `json:"context"`
-	State        string             `json:"state"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
-	TargetUrl    pgtype.Text        `json:"target_url"`
-	Description  pgtype.Text        `json:"description"`
+	ConnectionID string         `json:"connection_id"`
+	Sha          string         `json:"sha"`
+	Context      string         `json:"context"`
+	State        string         `json:"state"`
+	UpdatedAt    string         `json:"updated_at"`
+	TargetUrl    sql.NullString `json:"target_url"`
+	Description  sql.NullString `json:"description"`
 }
 
 // =====================
@@ -582,7 +640,7 @@ type UpsertVCSCommitStatusParams struct {
 // overwrites in place. updated_at guards against an older event overwriting a
 // newer one for the same context. state is normalized (passed/failed/pending).
 func (q *Queries) UpsertVCSCommitStatus(ctx context.Context, arg UpsertVCSCommitStatusParams) error {
-	_, err := q.db.Exec(ctx, upsertVCSCommitStatus,
+	_, err := q.db.ExecContext(ctx, upsertVCSCommitStatus,
 		arg.ConnectionID,
 		arg.Sha,
 		arg.Context,
@@ -599,7 +657,7 @@ INSERT INTO vcs_connection (
     workspace_id, provider, instance_url, account_login,
     access_token_encrypted, webhook_secret_encrypted, connected_by_id
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7
+    ?1, ?2, ?3, ?4, ?5, ?6, ?7
 )
 ON CONFLICT (workspace_id, instance_url) DO UPDATE SET
     provider                 = EXCLUDED.provider,
@@ -612,19 +670,19 @@ RETURNING id, workspace_id, provider, instance_url, account_login, access_token_
 `
 
 type UpsertVCSConnectionParams struct {
-	WorkspaceID            pgtype.UUID `json:"workspace_id"`
-	Provider               string      `json:"provider"`
-	InstanceUrl            string      `json:"instance_url"`
-	AccountLogin           string      `json:"account_login"`
-	AccessTokenEncrypted   string      `json:"access_token_encrypted"`
-	WebhookSecretEncrypted string      `json:"webhook_secret_encrypted"`
-	ConnectedByID          pgtype.UUID `json:"connected_by_id"`
+	WorkspaceID            string         `json:"workspace_id"`
+	Provider               string         `json:"provider"`
+	InstanceUrl            string         `json:"instance_url"`
+	AccountLogin           string         `json:"account_login"`
+	AccessTokenEncrypted   string         `json:"access_token_encrypted"`
+	WebhookSecretEncrypted string         `json:"webhook_secret_encrypted"`
+	ConnectedByID          sql.NullString `json:"connected_by_id"`
 }
 
 // Reconnecting the same instance rotates the stored token/secret, provider,
 // and identity in place rather than creating a duplicate row.
 func (q *Queries) UpsertVCSConnection(ctx context.Context, arg UpsertVCSConnectionParams) (VcsConnection, error) {
-	row := q.db.QueryRow(ctx, upsertVCSConnection,
+	row := q.db.QueryRowContext(ctx, upsertVCSConnection,
 		arg.WorkspaceID,
 		arg.Provider,
 		arg.InstanceUrl,
@@ -657,10 +715,10 @@ INSERT INTO vcs_pull_request (
     merged_at, closed_at, pr_created_at, pr_updated_at,
     additions, deletions, changed_files, head_sha
 ) VALUES (
-    $1, $2, $3, $4, $5, $6,
-    $7, $8, $9, $16, $17, $18,
-    $19, $20, $10, $11,
-    $12, $13, $14, $15
+    ?1, ?2, ?3, ?4, ?5, ?6,
+    ?7, ?8, ?9, ?16, ?17, ?18,
+    ?19, ?20, ?10, ?11,
+    ?12, ?13, ?14, ?15
 )
 ON CONFLICT (connection_id, repo_owner, repo_name, pr_number) DO UPDATE SET
     workspace_id      = CASE WHEN EXCLUDED.pr_updated_at >= vcs_pull_request.pr_updated_at THEN EXCLUDED.workspace_id      ELSE vcs_pull_request.workspace_id      END,
@@ -683,26 +741,26 @@ RETURNING id, workspace_id, connection_id, provider, repo_owner, repo_name, pr_n
 `
 
 type UpsertVCSPullRequestParams struct {
-	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
-	ConnectionID    pgtype.UUID        `json:"connection_id"`
-	Provider        string             `json:"provider"`
-	RepoOwner       string             `json:"repo_owner"`
-	RepoName        string             `json:"repo_name"`
-	PrNumber        int32              `json:"pr_number"`
-	Title           string             `json:"title"`
-	State           string             `json:"state"`
-	HtmlUrl         string             `json:"html_url"`
-	PrCreatedAt     pgtype.Timestamptz `json:"pr_created_at"`
-	PrUpdatedAt     pgtype.Timestamptz `json:"pr_updated_at"`
-	Additions       int32              `json:"additions"`
-	Deletions       int32              `json:"deletions"`
-	ChangedFiles    int32              `json:"changed_files"`
-	HeadSha         string             `json:"head_sha"`
-	Branch          pgtype.Text        `json:"branch"`
-	AuthorLogin     pgtype.Text        `json:"author_login"`
-	AuthorAvatarUrl pgtype.Text        `json:"author_avatar_url"`
-	MergedAt        pgtype.Timestamptz `json:"merged_at"`
-	ClosedAt        pgtype.Timestamptz `json:"closed_at"`
+	WorkspaceID     string         `json:"workspace_id"`
+	ConnectionID    string         `json:"connection_id"`
+	Provider        string         `json:"provider"`
+	RepoOwner       string         `json:"repo_owner"`
+	RepoName        string         `json:"repo_name"`
+	PrNumber        int64          `json:"pr_number"`
+	Title           string         `json:"title"`
+	State           string         `json:"state"`
+	HtmlUrl         string         `json:"html_url"`
+	PrCreatedAt     string         `json:"pr_created_at"`
+	PrUpdatedAt     string         `json:"pr_updated_at"`
+	Additions       int64          `json:"additions"`
+	Deletions       int64          `json:"deletions"`
+	ChangedFiles    int64          `json:"changed_files"`
+	HeadSha         string         `json:"head_sha"`
+	Branch          sql.NullString `json:"branch"`
+	AuthorLogin     sql.NullString `json:"author_login"`
+	AuthorAvatarUrl sql.NullString `json:"author_avatar_url"`
+	MergedAt        sql.NullString `json:"merged_at"`
+	ClosedAt        sql.NullString `json:"closed_at"`
 }
 
 // =====================
@@ -713,9 +771,9 @@ type UpsertVCSPullRequestParams struct {
 // mutable column is applied only when the incoming event is at least as new as
 // the stored row; a stale event keeps the existing values. The row is still
 // touched (and thus RETURNED) either way, so callers always get the current PR
-// — the webhook needs pr.id to link the issue even on a stale redelivery.
+// - the webhook needs pr.id to link the issue even on a stale redelivery.
 func (q *Queries) UpsertVCSPullRequest(ctx context.Context, arg UpsertVCSPullRequestParams) (VcsPullRequest, error) {
-	row := q.db.QueryRow(ctx, upsertVCSPullRequest,
+	row := q.db.QueryRowContext(ctx, upsertVCSPullRequest,
 		arg.WorkspaceID,
 		arg.ConnectionID,
 		arg.Provider,

@@ -2,13 +2,12 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"log/slog"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/attribution"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/handler"
-	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -27,7 +26,7 @@ func isAssignmentRecipientType(assigneeType string) bool {
 // Takes the pool rather than *db.Queries because the delegated rule needs a
 // transaction: its eligibility checks and its write must sit inside one
 // serialization boundary (see subscribeDelegatedHuman).
-func registerSubscriberListeners(bus *events.Bus, pool *pgxpool.Pool) {
+func registerSubscriberListeners(bus *events.Bus, pool *sql.DB) {
 	queries := db.New(pool)
 	// issue:created — subscribe creator + assignee (if different)
 	bus.Subscribe(protocol.EventIssueCreated, func(e events.Event) {
@@ -160,7 +159,7 @@ func registerSubscriberListeners(bus *events.Bus, pool *pgxpool.Pool) {
 //
 // Everything is best-effort and logged, never fatal — the issue is already
 // committed and a subscription hiccup must not look like a creation failure.
-func subscribeDelegatedHuman(bus *events.Bus, pool *pgxpool.Pool, queries *db.Queries, workspaceID, issueID string) {
+func subscribeDelegatedHuman(bus *events.Bus, pool *sql.DB, queries *db.Queries, workspaceID, issueID string) {
 	ctx := context.Background()
 	issueUUID := parseUUID(issueID)
 
@@ -180,7 +179,7 @@ func subscribeDelegatedHuman(bus *events.Bus, pool *pgxpool.Pool, queries *db.Qu
 	// never resolve someone from another tenant (the MUL-4252 guard the comment
 	// chain already applies).
 	facts, err := queries.GetDelegatedSubscriptionFacts(ctx, db.GetDelegatedSubscriptionFactsParams{
-		OriginTaskID: issue.OriginID,
+		OriginTaskID: issue.OriginID.String,
 		WorkspaceID:  parseUUID(workspaceID),
 	})
 	if err != nil {
@@ -191,10 +190,14 @@ func subscribeDelegatedHuman(bus *events.Bus, pool *pgxpool.Pool, queries *db.Qu
 		return
 	}
 
+	originOriginator := ""
+	if facts.OriginatorUserID.Valid {
+		originOriginator = facts.OriginatorUserID.String
+	}
 	human, reason, ok := attribution.DelegatedSubscriber(attribution.SubscriptionFacts{
 		CreatorType:      issue.CreatorType,
 		OriginType:       issue.OriginType.String,
-		OriginOriginator: facts.OriginatorUserID,
+		OriginOriginator: sql.NullString{String: originOriginator, Valid: originOriginator != ""},
 		OriginRootSource: attribution.Source(facts.RootSource.String),
 	})
 	if !ok {
@@ -217,25 +220,22 @@ func subscribeDelegatedHuman(bus *events.Bus, pool *pgxpool.Pool, queries *db.Qu
 	// correct here: the losing interleaving subscribes an issue that did not
 	// exist when the opt-out was written, so there is no row for a row lock to
 	// protect (MUL-5483 review round 7).
-	tx, err := pool.Begin(ctx)
+	tx, err := pool.BeginTx(ctx, nil)
 	if err != nil {
 		slog.Error("delegated subscribe: begin failed", "issue_id", issueID, "error", err)
 		return
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	qtx := queries.WithTx(tx)
 
-	if err := qtx.LockSubscriberWrites(ctx, db.LockSubscriberWritesParams{
-		WorkspaceID: parseUUID(workspaceID),
-		UserID:      human,
-	}); err != nil {
+	if err := qtx.LockSubscriberWrites(ctx); err != nil {
 		slog.Error("delegated subscribe: lock failed", "issue_id", issueID, "error", err)
 		return
 	}
 
 	affected, err := qtx.AddDelegatedSubscriber(ctx, db.AddDelegatedSubscriberParams{
 		IssueID:     issueUUID,
-		UserID:      human,
+		UserID:      human.String,
 		Reason:      reason,
 		WorkspaceID: parseUUID(workspaceID),
 	})
@@ -243,7 +243,7 @@ func subscribeDelegatedHuman(bus *events.Bus, pool *pgxpool.Pool, queries *db.Qu
 		slog.Error("delegated subscribe: insert failed", "issue_id", issueID, "error", err)
 		return
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		slog.Error("delegated subscribe: commit failed", "issue_id", issueID, "error", err)
 		return
 	}
@@ -254,7 +254,7 @@ func subscribeDelegatedHuman(bus *events.Bus, pool *pgxpool.Pool, queries *db.Qu
 	if affected == 0 {
 		return
 	}
-	publishSubscriberAdded(bus, workspaceID, issueID, "member", util.UUIDToString(human), reason)
+	publishSubscriberAdded(bus, workspaceID, issueID, "member", human.String, reason)
 }
 
 // extractIssueFields normalizes an issue payload that may be either a

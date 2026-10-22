@@ -2,13 +2,12 @@ package slack
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"net/url"
 	"strings"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/slack-go/slack"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
@@ -74,12 +73,12 @@ type slashQueries interface {
 // command needs to hand the invoker's prompt to the agent. *service.TaskService
 // satisfies it; tests supply a fake.
 type quickCreateEnqueuer interface {
-	EnqueueQuickCreateTask(ctx context.Context, workspaceID, requesterID, agentID, squadID pgtype.UUID, prompt, priority, dueDate string, projectID, parentIssueID pgtype.UUID, attachmentIDs []pgtype.UUID) (db.AgentTaskQueue, error)
+	EnqueueQuickCreateTask(ctx context.Context, workspaceID, requesterID, agentID, squadID string, prompt, priority, dueDate string, projectID, parentIssueID string, attachmentIDs []string) (db.AgentTaskQueue, error)
 }
 
 type slashControlStarter interface {
-	StartSlackDMChat(ctx context.Context, inst engine.ResolvedInstallation, userID pgtype.UUID, cmd slack.SlashCommand, envelopeID string) error
-	ClearSlackDMContext(ctx context.Context, inst engine.ResolvedInstallation, userID pgtype.UUID, cmd slack.SlashCommand, envelopeID string) error
+	StartSlackDMChat(ctx context.Context, inst engine.ResolvedInstallation, userID string, cmd slack.SlashCommand, envelopeID string) error
+	ClearSlackDMContext(ctx context.Context, inst engine.ResolvedInstallation, userID string, cmd slack.SlashCommand, envelopeID string) error
 }
 
 // SlashCommandProcessor handles Slack `/issue`, `/new`, and `/clear` commands end to end.
@@ -276,13 +275,13 @@ func (p *SlashCommandProcessor) process(ctx context.Context, cmd slack.SlashComm
 		inst.WorkspaceID,
 		userID,
 		inst.AgentID,
-		pgtype.UUID{}, // no squad — dispatch straight to the installation agent
+		"", // no squad — dispatch straight to the installation agent
 		prompt,
-		"",            // no explicit priority
-		"",            // no explicit due date
-		pgtype.UUID{}, // no project
-		pgtype.UUID{}, // no parent issue
-		nil,           // no attachments
+		"",  // no explicit priority
+		"",  // no explicit due date
+		"",  // no project
+		"",  // no parent issue
+		nil, // no attachments
 	); err != nil {
 		var limitErr *service.IssueLimitReachedError
 		if errors.As(err, &limitErr) {
@@ -303,7 +302,7 @@ func (p *SlashCommandProcessor) resolveInstallation(ctx context.Context, appID, 
 		AppID:       appID,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return engine.ResolvedInstallation{}, engine.ErrInstallationNotFound
 		}
 		return engine.ResolvedInstallation{}, err
@@ -324,25 +323,25 @@ func (p *SlashCommandProcessor) resolveInstallation(ctx context.Context, appID, 
 // resolveUser maps the Slack user id to the bound Multica user, re-checking
 // workspace membership (no binding→member FK). Returns engine.ErrSenderUnbound
 // or engine.ErrSenderNotMember for the product cases.
-func (p *SlashCommandProcessor) resolveUser(ctx context.Context, inst engine.ResolvedInstallation, slackUserID string) (pgtype.UUID, error) {
+func (p *SlashCommandProcessor) resolveUser(ctx context.Context, inst engine.ResolvedInstallation, slackUserID string) (string, error) {
 	binding, err := p.q.GetChannelUserBindingByUserID(ctx, db.GetChannelUserBindingByUserIDParams{
 		InstallationID: inst.ID,
 		ChannelUserID:  slackUserID,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return pgtype.UUID{}, engine.ErrSenderUnbound
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", engine.ErrSenderUnbound
 		}
-		return pgtype.UUID{}, err
+		return "", err
 	}
 	if _, err := p.q.GetMemberByUserAndWorkspace(ctx, db.GetMemberByUserAndWorkspaceParams{
 		UserID:      binding.MulticaUserID,
 		WorkspaceID: inst.WorkspaceID,
 	}); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return pgtype.UUID{}, engine.ErrSenderNotMember
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", engine.ErrSenderNotMember
 		}
-		return pgtype.UUID{}, err
+		return "", err
 	}
 	return binding.MulticaUserID, nil
 }

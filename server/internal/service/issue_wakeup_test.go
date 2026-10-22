@@ -2,19 +2,19 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-func wakeFixture(t *testing.T) (principalFixture, *IssueWakeupService, pgtype.UUID, string) {
+func wakeFixture(t *testing.T) (principalFixture, *IssueWakeupService, string, string) {
 	t.Helper()
 	f, owner := newPrincipalFixture(t)
 	if err := f.q.SeedIssueStatusEntries(context.Background(), parseTestUUID(t, f.WorkspaceID)); err != nil {
@@ -28,7 +28,7 @@ func wakeFixture(t *testing.T) (principalFixture, *IssueWakeupService, pgtype.UU
 	f.Cleanup(t, "DELETE FROM agent_task_queue WHERE issue_id=$1", issue)
 	return f, &IssueWakeupService{Tasks: f.svc.TaskSvc}, parseTestUUID(t, issue), agent
 }
-func parseTestUUID(t *testing.T, s string) pgtype.UUID {
+func parseTestUUID(t *testing.T, s string) string {
 	t.Helper()
 	id, e := util.ParseUUID(s)
 	if e != nil {
@@ -36,9 +36,9 @@ func parseTestUUID(t *testing.T, s string) pgtype.UUID {
 	}
 	return id
 }
-func wakeCreate(t *testing.T, f principalFixture, s *IssueWakeupService, issue pgtype.UUID, in WakeupInput) db.IssueWakeup {
+func wakeCreate(t *testing.T, f principalFixture, s *IssueWakeupService, issue string, in WakeupInput) db.IssueWakeup {
 	t.Helper()
-	w, e := s.Create(context.Background(), issue, parseTestUUID(t, f.UserID), pgtype.UUID{}, in)
+	w, e := s.Create(context.Background(), issue, parseTestUUID(t, f.UserID), "", in)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -53,14 +53,14 @@ func wakeDispatch(t *testing.T, s *IssueWakeupService, w db.IssueWakeup) {
 
 // wakeSetStatus writes a status the way production writers do: the status
 // update and StopClosedIssueWakeups commit in one transaction.
-func wakeSetStatus(t *testing.T, f principalFixture, issue pgtype.UUID, status string) []db.AgentTaskQueue {
+func wakeSetStatus(t *testing.T, f principalFixture, issue string, status string) []db.AgentTaskQueue {
 	t.Helper()
 	ctx := context.Background()
-	tx, err := f.Pool.Begin(ctx)
+	tx, err := f.Pool.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	q := f.q.WithTx(tx)
 	updated, err := q.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{ID: issue, Status: status, WorkspaceID: parseTestUUID(t, f.WorkspaceID)})
 	if err != nil {
@@ -70,7 +70,7 @@ func wakeSetStatus(t *testing.T, f principalFixture, issue pgtype.UUID, status s
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	return cancelled
@@ -81,15 +81,15 @@ func TestIssueWakeupEventAtomicOnceAndIndependentInputs(t *testing.T) {
 	ctx := context.Background()
 	w := wakeCreate(t, f, s, issue, WakeupInput{AgentID: agent, Kind: "event", EventTypes: []string{"comment.created"}, Instruction: "Review latest changes"})
 	// A source rollback cannot leave a notification behind.
-	tx, e := f.Pool.Begin(ctx)
+	tx, e := f.Pool.BeginTx(ctx, nil)
 	if e != nil {
 		t.Fatal(e)
 	}
-	_, e = tx.Exec(ctx, "INSERT INTO comment(issue_id,workspace_id,author_type,author_id,content,type) VALUES($1,$2,'member',$3,'rollback','comment')", issue, f.WorkspaceID, f.UserID)
+	_, e = tx.ExecContext(ctx, "INSERT INTO comment(issue_id,workspace_id,author_type,author_id,content,type) VALUES($1,$2,'member',$3,'rollback','comment')", issue, f.WorkspaceID, f.UserID)
 	if e != nil {
 		t.Fatal(e)
 	}
-	_ = tx.Rollback(ctx)
+	_ = tx.Rollback()
 	if n := f.Count(t, "SELECT count(*) FROM issue_wakeup_receipt WHERE wakeup_id=$1", w.ID); n != 0 {
 		t.Fatalf("rollback left %d receipts", n)
 	}
@@ -107,7 +107,7 @@ func TestIssueWakeupEventAtomicOnceAndIndependentInputs(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if !got.Enabled || got.LastTaskID.Valid {
+	if (got.Enabled == 0) || got.LastTaskID.Valid {
 		t.Fatalf("the once rule was used up before its input was handed over: %+v", got)
 	}
 	if notes := wakeClaim(t, f, s, ordinary); !strings.Contains(notes, comment) || !strings.Contains(notes, "Review latest changes") {
@@ -115,7 +115,7 @@ func TestIssueWakeupEventAtomicOnceAndIndependentInputs(t *testing.T) {
 	}
 	// The input is the run's once it starts; until then the rule keeps it.
 	wakeDispatch(t, s, w)
-	if got, e = f.q.GetIssueWakeup(ctx, db.GetIssueWakeupParams{ID: w.ID, WorkspaceID: w.WorkspaceID}); e != nil || !got.Enabled || got.FireCount != 0 {
+	if got, e = f.q.GetIssueWakeup(ctx, db.GetIssueWakeupParams{ID: w.ID, WorkspaceID: w.WorkspaceID}); e != nil || (got.Enabled == 0) || got.FireCount != 0 {
 		t.Fatalf("before the run started: %+v %v", got, e)
 	}
 	wakeStart(t, f, ordinary)
@@ -124,8 +124,8 @@ func TestIssueWakeupEventAtomicOnceAndIndependentInputs(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if got.Enabled || util.UUIDToString(got.LastTaskID) != ordinary || got.FireCount != 1 {
-		t.Fatalf("after the run started: enabled=%t last_task=%s fire_count=%d", got.Enabled, util.UUIDToString(got.LastTaskID), got.FireCount)
+	if (got.Enabled != 0) || util.UUIDToString(got.LastTaskID.String) != ordinary || got.FireCount != 1 {
+		t.Fatalf("after the run started: enabled=%t last_task=%s fire_count=%d", got.Enabled, util.UUIDToString(got.LastTaskID.String), got.FireCount)
 	}
 	if n := wakeRuns(t, f, w.ID); n != 0 {
 		t.Fatalf("the wakeup also queued %d runs of its own", n)
@@ -143,7 +143,7 @@ func TestIssueWakeupStartsItsOwnRunWhenNothingWaits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	task, err := f.q.GetAgentTask(context.Background(), got.LastTaskID)
+	task, err := f.q.GetAgentTask(context.Background(), got.LastTaskID.String)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestIssueWakeupTerminalStateAndScope(t *testing.T) {
 	}
 	wakeDispatch(t, s, w)
 	otherIssue := f.Issue(t, "Other issue")
-	_, err := s.Create(context.Background(), parseTestUUID(t, otherIssue), parseTestUUID(t, f.UserID), pgtype.UUID{}, WakeupInput{AgentID: agent, Kind: "event", EventTypes: []string{"task.completed"}, FilterTaskID: source, Instruction: "invalid scope"})
+	_, err := s.Create(context.Background(), parseTestUUID(t, otherIssue), parseTestUUID(t, f.UserID), "", WakeupInput{AgentID: agent, Kind: "event", EventTypes: []string{"task.completed"}, FilterTaskID: source, Instruction: "invalid scope"})
 	if !errors.Is(err, ErrWakeupInput) {
 		t.Fatalf("scope accepted: %v", err)
 	}
@@ -190,13 +190,13 @@ func TestIssueWakeupContinuousSelfLoopAndClose(t *testing.T) {
 	f.Insert(t, "issue_status", testutil.Cols{"workspace_id": f.WorkspaceID, "key": "finished", "name": "Finished", "category": "done", "color": "#000000"})
 	cancelled := wakeSetStatus(t, f, issue, "finished")
 	got, _ = f.q.GetIssueWakeup(ctx, db.GetIssueWakeupParams{ID: w.ID, WorkspaceID: w.WorkspaceID})
-	if got.Enabled || !got.DisabledAt.Valid {
+	if (got.Enabled != 0) || !got.DisabledAt.Valid {
 		t.Fatal("custom end state did not disable")
 	}
-	if len(cancelled) != 1 || cancelled[0].Status != "cancelled" || cancelled[0].ID == first {
+	if len(cancelled) != 1 || cancelled[0].Status != "cancelled" || cancelled[0].ID == first.String {
 		t.Fatalf("close did not withdraw only the unstarted run: %+v", cancelled)
 	}
-	task, _ := f.q.GetAgentTask(ctx, first)
+	task, _ := f.q.GetAgentTask(ctx, first.String)
 	if task.Status != "running" {
 		t.Fatal("close stopped active run")
 	}
@@ -204,7 +204,7 @@ func TestIssueWakeupContinuousSelfLoopAndClose(t *testing.T) {
 		t.Fatal("reopen cancelled runs")
 	}
 	got, _ = f.q.GetIssueWakeup(ctx, db.GetIssueWakeupParams{ID: w.ID, WorkspaceID: w.WorkspaceID})
-	if got.Enabled {
+	if got.Enabled != 0 {
 		t.Fatal("reopen enabled old subscription")
 	}
 }
@@ -233,7 +233,7 @@ func TestIssueWakeupTimeRecoveryUpdateAndRevocation(t *testing.T) {
 				t.Fatalf("offline catchup creates %d runs", n)
 			}
 			// Replacing the configuration withdraws the old queued input.
-			updated, e := s.Save(ctx, issue, parseTestUUID(t, f.UserID), pgtype.UUID{}, w.ID, in)
+			updated, e := s.Save(ctx, issue, parseTestUUID(t, f.UserID), "", w.ID, in)
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -247,7 +247,7 @@ func TestIssueWakeupTimeRecoveryUpdateAndRevocation(t *testing.T) {
 			f.Exec(t, "DELETE FROM member WHERE user_id=$1 AND workspace_id=$2", f.UserID, f.WorkspaceID)
 			wakeDispatch(t, s, updated)
 			got, _ := f.q.GetIssueWakeup(ctx, db.GetIssueWakeupParams{ID: w.ID, WorkspaceID: w.WorkspaceID})
-			if got.Enabled || !got.LastError.Valid {
+			if (got.Enabled != 0) || !got.LastError.Valid {
 				t.Fatal("permission revoked but still enabled")
 			}
 		})
@@ -270,14 +270,14 @@ func TestIssueWakeupStatusSourceAndClaimAuthority(t *testing.T) {
 	f.Exec(t, "UPDATE issue SET status='in_progress',revision=revision+1 WHERE id=$1", issue)
 	wakeDispatch(t, s, w)
 	got, _ := f.q.GetIssueWakeup(ctx, db.GetIssueWakeupParams{ID: w.ID, WorkspaceID: w.WorkspaceID})
-	_, err := f.q.UpdateIssue(ctx, db.UpdateIssueParams{ID: issue, Status: pgtype.Text{String: "in_review", Valid: true}, SourceTaskID: got.LastTaskID})
+	_, err := f.q.UpdateIssue(ctx, db.UpdateIssueParams{ID: issue, Status: sql.NullString{String: "in_review", Valid: true}, SourceTaskID: got.LastTaskID})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if n := f.Count(t, "SELECT count(*) FROM issue_wakeup_receipt WHERE wakeup_id=$1 AND processed_at IS NULL", w.ID); n != 0 {
 		t.Fatal("self status update created a loop")
 	}
-	task, _ := f.q.GetAgentTask(ctx, got.LastTaskID)
+	task, _ := f.q.GetAgentTask(ctx, got.LastTaskID.String)
 	if err = s.CheckClaim(ctx, task); err != nil {
 		t.Fatal(err)
 	}
@@ -295,8 +295,8 @@ func TestIssueWakeupRetryKeepsPromptAndSchedulingScope(t *testing.T) {
 	f.Exec(t, "UPDATE issue_wakeup SET next_fire_at=now()-interval '1 second' WHERE id=$1", w.ID)
 	wakeDispatch(t, s, w)
 	got, _ := f.q.GetIssueWakeup(ctx, db.GetIssueWakeupParams{ID: w.ID, WorkspaceID: w.WorkspaceID})
-	task, _ := f.q.GetAgentTask(ctx, got.LastTaskID)
-	if task.CommentThreadID != w.ID || util.UUIDToString(task.TriggerCommentID) != parent {
+	task, _ := f.q.GetAgentTask(ctx, got.LastTaskID.String)
+	if task.CommentThreadID.String != w.ID || util.UUIDToString(task.TriggerCommentID.String) != parent {
 		t.Fatal("delivery thread and scheduling scope confused")
 	}
 	f.Exec(t, "UPDATE agent_task_queue SET status='failed',completed_at=now() WHERE id=$1", task.ID)
@@ -304,7 +304,7 @@ func TestIssueWakeupRetryKeepsPromptAndSchedulingScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if child.HandoffNote != task.HandoffNote || child.CommentThreadID != w.ID {
+	if child.HandoffNote != task.HandoffNote || child.CommentThreadID.String != w.ID {
 		t.Fatal("retry lost wakeup prompt or scope")
 	}
 	f.Cleanup(t, "DELETE FROM agent_task_queue WHERE id=$1", child.ID)

@@ -7,21 +7,20 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const countInstallationsOfPackageVersions = `-- name: CountInstallationsOfPackageVersions :one
 SELECT count(*) FROM plugin_installation
 WHERE package_version_id IN (
-    SELECT id FROM plugin_package_version WHERE package_id = $1
+    SELECT id FROM plugin_package_version WHERE package_id = ?1
 )
 `
 
 // Whether any workspace still runs a version of this package. Publishing is
 // workspace-private, so this is scoped to the same workspace by construction.
-func (q *Queries) CountInstallationsOfPackageVersions(ctx context.Context, packageID pgtype.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countInstallationsOfPackageVersions, packageID)
+func (q *Queries) CountInstallationsOfPackageVersions(ctx context.Context, packageID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countInstallationsOfPackageVersions, packageID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -29,19 +28,19 @@ func (q *Queries) CountInstallationsOfPackageVersions(ctx context.Context, packa
 
 const countRecentPluginFailures = `-- name: CountRecentPluginFailures :one
 SELECT count(*) FROM plugin_invocation
-WHERE installation_id = $1 AND hook_key = $2 AND created_at > $3 AND status <> 'ok'
+WHERE installation_id = ?1 AND hook_key = ?2 AND created_at > ?3 AND status <> 'ok'
 `
 
 type CountRecentPluginFailuresParams struct {
-	InstallationID pgtype.UUID        `json:"installation_id"`
-	HookKey        string             `json:"hook_key"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	InstallationID string `json:"installation_id"`
+	HookKey        string `json:"hook_key"`
+	CreatedAt      string `json:"created_at"`
 }
 
 // Consecutive-failure signal for the event circuit breaker. Bounded by time so
 // a breaker that tripped hours ago does not keep a hook shut forever.
 func (q *Queries) CountRecentPluginFailures(ctx context.Context, arg CountRecentPluginFailuresParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countRecentPluginFailures, arg.InstallationID, arg.HookKey, arg.CreatedAt)
+	row := q.db.QueryRowContext(ctx, countRecentPluginFailures, arg.InstallationID, arg.HookKey, arg.CreatedAt)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -49,19 +48,19 @@ func (q *Queries) CountRecentPluginFailures(ctx context.Context, arg CountRecent
 
 const countRecentPluginInvocations = `-- name: CountRecentPluginInvocations :one
 SELECT count(*) FROM plugin_invocation
-WHERE installation_id = $1 AND hook_key = $2 AND created_at > $3
+WHERE installation_id = ?1 AND hook_key = ?2 AND created_at > ?3
 `
 
 type CountRecentPluginInvocationsParams struct {
-	InstallationID pgtype.UUID        `json:"installation_id"`
-	HookKey        string             `json:"hook_key"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	InstallationID string `json:"installation_id"`
+	HookKey        string `json:"hook_key"`
+	CreatedAt      string `json:"created_at"`
 }
 
 // Feeds the per-hook rate limit. Counts attempts, not distinct calls: a hook
 // retrying into a dead endpoint is exactly the traffic the limit exists to cap.
 func (q *Queries) CountRecentPluginInvocations(ctx context.Context, arg CountRecentPluginInvocationsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countRecentPluginInvocations, arg.InstallationID, arg.HookKey, arg.CreatedAt)
+	row := q.db.QueryRowContext(ctx, countRecentPluginInvocations, arg.InstallationID, arg.HookKey, arg.CreatedAt)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -71,22 +70,22 @@ const createPluginHookSchedule = `-- name: CreatePluginHookSchedule :one
 INSERT INTO plugin_hook_schedule (
     installation_id, workspace_id, hook_key, cron_expression, timezone,
     next_run_at, enabled
-) VALUES ($1, $2, $3, $4, $5, $7, $6)
+) VALUES (?1, ?2, ?3, ?4, ?5, ?7, ?6)
 RETURNING id, installation_id, workspace_id, hook_key, cron_expression, timezone, generation, activated_at, next_run_at, enabled, created_at, updated_at
 `
 
 type CreatePluginHookScheduleParams struct {
-	InstallationID pgtype.UUID        `json:"installation_id"`
-	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
-	HookKey        string             `json:"hook_key"`
-	CronExpression string             `json:"cron_expression"`
-	Timezone       string             `json:"timezone"`
-	Enabled        bool               `json:"enabled"`
-	NextRunAt      pgtype.Timestamptz `json:"next_run_at"`
+	InstallationID string         `json:"installation_id"`
+	WorkspaceID    string         `json:"workspace_id"`
+	HookKey        string         `json:"hook_key"`
+	CronExpression string         `json:"cron_expression"`
+	Timezone       string         `json:"timezone"`
+	Enabled        int64          `json:"enabled"`
+	NextRunAt      sql.NullString `json:"next_run_at"`
 }
 
 func (q *Queries) CreatePluginHookSchedule(ctx context.Context, arg CreatePluginHookScheduleParams) (PluginHookSchedule, error) {
-	row := q.db.QueryRow(ctx, createPluginHookSchedule,
+	row := q.db.QueryRowContext(ctx, createPluginHookSchedule,
 		arg.InstallationID,
 		arg.WorkspaceID,
 		arg.HookKey,
@@ -116,22 +115,22 @@ func (q *Queries) CreatePluginHookSchedule(ctx context.Context, arg CreatePlugin
 const createPluginInstallation = `-- name: CreatePluginInstallation :one
 INSERT INTO plugin_installation (
     workspace_id, plugin_key, package_version_id, version, manifest, granted_scopes, installed_by
-) VALUES ($1, $2, $3, $4, $5, $6, $7)
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
 RETURNING id, workspace_id, plugin_key, version, manifest, granted_scopes, config, enabled, installed_by, created_at, updated_at, token_hash, token_rotated_at, mcp_approvals, package_version_id
 `
 
 type CreatePluginInstallationParams struct {
-	WorkspaceID      pgtype.UUID `json:"workspace_id"`
-	PluginKey        string      `json:"plugin_key"`
-	PackageVersionID pgtype.UUID `json:"package_version_id"`
-	Version          string      `json:"version"`
-	Manifest         []byte      `json:"manifest"`
-	GrantedScopes    []byte      `json:"granted_scopes"`
-	InstalledBy      pgtype.UUID `json:"installed_by"`
+	WorkspaceID      string         `json:"workspace_id"`
+	PluginKey        string         `json:"plugin_key"`
+	PackageVersionID string         `json:"package_version_id"`
+	Version          string         `json:"version"`
+	Manifest         string         `json:"manifest"`
+	GrantedScopes    string         `json:"granted_scopes"`
+	InstalledBy      sql.NullString `json:"installed_by"`
 }
 
 func (q *Queries) CreatePluginInstallation(ctx context.Context, arg CreatePluginInstallationParams) (PluginInstallation, error) {
-	row := q.db.QueryRow(ctx, createPluginInstallation,
+	row := q.db.QueryRowContext(ctx, createPluginInstallation,
 		arg.WorkspaceID,
 		arg.PluginKey,
 		arg.PackageVersionID,
@@ -166,30 +165,30 @@ INSERT INTO plugin_invocation (
     id, installation_id, workspace_id, hook_key, trigger, status, event_type,
     delivery_id, planned_at, attempt, latency_ms, error
 ) VALUES (
-    COALESCE($8::uuid, gen_random_uuid()),
-    $1, $2, $3, $4, $5, $9, $10,
-    $11, $6, $7, $12
+    COALESCE(?8, gen_random_uuid()),
+    ?1, ?2, ?3, ?4, ?5, ?9, ?10,
+    ?11, ?6, ?7, ?12
 )
-RETURNING id, installation_id, workspace_id, hook_key, trigger, status, event_type, attempt, latency_ms, error, created_at, delivery_id, planned_at
+RETURNING id, installation_id, workspace_id, hook_key, "trigger", status, event_type, attempt, latency_ms, error, created_at, delivery_id, planned_at
 `
 
 type CreatePluginInvocationParams struct {
-	InstallationID pgtype.UUID        `json:"installation_id"`
-	WorkspaceID    pgtype.UUID        `json:"workspace_id"`
-	HookKey        string             `json:"hook_key"`
-	Trigger        string             `json:"trigger"`
-	Status         string             `json:"status"`
-	Attempt        int32              `json:"attempt"`
-	LatencyMs      int32              `json:"latency_ms"`
-	ID             pgtype.UUID        `json:"id"`
-	EventType      pgtype.Text        `json:"event_type"`
-	DeliveryID     pgtype.Text        `json:"delivery_id"`
-	PlannedAt      pgtype.Timestamptz `json:"planned_at"`
-	Error          pgtype.Text        `json:"error"`
+	InstallationID string         `json:"installation_id"`
+	WorkspaceID    string         `json:"workspace_id"`
+	HookKey        string         `json:"hook_key"`
+	Trigger        string         `json:"trigger"`
+	Status         string         `json:"status"`
+	Attempt        int64          `json:"attempt"`
+	LatencyMs      int64          `json:"latency_ms"`
+	ID             interface{}    `json:"id"`
+	EventType      sql.NullString `json:"event_type"`
+	DeliveryID     sql.NullString `json:"delivery_id"`
+	PlannedAt      sql.NullString `json:"planned_at"`
+	Error          sql.NullString `json:"error"`
 }
 
 func (q *Queries) CreatePluginInvocation(ctx context.Context, arg CreatePluginInvocationParams) (PluginInvocation, error) {
-	row := q.db.QueryRow(ctx, createPluginInvocation,
+	row := q.db.QueryRowContext(ctx, createPluginInvocation,
 		arg.InstallationID,
 		arg.WorkspaceID,
 		arg.HookKey,
@@ -224,19 +223,19 @@ func (q *Queries) CreatePluginInvocation(ctx context.Context, arg CreatePluginIn
 
 const createPluginPackage = `-- name: CreatePluginPackage :one
 INSERT INTO plugin_package (workspace_id, plugin_key, name, created_by)
-VALUES ($1, $2, $3, $4)
+VALUES (?1, ?2, ?3, ?4)
 RETURNING id, workspace_id, plugin_key, name, created_by, created_at, updated_at
 `
 
 type CreatePluginPackageParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	PluginKey   string      `json:"plugin_key"`
-	Name        string      `json:"name"`
-	CreatedBy   pgtype.UUID `json:"created_by"`
+	WorkspaceID string         `json:"workspace_id"`
+	PluginKey   string         `json:"plugin_key"`
+	Name        string         `json:"name"`
+	CreatedBy   sql.NullString `json:"created_by"`
 }
 
 func (q *Queries) CreatePluginPackage(ctx context.Context, arg CreatePluginPackageParams) (PluginPackage, error) {
-	row := q.db.QueryRow(ctx, createPluginPackage,
+	row := q.db.QueryRowContext(ctx, createPluginPackage,
 		arg.WorkspaceID,
 		arg.PluginKey,
 		arg.Name,
@@ -257,19 +256,19 @@ func (q *Queries) CreatePluginPackage(ctx context.Context, arg CreatePluginPacka
 
 const createPluginPackageFile = `-- name: CreatePluginPackageFile :exec
 INSERT INTO plugin_package_file (version_id, path, content, size_bytes, sha256)
-VALUES ($1, $2, $3, $4, $5)
+VALUES (?1, ?2, ?3, ?4, ?5)
 `
 
 type CreatePluginPackageFileParams struct {
-	VersionID pgtype.UUID `json:"version_id"`
-	Path      string      `json:"path"`
-	Content   []byte      `json:"content"`
-	SizeBytes int64       `json:"size_bytes"`
-	Sha256    string      `json:"sha256"`
+	VersionID string `json:"version_id"`
+	Path      string `json:"path"`
+	Content   []byte `json:"content"`
+	SizeBytes int64  `json:"size_bytes"`
+	Sha256    string `json:"sha256"`
 }
 
 func (q *Queries) CreatePluginPackageFile(ctx context.Context, arg CreatePluginPackageFileParams) error {
-	_, err := q.db.Exec(ctx, createPluginPackageFile,
+	_, err := q.db.ExecContext(ctx, createPluginPackageFile,
 		arg.VersionID,
 		arg.Path,
 		arg.Content,
@@ -282,25 +281,25 @@ func (q *Queries) CreatePluginPackageFile(ctx context.Context, arg CreatePluginP
 const createPluginPackageVersion = `-- name: CreatePluginPackageVersion :one
 INSERT INTO plugin_package_version (
     package_id, workspace_id, version, manifest, digest, size_bytes, published_by
-) VALUES ($1, $2, $3, $4, $5, $6, $7)
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
 RETURNING id, package_id, workspace_id, version, manifest, digest, size_bytes, published_by, created_at
 `
 
 type CreatePluginPackageVersionParams struct {
-	PackageID   pgtype.UUID `json:"package_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Version     string      `json:"version"`
-	Manifest    []byte      `json:"manifest"`
-	Digest      string      `json:"digest"`
-	SizeBytes   int64       `json:"size_bytes"`
-	PublishedBy pgtype.UUID `json:"published_by"`
+	PackageID   string         `json:"package_id"`
+	WorkspaceID string         `json:"workspace_id"`
+	Version     string         `json:"version"`
+	Manifest    string         `json:"manifest"`
+	Digest      string         `json:"digest"`
+	SizeBytes   int64          `json:"size_bytes"`
+	PublishedBy sql.NullString `json:"published_by"`
 }
 
 // Published versions are only ever inserted. Nothing updates one, and the
 // (package_id, version) unique index is what makes a second publish of the same
 // version a conflict instead of a silent overwrite.
 func (q *Queries) CreatePluginPackageVersion(ctx context.Context, arg CreatePluginPackageVersionParams) (PluginPackageVersion, error) {
-	row := q.db.QueryRow(ctx, createPluginPackageVersion,
+	row := q.db.QueryRowContext(ctx, createPluginPackageVersion,
 		arg.PackageID,
 		arg.WorkspaceID,
 		arg.Version,
@@ -325,157 +324,157 @@ func (q *Queries) CreatePluginPackageVersion(ctx context.Context, arg CreatePlug
 }
 
 const deleteExpiredPluginInvocations = `-- name: DeleteExpiredPluginInvocations :execrows
-DELETE FROM plugin_invocation WHERE created_at < $1
+DELETE FROM plugin_invocation WHERE created_at < ?1
 `
 
 // TTL sweep. This table is operational telemetry, not history to keep.
-func (q *Queries) DeleteExpiredPluginInvocations(ctx context.Context, createdAt pgtype.Timestamptz) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteExpiredPluginInvocations, createdAt)
+func (q *Queries) DeleteExpiredPluginInvocations(ctx context.Context, createdAt string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteExpiredPluginInvocations, createdAt)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const deletePluginHookSchedule = `-- name: DeletePluginHookSchedule :exec
-DELETE FROM plugin_hook_schedule WHERE id = $1
+DELETE FROM plugin_hook_schedule WHERE id = ?1
 `
 
-func (q *Queries) DeletePluginHookSchedule(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deletePluginHookSchedule, id)
+func (q *Queries) DeletePluginHookSchedule(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deletePluginHookSchedule, id)
 	return err
 }
 
 const deletePluginHookSchedulesByInstallation = `-- name: DeletePluginHookSchedulesByInstallation :exec
-DELETE FROM plugin_hook_schedule WHERE installation_id = $1
+DELETE FROM plugin_hook_schedule WHERE installation_id = ?1
 `
 
-func (q *Queries) DeletePluginHookSchedulesByInstallation(ctx context.Context, installationID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deletePluginHookSchedulesByInstallation, installationID)
+func (q *Queries) DeletePluginHookSchedulesByInstallation(ctx context.Context, installationID string) error {
+	_, err := q.db.ExecContext(ctx, deletePluginHookSchedulesByInstallation, installationID)
 	return err
 }
 
 const deletePluginInstallation = `-- name: DeletePluginInstallation :exec
-DELETE FROM plugin_installation WHERE id = $1
+DELETE FROM plugin_installation WHERE id = ?1
 `
 
-func (q *Queries) DeletePluginInstallation(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deletePluginInstallation, id)
+func (q *Queries) DeletePluginInstallation(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deletePluginInstallation, id)
 	return err
 }
 
 const deletePluginInvocationsByInstallation = `-- name: DeletePluginInvocationsByInstallation :exec
-DELETE FROM plugin_invocation WHERE installation_id = $1
+DELETE FROM plugin_invocation WHERE installation_id = ?1
 `
 
-func (q *Queries) DeletePluginInvocationsByInstallation(ctx context.Context, installationID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deletePluginInvocationsByInstallation, installationID)
+func (q *Queries) DeletePluginInvocationsByInstallation(ctx context.Context, installationID string) error {
+	_, err := q.db.ExecContext(ctx, deletePluginInvocationsByInstallation, installationID)
 	return err
 }
 
 const deletePluginPackage = `-- name: DeletePluginPackage :exec
-DELETE FROM plugin_package WHERE id = $1
+DELETE FROM plugin_package WHERE id = ?1
 `
 
-func (q *Queries) DeletePluginPackage(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deletePluginPackage, id)
+func (q *Queries) DeletePluginPackage(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deletePluginPackage, id)
 	return err
 }
 
 const deletePluginPackageFilesByPackage = `-- name: DeletePluginPackageFilesByPackage :exec
 DELETE FROM plugin_package_file
-WHERE version_id IN (SELECT id FROM plugin_package_version WHERE package_id = $1)
+WHERE version_id IN (SELECT id FROM plugin_package_version WHERE package_id = ?1)
 `
 
-func (q *Queries) DeletePluginPackageFilesByPackage(ctx context.Context, packageID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deletePluginPackageFilesByPackage, packageID)
+func (q *Queries) DeletePluginPackageFilesByPackage(ctx context.Context, packageID string) error {
+	_, err := q.db.ExecContext(ctx, deletePluginPackageFilesByPackage, packageID)
 	return err
 }
 
 const deletePluginPackageVersionsByPackage = `-- name: DeletePluginPackageVersionsByPackage :exec
-DELETE FROM plugin_package_version WHERE package_id = $1
+DELETE FROM plugin_package_version WHERE package_id = ?1
 `
 
-func (q *Queries) DeletePluginPackageVersionsByPackage(ctx context.Context, packageID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deletePluginPackageVersionsByPackage, packageID)
+func (q *Queries) DeletePluginPackageVersionsByPackage(ctx context.Context, packageID string) error {
+	_, err := q.db.ExecContext(ctx, deletePluginPackageVersionsByPackage, packageID)
 	return err
 }
 
 const deletePluginSecret = `-- name: DeletePluginSecret :execrows
-DELETE FROM plugin_secret WHERE installation_id = $1 AND key = $2
+DELETE FROM plugin_secret WHERE installation_id = ?1 AND key = ?2
 `
 
 type DeletePluginSecretParams struct {
-	InstallationID pgtype.UUID `json:"installation_id"`
-	Key            string      `json:"key"`
+	InstallationID string `json:"installation_id"`
+	Key            string `json:"key"`
 }
 
 func (q *Queries) DeletePluginSecret(ctx context.Context, arg DeletePluginSecretParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deletePluginSecret, arg.InstallationID, arg.Key)
+	result, err := q.db.ExecContext(ctx, deletePluginSecret, arg.InstallationID, arg.Key)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const deletePluginSecretsByInstallation = `-- name: DeletePluginSecretsByInstallation :exec
-DELETE FROM plugin_secret WHERE installation_id = $1
+DELETE FROM plugin_secret WHERE installation_id = ?1
 `
 
-func (q *Queries) DeletePluginSecretsByInstallation(ctx context.Context, installationID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deletePluginSecretsByInstallation, installationID)
+func (q *Queries) DeletePluginSecretsByInstallation(ctx context.Context, installationID string) error {
+	_, err := q.db.ExecContext(ctx, deletePluginSecretsByInstallation, installationID)
 	return err
 }
 
 const deletePluginSkillsByInstallation = `-- name: DeletePluginSkillsByInstallation :exec
-DELETE FROM skill WHERE plugin_installation_id = $1
+DELETE FROM skill WHERE plugin_installation_id = ?1
 `
 
-func (q *Queries) DeletePluginSkillsByInstallation(ctx context.Context, pluginInstallationID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deletePluginSkillsByInstallation, pluginInstallationID)
+func (q *Queries) DeletePluginSkillsByInstallation(ctx context.Context, pluginInstallationID sql.NullString) error {
+	_, err := q.db.ExecContext(ctx, deletePluginSkillsByInstallation, pluginInstallationID)
 	return err
 }
 
 const deletePluginSkillsNotIn = `-- name: DeletePluginSkillsNotIn :exec
 DELETE FROM skill
-WHERE plugin_installation_id = $1 AND name <> ALL($2::text[])
+WHERE plugin_installation_id = ?1 AND name <> ALL(?2)
 `
 
 type DeletePluginSkillsNotInParams struct {
-	PluginInstallationID pgtype.UUID `json:"plugin_installation_id"`
-	KeepNames            []string    `json:"keep_names"`
+	PluginInstallationID sql.NullString `json:"plugin_installation_id"`
+	KeepNames            interface{}    `json:"keep_names"`
 }
 
 // Upgrade pruning: a skill this installation used to contribute but no longer
 // declares must go, or a renamed skill leaves its predecessor behind forever.
 func (q *Queries) DeletePluginSkillsNotIn(ctx context.Context, arg DeletePluginSkillsNotInParams) error {
-	_, err := q.db.Exec(ctx, deletePluginSkillsNotIn, arg.PluginInstallationID, arg.KeepNames)
+	_, err := q.db.ExecContext(ctx, deletePluginSkillsNotIn, arg.PluginInstallationID, arg.KeepNames)
 	return err
 }
 
 const deletePluginStorageByInstallation = `-- name: DeletePluginStorageByInstallation :exec
-DELETE FROM plugin_storage WHERE installation_id = $1
+DELETE FROM plugin_storage WHERE installation_id = ?1
 `
 
-func (q *Queries) DeletePluginStorageByInstallation(ctx context.Context, installationID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deletePluginStorageByInstallation, installationID)
+func (q *Queries) DeletePluginStorageByInstallation(ctx context.Context, installationID string) error {
+	_, err := q.db.ExecContext(ctx, deletePluginStorageByInstallation, installationID)
 	return err
 }
 
 const deletePluginStorageValue = `-- name: DeletePluginStorageValue :execrows
 DELETE FROM plugin_storage
-WHERE installation_id = $1 AND scope_type = $2 AND scope_id = $3 AND key = $4
+WHERE installation_id = ?1 AND scope_type = ?2 AND scope_id = ?3 AND key = ?4
 `
 
 type DeletePluginStorageValueParams struct {
-	InstallationID pgtype.UUID `json:"installation_id"`
-	ScopeType      string      `json:"scope_type"`
-	ScopeID        pgtype.UUID `json:"scope_id"`
-	Key            string      `json:"key"`
+	InstallationID string `json:"installation_id"`
+	ScopeType      string `json:"scope_type"`
+	ScopeID        string `json:"scope_id"`
+	Key            string `json:"key"`
 }
 
 func (q *Queries) DeletePluginStorageValue(ctx context.Context, arg DeletePluginStorageValueParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deletePluginStorageValue,
+	result, err := q.db.ExecContext(ctx, deletePluginStorageValue,
 		arg.InstallationID,
 		arg.ScopeType,
 		arg.ScopeID,
@@ -484,26 +483,26 @@ func (q *Queries) DeletePluginStorageValue(ctx context.Context, arg DeletePlugin
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const disablePluginHookSchedules = `-- name: DisablePluginHookSchedules :exec
 UPDATE plugin_hook_schedule
 SET enabled = FALSE, next_run_at = NULL, updated_at = now()
-WHERE installation_id = $1
+WHERE installation_id = ?1
 `
 
-func (q *Queries) DisablePluginHookSchedules(ctx context.Context, installationID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, disablePluginHookSchedules, installationID)
+func (q *Queries) DisablePluginHookSchedules(ctx context.Context, installationID string) error {
+	_, err := q.db.ExecContext(ctx, disablePluginHookSchedules, installationID)
 	return err
 }
 
 const getPluginHookSchedule = `-- name: GetPluginHookSchedule :one
-SELECT id, installation_id, workspace_id, hook_key, cron_expression, timezone, generation, activated_at, next_run_at, enabled, created_at, updated_at FROM plugin_hook_schedule WHERE id = $1
+SELECT id, installation_id, workspace_id, hook_key, cron_expression, timezone, generation, activated_at, next_run_at, enabled, created_at, updated_at FROM plugin_hook_schedule WHERE id = ?1
 `
 
-func (q *Queries) GetPluginHookSchedule(ctx context.Context, id pgtype.UUID) (PluginHookSchedule, error) {
-	row := q.db.QueryRow(ctx, getPluginHookSchedule, id)
+func (q *Queries) GetPluginHookSchedule(ctx context.Context, id string) (PluginHookSchedule, error) {
+	row := q.db.QueryRowContext(ctx, getPluginHookSchedule, id)
 	var i PluginHookSchedule
 	err := row.Scan(
 		&i.ID,
@@ -523,11 +522,11 @@ func (q *Queries) GetPluginHookSchedule(ctx context.Context, id pgtype.UUID) (Pl
 }
 
 const getPluginInstallation = `-- name: GetPluginInstallation :one
-SELECT id, workspace_id, plugin_key, version, manifest, granted_scopes, config, enabled, installed_by, created_at, updated_at, token_hash, token_rotated_at, mcp_approvals, package_version_id FROM plugin_installation WHERE id = $1
+SELECT id, workspace_id, plugin_key, version, manifest, granted_scopes, config, enabled, installed_by, created_at, updated_at, token_hash, token_rotated_at, mcp_approvals, package_version_id FROM plugin_installation WHERE id = ?1
 `
 
-func (q *Queries) GetPluginInstallation(ctx context.Context, id pgtype.UUID) (PluginInstallation, error) {
-	row := q.db.QueryRow(ctx, getPluginInstallation, id)
+func (q *Queries) GetPluginInstallation(ctx context.Context, id string) (PluginInstallation, error) {
+	row := q.db.QueryRowContext(ctx, getPluginInstallation, id)
 	var i PluginInstallation
 	err := row.Scan(
 		&i.ID,
@@ -550,12 +549,12 @@ func (q *Queries) GetPluginInstallation(ctx context.Context, id pgtype.UUID) (Pl
 }
 
 const getPluginInstallationByTokenHash = `-- name: GetPluginInstallationByTokenHash :one
-SELECT id, workspace_id, plugin_key, version, manifest, granted_scopes, config, enabled, installed_by, created_at, updated_at, token_hash, token_rotated_at, mcp_approvals, package_version_id FROM plugin_installation WHERE token_hash = $1
+SELECT id, workspace_id, plugin_key, version, manifest, granted_scopes, config, enabled, installed_by, created_at, updated_at, token_hash, token_rotated_at, mcp_approvals, package_version_id FROM plugin_installation WHERE token_hash = ?1
 `
 
 // Looked up by hash, so the plaintext token exists only in the caller's request.
-func (q *Queries) GetPluginInstallationByTokenHash(ctx context.Context, tokenHash pgtype.Text) (PluginInstallation, error) {
-	row := q.db.QueryRow(ctx, getPluginInstallationByTokenHash, tokenHash)
+func (q *Queries) GetPluginInstallationByTokenHash(ctx context.Context, tokenHash sql.NullString) (PluginInstallation, error) {
+	row := q.db.QueryRowContext(ctx, getPluginInstallationByTokenHash, tokenHash)
 	var i PluginInstallation
 	err := row.Scan(
 		&i.ID,
@@ -579,16 +578,16 @@ func (q *Queries) GetPluginInstallationByTokenHash(ctx context.Context, tokenHas
 
 const getPluginPackageFile = `-- name: GetPluginPackageFile :one
 SELECT id, version_id, path, content, size_bytes, sha256, created_at FROM plugin_package_file
-WHERE version_id = $1 AND path = $2
+WHERE version_id = ?1 AND path = ?2
 `
 
 type GetPluginPackageFileParams struct {
-	VersionID pgtype.UUID `json:"version_id"`
-	Path      string      `json:"path"`
+	VersionID string `json:"version_id"`
+	Path      string `json:"path"`
 }
 
 func (q *Queries) GetPluginPackageFile(ctx context.Context, arg GetPluginPackageFileParams) (PluginPackageFile, error) {
-	row := q.db.QueryRow(ctx, getPluginPackageFile, arg.VersionID, arg.Path)
+	row := q.db.QueryRowContext(ctx, getPluginPackageFile, arg.VersionID, arg.Path)
 	var i PluginPackageFile
 	err := row.Scan(
 		&i.ID,
@@ -603,17 +602,17 @@ func (q *Queries) GetPluginPackageFile(ctx context.Context, arg GetPluginPackage
 }
 
 const getPluginSecret = `-- name: GetPluginSecret :one
-SELECT id, installation_id, key, ciphertext, created_at, updated_at FROM plugin_secret
-WHERE installation_id = $1 AND key = $2
+SELECT id, installation_id, "key", ciphertext, created_at, updated_at FROM plugin_secret
+WHERE installation_id = ?1 AND key = ?2
 `
 
 type GetPluginSecretParams struct {
-	InstallationID pgtype.UUID `json:"installation_id"`
-	Key            string      `json:"key"`
+	InstallationID string `json:"installation_id"`
+	Key            string `json:"key"`
 }
 
 func (q *Queries) GetPluginSecret(ctx context.Context, arg GetPluginSecretParams) (PluginSecret, error) {
-	row := q.db.QueryRow(ctx, getPluginSecret, arg.InstallationID, arg.Key)
+	row := q.db.QueryRowContext(ctx, getPluginSecret, arg.InstallationID, arg.Key)
 	var i PluginSecret
 	err := row.Scan(
 		&i.ID,
@@ -627,22 +626,22 @@ func (q *Queries) GetPluginSecret(ctx context.Context, arg GetPluginSecretParams
 }
 
 const getPluginStorageUsage = `-- name: GetPluginStorageUsage :one
-SELECT COUNT(*)::bigint AS key_count,
-       COALESCE(SUM(octet_length(value)), 0)::bigint AS total_bytes
+SELECT COUNT(*) AS key_count,
+       COALESCE(SUM(octet_length(value)), 0) AS total_bytes
 FROM plugin_storage
-WHERE installation_id = $1 AND scope_type = $2 AND scope_id = $3 AND key <> $4
+WHERE installation_id = ?1 AND scope_type = ?2 AND scope_id = ?3 AND key <> ?4
 `
 
 type GetPluginStorageUsageParams struct {
-	InstallationID pgtype.UUID `json:"installation_id"`
-	ScopeType      string      `json:"scope_type"`
-	ScopeID        pgtype.UUID `json:"scope_id"`
-	Key            string      `json:"key"`
+	InstallationID string `json:"installation_id"`
+	ScopeType      string `json:"scope_type"`
+	ScopeID        string `json:"scope_id"`
+	Key            string `json:"key"`
 }
 
 type GetPluginStorageUsageRow struct {
-	KeyCount   int64 `json:"key_count"`
-	TotalBytes int64 `json:"total_bytes"`
+	KeyCount   int64       `json:"key_count"`
+	TotalBytes interface{} `json:"total_bytes"`
 }
 
 // Quota accounting for one (installation, scope) pair. The candidate key is
@@ -650,7 +649,7 @@ type GetPluginStorageUsageRow struct {
 // than an addition. octet_length, not char_length: the service compares these
 // against byte budgets, and a UTF-8 character is up to 4 bytes.
 func (q *Queries) GetPluginStorageUsage(ctx context.Context, arg GetPluginStorageUsageParams) (GetPluginStorageUsageRow, error) {
-	row := q.db.QueryRow(ctx, getPluginStorageUsage,
+	row := q.db.QueryRowContext(ctx, getPluginStorageUsage,
 		arg.InstallationID,
 		arg.ScopeType,
 		arg.ScopeID,
@@ -662,19 +661,19 @@ func (q *Queries) GetPluginStorageUsage(ctx context.Context, arg GetPluginStorag
 }
 
 const getPluginStorageValue = `-- name: GetPluginStorageValue :one
-SELECT id, installation_id, scope_type, scope_id, key, value, created_at, updated_at FROM plugin_storage
-WHERE installation_id = $1 AND scope_type = $2 AND scope_id = $3 AND key = $4
+SELECT id, installation_id, scope_type, scope_id, "key", value, created_at, updated_at FROM plugin_storage
+WHERE installation_id = ?1 AND scope_type = ?2 AND scope_id = ?3 AND key = ?4
 `
 
 type GetPluginStorageValueParams struct {
-	InstallationID pgtype.UUID `json:"installation_id"`
-	ScopeType      string      `json:"scope_type"`
-	ScopeID        pgtype.UUID `json:"scope_id"`
-	Key            string      `json:"key"`
+	InstallationID string `json:"installation_id"`
+	ScopeType      string `json:"scope_type"`
+	ScopeID        string `json:"scope_id"`
+	Key            string `json:"key"`
 }
 
 func (q *Queries) GetPluginStorageValue(ctx context.Context, arg GetPluginStorageValueParams) (PluginStorage, error) {
-	row := q.db.QueryRow(ctx, getPluginStorageValue,
+	row := q.db.QueryRowContext(ctx, getPluginStorageValue,
 		arg.InstallationID,
 		arg.ScopeType,
 		arg.ScopeID,
@@ -696,16 +695,16 @@ func (q *Queries) GetPluginStorageValue(ctx context.Context, arg GetPluginStorag
 
 const getWorkspacePluginInstallation = `-- name: GetWorkspacePluginInstallation :one
 SELECT id, workspace_id, plugin_key, version, manifest, granted_scopes, config, enabled, installed_by, created_at, updated_at, token_hash, token_rotated_at, mcp_approvals, package_version_id FROM plugin_installation
-WHERE workspace_id = $1 AND id = $2
+WHERE workspace_id = ?1 AND id = ?2
 `
 
 type GetWorkspacePluginInstallationParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	ID          pgtype.UUID `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	ID          string `json:"id"`
 }
 
 func (q *Queries) GetWorkspacePluginInstallation(ctx context.Context, arg GetWorkspacePluginInstallationParams) (PluginInstallation, error) {
-	row := q.db.QueryRow(ctx, getWorkspacePluginInstallation, arg.WorkspaceID, arg.ID)
+	row := q.db.QueryRowContext(ctx, getWorkspacePluginInstallation, arg.WorkspaceID, arg.ID)
 	var i PluginInstallation
 	err := row.Scan(
 		&i.ID,
@@ -729,16 +728,16 @@ func (q *Queries) GetWorkspacePluginInstallation(ctx context.Context, arg GetWor
 
 const getWorkspacePluginInstallationByKey = `-- name: GetWorkspacePluginInstallationByKey :one
 SELECT id, workspace_id, plugin_key, version, manifest, granted_scopes, config, enabled, installed_by, created_at, updated_at, token_hash, token_rotated_at, mcp_approvals, package_version_id FROM plugin_installation
-WHERE workspace_id = $1 AND plugin_key = $2
+WHERE workspace_id = ?1 AND plugin_key = ?2
 `
 
 type GetWorkspacePluginInstallationByKeyParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	PluginKey   string      `json:"plugin_key"`
+	WorkspaceID string `json:"workspace_id"`
+	PluginKey   string `json:"plugin_key"`
 }
 
 func (q *Queries) GetWorkspacePluginInstallationByKey(ctx context.Context, arg GetWorkspacePluginInstallationByKeyParams) (PluginInstallation, error) {
-	row := q.db.QueryRow(ctx, getWorkspacePluginInstallationByKey, arg.WorkspaceID, arg.PluginKey)
+	row := q.db.QueryRowContext(ctx, getWorkspacePluginInstallationByKey, arg.WorkspaceID, arg.PluginKey)
 	var i PluginInstallation
 	err := row.Scan(
 		&i.ID,
@@ -762,16 +761,16 @@ func (q *Queries) GetWorkspacePluginInstallationByKey(ctx context.Context, arg G
 
 const getWorkspacePluginPackage = `-- name: GetWorkspacePluginPackage :one
 SELECT id, workspace_id, plugin_key, name, created_by, created_at, updated_at FROM plugin_package
-WHERE workspace_id = $1 AND id = $2
+WHERE workspace_id = ?1 AND id = ?2
 `
 
 type GetWorkspacePluginPackageParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	ID          pgtype.UUID `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	ID          string `json:"id"`
 }
 
 func (q *Queries) GetWorkspacePluginPackage(ctx context.Context, arg GetWorkspacePluginPackageParams) (PluginPackage, error) {
-	row := q.db.QueryRow(ctx, getWorkspacePluginPackage, arg.WorkspaceID, arg.ID)
+	row := q.db.QueryRowContext(ctx, getWorkspacePluginPackage, arg.WorkspaceID, arg.ID)
 	var i PluginPackage
 	err := row.Scan(
 		&i.ID,
@@ -787,16 +786,16 @@ func (q *Queries) GetWorkspacePluginPackage(ctx context.Context, arg GetWorkspac
 
 const getWorkspacePluginPackageByKey = `-- name: GetWorkspacePluginPackageByKey :one
 SELECT id, workspace_id, plugin_key, name, created_by, created_at, updated_at FROM plugin_package
-WHERE workspace_id = $1 AND plugin_key = $2
+WHERE workspace_id = ?1 AND plugin_key = ?2
 `
 
 type GetWorkspacePluginPackageByKeyParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	PluginKey   string      `json:"plugin_key"`
+	WorkspaceID string `json:"workspace_id"`
+	PluginKey   string `json:"plugin_key"`
 }
 
 func (q *Queries) GetWorkspacePluginPackageByKey(ctx context.Context, arg GetWorkspacePluginPackageByKeyParams) (PluginPackage, error) {
-	row := q.db.QueryRow(ctx, getWorkspacePluginPackageByKey, arg.WorkspaceID, arg.PluginKey)
+	row := q.db.QueryRowContext(ctx, getWorkspacePluginPackageByKey, arg.WorkspaceID, arg.PluginKey)
 	var i PluginPackage
 	err := row.Scan(
 		&i.ID,
@@ -812,16 +811,16 @@ func (q *Queries) GetWorkspacePluginPackageByKey(ctx context.Context, arg GetWor
 
 const getWorkspacePluginPackageVersion = `-- name: GetWorkspacePluginPackageVersion :one
 SELECT id, package_id, workspace_id, version, manifest, digest, size_bytes, published_by, created_at FROM plugin_package_version
-WHERE workspace_id = $1 AND id = $2
+WHERE workspace_id = ?1 AND id = ?2
 `
 
 type GetWorkspacePluginPackageVersionParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	ID          pgtype.UUID `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	ID          string `json:"id"`
 }
 
 func (q *Queries) GetWorkspacePluginPackageVersion(ctx context.Context, arg GetWorkspacePluginPackageVersionParams) (PluginPackageVersion, error) {
-	row := q.db.QueryRow(ctx, getWorkspacePluginPackageVersion, arg.WorkspaceID, arg.ID)
+	row := q.db.QueryRowContext(ctx, getWorkspacePluginPackageVersion, arg.WorkspaceID, arg.ID)
 	var i PluginPackageVersion
 	err := row.Scan(
 		&i.ID,
@@ -846,7 +845,7 @@ ORDER BY id ASC
 // Do not filter by next_run_at: it is display-only, while retries and recovery
 // derive eligibility from cron + activated_at + sys_cron_executions.
 func (q *Queries) ListEnabledPluginHookSchedules(ctx context.Context) ([]PluginHookSchedule, error) {
-	rows, err := q.db.Query(ctx, listEnabledPluginHookSchedules)
+	rows, err := q.db.QueryContext(ctx, listEnabledPluginHookSchedules)
 	if err != nil {
 		return nil, err
 	}
@@ -871,6 +870,9 @@ func (q *Queries) ListEnabledPluginHookSchedules(ctx context.Context) ([]PluginH
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -880,12 +882,12 @@ func (q *Queries) ListEnabledPluginHookSchedules(ctx context.Context) ([]PluginH
 
 const listPluginHookSchedulesByInstallation = `-- name: ListPluginHookSchedulesByInstallation :many
 SELECT id, installation_id, workspace_id, hook_key, cron_expression, timezone, generation, activated_at, next_run_at, enabled, created_at, updated_at FROM plugin_hook_schedule
-WHERE installation_id = $1
+WHERE installation_id = ?1
 ORDER BY hook_key ASC
 `
 
-func (q *Queries) ListPluginHookSchedulesByInstallation(ctx context.Context, installationID pgtype.UUID) ([]PluginHookSchedule, error) {
-	rows, err := q.db.Query(ctx, listPluginHookSchedulesByInstallation, installationID)
+func (q *Queries) ListPluginHookSchedulesByInstallation(ctx context.Context, installationID string) ([]PluginHookSchedule, error) {
+	rows, err := q.db.QueryContext(ctx, listPluginHookSchedulesByInstallation, installationID)
 	if err != nil {
 		return nil, err
 	}
@@ -911,6 +913,9 @@ func (q *Queries) ListPluginHookSchedulesByInstallation(ctx context.Context, ins
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -918,19 +923,19 @@ func (q *Queries) ListPluginHookSchedulesByInstallation(ctx context.Context, ins
 }
 
 const listPluginInvocations = `-- name: ListPluginInvocations :many
-SELECT id, installation_id, workspace_id, hook_key, trigger, status, event_type, attempt, latency_ms, error, created_at, delivery_id, planned_at FROM plugin_invocation
-WHERE installation_id = $1
+SELECT id, installation_id, workspace_id, hook_key, "trigger", status, event_type, attempt, latency_ms, error, created_at, delivery_id, planned_at FROM plugin_invocation
+WHERE installation_id = ?1
 ORDER BY created_at DESC
-LIMIT $2
+LIMIT ?2
 `
 
 type ListPluginInvocationsParams struct {
-	InstallationID pgtype.UUID `json:"installation_id"`
-	Limit          int32       `json:"limit"`
+	InstallationID string `json:"installation_id"`
+	Limit          int64  `json:"limit"`
 }
 
 func (q *Queries) ListPluginInvocations(ctx context.Context, arg ListPluginInvocationsParams) ([]PluginInvocation, error) {
-	rows, err := q.db.Query(ctx, listPluginInvocations, arg.InstallationID, arg.Limit)
+	rows, err := q.db.QueryContext(ctx, listPluginInvocations, arg.InstallationID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -957,6 +962,9 @@ func (q *Queries) ListPluginInvocations(ctx context.Context, arg ListPluginInvoc
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -965,7 +973,7 @@ func (q *Queries) ListPluginInvocations(ctx context.Context, arg ListPluginInvoc
 
 const listPluginPackageFilePaths = `-- name: ListPluginPackageFilePaths :many
 SELECT path, size_bytes, sha256 FROM plugin_package_file
-WHERE version_id = $1
+WHERE version_id = ?1
 ORDER BY path ASC
 `
 
@@ -976,8 +984,8 @@ type ListPluginPackageFilePathsRow struct {
 }
 
 // Paths and sizes only: the publisher's file list never needs the bytes.
-func (q *Queries) ListPluginPackageFilePaths(ctx context.Context, versionID pgtype.UUID) ([]ListPluginPackageFilePathsRow, error) {
-	rows, err := q.db.Query(ctx, listPluginPackageFilePaths, versionID)
+func (q *Queries) ListPluginPackageFilePaths(ctx context.Context, versionID string) ([]ListPluginPackageFilePathsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listPluginPackageFilePaths, versionID)
 	if err != nil {
 		return nil, err
 	}
@@ -990,6 +998,9 @@ func (q *Queries) ListPluginPackageFilePaths(ctx context.Context, versionID pgty
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -998,12 +1009,12 @@ func (q *Queries) ListPluginPackageFilePaths(ctx context.Context, versionID pgty
 
 const listPluginPackageVersions = `-- name: ListPluginPackageVersions :many
 SELECT id, package_id, workspace_id, version, manifest, digest, size_bytes, published_by, created_at FROM plugin_package_version
-WHERE package_id = $1
+WHERE package_id = ?1
 ORDER BY created_at DESC
 `
 
-func (q *Queries) ListPluginPackageVersions(ctx context.Context, packageID pgtype.UUID) ([]PluginPackageVersion, error) {
-	rows, err := q.db.Query(ctx, listPluginPackageVersions, packageID)
+func (q *Queries) ListPluginPackageVersions(ctx context.Context, packageID string) ([]PluginPackageVersion, error) {
+	rows, err := q.db.QueryContext(ctx, listPluginPackageVersions, packageID)
 	if err != nil {
 		return nil, err
 	}
@@ -1026,6 +1037,9 @@ func (q *Queries) ListPluginPackageVersions(ctx context.Context, packageID pgtyp
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -1034,19 +1048,19 @@ func (q *Queries) ListPluginPackageVersions(ctx context.Context, packageID pgtyp
 
 const listPluginSecretKeys = `-- name: ListPluginSecretKeys :many
 SELECT key, updated_at FROM plugin_secret
-WHERE installation_id = $1
+WHERE installation_id = ?1
 ORDER BY key ASC
 `
 
 type ListPluginSecretKeysRow struct {
-	Key       string             `json:"key"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	Key       string `json:"key"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 // Deliberately never selects ciphertext: the presence of a secret is readable,
 // its value is not.
-func (q *Queries) ListPluginSecretKeys(ctx context.Context, installationID pgtype.UUID) ([]ListPluginSecretKeysRow, error) {
-	rows, err := q.db.Query(ctx, listPluginSecretKeys, installationID)
+func (q *Queries) ListPluginSecretKeys(ctx context.Context, installationID string) ([]ListPluginSecretKeysRow, error) {
+	rows, err := q.db.QueryContext(ctx, listPluginSecretKeys, installationID)
 	if err != nil {
 		return nil, err
 	}
@@ -1059,6 +1073,9 @@ func (q *Queries) ListPluginSecretKeys(ctx context.Context, installationID pgtyp
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -1066,11 +1083,11 @@ func (q *Queries) ListPluginSecretKeys(ctx context.Context, installationID pgtyp
 }
 
 const listPluginSkills = `-- name: ListPluginSkills :many
-SELECT id, workspace_id, name, description, content, config, created_by, created_at, updated_at, plugin_installation_id FROM skill WHERE plugin_installation_id = $1 ORDER BY name ASC
+SELECT id, workspace_id, name, description, content, config, created_by, created_at, updated_at, plugin_installation_id FROM skill WHERE plugin_installation_id = ?1 ORDER BY name ASC
 `
 
-func (q *Queries) ListPluginSkills(ctx context.Context, pluginInstallationID pgtype.UUID) ([]Skill, error) {
-	rows, err := q.db.Query(ctx, listPluginSkills, pluginInstallationID)
+func (q *Queries) ListPluginSkills(ctx context.Context, pluginInstallationID sql.NullString) ([]Skill, error) {
+	rows, err := q.db.QueryContext(ctx, listPluginSkills, pluginInstallationID)
 	if err != nil {
 		return nil, err
 	}
@@ -1094,6 +1111,9 @@ func (q *Queries) ListPluginSkills(ctx context.Context, pluginInstallationID pgt
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -1101,26 +1121,26 @@ func (q *Queries) ListPluginSkills(ctx context.Context, pluginInstallationID pgt
 }
 
 const listPluginStorageKeys = `-- name: ListPluginStorageKeys :many
-SELECT key, octet_length(value)::bigint AS size_bytes, updated_at
+SELECT key, octet_length(value) AS size_bytes, updated_at
 FROM plugin_storage
-WHERE installation_id = $1 AND scope_type = $2 AND scope_id = $3
+WHERE installation_id = ?1 AND scope_type = ?2 AND scope_id = ?3
 ORDER BY key ASC
 `
 
 type ListPluginStorageKeysParams struct {
-	InstallationID pgtype.UUID `json:"installation_id"`
-	ScopeType      string      `json:"scope_type"`
-	ScopeID        pgtype.UUID `json:"scope_id"`
+	InstallationID string `json:"installation_id"`
+	ScopeType      string `json:"scope_type"`
+	ScopeID        string `json:"scope_id"`
 }
 
 type ListPluginStorageKeysRow struct {
-	Key       string             `json:"key"`
-	SizeBytes int64              `json:"size_bytes"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	Key       string      `json:"key"`
+	SizeBytes interface{} `json:"size_bytes"`
+	UpdatedAt string      `json:"updated_at"`
 }
 
 func (q *Queries) ListPluginStorageKeys(ctx context.Context, arg ListPluginStorageKeysParams) ([]ListPluginStorageKeysRow, error) {
-	rows, err := q.db.Query(ctx, listPluginStorageKeys, arg.InstallationID, arg.ScopeType, arg.ScopeID)
+	rows, err := q.db.QueryContext(ctx, listPluginStorageKeys, arg.InstallationID, arg.ScopeType, arg.ScopeID)
 	if err != nil {
 		return nil, err
 	}
@@ -1133,6 +1153,9 @@ func (q *Queries) ListPluginStorageKeys(ctx context.Context, arg ListPluginStora
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -1141,12 +1164,12 @@ func (q *Queries) ListPluginStorageKeys(ctx context.Context, arg ListPluginStora
 
 const listWorkspacePluginInstallations = `-- name: ListWorkspacePluginInstallations :many
 SELECT id, workspace_id, plugin_key, version, manifest, granted_scopes, config, enabled, installed_by, created_at, updated_at, token_hash, token_rotated_at, mcp_approvals, package_version_id FROM plugin_installation
-WHERE workspace_id = $1
+WHERE workspace_id = ?1
 ORDER BY created_at ASC
 `
 
-func (q *Queries) ListWorkspacePluginInstallations(ctx context.Context, workspaceID pgtype.UUID) ([]PluginInstallation, error) {
-	rows, err := q.db.Query(ctx, listWorkspacePluginInstallations, workspaceID)
+func (q *Queries) ListWorkspacePluginInstallations(ctx context.Context, workspaceID string) ([]PluginInstallation, error) {
+	rows, err := q.db.QueryContext(ctx, listWorkspacePluginInstallations, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -1175,6 +1198,9 @@ func (q *Queries) ListWorkspacePluginInstallations(ctx context.Context, workspac
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -1183,12 +1209,12 @@ func (q *Queries) ListWorkspacePluginInstallations(ctx context.Context, workspac
 
 const listWorkspacePluginPackages = `-- name: ListWorkspacePluginPackages :many
 SELECT id, workspace_id, plugin_key, name, created_by, created_at, updated_at FROM plugin_package
-WHERE workspace_id = $1
+WHERE workspace_id = ?1
 ORDER BY name ASC
 `
 
-func (q *Queries) ListWorkspacePluginPackages(ctx context.Context, workspaceID pgtype.UUID) ([]PluginPackage, error) {
-	rows, err := q.db.Query(ctx, listWorkspacePluginPackages, workspaceID)
+func (q *Queries) ListWorkspacePluginPackages(ctx context.Context, workspaceID string) ([]PluginPackage, error) {
+	rows, err := q.db.QueryContext(ctx, listWorkspacePluginPackages, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -1209,6 +1235,9 @@ func (q *Queries) ListWorkspacePluginPackages(ctx context.Context, workspaceID p
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -1216,22 +1245,22 @@ func (q *Queries) ListWorkspacePluginPackages(ctx context.Context, workspaceID p
 }
 
 const lockPluginPackageKey = `-- name: LockPluginPackageKey :exec
-SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
+SELECT 1
 `
 
 // Serializes publish, install and delete for one (workspace, plugin key).
 //
 // Relationships are application-owned by repository policy, so there are no
 // foreign keys to make "this version still exists" true across statements.
-// Without this lock the interleaving `delete counts 0 installs` → `install
-// reads the version` → `delete commits` → `install commits` leaves an
+// Without this lock the interleaving `delete counts 0 installs` -> `install
+// reads the version` -> `delete commits` -> `install commits` leaves an
 // installation pointing at a version that no longer exists, and its panel 404s
 // forever with nothing in the product able to explain why.
 //
 // Keyed on the plugin key rather than the package id because publish has no
-// package id yet — the row it would lock is the one it may be about to create.
-func (q *Queries) LockPluginPackageKey(ctx context.Context, dollar_1 string) error {
-	_, err := q.db.Exec(ctx, lockPluginPackageKey, dollar_1)
+// package id yet - the row it would lock is the one it may be about to create.
+func (q *Queries) LockPluginPackageKey(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, lockPluginPackageKey)
 	return err
 }
 
@@ -1240,22 +1269,22 @@ UPDATE plugin_hook_schedule
 SET enabled = TRUE,
     generation = gen_random_uuid(),
     activated_at = now(),
-    next_run_at = $2,
+    next_run_at = ?2,
     updated_at = now()
-WHERE id = $1
+WHERE id = ?1
 RETURNING id, installation_id, workspace_id, hook_key, cron_expression, timezone, generation, activated_at, next_run_at, enabled, created_at, updated_at
 `
 
 type ReactivatePluginHookScheduleParams struct {
-	ID        pgtype.UUID        `json:"id"`
-	NextRunAt pgtype.Timestamptz `json:"next_run_at"`
+	ID        string         `json:"id"`
+	NextRunAt sql.NullString `json:"next_run_at"`
 }
 
 // Re-enable starts a new epoch so occurrences while the installation was off
 // are never caught up. An already-sent request from the old generation may
 // finish, but no unstarted old plan survives the generation check.
 func (q *Queries) ReactivatePluginHookSchedule(ctx context.Context, arg ReactivatePluginHookScheduleParams) (PluginHookSchedule, error) {
-	row := q.db.QueryRow(ctx, reactivatePluginHookSchedule, arg.ID, arg.NextRunAt)
+	row := q.db.QueryRowContext(ctx, reactivatePluginHookSchedule, arg.ID, arg.NextRunAt)
 	var i PluginHookSchedule
 	err := row.Scan(
 		&i.ID,
@@ -1276,19 +1305,19 @@ func (q *Queries) ReactivatePluginHookSchedule(ctx context.Context, arg Reactiva
 
 const setPluginInstallationEnabled = `-- name: SetPluginInstallationEnabled :one
 UPDATE plugin_installation
-SET enabled = $2,
+SET enabled = ?2,
     updated_at = now()
-WHERE id = $1
+WHERE id = ?1
 RETURNING id, workspace_id, plugin_key, version, manifest, granted_scopes, config, enabled, installed_by, created_at, updated_at, token_hash, token_rotated_at, mcp_approvals, package_version_id
 `
 
 type SetPluginInstallationEnabledParams struct {
-	ID      pgtype.UUID `json:"id"`
-	Enabled bool        `json:"enabled"`
+	ID      string `json:"id"`
+	Enabled int64  `json:"enabled"`
 }
 
 func (q *Queries) SetPluginInstallationEnabled(ctx context.Context, arg SetPluginInstallationEnabledParams) (PluginInstallation, error) {
-	row := q.db.QueryRow(ctx, setPluginInstallationEnabled, arg.ID, arg.Enabled)
+	row := q.db.QueryRowContext(ctx, setPluginInstallationEnabled, arg.ID, arg.Enabled)
 	var i PluginInstallation
 	err := row.Scan(
 		&i.ID,
@@ -1312,34 +1341,34 @@ func (q *Queries) SetPluginInstallationEnabled(ctx context.Context, arg SetPlugi
 
 const setPluginInstallationToken = `-- name: SetPluginInstallationToken :exec
 UPDATE plugin_installation
-SET token_hash = $2, token_rotated_at = now(), updated_at = now()
-WHERE id = $1
+SET token_hash = ?2, token_rotated_at = now(), updated_at = now()
+WHERE id = ?1
 `
 
 type SetPluginInstallationTokenParams struct {
-	ID        pgtype.UUID `json:"id"`
-	TokenHash pgtype.Text `json:"token_hash"`
+	ID        string         `json:"id"`
+	TokenHash sql.NullString `json:"token_hash"`
 }
 
 func (q *Queries) SetPluginInstallationToken(ctx context.Context, arg SetPluginInstallationTokenParams) error {
-	_, err := q.db.Exec(ctx, setPluginInstallationToken, arg.ID, arg.TokenHash)
+	_, err := q.db.ExecContext(ctx, setPluginInstallationToken, arg.ID, arg.TokenHash)
 	return err
 }
 
 const setPluginMCPApprovals = `-- name: SetPluginMCPApprovals :one
 UPDATE plugin_installation
-SET mcp_approvals = $2, updated_at = now()
-WHERE id = $1
+SET mcp_approvals = ?2, updated_at = now()
+WHERE id = ?1
 RETURNING id, workspace_id, plugin_key, version, manifest, granted_scopes, config, enabled, installed_by, created_at, updated_at, token_hash, token_rotated_at, mcp_approvals, package_version_id
 `
 
 type SetPluginMCPApprovalsParams struct {
-	ID           pgtype.UUID `json:"id"`
-	McpApprovals []byte      `json:"mcp_approvals"`
+	ID           string `json:"id"`
+	McpApprovals string `json:"mcp_approvals"`
 }
 
 func (q *Queries) SetPluginMCPApprovals(ctx context.Context, arg SetPluginMCPApprovalsParams) (PluginInstallation, error) {
-	row := q.db.QueryRow(ctx, setPluginMCPApprovals, arg.ID, arg.McpApprovals)
+	row := q.db.QueryRowContext(ctx, setPluginMCPApprovals, arg.ID, arg.McpApprovals)
 	var i PluginInstallation
 	err := row.Scan(
 		&i.ID,
@@ -1363,29 +1392,29 @@ func (q *Queries) SetPluginMCPApprovals(ctx context.Context, arg SetPluginMCPApp
 
 const updatePluginHookScheduleDefinition = `-- name: UpdatePluginHookScheduleDefinition :one
 UPDATE plugin_hook_schedule
-SET cron_expression = $2,
-    timezone = $3,
+SET cron_expression = ?2,
+    timezone = ?3,
     generation = gen_random_uuid(),
     activated_at = now(),
-    next_run_at = $5,
-    enabled = $4,
+    next_run_at = ?5,
+    enabled = ?4,
     updated_at = now()
-WHERE id = $1
+WHERE id = ?1
 RETURNING id, installation_id, workspace_id, hook_key, cron_expression, timezone, generation, activated_at, next_run_at, enabled, created_at, updated_at
 `
 
 type UpdatePluginHookScheduleDefinitionParams struct {
-	ID             pgtype.UUID        `json:"id"`
-	CronExpression string             `json:"cron_expression"`
-	Timezone       string             `json:"timezone"`
-	Enabled        bool               `json:"enabled"`
-	NextRunAt      pgtype.Timestamptz `json:"next_run_at"`
+	ID             string         `json:"id"`
+	CronExpression string         `json:"cron_expression"`
+	Timezone       string         `json:"timezone"`
+	Enabled        int64          `json:"enabled"`
+	NextRunAt      sql.NullString `json:"next_run_at"`
 }
 
 // A cron/timezone change creates a new scheduler generation. The old
 // sys_cron_executions rows remain immutable history under the prior scope id.
 func (q *Queries) UpdatePluginHookScheduleDefinition(ctx context.Context, arg UpdatePluginHookScheduleDefinitionParams) (PluginHookSchedule, error) {
-	row := q.db.QueryRow(ctx, updatePluginHookScheduleDefinition,
+	row := q.db.QueryRowContext(ctx, updatePluginHookScheduleDefinition,
 		arg.ID,
 		arg.CronExpression,
 		arg.Timezone,
@@ -1412,39 +1441,39 @@ func (q *Queries) UpdatePluginHookScheduleDefinition(ctx context.Context, arg Up
 
 const updatePluginHookScheduleNextRun = `-- name: UpdatePluginHookScheduleNextRun :execrows
 UPDATE plugin_hook_schedule
-SET next_run_at = $3, updated_at = now()
-WHERE id = $1 AND generation = $2 AND enabled
+SET next_run_at = ?3, updated_at = now()
+WHERE id = ?1 AND generation = ?2 AND enabled
 `
 
 type UpdatePluginHookScheduleNextRunParams struct {
-	ID         pgtype.UUID        `json:"id"`
-	Generation pgtype.UUID        `json:"generation"`
-	NextRunAt  pgtype.Timestamptz `json:"next_run_at"`
+	ID         string         `json:"id"`
+	Generation string         `json:"generation"`
+	NextRunAt  sql.NullString `json:"next_run_at"`
 }
 
 func (q *Queries) UpdatePluginHookScheduleNextRun(ctx context.Context, arg UpdatePluginHookScheduleNextRunParams) (int64, error) {
-	result, err := q.db.Exec(ctx, updatePluginHookScheduleNextRun, arg.ID, arg.Generation, arg.NextRunAt)
+	result, err := q.db.ExecContext(ctx, updatePluginHookScheduleNextRun, arg.ID, arg.Generation, arg.NextRunAt)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const updatePluginInstallationConfig = `-- name: UpdatePluginInstallationConfig :one
 UPDATE plugin_installation
-SET config = $2,
+SET config = ?2,
     updated_at = now()
-WHERE id = $1
+WHERE id = ?1
 RETURNING id, workspace_id, plugin_key, version, manifest, granted_scopes, config, enabled, installed_by, created_at, updated_at, token_hash, token_rotated_at, mcp_approvals, package_version_id
 `
 
 type UpdatePluginInstallationConfigParams struct {
-	ID     pgtype.UUID `json:"id"`
-	Config []byte      `json:"config"`
+	ID     string `json:"id"`
+	Config string `json:"config"`
 }
 
 func (q *Queries) UpdatePluginInstallationConfig(ctx context.Context, arg UpdatePluginInstallationConfigParams) (PluginInstallation, error) {
-	row := q.db.QueryRow(ctx, updatePluginInstallationConfig, arg.ID, arg.Config)
+	row := q.db.QueryRowContext(ctx, updatePluginInstallationConfig, arg.ID, arg.Config)
 	var i PluginInstallation
 	err := row.Scan(
 		&i.ID,
@@ -1468,23 +1497,23 @@ func (q *Queries) UpdatePluginInstallationConfig(ctx context.Context, arg Update
 
 const updatePluginInstallationManifest = `-- name: UpdatePluginInstallationManifest :one
 UPDATE plugin_installation
-SET package_version_id = $2,
-    version = $3,
-    manifest = $4,
-    granted_scopes = $5,
-    config = $6,
+SET package_version_id = ?2,
+    version = ?3,
+    manifest = ?4,
+    granted_scopes = ?5,
+    config = ?6,
     updated_at = now()
-WHERE id = $1
+WHERE id = ?1
 RETURNING id, workspace_id, plugin_key, version, manifest, granted_scopes, config, enabled, installed_by, created_at, updated_at, token_hash, token_rotated_at, mcp_approvals, package_version_id
 `
 
 type UpdatePluginInstallationManifestParams struct {
-	ID               pgtype.UUID `json:"id"`
-	PackageVersionID pgtype.UUID `json:"package_version_id"`
-	Version          string      `json:"version"`
-	Manifest         []byte      `json:"manifest"`
-	GrantedScopes    []byte      `json:"granted_scopes"`
-	Config           []byte      `json:"config"`
+	ID               string `json:"id"`
+	PackageVersionID string `json:"package_version_id"`
+	Version          string `json:"version"`
+	Manifest         string `json:"manifest"`
+	GrantedScopes    string `json:"granted_scopes"`
+	Config           string `json:"config"`
 }
 
 // Upgrade path: the installation is re-pointed at another published version and
@@ -1492,7 +1521,7 @@ type UpdatePluginInstallationManifestParams struct {
 // purpose; fields the new manifest dropped are pruned by the service before this
 // runs.
 func (q *Queries) UpdatePluginInstallationManifest(ctx context.Context, arg UpdatePluginInstallationManifestParams) (PluginInstallation, error) {
-	row := q.db.QueryRow(ctx, updatePluginInstallationManifest,
+	row := q.db.QueryRowContext(ctx, updatePluginInstallationManifest,
 		arg.ID,
 		arg.PackageVersionID,
 		arg.Version,
@@ -1523,21 +1552,21 @@ func (q *Queries) UpdatePluginInstallationManifest(ctx context.Context, arg Upda
 
 const updatePluginPackageName = `-- name: UpdatePluginPackageName :one
 UPDATE plugin_package
-SET name = $2,
+SET name = ?2,
     updated_at = now()
-WHERE id = $1
+WHERE id = ?1
 RETURNING id, workspace_id, plugin_key, name, created_by, created_at, updated_at
 `
 
 type UpdatePluginPackageNameParams struct {
-	ID   pgtype.UUID `json:"id"`
-	Name string      `json:"name"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // The display name follows the newest published version. The key never moves:
 // it is the identity an installation was consented under.
 func (q *Queries) UpdatePluginPackageName(ctx context.Context, arg UpdatePluginPackageNameParams) (PluginPackage, error) {
-	row := q.db.QueryRow(ctx, updatePluginPackageName, arg.ID, arg.Name)
+	row := q.db.QueryRowContext(ctx, updatePluginPackageName, arg.ID, arg.Name)
 	var i PluginPackage
 	err := row.Scan(
 		&i.ID,
@@ -1553,25 +1582,25 @@ func (q *Queries) UpdatePluginPackageName(ctx context.Context, arg UpdatePluginP
 
 const upsertPluginSecret = `-- name: UpsertPluginSecret :exec
 INSERT INTO plugin_secret (installation_id, key, ciphertext)
-VALUES ($1, $2, $3)
+VALUES (?1, ?2, ?3)
 ON CONFLICT (installation_id, key)
 DO UPDATE SET ciphertext = EXCLUDED.ciphertext, updated_at = now()
 `
 
 type UpsertPluginSecretParams struct {
-	InstallationID pgtype.UUID `json:"installation_id"`
-	Key            string      `json:"key"`
-	Ciphertext     []byte      `json:"ciphertext"`
+	InstallationID string `json:"installation_id"`
+	Key            string `json:"key"`
+	Ciphertext     []byte `json:"ciphertext"`
 }
 
 func (q *Queries) UpsertPluginSecret(ctx context.Context, arg UpsertPluginSecretParams) error {
-	_, err := q.db.Exec(ctx, upsertPluginSecret, arg.InstallationID, arg.Key, arg.Ciphertext)
+	_, err := q.db.ExecContext(ctx, upsertPluginSecret, arg.InstallationID, arg.Key, arg.Ciphertext)
 	return err
 }
 
 const upsertPluginSkill = `-- name: UpsertPluginSkill :one
 INSERT INTO skill (workspace_id, name, description, content, config, created_by, plugin_installation_id)
-VALUES ($1, $2, $3, $4, '{}'::jsonb, $6, $5)
+VALUES (?1, ?2, ?3, ?4, '{}', ?6, ?5)
 ON CONFLICT (workspace_id, name) DO UPDATE SET
     description = EXCLUDED.description,
     content = EXCLUDED.content,
@@ -1581,12 +1610,12 @@ RETURNING id, workspace_id, name, description, content, config, created_by, crea
 `
 
 type UpsertPluginSkillParams struct {
-	WorkspaceID          pgtype.UUID `json:"workspace_id"`
-	Name                 string      `json:"name"`
-	Description          string      `json:"description"`
-	Content              string      `json:"content"`
-	PluginInstallationID pgtype.UUID `json:"plugin_installation_id"`
-	CreatedBy            pgtype.UUID `json:"created_by"`
+	WorkspaceID          string         `json:"workspace_id"`
+	Name                 string         `json:"name"`
+	Description          string         `json:"description"`
+	Content              string         `json:"content"`
+	PluginInstallationID sql.NullString `json:"plugin_installation_id"`
+	CreatedBy            sql.NullString `json:"created_by"`
 }
 
 // A plugin's skill resource, as an ordinary workspace skill.
@@ -1597,7 +1626,7 @@ type UpsertPluginSkillParams struct {
 // another installation owns. A plugin claiming a name someone already used must
 // fail the install loudly, not silently replace their work.
 func (q *Queries) UpsertPluginSkill(ctx context.Context, arg UpsertPluginSkillParams) (Skill, error) {
-	row := q.db.QueryRow(ctx, upsertPluginSkill,
+	row := q.db.QueryRowContext(ctx, upsertPluginSkill,
 		arg.WorkspaceID,
 		arg.Name,
 		arg.Description,
@@ -1623,22 +1652,22 @@ func (q *Queries) UpsertPluginSkill(ctx context.Context, arg UpsertPluginSkillPa
 
 const upsertPluginStorageValue = `-- name: UpsertPluginStorageValue :one
 INSERT INTO plugin_storage (installation_id, scope_type, scope_id, key, value)
-VALUES ($1, $2, $3, $4, $5)
+VALUES (?1, ?2, ?3, ?4, ?5)
 ON CONFLICT (installation_id, scope_type, scope_id, key)
 DO UPDATE SET value = EXCLUDED.value, updated_at = now()
-RETURNING id, installation_id, scope_type, scope_id, key, value, created_at, updated_at
+RETURNING id, installation_id, scope_type, scope_id, "key", value, created_at, updated_at
 `
 
 type UpsertPluginStorageValueParams struct {
-	InstallationID pgtype.UUID `json:"installation_id"`
-	ScopeType      string      `json:"scope_type"`
-	ScopeID        pgtype.UUID `json:"scope_id"`
-	Key            string      `json:"key"`
-	Value          string      `json:"value"`
+	InstallationID string `json:"installation_id"`
+	ScopeType      string `json:"scope_type"`
+	ScopeID        string `json:"scope_id"`
+	Key            string `json:"key"`
+	Value          string `json:"value"`
 }
 
 func (q *Queries) UpsertPluginStorageValue(ctx context.Context, arg UpsertPluginStorageValueParams) (PluginStorage, error) {
-	row := q.db.QueryRow(ctx, upsertPluginStorageValue,
+	row := q.db.QueryRowContext(ctx, upsertPluginStorageValue,
 		arg.InstallationID,
 		arg.ScopeType,
 		arg.ScopeID,

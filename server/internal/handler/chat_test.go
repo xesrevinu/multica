@@ -106,7 +106,7 @@ func TestSendChatMessage_DeferredPredecessorStaysHeadAcrossPromotion(t *testing.
 
 	assertStableHead := func(stage string) {
 		t.Helper()
-		pending, err := testHandler.Queries.ListPendingChatTasksForSession(ctx, parseUUID(sessionID))
+		pending, err := testHandler.Queries.ListPendingChatTasksForSession(ctx, nullString(parseUUID(sessionID)))
 		if err != nil {
 			t.Fatalf("list pending tasks %s: %v", stage, err)
 		}

@@ -13,7 +13,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -1413,7 +1412,7 @@ func TestCountNewCommentsSince_IssueWideExcludesAgentOwnAndTrigger(t *testing.T)
 		AnchorID:    parseUUID(fx.R1b1),
 		IssueID:     parseUUID(fx.IssueID),
 		WorkspaceID: parseUUID(testWorkspaceID),
-		Since:       pgtype.Timestamptz{Time: fx.Base.Add(90 * time.Second), Valid: true},
+		Since:       fx.Base.Add(90 * time.Second).UTC().Format(time.RFC3339Nano),
 		AuthorID:    parseUUID(agentID),
 	})
 	if err != nil {
@@ -1428,7 +1427,7 @@ func TestCountNewCommentsSince_IssueWideExcludesAgentOwnAndTrigger(t *testing.T)
 		AnchorID:    parseUUID(fx.R1b1),
 		IssueID:     parseUUID(fx.IssueID),
 		WorkspaceID: parseUUID(testWorkspaceID),
-		Since:       pgtype.Timestamptz{Time: time.Now().Add(time.Hour), Valid: true},
+		Since:       time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano),
 		AuthorID:    parseUUID(agentID),
 	})
 	if err != nil {

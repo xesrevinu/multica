@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/featureflags"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/plugincontract"
@@ -59,7 +58,7 @@ type dispatchJob struct {
 	installation db.PluginInstallation
 	hook         plugincontract.Hook
 	eventType    string
-	issueID      pgtype.UUID
+	issueID      string
 	payload      any
 }
 
@@ -128,8 +127,8 @@ func (d *PluginEventDispatcher) sweepOnce() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	cutoff := pgtype.Timestamptz{Time: time.Now().Add(-invocationRetention), Valid: true}
-	removed, err := d.service.Queries.DeleteExpiredPluginInvocations(ctx, cutoff)
+	cutoff := nullTime(time.Now().Add(-invocationRetention), true)
+	removed, err := d.service.Queries.DeleteExpiredPluginInvocations(ctx, cutoff.String)
 	if err != nil {
 		slog.Warn("plugins: invocation sweep failed", "error", err)
 		return
@@ -241,7 +240,7 @@ func (d *PluginEventDispatcher) run(job dispatchJob) {
 		return
 	}
 	for _, installation := range installations {
-		if !installation.Enabled {
+		if installation.Enabled == 0 {
 			continue
 		}
 		manifest, err := ParseInstallationManifest(installation)

@@ -7,7 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
+
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -16,22 +17,22 @@ type typingLedgerQueries interface {
 	RegisterChannelTypingReaction(context.Context, db.RegisterChannelTypingReactionParams) (db.ChannelTypingReaction, error)
 	FinishChannelTypingReactionAdd(context.Context, db.FinishChannelTypingReactionAddParams) (db.ChannelTypingReaction, error)
 	AcknowledgeChannelTypingReactionCleanup(context.Context, db.AcknowledgeChannelTypingReactionCleanupParams) error
-	ClaimChannelTypingReactionCleanup(context.Context, pgtype.UUID) ([]db.ChannelTypingReaction, error)
+	ClaimChannelTypingReactionCleanup(context.Context, any) ([]db.ChannelTypingReaction, error)
 	SettleChannelTypingInputs(context.Context, db.SettleChannelTypingInputsParams) error
-	SkipChannelTypingReactionAdd(context.Context, pgtype.UUID) error
+	SkipChannelTypingReactionAdd(context.Context, string) error
 	PruneChannelTypingReactionCleanup(context.Context) error
 	ExpireChannelTypingReactionCleanup(context.Context) ([]db.ExpireChannelTypingReactionCleanupRow, error)
-	ListRequestedChannelTypingReactions(context.Context, []pgtype.UUID) ([]pgtype.UUID, error)
+	ListRequestedChannelTypingReactions(context.Context, any) ([]string, error)
 }
 
 // Settle persists the failed flush's input boundary before removing reactions.
 // It covers inputs whose detached Add has not even registered yet.
-func (m *TypingIndicatorManager) Settle(ctx context.Context, sessionID pgtype.UUID, scope engine.TypingSettlement) {
+func (m *TypingIndicatorManager) Settle(ctx context.Context, sessionID string, scope engine.TypingSettlement) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), typingCleanupTimeout)
 	defer cancel()
 	if err := m.queries.SettleChannelTypingInputs(ctx, db.SettleChannelTypingInputsParams{
 		ThroughMessageID: scope.ThroughMessageID, ChatSessionID: sessionID,
-		WorkspaceID: scope.WorkspaceID, InstallationID: scope.InstallationID, ContextRevision: pgtype.Int8{Int64: scope.ContextRevision, Valid: true},
+		WorkspaceID: scope.WorkspaceID, InstallationID: scope.InstallationID, ContextRevision: sql.NullInt64{Int64: scope.ContextRevision, Valid: true},
 	}); err != nil {
 		m.log.Warn("lark typing: persist taskless settlement", "err", err)
 		return
@@ -43,10 +44,14 @@ func (m *TypingIndicatorManager) Settle(ctx context.Context, sessionID pgtype.UU
 // A null session selects due work across all workspaces for the system worker.
 // The ledger survives source deletion; eligibility is based on committed rows,
 // so rolled-back cancellation/deletion never grants cleanup ownership.
-func (m *TypingIndicatorManager) Reconcile(ctx context.Context, sessionID pgtype.UUID) map[string]bool {
+func (m *TypingIndicatorManager) Reconcile(ctx context.Context, sessionID string) map[string]bool {
 	defer m.pruneLocal(ctx)
 	covered := make(map[string]bool)
-	rows, err := m.queries.ClaimChannelTypingReactionCleanup(ctx, sessionID)
+	var sessionArg any
+	if sessionID != "" {
+		sessionArg = sessionID
+	}
+	rows, err := m.queries.ClaimChannelTypingReactionCleanup(ctx, sessionArg)
 	if err != nil {
 		m.log.Warn("lark typing: claim cleanup", "err", err)
 		return covered
@@ -74,7 +79,7 @@ func (m *TypingIndicatorManager) Reconcile(ctx context.Context, sessionID pgtype
 
 func (m *TypingIndicatorManager) cleanupReaction(ctx context.Context, row db.ChannelTypingReaction) {
 	var snapshot Installation
-	if err := json.Unmarshal(row.InstallationSnapshot, &snapshot); err != nil {
+	if err := json.Unmarshal([]byte(row.InstallationSnapshot), &snapshot); err != nil {
 		m.log.Warn("lark typing: read cleanup snapshot", "err", err)
 		return
 	}
@@ -146,7 +151,7 @@ func (m *TypingIndicatorManager) Run(ctx context.Context) {
 	for {
 		m.maintainCleanup(ctx)
 		passCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		m.Reconcile(passCtx, pgtype.UUID{})
+		m.Reconcile(passCtx, "")
 		cancel()
 		select {
 		case <-ctx.Done():
@@ -163,7 +168,7 @@ func (m *TypingIndicatorManager) maintainCleanup(ctx context.Context) {
 	if err != nil && ctx.Err() == nil {
 		m.log.Error("lark typing: credential expiry maintenance failed", "err", err)
 	}
-	counts := make(map[pgtype.UUID]int)
+	counts := make(map[string]int)
 	for _, row := range rows {
 		counts[row.WorkspaceID]++
 	}
@@ -181,7 +186,7 @@ func (m *TypingIndicatorManager) maintainCleanup(ctx context.Context) {
 // Evict those stale views even when no remote retry is left to claim.
 func (m *TypingIndicatorManager) pruneLocal(ctx context.Context) {
 	m.mu.RLock()
-	var ids []pgtype.UUID
+	var ids []string
 	for _, states := range m.states {
 		for _, state := range states {
 			ids = append(ids, state.LedgerID)
@@ -196,7 +201,7 @@ func (m *TypingIndicatorManager) pruneLocal(ctx context.Context) {
 		m.log.Warn("lark typing: refresh local cleanup state", "err", err)
 		return
 	}
-	closed := make(map[pgtype.UUID]bool, len(ended))
+	closed := make(map[string]bool, len(ended))
 	for _, id := range ended {
 		closed[id] = true
 	}

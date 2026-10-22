@@ -7,37 +7,36 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const countInactiveDingTalkGroupPresencesByWorkspace = `-- name: CountInactiveDingTalkGroupPresencesByWorkspace :many
-SELECT presence.installation_id, installation.agent_id, count(*)::bigint AS group_count
+SELECT presence.installation_id, installation.agent_id, count(*) AS group_count
 FROM dingtalk_group_presence presence
 JOIN channel_installation installation ON installation.id = presence.installation_id
-WHERE installation.workspace_id = $1
+WHERE installation.workspace_id = ?1
   AND installation.channel_type = 'dingtalk'
   AND installation.status = 'active'
-  AND (presence.last_active_at < $2 OR presence.last_active_at IS NULL)
-  AND (NOT $3::boolean OR installation.agent_id = $4)
+  AND (presence.last_active_at < ?2 OR presence.last_active_at IS NULL)
+  AND (NOT ?3 OR installation.agent_id = ?4)
 GROUP BY presence.installation_id, installation.agent_id
 `
 
 type CountInactiveDingTalkGroupPresencesByWorkspaceParams struct {
-	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
-	ActiveSince   pgtype.Timestamptz `json:"active_since"`
-	FilterByAgent bool               `json:"filter_by_agent"`
-	AgentID       pgtype.UUID        `json:"agent_id"`
+	WorkspaceID   string         `json:"workspace_id"`
+	ActiveSince   sql.NullString `json:"active_since"`
+	FilterByAgent interface{}    `json:"filter_by_agent"`
+	AgentID       string         `json:"agent_id"`
 }
 
 type CountInactiveDingTalkGroupPresencesByWorkspaceRow struct {
-	InstallationID pgtype.UUID `json:"installation_id"`
-	AgentID        pgtype.UUID `json:"agent_id"`
-	GroupCount     int64       `json:"group_count"`
+	InstallationID string `json:"installation_id"`
+	AgentID        string `json:"agent_id"`
+	GroupCount     int64  `json:"group_count"`
 }
 
 func (q *Queries) CountInactiveDingTalkGroupPresencesByWorkspace(ctx context.Context, arg CountInactiveDingTalkGroupPresencesByWorkspaceParams) ([]CountInactiveDingTalkGroupPresencesByWorkspaceRow, error) {
-	rows, err := q.db.Query(ctx, countInactiveDingTalkGroupPresencesByWorkspace,
+	rows, err := q.db.QueryContext(ctx, countInactiveDingTalkGroupPresencesByWorkspace,
 		arg.WorkspaceID,
 		arg.ActiveSince,
 		arg.FilterByAgent,
@@ -55,6 +54,9 @@ func (q *Queries) CountInactiveDingTalkGroupPresencesByWorkspace(ctx context.Con
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -62,70 +64,18 @@ func (q *Queries) CountInactiveDingTalkGroupPresencesByWorkspace(ctx context.Con
 }
 
 const deleteDingTalkInstallationForReplacement = `-- name: DeleteDingTalkInstallationForReplacement :one
-WITH retired AS (
-    DELETE FROM channel_installation ci
-    WHERE ci.id = $1
-      AND ci.workspace_id = $2
-      AND ci.agent_id = $3
-      AND ci.channel_type = 'dingtalk'
-    RETURNING ci.id
-),
-cleared_group_presence AS (
-    DELETE FROM dingtalk_group_presence
-    WHERE installation_id IN (SELECT id FROM retired)
-),
-cleared_bot_identity AS (
-    DELETE FROM dingtalk_bot_identity
-    WHERE installation_id IN (SELECT id FROM retired)
-),
-cleared_group_routes AS (
-    DELETE FROM dingtalk_group_route
-    WHERE installation_id IN (SELECT id FROM retired)
-),
-cleared_task_deliveries AS (
-    DELETE FROM channel_task_delivery
-    WHERE installation_id IN (SELECT id FROM retired)
-),
-cleared_outbound_messages AS (
-    DELETE FROM channel_outbound_message
-    WHERE installation_id IN (SELECT id FROM retired)
-),
-cleared_chat_sessions AS (
-    DELETE FROM channel_chat_session_binding
-    WHERE installation_id IN (SELECT id FROM retired)
-    RETURNING chat_session_id
-),
-cleared_outbound_cards AS (
-    DELETE FROM channel_outbound_card_message
-    WHERE chat_session_id IN (SELECT chat_session_id FROM cleared_chat_sessions)
-),
-cleared_binding_tokens AS (
-    DELETE FROM channel_binding_token
-    WHERE installation_id IN (SELECT id FROM retired)
-),
-cleared_user_bindings AS (
-    DELETE FROM channel_user_binding
-    WHERE installation_id IN (SELECT id FROM retired)
-),
-cleared_inbound_dedup AS (
-    DELETE FROM channel_inbound_message_dedup
-    WHERE installation_id IN (SELECT id FROM retired)
-),
-detached_audit AS (
-    UPDATE channel_inbound_audit SET installation_id = NULL
-    WHERE installation_id IN (SELECT id FROM retired)
-),
-detached_media_intents AS (
-    UPDATE channel_media_pending_object SET installation_id = NULL
-    WHERE installation_id IN (SELECT id FROM retired)
-)
-SELECT retired.id FROM retired
+DELETE FROM channel_installation
+WHERE id = ?1
+  AND workspace_id = ?2
+  AND agent_id = ?3
+  AND channel_type = 'dingtalk'
+RETURNING id
 `
 
 type DeleteDingTalkInstallationForReplacementParams struct {
-	InstallationID pgtype.UUID `json:"installation_id"`
-	WorkspaceID    pgtype.UUID `json:"workspace_id"`
-	AgentID        pgtype.UUID `json:"agent_id"`
+	InstallationID string `json:"installation_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	AgentID        string `json:"agent_id"`
 }
 
 // Retires an installation when the same agent is connected with a DIFFERENT
@@ -138,55 +88,340 @@ type DeleteDingTalkInstallationForReplacementParams struct {
 // Chat sessions themselves remain as history, but their channel bindings and
 // outbound cards are removed. Audit and media-intent rows remain useful for
 // diagnostics / reconciliation, so their installation references are detached.
-func (q *Queries) DeleteDingTalkInstallationForReplacement(ctx context.Context, arg DeleteDingTalkInstallationForReplacementParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, deleteDingTalkInstallationForReplacement, arg.InstallationID, arg.WorkspaceID, arg.AgentID)
-	var id pgtype.UUID
+// Order: DeleteDingTalkInstallationForReplacement_Step2 through Step13, then
+// this statement. The steps clear child rows while the installation still
+// matches; this statement deletes it and returns the id.
+func (q *Queries) DeleteDingTalkInstallationForReplacement(ctx context.Context, arg DeleteDingTalkInstallationForReplacementParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, deleteDingTalkInstallationForReplacement, arg.InstallationID, arg.WorkspaceID, arg.AgentID)
+	var id string
 	err := row.Scan(&id)
 	return id, err
 }
 
+const deleteDingTalkInstallationForReplacement_Step10 = `-- name: DeleteDingTalkInstallationForReplacement_Step10 :exec
+DELETE FROM channel_user_binding
+WHERE installation_id = ?1
+  AND EXISTS (
+      SELECT 1 FROM channel_installation ci
+      WHERE ci.id = ?1
+        AND ci.workspace_id = ?2
+        AND ci.agent_id = ?3
+        AND ci.channel_type = 'dingtalk'
+  )
+`
+
+type DeleteDingTalkInstallationForReplacement_Step10Params struct {
+	InstallationID string `json:"installation_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	AgentID        string `json:"agent_id"`
+}
+
+func (q *Queries) DeleteDingTalkInstallationForReplacement_Step10(ctx context.Context, arg DeleteDingTalkInstallationForReplacement_Step10Params) error {
+	_, err := q.db.ExecContext(ctx, deleteDingTalkInstallationForReplacement_Step10, arg.InstallationID, arg.WorkspaceID, arg.AgentID)
+	return err
+}
+
+const deleteDingTalkInstallationForReplacement_Step11 = `-- name: DeleteDingTalkInstallationForReplacement_Step11 :exec
+DELETE FROM channel_inbound_message_dedup
+WHERE installation_id = ?1
+  AND EXISTS (
+      SELECT 1 FROM channel_installation ci
+      WHERE ci.id = ?1
+        AND ci.workspace_id = ?2
+        AND ci.agent_id = ?3
+        AND ci.channel_type = 'dingtalk'
+  )
+`
+
+type DeleteDingTalkInstallationForReplacement_Step11Params struct {
+	InstallationID string `json:"installation_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	AgentID        string `json:"agent_id"`
+}
+
+func (q *Queries) DeleteDingTalkInstallationForReplacement_Step11(ctx context.Context, arg DeleteDingTalkInstallationForReplacement_Step11Params) error {
+	_, err := q.db.ExecContext(ctx, deleteDingTalkInstallationForReplacement_Step11, arg.InstallationID, arg.WorkspaceID, arg.AgentID)
+	return err
+}
+
+const deleteDingTalkInstallationForReplacement_Step12 = `-- name: DeleteDingTalkInstallationForReplacement_Step12 :exec
+UPDATE channel_inbound_audit
+SET installation_id = NULL
+WHERE installation_id = ?1
+  AND EXISTS (
+      SELECT 1 FROM channel_installation ci
+      WHERE ci.id = ?1
+        AND ci.workspace_id = ?2
+        AND ci.agent_id = ?3
+        AND ci.channel_type = 'dingtalk'
+  )
+`
+
+type DeleteDingTalkInstallationForReplacement_Step12Params struct {
+	InstallationID sql.NullString `json:"installation_id"`
+	WorkspaceID    string         `json:"workspace_id"`
+	AgentID        string         `json:"agent_id"`
+}
+
+func (q *Queries) DeleteDingTalkInstallationForReplacement_Step12(ctx context.Context, arg DeleteDingTalkInstallationForReplacement_Step12Params) error {
+	_, err := q.db.ExecContext(ctx, deleteDingTalkInstallationForReplacement_Step12, arg.InstallationID, arg.WorkspaceID, arg.AgentID)
+	return err
+}
+
+const deleteDingTalkInstallationForReplacement_Step13 = `-- name: DeleteDingTalkInstallationForReplacement_Step13 :exec
+UPDATE channel_media_pending_object
+SET installation_id = NULL
+WHERE installation_id = ?1
+  AND EXISTS (
+      SELECT 1 FROM channel_installation ci
+      WHERE ci.id = ?1
+        AND ci.workspace_id = ?2
+        AND ci.agent_id = ?3
+        AND ci.channel_type = 'dingtalk'
+  )
+`
+
+type DeleteDingTalkInstallationForReplacement_Step13Params struct {
+	InstallationID sql.NullString `json:"installation_id"`
+	WorkspaceID    string         `json:"workspace_id"`
+	AgentID        string         `json:"agent_id"`
+}
+
+func (q *Queries) DeleteDingTalkInstallationForReplacement_Step13(ctx context.Context, arg DeleteDingTalkInstallationForReplacement_Step13Params) error {
+	_, err := q.db.ExecContext(ctx, deleteDingTalkInstallationForReplacement_Step13, arg.InstallationID, arg.WorkspaceID, arg.AgentID)
+	return err
+}
+
+const deleteDingTalkInstallationForReplacement_Step2 = `-- name: DeleteDingTalkInstallationForReplacement_Step2 :exec
+DELETE FROM dingtalk_group_presence
+WHERE installation_id = ?1
+  AND EXISTS (
+      SELECT 1 FROM channel_installation ci
+      WHERE ci.id = ?1
+        AND ci.workspace_id = ?2
+        AND ci.agent_id = ?3
+        AND ci.channel_type = 'dingtalk'
+  )
+`
+
+type DeleteDingTalkInstallationForReplacement_Step2Params struct {
+	InstallationID string `json:"installation_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	AgentID        string `json:"agent_id"`
+}
+
+func (q *Queries) DeleteDingTalkInstallationForReplacement_Step2(ctx context.Context, arg DeleteDingTalkInstallationForReplacement_Step2Params) error {
+	_, err := q.db.ExecContext(ctx, deleteDingTalkInstallationForReplacement_Step2, arg.InstallationID, arg.WorkspaceID, arg.AgentID)
+	return err
+}
+
+const deleteDingTalkInstallationForReplacement_Step3 = `-- name: DeleteDingTalkInstallationForReplacement_Step3 :exec
+DELETE FROM dingtalk_bot_identity
+WHERE installation_id = ?1
+  AND EXISTS (
+      SELECT 1 FROM channel_installation ci
+      WHERE ci.id = ?1
+        AND ci.workspace_id = ?2
+        AND ci.agent_id = ?3
+        AND ci.channel_type = 'dingtalk'
+  )
+`
+
+type DeleteDingTalkInstallationForReplacement_Step3Params struct {
+	InstallationID string `json:"installation_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	AgentID        string `json:"agent_id"`
+}
+
+func (q *Queries) DeleteDingTalkInstallationForReplacement_Step3(ctx context.Context, arg DeleteDingTalkInstallationForReplacement_Step3Params) error {
+	_, err := q.db.ExecContext(ctx, deleteDingTalkInstallationForReplacement_Step3, arg.InstallationID, arg.WorkspaceID, arg.AgentID)
+	return err
+}
+
+const deleteDingTalkInstallationForReplacement_Step4 = `-- name: DeleteDingTalkInstallationForReplacement_Step4 :exec
+DELETE FROM dingtalk_group_route
+WHERE installation_id = ?1
+  AND EXISTS (
+      SELECT 1 FROM channel_installation ci
+      WHERE ci.id = ?1
+        AND ci.workspace_id = ?2
+        AND ci.agent_id = ?3
+        AND ci.channel_type = 'dingtalk'
+  )
+`
+
+type DeleteDingTalkInstallationForReplacement_Step4Params struct {
+	InstallationID string `json:"installation_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	AgentID        string `json:"agent_id"`
+}
+
+func (q *Queries) DeleteDingTalkInstallationForReplacement_Step4(ctx context.Context, arg DeleteDingTalkInstallationForReplacement_Step4Params) error {
+	_, err := q.db.ExecContext(ctx, deleteDingTalkInstallationForReplacement_Step4, arg.InstallationID, arg.WorkspaceID, arg.AgentID)
+	return err
+}
+
+const deleteDingTalkInstallationForReplacement_Step5 = `-- name: DeleteDingTalkInstallationForReplacement_Step5 :exec
+DELETE FROM channel_task_delivery
+WHERE installation_id = ?1
+  AND EXISTS (
+      SELECT 1 FROM channel_installation ci
+      WHERE ci.id = ?1
+        AND ci.workspace_id = ?2
+        AND ci.agent_id = ?3
+        AND ci.channel_type = 'dingtalk'
+  )
+`
+
+type DeleteDingTalkInstallationForReplacement_Step5Params struct {
+	InstallationID string `json:"installation_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	AgentID        string `json:"agent_id"`
+}
+
+func (q *Queries) DeleteDingTalkInstallationForReplacement_Step5(ctx context.Context, arg DeleteDingTalkInstallationForReplacement_Step5Params) error {
+	_, err := q.db.ExecContext(ctx, deleteDingTalkInstallationForReplacement_Step5, arg.InstallationID, arg.WorkspaceID, arg.AgentID)
+	return err
+}
+
+const deleteDingTalkInstallationForReplacement_Step6 = `-- name: DeleteDingTalkInstallationForReplacement_Step6 :exec
+DELETE FROM channel_outbound_message
+WHERE installation_id = ?1
+  AND EXISTS (
+      SELECT 1 FROM channel_installation ci
+      WHERE ci.id = ?1
+        AND ci.workspace_id = ?2
+        AND ci.agent_id = ?3
+        AND ci.channel_type = 'dingtalk'
+  )
+`
+
+type DeleteDingTalkInstallationForReplacement_Step6Params struct {
+	InstallationID string `json:"installation_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	AgentID        string `json:"agent_id"`
+}
+
+func (q *Queries) DeleteDingTalkInstallationForReplacement_Step6(ctx context.Context, arg DeleteDingTalkInstallationForReplacement_Step6Params) error {
+	_, err := q.db.ExecContext(ctx, deleteDingTalkInstallationForReplacement_Step6, arg.InstallationID, arg.WorkspaceID, arg.AgentID)
+	return err
+}
+
+const deleteDingTalkInstallationForReplacement_Step7 = `-- name: DeleteDingTalkInstallationForReplacement_Step7 :exec
+DELETE FROM channel_outbound_card_message
+WHERE chat_session_id IN (
+    SELECT chat_session_id FROM channel_chat_session_binding
+    WHERE installation_id = ?1
+)
+  AND EXISTS (
+      SELECT 1 FROM channel_installation ci
+      WHERE ci.id = ?1
+        AND ci.workspace_id = ?2
+        AND ci.agent_id = ?3
+        AND ci.channel_type = 'dingtalk'
+  )
+`
+
+type DeleteDingTalkInstallationForReplacement_Step7Params struct {
+	InstallationID string `json:"installation_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	AgentID        string `json:"agent_id"`
+}
+
+func (q *Queries) DeleteDingTalkInstallationForReplacement_Step7(ctx context.Context, arg DeleteDingTalkInstallationForReplacement_Step7Params) error {
+	_, err := q.db.ExecContext(ctx, deleteDingTalkInstallationForReplacement_Step7, arg.InstallationID, arg.WorkspaceID, arg.AgentID)
+	return err
+}
+
+const deleteDingTalkInstallationForReplacement_Step8 = `-- name: DeleteDingTalkInstallationForReplacement_Step8 :exec
+DELETE FROM channel_chat_session_binding
+WHERE installation_id = ?1
+  AND EXISTS (
+      SELECT 1 FROM channel_installation ci
+      WHERE ci.id = ?1
+        AND ci.workspace_id = ?2
+        AND ci.agent_id = ?3
+        AND ci.channel_type = 'dingtalk'
+  )
+`
+
+type DeleteDingTalkInstallationForReplacement_Step8Params struct {
+	InstallationID string `json:"installation_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	AgentID        string `json:"agent_id"`
+}
+
+func (q *Queries) DeleteDingTalkInstallationForReplacement_Step8(ctx context.Context, arg DeleteDingTalkInstallationForReplacement_Step8Params) error {
+	_, err := q.db.ExecContext(ctx, deleteDingTalkInstallationForReplacement_Step8, arg.InstallationID, arg.WorkspaceID, arg.AgentID)
+	return err
+}
+
+const deleteDingTalkInstallationForReplacement_Step9 = `-- name: DeleteDingTalkInstallationForReplacement_Step9 :exec
+DELETE FROM channel_binding_token
+WHERE installation_id = ?1
+  AND EXISTS (
+      SELECT 1 FROM channel_installation ci
+      WHERE ci.id = ?1
+        AND ci.workspace_id = ?2
+        AND ci.agent_id = ?3
+        AND ci.channel_type = 'dingtalk'
+  )
+`
+
+type DeleteDingTalkInstallationForReplacement_Step9Params struct {
+	InstallationID string `json:"installation_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	AgentID        string `json:"agent_id"`
+}
+
+func (q *Queries) DeleteDingTalkInstallationForReplacement_Step9(ctx context.Context, arg DeleteDingTalkInstallationForReplacement_Step9Params) error {
+	_, err := q.db.ExecContext(ctx, deleteDingTalkInstallationForReplacement_Step9, arg.InstallationID, arg.WorkspaceID, arg.AgentID)
+	return err
+}
+
 const forgetDingTalkGroupPresence = `-- name: ForgetDingTalkGroupPresence :one
-DELETE FROM dingtalk_group_presence presence
-USING channel_installation installation
-WHERE presence.installation_id = installation.id
-  AND presence.workspace_id = $1
-  AND presence.installation_id = $2
-  AND presence.conversation_id = $3
-  AND installation.workspace_id = $1
-  AND installation.channel_type = 'dingtalk'
-RETURNING presence.installation_id
+DELETE FROM dingtalk_group_presence
+WHERE dingtalk_group_presence.workspace_id = ?1
+  AND dingtalk_group_presence.installation_id = ?2
+  AND dingtalk_group_presence.conversation_id = ?3
+  AND EXISTS (
+      SELECT 1 FROM channel_installation installation
+      WHERE installation.id = dingtalk_group_presence.installation_id
+        AND installation.workspace_id = ?1
+        AND installation.channel_type = 'dingtalk'
+  )
+RETURNING installation_id
 `
 
 type ForgetDingTalkGroupPresenceParams struct {
-	WorkspaceID    pgtype.UUID `json:"workspace_id"`
-	InstallationID pgtype.UUID `json:"installation_id"`
-	ConversationID string      `json:"conversation_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	InstallationID string `json:"installation_id"`
+	ConversationID string `json:"conversation_id"`
 }
 
-func (q *Queries) ForgetDingTalkGroupPresence(ctx context.Context, arg ForgetDingTalkGroupPresenceParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, forgetDingTalkGroupPresence, arg.WorkspaceID, arg.InstallationID, arg.ConversationID)
-	var installation_id pgtype.UUID
+func (q *Queries) ForgetDingTalkGroupPresence(ctx context.Context, arg ForgetDingTalkGroupPresenceParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, forgetDingTalkGroupPresence, arg.WorkspaceID, arg.InstallationID, arg.ConversationID)
+	var installation_id string
 	err := row.Scan(&installation_id)
 	return installation_id, err
 }
 
 const getDingTalkInstallationOwnerForUpdate = `-- name: GetDingTalkInstallationOwnerForUpdate :one
-SELECT id, COALESCE(config ->> 'app_id', '')::text AS app_id
+SELECT id, COALESCE(config ->> 'app_id', '') AS app_id
 FROM channel_installation
-WHERE workspace_id = $1
-  AND agent_id = $2
+WHERE workspace_id = ?1
+  AND agent_id = ?2
   AND channel_type = 'dingtalk'
-FOR UPDATE
 `
 
 type GetDingTalkInstallationOwnerForUpdateParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	AgentID     pgtype.UUID `json:"agent_id"`
+	WorkspaceID string `json:"workspace_id"`
+	AgentID     string `json:"agent_id"`
 }
 
 type GetDingTalkInstallationOwnerForUpdateRow struct {
-	ID    pgtype.UUID `json:"id"`
-	AppID string      `json:"app_id"`
+	ID    string      `json:"id"`
+	AppID interface{} `json:"app_id"`
 }
 
 // Reads the current robot identity after LockDingTalkInstallationOwner has
@@ -194,7 +429,7 @@ type GetDingTalkInstallationOwnerForUpdateRow struct {
 // installation; COALESCE treats malformed legacy config as a different robot,
 // which safely replaces it instead of preserving unknown identity state.
 func (q *Queries) GetDingTalkInstallationOwnerForUpdate(ctx context.Context, arg GetDingTalkInstallationOwnerForUpdateParams) (GetDingTalkInstallationOwnerForUpdateRow, error) {
-	row := q.db.QueryRow(ctx, getDingTalkInstallationOwnerForUpdate, arg.WorkspaceID, arg.AgentID)
+	row := q.db.QueryRowContext(ctx, getDingTalkInstallationOwnerForUpdate, arg.WorkspaceID, arg.AgentID)
 	var i GetDingTalkInstallationOwnerForUpdateRow
 	err := row.Scan(&i.ID, &i.AppID)
 	return i, err
@@ -208,29 +443,29 @@ SELECT
     identity.bot_identity_issue
 FROM channel_installation installation
 JOIN dingtalk_bot_identity identity ON identity.installation_id = installation.id
-WHERE installation.workspace_id = $1
+WHERE installation.workspace_id = ?1
   AND installation.channel_type = 'dingtalk'
   AND installation.status = 'active'
-  AND (NOT $2::boolean OR installation.agent_id = $3)
+  AND (NOT ?2 OR installation.agent_id = ?3)
 `
 
 type ListDingTalkBotIdentitiesByWorkspaceParams struct {
-	WorkspaceID   pgtype.UUID `json:"workspace_id"`
-	FilterByAgent bool        `json:"filter_by_agent"`
-	AgentID       pgtype.UUID `json:"agent_id"`
+	WorkspaceID   string      `json:"workspace_id"`
+	FilterByAgent interface{} `json:"filter_by_agent"`
+	AgentID       string      `json:"agent_id"`
 }
 
 type ListDingTalkBotIdentitiesByWorkspaceRow struct {
-	InstallationID   pgtype.UUID `json:"installation_id"`
-	AgentID          pgtype.UUID `json:"agent_id"`
-	BotName          string      `json:"bot_name"`
-	BotIdentityIssue string      `json:"bot_identity_issue"`
+	InstallationID   string `json:"installation_id"`
+	AgentID          string `json:"agent_id"`
+	BotName          string `json:"bot_name"`
+	BotIdentityIssue string `json:"bot_identity_issue"`
 }
 
 // Identity is installation-owned, so forgetting or collapsing groups cannot
 // change the connection label.
 func (q *Queries) ListDingTalkBotIdentitiesByWorkspace(ctx context.Context, arg ListDingTalkBotIdentitiesByWorkspaceParams) ([]ListDingTalkBotIdentitiesByWorkspaceRow, error) {
-	rows, err := q.db.Query(ctx, listDingTalkBotIdentitiesByWorkspace, arg.WorkspaceID, arg.FilterByAgent, arg.AgentID)
+	rows, err := q.db.QueryContext(ctx, listDingTalkBotIdentitiesByWorkspace, arg.WorkspaceID, arg.FilterByAgent, arg.AgentID)
 	if err != nil {
 		return nil, err
 	}
@@ -248,6 +483,9 @@ func (q *Queries) ListDingTalkBotIdentitiesByWorkspace(ctx context.Context, arg 
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -260,55 +498,55 @@ SELECT
     presence.conversation_title,
     presence.installation_id,
     installation.agent_id,
-    COALESCE(identity.bot_name, presence.bot_name)::text AS bot_name,
-    COALESCE(identity.bot_identity_issue, presence.bot_identity_issue)::text AS bot_identity_issue,
+    COALESCE(identity.bot_name, presence.bot_name) AS bot_name,
+    COALESCE(identity.bot_identity_issue, presence.bot_identity_issue) AS bot_identity_issue,
     presence.last_active_at,
     presence.mention_count
 FROM dingtalk_group_presence presence
 JOIN channel_installation installation ON installation.id = presence.installation_id
 LEFT JOIN dingtalk_bot_identity identity ON identity.installation_id = presence.installation_id
-WHERE installation.workspace_id = $1
+WHERE installation.workspace_id = ?1
   AND installation.channel_type = 'dingtalk'
   AND installation.status = 'active'
-  AND (NOT $2::boolean OR installation.agent_id = $3)
-  AND (NOT $4::boolean OR installation.id = $5)
+  AND (NOT ?2 OR installation.agent_id = ?3)
+  AND (NOT ?4 OR installation.id = ?5)
   AND (
-      (NOT $6::boolean AND presence.last_active_at >= $7)
-      OR ($6::boolean AND (presence.last_active_at < $7 OR presence.last_active_at IS NULL))
+      (NOT ?6 AND presence.last_active_at >= ?7)
+      OR (?6 AND (presence.last_active_at < ?7 OR presence.last_active_at IS NULL))
   )
-ORDER BY presence.last_active_at DESC NULLS LAST, presence.conversation_title ASC,
+ORDER BY presence.last_active_at DESC, presence.conversation_title ASC,
          presence.conversation_id ASC, installation.installed_at ASC, installation.id ASC
-LIMIT NULLIF($9::integer, 0)
-OFFSET $8::integer
+LIMIT NULLIF(?9, 0)
+OFFSET ?8
 `
 
 type ListDingTalkGroupPresencesByWorkspaceParams struct {
-	WorkspaceID          pgtype.UUID        `json:"workspace_id"`
-	FilterByAgent        bool               `json:"filter_by_agent"`
-	AgentID              pgtype.UUID        `json:"agent_id"`
-	FilterByInstallation bool               `json:"filter_by_installation"`
-	FilterInstallationID pgtype.UUID        `json:"filter_installation_id"`
-	IncludeInactive      bool               `json:"include_inactive"`
-	ActiveSince          pgtype.Timestamptz `json:"active_since"`
-	PageOffset           int32              `json:"page_offset"`
-	PageLimit            int32              `json:"page_limit"`
+	WorkspaceID          string         `json:"workspace_id"`
+	FilterByAgent        interface{}    `json:"filter_by_agent"`
+	AgentID              string         `json:"agent_id"`
+	FilterByInstallation interface{}    `json:"filter_by_installation"`
+	FilterInstallationID string         `json:"filter_installation_id"`
+	IncludeInactive      interface{}    `json:"include_inactive"`
+	ActiveSince          sql.NullString `json:"active_since"`
+	PageOffset           int64          `json:"page_offset"`
+	PageLimit            interface{}    `json:"page_limit"`
 }
 
 type ListDingTalkGroupPresencesByWorkspaceRow struct {
-	ConversationID    string             `json:"conversation_id"`
-	ConversationTitle string             `json:"conversation_title"`
-	InstallationID    pgtype.UUID        `json:"installation_id"`
-	AgentID           pgtype.UUID        `json:"agent_id"`
-	BotName           string             `json:"bot_name"`
-	BotIdentityIssue  string             `json:"bot_identity_issue"`
-	LastActiveAt      pgtype.Timestamptz `json:"last_active_at"`
-	MentionCount      int64              `json:"mention_count"`
+	ConversationID    string         `json:"conversation_id"`
+	ConversationTitle string         `json:"conversation_title"`
+	InstallationID    string         `json:"installation_id"`
+	AgentID           string         `json:"agent_id"`
+	BotName           string         `json:"bot_name"`
+	BotIdentityIssue  string         `json:"bot_identity_issue"`
+	LastActiveAt      sql.NullString `json:"last_active_at"`
+	MentionCount      int64          `json:"mention_count"`
 }
 
 // Active rows are the default inventory. Inactive rows are loaded only when a
 // client expands one installation's historical section.
 func (q *Queries) ListDingTalkGroupPresencesByWorkspace(ctx context.Context, arg ListDingTalkGroupPresencesByWorkspaceParams) ([]ListDingTalkGroupPresencesByWorkspaceRow, error) {
-	rows, err := q.db.Query(ctx, listDingTalkGroupPresencesByWorkspace,
+	rows, err := q.db.QueryContext(ctx, listDingTalkGroupPresencesByWorkspace,
 		arg.WorkspaceID,
 		arg.FilterByAgent,
 		arg.AgentID,
@@ -340,6 +578,9 @@ func (q *Queries) ListDingTalkGroupPresencesByWorkspace(ctx context.Context, arg
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -350,20 +591,20 @@ const listDingTalkUserBindingsForMember = `-- name: ListDingTalkUserBindingsForM
 
 SELECT installation_id, channel_user_id
 FROM channel_user_binding
-WHERE workspace_id = $1
-  AND multica_user_id = $2
+WHERE workspace_id = ?1
+  AND multica_user_id = ?2
   AND channel_type = 'dingtalk'
 ORDER BY bound_at DESC, id ASC
 `
 
 type ListDingTalkUserBindingsForMemberParams struct {
-	WorkspaceID   pgtype.UUID `json:"workspace_id"`
-	MulticaUserID pgtype.UUID `json:"multica_user_id"`
+	WorkspaceID   string `json:"workspace_id"`
+	MulticaUserID string `json:"multica_user_id"`
 }
 
 type ListDingTalkUserBindingsForMemberRow struct {
-	InstallationID pgtype.UUID `json:"installation_id"`
-	ChannelUserID  string      `json:"channel_user_id"`
+	InstallationID string `json:"installation_id"`
+	ChannelUserID  string `json:"channel_user_id"`
 }
 
 // DingTalk-specific installation identity operations. The underlying channel_*
@@ -373,7 +614,7 @@ type ListDingTalkUserBindingsForMemberRow struct {
 // installation list is member-visible, so returning every member's staff id
 // here would expose staff ID values more broadly than necessary.
 func (q *Queries) ListDingTalkUserBindingsForMember(ctx context.Context, arg ListDingTalkUserBindingsForMemberParams) ([]ListDingTalkUserBindingsForMemberRow, error) {
-	rows, err := q.db.Query(ctx, listDingTalkUserBindingsForMember, arg.WorkspaceID, arg.MulticaUserID)
+	rows, err := q.db.QueryContext(ctx, listDingTalkUserBindingsForMember, arg.WorkspaceID, arg.MulticaUserID)
 	if err != nil {
 		return nil, err
 	}
@@ -386,6 +627,9 @@ func (q *Queries) ListDingTalkUserBindingsForMember(ctx context.Context, arg Lis
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -393,195 +637,189 @@ func (q *Queries) ListDingTalkUserBindingsForMember(ctx context.Context, arg Lis
 }
 
 const lockDingTalkInstallationOwner = `-- name: LockDingTalkInstallationOwner :exec
-SELECT pg_advisory_xact_lock(
-    hashtextextended(
-        ($1::uuid)::text || ':' ||
-        ($2::uuid)::text || ':dingtalk',
-        0
-    )
-)
+SELECT 1
 `
-
-type LockDingTalkInstallationOwnerParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	AgentID     pgtype.UUID `json:"agent_id"`
-}
 
 // Serializes install / replacement decisions for one logical
 // (workspace, agent, channel) slot. A different-AppKey replacement deletes the
 // old row and inserts a fresh installation id; the advisory lock closes the
 // gap where two concurrent replacements could otherwise miss each other's new
 // row and update it in place, carrying identity state across robot boundaries.
-func (q *Queries) LockDingTalkInstallationOwner(ctx context.Context, arg LockDingTalkInstallationOwnerParams) error {
-	_, err := q.db.Exec(ctx, lockDingTalkInstallationOwner, arg.WorkspaceID, arg.AgentID)
+func (q *Queries) LockDingTalkInstallationOwner(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, lockDingTalkInstallationOwner)
 	return err
 }
 
 const recordDingTalkGroupActivity = `-- name: RecordDingTalkGroupActivity :one
 UPDATE dingtalk_group_presence
 SET last_active_at = now(), mention_count = mention_count + 1, updated_at = now()
-WHERE installation_id = $1
-  AND conversation_id = $2
+WHERE installation_id = ?1
+  AND conversation_id = ?2
 RETURNING installation_id
 `
 
 type RecordDingTalkGroupActivityParams struct {
-	InstallationID pgtype.UUID `json:"installation_id"`
-	ConversationID string      `json:"conversation_id"`
+	InstallationID string `json:"installation_id"`
+	ConversationID string `json:"conversation_id"`
 }
 
 // Advances activity only after the deduplicated inbound message is durable.
 // Presence observation runs first, so a forgotten group is recreated before
 // this update executes.
-func (q *Queries) RecordDingTalkGroupActivity(ctx context.Context, arg RecordDingTalkGroupActivityParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, recordDingTalkGroupActivity, arg.InstallationID, arg.ConversationID)
-	var installation_id pgtype.UUID
+func (q *Queries) RecordDingTalkGroupActivity(ctx context.Context, arg RecordDingTalkGroupActivityParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, recordDingTalkGroupActivity, arg.InstallationID, arg.ConversationID)
+	var installation_id string
 	err := row.Scan(&installation_id)
 	return installation_id, err
 }
 
 const recordDingTalkGroupPresence = `-- name: RecordDingTalkGroupPresence :one
-WITH target AS MATERIALIZED (
-    SELECT channel_installation.id, channel_installation.workspace_id
-    FROM channel_installation
-    WHERE channel_installation.id = $1
-      AND channel_installation.workspace_id = $2
-      AND channel_installation.channel_type = 'dingtalk'
-      AND channel_installation.status = 'active'
-    FOR KEY SHARE
-), current_identity AS (
-    SELECT identity.installation_id, identity.bot_name, identity.bot_identity_issue
-    FROM target
-    JOIN dingtalk_bot_identity identity ON identity.installation_id = target.id
-), observed AS (
-    INSERT INTO dingtalk_group_presence (
-        workspace_id, installation_id, conversation_id, conversation_title,
-        bot_name, bot_identity_issue
-    )
-    SELECT
-        target.workspace_id,
-        target.id,
-        $3::text,
-        $4::text,
-        current_identity.bot_name,
-        current_identity.bot_identity_issue
-    FROM target
-    JOIN current_identity ON current_identity.installation_id = target.id
-    ON CONFLICT (installation_id, conversation_id) DO UPDATE SET
-        conversation_title = CASE
-            WHEN EXCLUDED.conversation_title <> '' THEN EXCLUDED.conversation_title
-            ELSE dingtalk_group_presence.conversation_title
-        END,
-        bot_name = EXCLUDED.bot_name,
-        bot_identity_issue = EXCLUDED.bot_identity_issue,
-        updated_at = now()
-    WHERE (
-        dingtalk_group_presence.conversation_title IS DISTINCT FROM EXCLUDED.conversation_title
-        AND EXCLUDED.conversation_title <> ''
-    )
-       OR dingtalk_group_presence.bot_name IS DISTINCT FROM EXCLUDED.bot_name
-       OR dingtalk_group_presence.bot_identity_issue IS DISTINCT FROM EXCLUDED.bot_identity_issue
-    RETURNING installation_id
-), synced_identity AS (
-    UPDATE dingtalk_group_presence presence
-    SET
-        bot_name = current_identity.bot_name,
-        bot_identity_issue = current_identity.bot_identity_issue,
-        updated_at = now()
-    FROM current_identity
-    WHERE presence.installation_id = current_identity.installation_id
-      AND presence.conversation_id <> $3::text
-      AND (
-          presence.bot_name IS DISTINCT FROM current_identity.bot_name
-          OR presence.bot_identity_issue IS DISTINCT FROM current_identity.bot_identity_issue
-      )
+INSERT INTO dingtalk_group_presence (
+    workspace_id, installation_id, conversation_id, conversation_title,
+    bot_name, bot_identity_issue
 )
-SELECT target.id FROM target
+SELECT
+    c.workspace_id AS workspace_id,
+    c.id AS installation_id,
+    ?1 AS conversation_id,
+    ?2 AS conversation_title,
+    identity.bot_name AS bot_name,
+    identity.bot_identity_issue AS bot_identity_issue
+FROM channel_installation c
+JOIN dingtalk_bot_identity identity ON identity.installation_id = c.id
+WHERE c.id = ?3
+  AND c.workspace_id = ?4
+  AND c.channel_type = 'dingtalk'
+  AND c.status = 'active'
+ON CONFLICT (installation_id, conversation_id) DO UPDATE SET
+    conversation_title = CASE
+        WHEN excluded.conversation_title <> '' THEN excluded.conversation_title
+        ELSE dingtalk_group_presence.conversation_title
+    END,
+    bot_name = excluded.bot_name,
+    bot_identity_issue = excluded.bot_identity_issue,
+    updated_at = CASE
+        WHEN (
+            dingtalk_group_presence.conversation_title IS NOT excluded.conversation_title
+            AND excluded.conversation_title <> ''
+        )
+           OR dingtalk_group_presence.bot_name IS NOT excluded.bot_name
+           OR dingtalk_group_presence.bot_identity_issue IS NOT excluded.bot_identity_issue
+        THEN now()
+        ELSE dingtalk_group_presence.updated_at
+    END
+RETURNING dingtalk_group_presence.installation_id
 `
 
 type RecordDingTalkGroupPresenceParams struct {
-	InstallationID    pgtype.UUID `json:"installation_id"`
-	WorkspaceID       pgtype.UUID `json:"workspace_id"`
-	ConversationID    string      `json:"conversation_id"`
-	ConversationTitle string      `json:"conversation_title"`
+	ConversationID    string `json:"conversation_id"`
+	ConversationTitle string `json:"conversation_title"`
+	InstallationID    string `json:"installation_id"`
+	WorkspaceID       string `json:"workspace_id"`
 }
 
 // Records an observed bot/group pair without carrying routing state. The
 // installation identity is copied only for compatibility with the preceding
 // draft; readers use dingtalk_bot_identity as the authority.
-func (q *Queries) RecordDingTalkGroupPresence(ctx context.Context, arg RecordDingTalkGroupPresenceParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, recordDingTalkGroupPresence,
-		arg.InstallationID,
-		arg.WorkspaceID,
+// Order: RecordDingTalkGroupPresence, then RecordDingTalkGroupPresence_Step2.
+// Step2 copies the current identity onto the installation's other groups.
+func (q *Queries) RecordDingTalkGroupPresence(ctx context.Context, arg RecordDingTalkGroupPresenceParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, recordDingTalkGroupPresence,
 		arg.ConversationID,
 		arg.ConversationTitle,
+		arg.InstallationID,
+		arg.WorkspaceID,
 	)
-	var id pgtype.UUID
-	err := row.Scan(&id)
-	return id, err
+	var installation_id string
+	err := row.Scan(&installation_id)
+	return installation_id, err
+}
+
+const recordDingTalkGroupPresence_Step2 = `-- name: RecordDingTalkGroupPresence_Step2 :exec
+UPDATE dingtalk_group_presence
+SET bot_name = (
+        SELECT identity.bot_name FROM dingtalk_bot_identity identity
+        WHERE identity.installation_id = dingtalk_group_presence.installation_id
+    ),
+    bot_identity_issue = (
+        SELECT identity.bot_identity_issue FROM dingtalk_bot_identity identity
+        WHERE identity.installation_id = dingtalk_group_presence.installation_id
+    ),
+    updated_at = now()
+WHERE dingtalk_group_presence.installation_id = ?1
+  AND dingtalk_group_presence.conversation_id <> ?2
+  AND EXISTS (
+      SELECT 1 FROM dingtalk_bot_identity identity
+      WHERE identity.installation_id = dingtalk_group_presence.installation_id
+        AND (
+            dingtalk_group_presence.bot_name IS NOT identity.bot_name
+            OR dingtalk_group_presence.bot_identity_issue IS NOT identity.bot_identity_issue
+        )
+  )
+`
+
+type RecordDingTalkGroupPresence_Step2Params struct {
+	InstallationID string `json:"installation_id"`
+	ConversationID string `json:"conversation_id"`
+}
+
+func (q *Queries) RecordDingTalkGroupPresence_Step2(ctx context.Context, arg RecordDingTalkGroupPresence_Step2Params) error {
+	_, err := q.db.ExecContext(ctx, recordDingTalkGroupPresence_Step2, arg.InstallationID, arg.ConversationID)
+	return err
 }
 
 const upsertDingTalkBotIdentity = `-- name: UpsertDingTalkBotIdentity :one
-WITH target AS MATERIALIZED (
-    SELECT channel_installation.id, channel_installation.workspace_id
-    FROM channel_installation
-    WHERE channel_installation.id = $1
-      AND channel_installation.workspace_id = $2
-      AND channel_installation.channel_type = 'dingtalk'
-      AND channel_installation.status = 'active'
-    FOR UPDATE
-), prior_identity AS (
-    SELECT
-        COALESCE(identity.bot_name, '')::text AS bot_name,
-        COALESCE(identity.bot_identity_issue, '')::text AS bot_identity_issue
-    FROM target
-    LEFT JOIN dingtalk_bot_identity identity ON identity.installation_id = target.id
-), upserted_identity AS (
-    INSERT INTO dingtalk_bot_identity (
-        workspace_id, installation_id, bot_name, bot_identity_issue
-    )
-    SELECT
-        target.workspace_id,
-        target.id,
-        COALESCE(NULLIF($3::text, ''), prior_identity.bot_name),
-        CASE
-            WHEN $4::text <> '' THEN $4::text
-            WHEN $3::text <> '' THEN ''
-            ELSE prior_identity.bot_identity_issue
-        END
-    FROM target, prior_identity
-    ON CONFLICT (installation_id) DO UPDATE SET
-        workspace_id = EXCLUDED.workspace_id,
-        bot_name = EXCLUDED.bot_name,
-        bot_identity_issue = EXCLUDED.bot_identity_issue,
-        updated_at = now()
-    WHERE dingtalk_bot_identity.workspace_id IS DISTINCT FROM EXCLUDED.workspace_id
-       OR dingtalk_bot_identity.bot_name IS DISTINCT FROM EXCLUDED.bot_name
-       OR dingtalk_bot_identity.bot_identity_issue IS DISTINCT FROM EXCLUDED.bot_identity_issue
-    RETURNING installation_id
+INSERT INTO dingtalk_bot_identity (
+    workspace_id, installation_id, bot_name, bot_identity_issue
 )
-SELECT target.id FROM target
+SELECT
+    c.workspace_id AS workspace_id,
+    c.id AS installation_id,
+    COALESCE(NULLIF(?1, ''), COALESCE(identity.bot_name, '')) AS bot_name,
+    CASE
+        WHEN ?2 <> '' THEN ?2
+        WHEN ?1 <> '' THEN ''
+        ELSE COALESCE(identity.bot_identity_issue, '')
+    END AS bot_identity_issue
+FROM channel_installation c
+LEFT JOIN dingtalk_bot_identity identity ON identity.installation_id = c.id
+WHERE c.id = ?3
+  AND c.workspace_id = ?4
+  AND c.channel_type = 'dingtalk'
+  AND c.status = 'active'
+ON CONFLICT (installation_id) DO UPDATE SET
+    workspace_id = excluded.workspace_id,
+    bot_name = excluded.bot_name,
+    bot_identity_issue = excluded.bot_identity_issue,
+    updated_at = CASE
+        WHEN dingtalk_bot_identity.workspace_id IS NOT excluded.workspace_id
+          OR dingtalk_bot_identity.bot_name IS NOT excluded.bot_name
+          OR dingtalk_bot_identity.bot_identity_issue IS NOT excluded.bot_identity_issue
+        THEN now()
+        ELSE dingtalk_bot_identity.updated_at
+    END
+RETURNING installation_id
 `
 
 type UpsertDingTalkBotIdentityParams struct {
-	InstallationID   pgtype.UUID `json:"installation_id"`
-	WorkspaceID      pgtype.UUID `json:"workspace_id"`
-	BotName          string      `json:"bot_name"`
-	BotIdentityIssue string      `json:"bot_identity_issue"`
+	BotName          interface{} `json:"bot_name"`
+	BotIdentityIssue interface{} `json:"bot_identity_issue"`
+	InstallationID   string      `json:"installation_id"`
+	WorkspaceID      string      `json:"workspace_id"`
 }
 
 // Bot identity and the optional permission issue belong to the installation,
 // not to any one group. Keep this as a separate command so the mixed-version
 // compatibility trigger can observe the completed command state when the
 // group-presence command runs next.
-func (q *Queries) UpsertDingTalkBotIdentity(ctx context.Context, arg UpsertDingTalkBotIdentityParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, upsertDingTalkBotIdentity,
-		arg.InstallationID,
-		arg.WorkspaceID,
+func (q *Queries) UpsertDingTalkBotIdentity(ctx context.Context, arg UpsertDingTalkBotIdentityParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, upsertDingTalkBotIdentity,
 		arg.BotName,
 		arg.BotIdentityIssue,
+		arg.InstallationID,
+		arg.WorkspaceID,
 	)
-	var id pgtype.UUID
-	err := row.Scan(&id)
-	return id, err
+	var installation_id string
+	err := row.Scan(&installation_id)
+	return installation_id, err
 }

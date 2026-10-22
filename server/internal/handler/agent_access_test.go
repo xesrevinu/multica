@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -18,14 +17,14 @@ import (
 
 func TestDeriveAgentRuntimeAvailability(t *testing.T) {
 	now := time.Date(2026, time.April, 27, 12, 0, 0, 0, time.UTC)
-	timestamp := func(at time.Time) pgtype.Timestamptz {
-		return pgtype.Timestamptz{Time: at, Valid: true}
+	timestamp := func(at time.Time) string {
+		return at.UTC().Format(time.RFC3339Nano)
 	}
 
 	for _, tc := range []struct {
 		name   string
 		status string
-		seen   pgtype.Timestamptz
+		seen   string
 		want   string
 	}{
 		{name: "online", status: "online", want: "online"},
@@ -36,7 +35,7 @@ func TestDeriveAgentRuntimeAvailability(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := deriveAgentRuntimeAvailability(db.AgentRuntime{
 				Status:     tc.status,
-				LastSeenAt: tc.seen,
+				LastSeenAt: nullString(tc.seen),
 			}, now)
 			if got != tc.want {
 				t.Fatalf("deriveAgentRuntimeAvailability = %q, want %q", got, tc.want)
@@ -48,7 +47,7 @@ func TestDeriveAgentRuntimeAvailability(t *testing.T) {
 func TestLoadAgentRuntimeAvailability_PrivilegedViewerSkipsRuntimeQuery(t *testing.T) {
 	h := &Handler{}
 	agents := []db.Agent{{
-		RuntimeID: util.MustParseUUID("11111111-1111-1111-1111-111111111111"),
+		RuntimeID: nullString(util.MustParseUUID("11111111-1111-1111-1111-111111111111")),
 	}}
 
 	for _, role := range []string{"owner", "admin"} {
@@ -82,7 +81,7 @@ func TestMemberAllowedToViewAgent_Pure(t *testing.T) {
 	otherUserID := "22222222-2222-2222-2222-222222222222"
 
 	agent := db.Agent{
-		OwnerID:        util.MustParseUUID(ownerUserID),
+		OwnerID:        nullString(util.MustParseUUID(ownerUserID)),
 		PermissionMode: "private",
 	}
 

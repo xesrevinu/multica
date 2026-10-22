@@ -1,10 +1,10 @@
 package util
 
 import (
-	"encoding/hex"
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -16,21 +16,17 @@ import (
 // request bodies, headers) and pair it with a 4xx response on error.
 // For trusted, already-validated UUID strings (sqlc round-trips, fixtures),
 // use MustParseUUID instead.
-func ParseUUID(s string) (pgtype.UUID, error) {
-	var u pgtype.UUID
-	if err := u.Scan(s); err != nil {
-		return u, fmt.Errorf("invalid UUID %q: %w", s, err)
+func ParseUUID(s string) (string, error) {
+	if _, err := uuid.Parse(s); err != nil {
+		return "", fmt.Errorf("invalid UUID %q: %w", s, err)
 	}
-	if !u.Valid {
-		return u, fmt.Errorf("invalid UUID: %q", s)
-	}
-	return u, nil
+	return s, nil
 }
 
 // MustParseUUID parses s into a pgtype.UUID and panics on invalid input.
 // Reserve for trusted callers (already-validated round-trips, test fixtures).
 // At a request boundary, use ParseUUID and surface a 4xx instead.
-func MustParseUUID(s string) pgtype.UUID {
+func MustParseUUID(s string) string {
 	u, err := ParseUUID(s)
 	if err != nil {
 		panic(err)
@@ -38,22 +34,8 @@ func MustParseUUID(s string) pgtype.UUID {
 	return u
 }
 
-func UUIDToString(u pgtype.UUID) string {
-	if !u.Valid {
-		return ""
-	}
-	b := u.Bytes
-	dst := make([]byte, 36)
-	hex.Encode(dst[0:8], b[0:4])
-	dst[8] = '-'
-	hex.Encode(dst[9:13], b[4:6])
-	dst[13] = '-'
-	hex.Encode(dst[14:18], b[6:8])
-	dst[18] = '-'
-	hex.Encode(dst[19:23], b[8:10])
-	dst[23] = '-'
-	hex.Encode(dst[24:36], b[10:16])
-	return string(dst)
+func UUIDToString(u string) string {
+	return u
 }
 
 func TextToPtr(t pgtype.Text) *string {
@@ -151,12 +133,11 @@ func ParseCalendarDate(s string) (pgtype.Date, error) {
 	return pgtype.Date{}, fmt.Errorf("invalid date %q: expected YYYY-MM-DD", s)
 }
 
-func UUIDToPtr(u pgtype.UUID) *string {
-	if !u.Valid {
+func UUIDToPtr(u string) *string {
+	if u == "" {
 		return nil
 	}
-	s := UUIDToString(u)
-	return &s
+	return &u
 }
 
 func Int8ToPtr(v pgtype.Int8) *int64 {

@@ -2,11 +2,10 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -14,7 +13,7 @@ import (
 // notice.
 type AutopilotNotificationRecipient struct {
 	Type string
-	ID   pgtype.UUID
+	ID   string
 }
 
 // ListWorkspaceManagerNotificationRecipients returns the current workspace
@@ -22,7 +21,7 @@ type AutopilotNotificationRecipient struct {
 func ListWorkspaceManagerNotificationRecipients(
 	ctx context.Context,
 	queries *db.Queries,
-	workspaceID pgtype.UUID,
+	workspaceID string,
 ) ([]AutopilotNotificationRecipient, error) {
 	userIDs, err := queries.ListWorkspaceManagerUserIDs(ctx, workspaceID)
 	if err != nil {
@@ -44,14 +43,14 @@ func ResolveAutopilotNotificationRecipient(
 	autopilot db.Autopilot,
 ) (recipient AutopilotNotificationRecipient, ok bool, err error) {
 	if autopilot.CreatedByType == "member" {
-		if !autopilot.CreatedByID.Valid {
+		if autopilot.CreatedByID == "" {
 			return AutopilotNotificationRecipient{}, false, nil
 		}
 		member, err := queries.GetMemberByUserAndWorkspace(ctx, db.GetMemberByUserAndWorkspaceParams{
 			UserID:      autopilot.CreatedByID,
 			WorkspaceID: autopilot.WorkspaceID,
 		})
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return AutopilotNotificationRecipient{}, false, nil
 		}
 		if err != nil {
@@ -67,21 +66,21 @@ func ResolveAutopilotNotificationRecipient(
 	}
 
 	agent, err := queries.GetAgent(ctx, autopilot.CreatedByID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return AutopilotNotificationRecipient{}, false, nil
 	}
 	if err != nil {
 		return AutopilotNotificationRecipient{}, false, fmt.Errorf("load autopilot creator agent: %w", err)
 	}
-	if !agent.OwnerID.Valid || agent.WorkspaceID.Bytes != autopilot.WorkspaceID.Bytes {
+	if !agent.OwnerID.Valid || agent.WorkspaceID != autopilot.WorkspaceID {
 		return AutopilotNotificationRecipient{}, false, nil
 	}
 
 	member, err := queries.GetMemberByUserAndWorkspace(ctx, db.GetMemberByUserAndWorkspaceParams{
-		UserID:      agent.OwnerID,
+		UserID:      agent.OwnerID.String,
 		WorkspaceID: autopilot.WorkspaceID,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return AutopilotNotificationRecipient{}, false, nil
 	}
 	if err != nil {

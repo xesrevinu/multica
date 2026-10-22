@@ -2,15 +2,13 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/testutil"
@@ -66,7 +64,7 @@ func TestCreateComment_BumpsIssueActivity(t *testing.T) {
 // single carrier of "a comment always belongs to an issue in the same
 // workspace and always bumps it". If the passed workspace does not match the
 // target issue's workspace, the leading UPDATE matches no issue row, the
-// dependent INSERT selects nothing, and the :one query returns pgx.ErrNoRows —
+// dependent INSERT selects nothing, and the :one query returns sql.ErrNoRows —
 // so no mis-attributed comment is written and the issue is not touched.
 func TestCreateComment_WorkspaceMismatchPersistsNothing(t *testing.T) {
 	if testHandler == nil || testPool == nil {
@@ -92,8 +90,8 @@ func TestCreateComment_WorkspaceMismatchPersistsNothing(t *testing.T) {
 		Content:     "should never persist",
 		Type:        "comment",
 	})
-	if !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("expected pgx.ErrNoRows on workspace mismatch, got %v", err)
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected sql.ErrNoRows on workspace mismatch, got %v", err)
 	}
 
 	var commentCount int
@@ -158,7 +156,7 @@ func TestUpdateAndDeleteCommentBumpIssueActivity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateComment: %v", err)
 	}
-	if updated.IssueRevision == 0 {
+	if updated.Column19 == 0 {
 		t.Fatal("comment edit omitted the advanced issue revision")
 	}
 	if got := readActivity(); !got.After(base) {
@@ -269,8 +267,8 @@ func TestUpdateCommentLosingRaceDoesNotTouchIssue(t *testing.T) {
 		_, updateErr := testHandler.Queries.UpdateComment(context.Background(), db.UpdateCommentParams{
 			ID:               parseUUID(commentID),
 			Content:          "loser",
-			ExpectedRevision: pgtype.Int8{Int64: 1, Valid: true},
-			ContentBase:      pgtype.Text{String: "base", Valid: true},
+			ExpectedRevision: sql.NullInt64{Int64: 1, Valid: true},
+			ContentBase:      sql.NullString{String: "base", Valid: true},
 		})
 		done <- updateErr
 	}()
@@ -282,8 +280,8 @@ func TestUpdateCommentLosingRaceDoesNotTouchIssue(t *testing.T) {
 	if err := holder.Commit(ctx); err != nil {
 		t.Fatalf("commit holder: %v", err)
 	}
-	if err := <-done; !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("losing update error = %v, want pgx.ErrNoRows", err)
+	if err := <-done; !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("losing update error = %v, want sql.ErrNoRows", err)
 	}
 
 	assertIssueActivityState(t, issueID, 7, time.Date(2020, time.January, 1, 0, 0, 0, 0, time.UTC))
@@ -319,7 +317,7 @@ func TestDeleteCommentLosingRaceDoesNotTouchIssue(t *testing.T) {
 			lockDone <- errors.New("losing delete unexpectedly changed a row")
 			return
 		}
-		if errors.Is(deleteErr, pgx.ErrNoRows) {
+		if errors.Is(deleteErr, sql.ErrNoRows) {
 			deleteErr = nil
 		}
 		lockDone <- deleteErr
@@ -360,7 +358,7 @@ func TestCommentMutationsFollowIssueTeardownLockOrder(t *testing.T) {
 					ID:      parseUUID(commentID),
 					Content: "concurrent edit",
 				})
-				if errors.Is(err, pgx.ErrNoRows) {
+				if errors.Is(err, sql.ErrNoRows) {
 					return nil
 				}
 				if err != nil {
@@ -374,7 +372,7 @@ func TestCommentMutationsFollowIssueTeardownLockOrder(t *testing.T) {
 			queryName: "LockCommentForDelete",
 			mutate: func(ctx context.Context, commentID string) error {
 				_, err := testHandler.deleteComment(ctx, parseUUID(commentID), parseUUID(testWorkspaceID))
-				if errors.Is(err, pgx.ErrNoRows) {
+				if errors.Is(err, sql.ErrNoRows) {
 					return nil
 				}
 				if err != nil {
@@ -397,7 +395,7 @@ func TestCommentMutationsFollowIssueTeardownLockOrder(t *testing.T) {
 			if err != nil {
 				t.Fatalf("begin issue teardown: %v", err)
 			}
-			defer teardown.Rollback(context.Background())
+			defer teardown.Rollback(ctx)
 			qtx := testHandler.Queries.WithTx(teardown)
 			if _, err := qtx.LockIssueForDelete(ctx, db.LockIssueForDeleteParams{
 				ID:          parseUUID(issueID),
@@ -422,7 +420,7 @@ func TestCommentMutationsFollowIssueTeardownLockOrder(t *testing.T) {
 			if deleteErr == nil {
 				deleteErr = teardown.Commit(ctx)
 			} else {
-				_ = teardown.Rollback(context.Background())
+				_ = teardown.Rollback(ctx)
 			}
 			mutationErr := <-mutationDone
 			if deleteErr != nil {

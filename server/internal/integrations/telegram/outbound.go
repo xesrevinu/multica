@@ -13,8 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -77,7 +76,7 @@ type Outbound struct {
 // outboundQueries is the slice of generated queries the subscriber needs.
 // *db.Queries satisfies it.
 type outboundQueries interface {
-	GetChannelTaskDelivery(ctx context.Context, taskID pgtype.UUID) (db.ChannelTaskDelivery, error)
+	GetChannelTaskDelivery(ctx context.Context, taskID string) (db.ChannelTaskDelivery, error)
 	GetChannelInstallation(ctx context.Context, arg db.GetChannelInstallationParams) (db.ChannelInstallation, error)
 	// ListAttachmentsByChatMessage is the files the agent bound to its reply,
 	// read by the attachment hop (outbound_media.go).
@@ -86,16 +85,16 @@ type outboundQueries interface {
 	// Reply-delivery ownership. The streamed placeholder, the final answer and
 	// the failure notice agree on who owns a reply through these and nothing
 	// else — see delivery.go.
-	GetChannelReplyTurn(ctx context.Context, taskID pgtype.UUID) (db.GetChannelReplyTurnRow, error)
+	GetChannelReplyTurn(ctx context.Context, taskID string) (db.GetChannelReplyTurnRow, error)
 	AcquireChannelReplyDelivery(ctx context.Context, arg db.AcquireChannelReplyDeliveryParams) (db.ChannelReplyDelivery, error)
-	GetChannelReplyDelivery(ctx context.Context, turnID pgtype.UUID) (db.ChannelReplyDelivery, error)
+	GetChannelReplyDelivery(ctx context.Context, turnID string) (db.ChannelReplyDelivery, error)
 	RenewChannelReplyDelivery(ctx context.Context, arg db.RenewChannelReplyDeliveryParams) (int64, error)
 	ReleaseChannelReplyDelivery(ctx context.Context, arg db.ReleaseChannelReplyDeliveryParams) (int64, error)
 	MarkChannelReplyDeliverySending(ctx context.Context, arg db.MarkChannelReplyDeliverySendingParams) (int64, error)
 	RecordChannelReplyDeliveryPlaceholder(ctx context.Context, arg db.RecordChannelReplyDeliveryPlaceholderParams) (int64, error)
 	RecordChannelReplyDeliveryChunk(ctx context.Context, arg db.RecordChannelReplyDeliveryChunkParams) (int64, error)
 	ResetChannelReplyDeliverySend(ctx context.Context, arg db.ResetChannelReplyDeliverySendParams) (int64, error)
-	MarkChannelReplyDeliverySendUnknown(ctx context.Context, turnID pgtype.UUID) (int64, error)
+	MarkChannelReplyDeliverySendUnknown(ctx context.Context, turnID string) (int64, error)
 	SettleChannelReplyDelivery(ctx context.Context, arg db.SettleChannelReplyDeliveryParams) (int64, error)
 	CloseChannelReplyDeliveryTurn(ctx context.Context, arg db.CloseChannelReplyDeliveryTurnParams) (db.ChannelReplyDelivery, error)
 }
@@ -360,7 +359,7 @@ func (o *Outbound) handleTaskMessage(e events.Event) {
 		turn = st.turn
 	}
 	o.mu.Unlock()
-	if !turn.id.Valid {
+	if turn.id == "" {
 		resolved, err := o.turnFor(ctx, target.taskID)
 		if err != nil {
 			// Treating the task as its own turn here would open a second reply
@@ -546,7 +545,7 @@ func (o *Outbound) enqueueTerminalReply(e events.Event) {
 func (o *Outbound) enqueueTerminal(e events.Event, kind terminalKind, settleReason string) {
 	_, hasTaskID := eventTaskID(e)
 	sessionID, sessionErr := util.ParseUUID(e.ChatSessionID)
-	if !hasTaskID || sessionErr != nil || !sessionID.Valid {
+	if !hasTaskID || sessionErr != nil || sessionID == "" {
 		o.logger.Error("telegram outbound: terminal reply has invalid identity",
 			"task_id", e.TaskID, "chat_session_id", e.ChatSessionID)
 		o.clearStream(e)
@@ -1279,7 +1278,7 @@ func (o *Outbound) sweepSettledStreams(ctx context.Context) {
 	var candidates []candidate
 	o.mu.Lock()
 	for key, st := range o.streams {
-		if !st.turn.id.Valid || st.lastFrameAt.IsZero() || now.Sub(st.lastFrameAt) < streamSweepGrace {
+		if st.turn.id == "" || st.lastFrameAt.IsZero() || now.Sub(st.lastFrameAt) < streamSweepGrace {
 			continue
 		}
 		candidates = append(candidates, candidate{key: key, stream: st, turn: st.turn, seenAt: st.lastFrameAt})
@@ -1493,9 +1492,9 @@ type replyTarget struct {
 	botToken  string
 
 	// Identity of the reply this target belongs to, for the ownership row.
-	taskID         pgtype.UUID
-	bindingID      pgtype.UUID
-	installationID pgtype.UUID
+	taskID         string
+	bindingID      string
+	installationID string
 	channelChatID  string
 }
 
@@ -1510,7 +1509,7 @@ func (o *Outbound) resolveTarget(ctx context.Context, e events.Event, _ bool) (*
 	}
 	delivery, err := o.q.GetChannelTaskDelivery(ctx, taskID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("lookup telegram task delivery: %w", err)
@@ -1562,9 +1561,9 @@ func telegramBindingFromTaskDelivery(delivery db.ChannelTaskDelivery) db.Channel
 // the binding key is a composite "chat:thread") and the reply thread.
 func outboundTarget(b db.ChannelChatSessionBinding) (chatID, threadID, replyTo int64) {
 	raw := b.ChannelChatID
-	if len(b.Config) > 0 {
+	if b.Config != "" {
 		var cfg telegramBindingConfig
-		if err := json.Unmarshal(b.Config, &cfg); err == nil && cfg.ChatID != "" {
+		if err := json.Unmarshal([]byte(b.Config), &cfg); err == nil && cfg.ChatID != "" {
 			raw = cfg.ChatID
 		}
 	}
@@ -1586,7 +1585,7 @@ func optionalReplyParameters(messageID int64) *replyParameters {
 }
 
 // eventTaskID extracts the task id from the event envelope or payload.
-func eventTaskID(e events.Event) (pgtype.UUID, bool) {
+func eventTaskID(e events.Event) (string, bool) {
 	raw := e.TaskID
 	if raw == "" {
 		switch p := e.Payload.(type) {
@@ -1597,7 +1596,7 @@ func eventTaskID(e events.Event) (pgtype.UUID, bool) {
 		}
 	}
 	id, err := util.ParseUUID(raw)
-	return id, err == nil && id.Valid
+	return id, err == nil && id != ""
 }
 
 // chatDoneContent extracts the reply text from an EventChatDone payload.

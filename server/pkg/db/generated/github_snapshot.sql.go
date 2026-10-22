@@ -7,27 +7,26 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const deleteGitHubPRCheckRuns = `-- name: DeleteGitHubPRCheckRuns :exec
-DELETE FROM github_pull_request_check_run WHERE pr_id = $1
+DELETE FROM github_pull_request_check_run WHERE pr_id = ?1
 `
 
 // First half of the atomic per-check replace. Runs inside the same transaction
 // as UpdateGitHubPRSnapshot and the inserts below.
-func (q *Queries) DeleteGitHubPRCheckRuns(ctx context.Context, prID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteGitHubPRCheckRuns, prID)
+func (q *Queries) DeleteGitHubPRCheckRuns(ctx context.Context, prID string) error {
+	_, err := q.db.ExecContext(ctx, deleteGitHubPRCheckRuns, prID)
 	return err
 }
 
 const getGitHubPullRequestByID = `-- name: GetGitHubPullRequestByID :one
-SELECT id, workspace_id, installation_id, repo_owner, repo_name, pr_number, title, state, html_url, branch, author_login, author_avatar_url, merged_at, closed_at, pr_created_at, pr_updated_at, created_at, updated_at, head_sha, mergeable_state, additions, deletions, changed_files, api_mergeable, api_merge_state_status, checks_rollup_state, snapshot_head_sha, snapshot_fetched_at FROM github_pull_request WHERE id = $1
+SELECT id, workspace_id, installation_id, repo_owner, repo_name, pr_number, title, state, html_url, branch, author_login, author_avatar_url, merged_at, closed_at, pr_created_at, pr_updated_at, created_at, updated_at, head_sha, mergeable_state, additions, deletions, changed_files, api_mergeable, api_merge_state_status, checks_rollup_state, snapshot_head_sha, snapshot_fetched_at FROM github_pull_request WHERE id = ?1
 `
 
-func (q *Queries) GetGitHubPullRequestByID(ctx context.Context, id pgtype.UUID) (GithubPullRequest, error) {
-	row := q.db.QueryRow(ctx, getGitHubPullRequestByID, id)
+func (q *Queries) GetGitHubPullRequestByID(ctx context.Context, id string) (GithubPullRequest, error) {
+	row := q.db.QueryRowContext(ctx, getGitHubPullRequestByID, id)
 	var i GithubPullRequest
 	err := row.Scan(
 		&i.ID,
@@ -66,23 +65,23 @@ const insertGitHubPRCheckRun = `-- name: InsertGitHubPRCheckRun :exec
 INSERT INTO github_pull_request_check_run (
     pr_id, head_sha, ordinal, name, status, conclusion, details_url, is_status_context
 ) VALUES (
-    $1, $2, $3, $4, $5, $7, $8, $6
+    ?1, ?2, ?3, ?4, ?5, ?7, ?8, ?6
 )
 `
 
 type InsertGitHubPRCheckRunParams struct {
-	PrID            pgtype.UUID `json:"pr_id"`
-	HeadSha         string      `json:"head_sha"`
-	Ordinal         int32       `json:"ordinal"`
-	Name            string      `json:"name"`
-	Status          string      `json:"status"`
-	IsStatusContext bool        `json:"is_status_context"`
-	Conclusion      pgtype.Text `json:"conclusion"`
-	DetailsUrl      pgtype.Text `json:"details_url"`
+	PrID            string         `json:"pr_id"`
+	HeadSha         string         `json:"head_sha"`
+	Ordinal         int64          `json:"ordinal"`
+	Name            string         `json:"name"`
+	Status          string         `json:"status"`
+	IsStatusContext int64          `json:"is_status_context"`
+	Conclusion      sql.NullString `json:"conclusion"`
+	DetailsUrl      sql.NullString `json:"details_url"`
 }
 
 func (q *Queries) InsertGitHubPRCheckRun(ctx context.Context, arg InsertGitHubPRCheckRunParams) error {
-	_, err := q.db.Exec(ctx, insertGitHubPRCheckRun,
+	_, err := q.db.ExecContext(ctx, insertGitHubPRCheckRun,
 		arg.PrID,
 		arg.HeadSha,
 		arg.Ordinal,
@@ -98,7 +97,7 @@ func (q *Queries) InsertGitHubPRCheckRun(ctx context.Context, arg InsertGitHubPR
 const listGitHubPRNumbersByHeadSHA = `-- name: ListGitHubPRNumbersByHeadSHA :many
 SELECT DISTINCT pr_number
 FROM github_pull_request
-WHERE installation_id = $1 AND repo_owner = $2 AND repo_name = $3 AND head_sha = $4
+WHERE installation_id = ?1 AND repo_owner = ?2 AND repo_name = ?3 AND head_sha = ?4
 `
 
 type ListGitHubPRNumbersByHeadSHAParams struct {
@@ -111,8 +110,8 @@ type ListGitHubPRNumbersByHeadSHAParams struct {
 // Resolves a commit SHA to the PR numbers whose head it is. `status` webhook
 // events (legacy commit statuses) carry a SHA + repo but no PR number, so we
 // map back through the mirrored head_sha to find which PR(s) to refresh.
-func (q *Queries) ListGitHubPRNumbersByHeadSHA(ctx context.Context, arg ListGitHubPRNumbersByHeadSHAParams) ([]int32, error) {
-	rows, err := q.db.Query(ctx, listGitHubPRNumbersByHeadSHA,
+func (q *Queries) ListGitHubPRNumbersByHeadSHA(ctx context.Context, arg ListGitHubPRNumbersByHeadSHAParams) ([]int64, error) {
+	rows, err := q.db.QueryContext(ctx, listGitHubPRNumbersByHeadSHA,
 		arg.InstallationID,
 		arg.RepoOwner,
 		arg.RepoName,
@@ -122,13 +121,16 @@ func (q *Queries) ListGitHubPRNumbersByHeadSHA(ctx context.Context, arg ListGitH
 		return nil, err
 	}
 	defer rows.Close()
-	items := []int32{}
+	items := []int64{}
 	for rows.Next() {
-		var pr_number int32
+		var pr_number int64
 		if err := rows.Scan(&pr_number); err != nil {
 			return nil, err
 		}
 		items = append(items, pr_number)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -140,21 +142,21 @@ const listGitHubPRRowsByAddress = `-- name: ListGitHubPRRowsByAddress :many
 
 SELECT id, workspace_id, head_sha, state
 FROM github_pull_request
-WHERE installation_id = $1 AND repo_owner = $2 AND repo_name = $3 AND pr_number = $4
+WHERE installation_id = ?1 AND repo_owner = ?2 AND repo_name = ?3 AND pr_number = ?4
 `
 
 type ListGitHubPRRowsByAddressParams struct {
 	InstallationID int64  `json:"installation_id"`
 	RepoOwner      string `json:"repo_owner"`
 	RepoName       string `json:"repo_name"`
-	PrNumber       int32  `json:"pr_number"`
+	PrNumber       int64  `json:"pr_number"`
 }
 
 type ListGitHubPRRowsByAddressRow struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	HeadSha     string      `json:"head_sha"`
-	State       string      `json:"state"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	HeadSha     string `json:"head_sha"`
+	State       string `json:"state"`
 }
 
 // =====================
@@ -166,11 +168,11 @@ type ListGitHubPRRowsByAddressRow struct {
 // per-check rows) inside a single transaction.
 // =====================
 // One (installation, owner, repo, number) address can map to several
-// github_pull_request rows — the same installation can be bound to multiple
+// github_pull_request rows - the same installation can be bound to multiple
 // workspaces (#4823/#4855), each mirroring its own row. A single API fetch is
 // applied to every matching row (each guarded by its own head_sha).
 func (q *Queries) ListGitHubPRRowsByAddress(ctx context.Context, arg ListGitHubPRRowsByAddressParams) ([]ListGitHubPRRowsByAddressRow, error) {
-	rows, err := q.db.Query(ctx, listGitHubPRRowsByAddress,
+	rows, err := q.db.QueryContext(ctx, listGitHubPRRowsByAddress,
 		arg.InstallationID,
 		arg.RepoOwner,
 		arg.RepoName,
@@ -193,6 +195,9 @@ func (q *Queries) ListGitHubPRRowsByAddress(ctx context.Context, arg ListGitHubP
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -204,7 +209,7 @@ WITH candidates AS (
     SELECT installation_id, repo_owner, repo_name, pr_number
     FROM github_pull_request AS pr
     WHERE state IN ('open', 'draft')
-      AND (snapshot_fetched_at IS NULL OR snapshot_fetched_at < $6)
+      AND (snapshot_fetched_at IS NULL OR snapshot_fetched_at < ?2)
       AND (
           snapshot_fetched_at IS NULL
           OR api_mergeable IS NULL
@@ -223,30 +228,26 @@ FROM candidates
 ORDER BY (
     ROW(installation_id, repo_owner, repo_name, pr_number) >
     ROW(
-        $1::BIGINT,
-        $2::TEXT,
-        $3::TEXT,
-        $4::INTEGER
+        sqlc.arg('after_installation_id'),
+        sqlc.arg('after_repo_owner'),
+        sqlc.arg('after_repo_name'),
+        sqlc.arg('after_pr_number')
     )
 ) DESC,
 installation_id, repo_owner, repo_name, pr_number
-LIMIT $5
+LIMIT ?1
 `
 
 type ListStaleUndecidedGitHubPRsParams struct {
-	AfterInstallationID int64              `json:"after_installation_id"`
-	AfterRepoOwner      string             `json:"after_repo_owner"`
-	AfterRepoName       string             `json:"after_repo_name"`
-	AfterPrNumber       int32              `json:"after_pr_number"`
-	MaxRows             int32              `json:"max_rows"`
-	OlderThan           pgtype.Timestamptz `json:"older_than"`
+	MaxRows   int64          `json:"max_rows"`
+	OlderThan sql.NullString `json:"older_than"`
 }
 
 type ListStaleUndecidedGitHubPRsRow struct {
 	InstallationID int64  `json:"installation_id"`
 	RepoOwner      string `json:"repo_owner"`
 	RepoName       string `json:"repo_name"`
-	PrNumber       int32  `json:"pr_number"`
+	PrNumber       int64  `json:"pr_number"`
 }
 
 // TTL / safety-net sweep source. Returns distinct addresses of open/draft PRs
@@ -256,14 +257,7 @@ type ListStaleUndecidedGitHubPRsRow struct {
 // the cursor sort first, followed by a wrap to the start, so even perpetually
 // failing addresses cannot pin the same first LIMIT rows forever.
 func (q *Queries) ListStaleUndecidedGitHubPRs(ctx context.Context, arg ListStaleUndecidedGitHubPRsParams) ([]ListStaleUndecidedGitHubPRsRow, error) {
-	rows, err := q.db.Query(ctx, listStaleUndecidedGitHubPRs,
-		arg.AfterInstallationID,
-		arg.AfterRepoOwner,
-		arg.AfterRepoName,
-		arg.AfterPrNumber,
-		arg.MaxRows,
-		arg.OlderThan,
-	)
+	rows, err := q.db.QueryContext(ctx, listStaleUndecidedGitHubPRs, arg.MaxRows, arg.OlderThan)
 	if err != nil {
 		return nil, err
 	}
@@ -281,6 +275,9 @@ func (q *Queries) ListStaleUndecidedGitHubPRs(ctx context.Context, arg ListStale
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -289,31 +286,31 @@ func (q *Queries) ListStaleUndecidedGitHubPRs(ctx context.Context, arg ListStale
 
 const updateGitHubPRSnapshot = `-- name: UpdateGitHubPRSnapshot :execrows
 UPDATE github_pull_request
-SET api_mergeable          = $1,
-    api_merge_state_status = $2,
-    checks_rollup_state    = $3,
-    snapshot_head_sha      = $4,
-    snapshot_fetched_at    = $5,
+SET api_mergeable          = ?1,
+    api_merge_state_status = ?2,
+    checks_rollup_state    = ?3,
+    snapshot_head_sha      = ?4,
+    snapshot_fetched_at    = ?5,
     updated_at             = now()
-WHERE id = $6 AND head_sha = $4
+WHERE id = ?6 AND head_sha = ?4
 `
 
 type UpdateGitHubPRSnapshotParams struct {
-	ApiMergeable        pgtype.Text        `json:"api_mergeable"`
-	ApiMergeStateStatus pgtype.Text        `json:"api_merge_state_status"`
-	ChecksRollupState   pgtype.Text        `json:"checks_rollup_state"`
-	HeadSha             string             `json:"head_sha"`
-	FetchedAt           pgtype.Timestamptz `json:"fetched_at"`
-	PrID                pgtype.UUID        `json:"pr_id"`
+	ApiMergeable        sql.NullString `json:"api_mergeable"`
+	ApiMergeStateStatus sql.NullString `json:"api_merge_state_status"`
+	ChecksRollupState   sql.NullString `json:"checks_rollup_state"`
+	HeadSha             string         `json:"head_sha"`
+	FetchedAt           sql.NullString `json:"fetched_at"`
+	PrID                string         `json:"pr_id"`
 }
 
 // Head-SHA anti-stale write (acceptance criterion 1): the snapshot is written
 // only when the row's current head_sha still equals the head the snapshot was
 // fetched for. If the head advanced (a newer push landed while this request was
 // in flight, mirrored by the pull_request webhook), 0 rows are updated and the
-// caller discards the whole response — the per-check replace is skipped too.
+// caller discards the whole response - the per-check replace is skipped too.
 func (q *Queries) UpdateGitHubPRSnapshot(ctx context.Context, arg UpdateGitHubPRSnapshotParams) (int64, error) {
-	result, err := q.db.Exec(ctx, updateGitHubPRSnapshot,
+	result, err := q.db.ExecContext(ctx, updateGitHubPRSnapshot,
 		arg.ApiMergeable,
 		arg.ApiMergeStateStatus,
 		arg.ChecksRollupState,
@@ -324,5 +321,5 @@ func (q *Queries) UpdateGitHubPRSnapshot(ctx context.Context, arg UpdateGitHubPR
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }

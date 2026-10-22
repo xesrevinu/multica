@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -21,7 +22,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/testutil"
@@ -189,15 +189,15 @@ func TestDerivePRState(t *testing.T) {
 }
 
 func TestIssuePullRequestResponseHidesUnavailableSnapshot(t *testing.T) {
-	fetchedAt := pgtype.Timestamptz{Time: time.Now(), Valid: true}
+	fetchedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	row := db.ListPullRequestsByIssueRow{
 		State:               "open",
 		HeadSha:             "B",
 		SnapshotHeadSha:     "A",
-		SnapshotFetchedAt:   fetchedAt,
-		ApiMergeable:        pgtype.Text{String: "CONFLICTING", Valid: true},
-		ApiMergeStateStatus: pgtype.Text{String: "DIRTY", Valid: true},
-		ChecksRollupState:   pgtype.Text{String: "FAILURE", Valid: true},
+		SnapshotFetchedAt:   nullString(fetchedAt),
+		ApiMergeable:        sql.NullString{String: "CONFLICTING", Valid: true},
+		ApiMergeStateStatus: sql.NullString{String: "DIRTY", Valid: true},
+		ChecksRollupState:   sql.NullString{String: "FAILURE", Valid: true},
 		ChecksTotal:         1,
 		ChecksFailed:        1,
 		FailedCheckNames:    []string{"backend"},
@@ -1048,7 +1048,7 @@ func unlinkPRForTest(t *testing.T, issueID, prID string) {
 func linkMergedGitHubPRForTest(t *testing.T, issueID, repo string) {
 	t.Helper()
 	ctx := context.Background()
-	now := pgtype.Timestamptz{Time: time.Now(), Valid: true}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
 	pr, err := testHandler.Queries.UpsertGitHubPullRequest(ctx, db.UpsertGitHubPullRequestParams{
 		WorkspaceID: parseUUID(testWorkspaceID), InstallationID: 1, RepoOwner: "acme", RepoName: repo,
 		PrNumber: 1, Title: "merged work", State: "merged", HtmlUrl: "https://github.com/acme/" + repo + "/pull/1",
@@ -1070,7 +1070,7 @@ func linkMergedGitHubPRForTest(t *testing.T, issueID, repo string) {
 func githubPRIDForTest(t *testing.T, repo string, number int32) string {
 	t.Helper()
 	pr, err := testHandler.Queries.GetGitHubPullRequest(context.Background(), db.GetGitHubPullRequestParams{
-		WorkspaceID: parseUUID(testWorkspaceID), RepoOwner: "acme", RepoName: repo, PrNumber: number,
+		WorkspaceID: parseUUID(testWorkspaceID), RepoOwner: "acme", RepoName: repo, PrNumber: int64(number),
 	})
 	if err != nil {
 		t.Fatalf("GetGitHubPullRequest %s#%d: %v", repo, number, err)
@@ -1536,7 +1536,7 @@ func TestPRMergeStatusSetting(t *testing.T) {
 		{`{"pr_auto_complete_enabled": false, "pr_merge_status": "in_review"}`, "in_review"},
 		{`not json`, "none"},
 	} {
-		if got := prMergeStatusSetting(db.Workspace{Settings: []byte(tc.settings)}); got != tc.want {
+		if got := prMergeStatusSetting(db.Workspace{Settings: string([]byte(tc.settings))}); got != tc.want {
 			t.Errorf("prMergeStatusSetting(%q) = %q, want %q", tc.settings, got, tc.want)
 		}
 	}
@@ -2886,12 +2886,12 @@ func TestWebhook_PullRequest_FansOutToBoundWorkspaces(t *testing.T) {
 
 	// The PR must be mirrored in BOTH bound workspaces.
 	if _, err := testHandler.Queries.GetGitHubPullRequest(ctx, db.GetGitHubPullRequestParams{
-		WorkspaceID: parseUUID(testWorkspaceID), RepoOwner: "acme", RepoName: repo, PrNumber: prNumber,
+		WorkspaceID: parseUUID(testWorkspaceID), RepoOwner: "acme", RepoName: repo, PrNumber: int64(prNumber),
 	}); err != nil {
 		t.Fatalf("expected PR mirrored in workspace B: %v", err)
 	}
 	prA, err := testHandler.Queries.GetGitHubPullRequest(ctx, db.GetGitHubPullRequestParams{
-		WorkspaceID: wsA.ID, RepoOwner: "acme", RepoName: repo, PrNumber: prNumber,
+		WorkspaceID: wsA.ID, RepoOwner: "acme", RepoName: repo, PrNumber: int64(prNumber),
 	})
 	if err != nil {
 		t.Fatalf("expected PR fanned out to workspace A: %v", err)
@@ -2964,13 +2964,13 @@ func TestWebhook_PullRequest_AmbiguousCloseAcrossWorkspaces(t *testing.T) {
 		Priority:    "none",
 		CreatorType: "member",
 		CreatorID:   parseUUID(testUserID),
-		Number:      issueB.Number,
+		Number:      int64(issueB.Number),
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue in workspace A: %v", err)
 	}
 
-	for _, wsID := range []pgtype.UUID{parseUUID(testWorkspaceID), wsA.ID} {
+	for _, wsID := range []string{parseUUID(testWorkspaceID), wsA.ID} {
 		if _, err := testHandler.Queries.CreateGitHubInstallation(ctx, db.CreateGitHubInstallationParams{
 			WorkspaceID: wsID, InstallationID: installationID, AccountLogin: "acme", AccountType: "User",
 		}); err != nil {
@@ -2999,7 +2999,7 @@ func TestWebhook_PullRequest_AmbiguousCloseAcrossWorkspaces(t *testing.T) {
 
 	for _, tc := range []struct {
 		name    string
-		issueID pgtype.UUID
+		issueID string
 	}{
 		{"workspace B (owns the PR)", parseUUID(issueB.ID)},
 		{"workspace A (collision)", issueA.ID},
@@ -3244,7 +3244,7 @@ func TestWebhook_PullRequest_UnreadableWorkspaceLinksNothing(t *testing.T) {
 // bindSecondWorkspaceForTest creates a throwaway workspace with the given issue
 // prefix, binds it to installationID, and registers cleanup for both. Returns
 // the new workspace id.
-func bindSecondWorkspaceForTest(t *testing.T, slug, prefix string, installationID int64) pgtype.UUID {
+func bindSecondWorkspaceForTest(t *testing.T, slug, prefix string, installationID int64) string {
 	t.Helper()
 	ctx := context.Background()
 	testPool.Exec(ctx, `DELETE FROM github_installation WHERE installation_id = $1`, installationID)

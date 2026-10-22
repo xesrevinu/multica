@@ -133,7 +133,7 @@ func (h *Handler) PinChatAgent(w http.ResponseWriter, r *http.Request) {
 		WorkspaceID: parseUUID(workspaceID),
 		UserID:      parseUUID(userID),
 		AgentID:     agentUUID,
-		Position:    maxPos + 1,
+		Position:    ifaceFloat64(maxPos) + 1,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to pin agent")

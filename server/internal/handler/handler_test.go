@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,12 +14,12 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/internal/sqliteutil"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -26,6 +27,7 @@ import (
 
 var testHandler *Handler
 var testPool *pgxpool.Pool
+var testSQLite *sql.DB
 var testUserID string
 var testWorkspaceID string
 var testRuntimeID string
@@ -59,12 +61,18 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 
-	queries := db.New(pool)
+	sqlDB, sqlErr := sqliteutil.Open(ctx, "file:handler-tests?mode=memory&cache=shared")
+	if sqlErr != nil {
+		fmt.Printf("Skipping tests: could not open sqlite: %v\n", sqlErr)
+		os.Exit(0)
+	}
+	testSQLite = sqlDB
+	queries := db.New(sqlDB)
 	hub := realtime.NewHub()
 	go hub.Run()
 	bus := events.New()
 	emailSvc := service.NewEmailService()
-	testHandler = New(queries, pool, hub, bus, emailSvc, nil, nil, analytics.NoopClient{}, Config{AllowSignup: true})
+	testHandler = New(queries, sqlDBBeginner{DB: sqlDB}, hub, bus, emailSvc, nil, nil, analytics.NoopClient{}, Config{AllowSignup: true})
 	// httptest.NewRequest defaults RemoteAddr to 192.0.2.1, so every webhook
 	// test in the suite shares one IP bucket. With the production default
 	// (30/min) the budget runs out partway through the suite and unrelated
@@ -88,7 +96,7 @@ func TestMain(m *testing.M) {
 		pool.Close()
 		os.Exit(1)
 	}
-	dbfx = testutil.New(pool, testWorkspaceID, testUserID)
+	dbfx = testutil.New(sqlDB, testWorkspaceID, testUserID)
 
 	code := m.Run()
 	if err := cleanupHandlerTestFixture(context.Background(), pool); err != nil {
@@ -1037,7 +1045,7 @@ func TestScheduledAutopilotAllowsActiveDuplicateIssue(t *testing.T) {
 	w.JSON(&autopilot)
 	autopilotID = autopilot.ID
 
-	queries := db.New(testPool)
+	queries := db.New(testSQLite)
 	ap, err := queries.GetAutopilot(ctx, parseUUID(autopilotID))
 	if err != nil {
 		t.Fatalf("GetAutopilot: %v", err)
@@ -1059,7 +1067,7 @@ func TestScheduledAutopilotAllowsActiveDuplicateIssue(t *testing.T) {
 	if run == nil || run.Status != "issue_created" {
 		t.Fatalf("dispatch result = %+v, want status issue_created", run)
 	}
-	newIssueID := uuidToString(run.IssueID)
+	newIssueID := uuidToString(run.IssueID.String)
 	if newIssueID == "" {
 		t.Fatal("run issue_id is empty, want newly created issue")
 	}
@@ -1120,12 +1128,12 @@ func TestAutopilotCreatedIssueCreatorIsAssigneeAgent(t *testing.T) {
 		}
 	})
 
-	queries := db.New(testPool)
+	queries := db.New(testSQLite)
 	ap, err := queries.GetAutopilot(ctx, parseUUID(autopilotID))
 	if err != nil {
 		t.Fatalf("GetAutopilot: %v", err)
 	}
-	run, _, err := testHandler.AutopilotService.DispatchAutopilotManual(ctx, ap, pgtype.UUID{}, nil, parseUUID(testUserID))
+	run, _, err := testHandler.AutopilotService.DispatchAutopilotManual(ctx, ap, "", nil, parseUUID(testUserID))
 	if err != nil {
 		t.Fatalf("DispatchAutopilot: %v", err)
 	}
@@ -1201,19 +1209,19 @@ func TestAutopilotCreateIssueAssociatesConfiguredProject(t *testing.T) {
 		t.Fatalf("autopilot project_id = %v, want %q", autopilot.ProjectID, projectID)
 	}
 
-	queries := db.New(testPool)
+	queries := db.New(testSQLite)
 	ap, err := queries.GetAutopilot(ctx, parseUUID(autopilotID))
 	if err != nil {
 		t.Fatalf("GetAutopilot: %v", err)
 	}
-	run, _, err := testHandler.AutopilotService.DispatchAutopilotManual(ctx, ap, pgtype.UUID{}, nil, parseUUID(testUserID))
+	run, _, err := testHandler.AutopilotService.DispatchAutopilotManual(ctx, ap, "", nil, parseUUID(testUserID))
 	if err != nil {
 		t.Fatalf("DispatchAutopilot: %v", err)
 	}
 	if run == nil || !run.IssueID.Valid {
 		t.Fatalf("dispatch run = %+v, want linked issue", run)
 	}
-	issueID = uuidToString(run.IssueID)
+	issueID = uuidToString(run.IssueID.String)
 
 	var issueProjectID *string
 	dbfx.QueryRow(t, `
@@ -1271,7 +1279,7 @@ func TestAutopilotDispatchUsesCurrentProjectBinding(t *testing.T) {
 	w.JSON(&created)
 	autopilotID = created.ID
 
-	queries := db.New(testPool)
+	queries := db.New(testSQLite)
 	ap, err := queries.GetAutopilot(ctx, parseUUID(autopilotID))
 	if err != nil {
 		t.Fatalf("GetAutopilot: %v", err)
@@ -1283,14 +1291,14 @@ func TestAutopilotDispatchUsesCurrentProjectBinding(t *testing.T) {
 	req = withURLParam(req, "id", autopilotID)
 	w = testutil.Call(t, testHandler.UpdateAutopilot, req).Want(http.StatusOK)
 
-	run, _, err := testHandler.AutopilotService.DispatchAutopilotManual(ctx, ap, pgtype.UUID{}, nil, parseUUID(testUserID))
+	run, _, err := testHandler.AutopilotService.DispatchAutopilotManual(ctx, ap, "", nil, parseUUID(testUserID))
 	if err != nil {
 		t.Fatalf("DispatchAutopilot: %v", err)
 	}
 	if run == nil || !run.IssueID.Valid {
 		t.Fatalf("dispatch run = %+v, want linked issue", run)
 	}
-	issueID = uuidToString(run.IssueID)
+	issueID = uuidToString(run.IssueID.String)
 
 	var issueProjectID *string
 	dbfx.QueryRow(t, `

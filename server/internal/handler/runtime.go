@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,8 +13,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -52,8 +51,8 @@ type AgentRuntimeResponse struct {
 
 func runtimeToResponse(rt db.AgentRuntime) AgentRuntimeResponse {
 	var metadata any
-	if rt.Metadata != nil {
-		json.Unmarshal(rt.Metadata, &metadata)
+	if rt.Metadata != "" {
+		json.Unmarshal([]byte(rt.Metadata), &metadata)
 	}
 	if metadata == nil {
 		metadata = map[string]any{}
@@ -129,7 +128,7 @@ func (h *Handler) GetRuntimeUsage(w http.ResponseWriter, r *http.Request) {
 
 // listRuntimeUsage reads the daily-bucketed trend from task_usage_hourly,
 // applying the viewer's tz to project bucket_hour into local days.
-func (h *Handler) listRuntimeUsage(ctx context.Context, runtimeID pgtype.UUID, tz string, since pgtype.Timestamptz) ([]RuntimeUsageResponse, error) {
+func (h *Handler) listRuntimeUsage(ctx context.Context, runtimeID string, tz string, since string) ([]RuntimeUsageResponse, error) {
 	resolvedRuntimeID := uuidToString(runtimeID)
 	rows, err := h.Queries.ListRuntimeUsage(ctx, db.ListRuntimeUsageParams{
 		RuntimeID: runtimeID,
@@ -143,18 +142,18 @@ func (h *Handler) listRuntimeUsage(ctx context.Context, runtimeID pgtype.UUID, t
 	for i, row := range rows {
 		resp[i] = RuntimeUsageResponse{
 			RuntimeID:                resolvedRuntimeID,
-			Date:                     row.Date.Time.Format("2006-01-02"),
+			Date:                     ifaceDate(row.Date),
 			Provider:                 row.Provider,
 			Model:                    row.Model,
-			InputTokens:              row.InputTokens,
-			OutputTokens:             row.OutputTokens,
-			CacheReadTokens:          row.CacheReadTokens,
-			CacheWriteTokens:         row.CacheWriteTokens,
-			CostUSDTicks:             row.CostUsdTicks,
-			UncostedInputTokens:      row.UncostedInputTokens,
-			UncostedOutputTokens:     row.UncostedOutputTokens,
-			UncostedCacheReadTokens:  row.UncostedCacheReadTokens,
-			UncostedCacheWriteTokens: row.UncostedCacheWriteTokens,
+			InputTokens:              int64(row.InputTokens.Float64),
+			OutputTokens:             int64(row.OutputTokens.Float64),
+			CacheReadTokens:          int64(row.CacheReadTokens.Float64),
+			CacheWriteTokens:         int64(row.CacheWriteTokens.Float64),
+			CostUSDTicks:             int64(row.CostUsdTicks.Float64),
+			UncostedInputTokens:      int64(row.UncostedInputTokens.Float64),
+			UncostedOutputTokens:     int64(row.UncostedOutputTokens.Float64),
+			UncostedCacheReadTokens:  int64(row.UncostedCacheReadTokens.Float64),
+			UncostedCacheWriteTokens: int64(row.UncostedCacheWriteTokens.Float64),
 		}
 	}
 	return resp, nil
@@ -168,11 +167,7 @@ func (h *Handler) GetRuntimeTaskActivity(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	viewTZ := h.resolveViewingTZ(r)
-	rows, err := h.Queries.GetRuntimeTaskHourlyActivity(r.Context(), db.GetRuntimeTaskHourlyActivityParams{
-		RuntimeID: rt.ID,
-		Tz:        viewTZ,
-	})
+	rows, err := h.Queries.GetRuntimeTaskHourlyActivity(r.Context(), nullString(rt.ID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get task activity")
 		return
@@ -232,7 +227,7 @@ func (h *Handler) GetRuntimeUsageByAgent(w http.ResponseWriter, r *http.Request)
 	since := parseSinceParamInTZ(r, 30, viewTZ)
 
 	rows, err := h.Queries.ListRuntimeUsageByAgent(r.Context(), db.ListRuntimeUsageByAgentParams{
-		RuntimeID: rt.ID,
+		RuntimeID: nullString(rt.ID),
 		Since:     since,
 	})
 	if err != nil {
@@ -246,16 +241,16 @@ func (h *Handler) GetRuntimeUsageByAgent(w http.ResponseWriter, r *http.Request)
 			AgentID:                  uuidToString(row.AgentID),
 			Provider:                 row.Provider,
 			Model:                    row.Model,
-			InputTokens:              row.InputTokens,
-			OutputTokens:             row.OutputTokens,
-			CacheReadTokens:          row.CacheReadTokens,
-			CacheWriteTokens:         row.CacheWriteTokens,
-			CostUSDTicks:             row.CostUsdTicks,
-			UncostedInputTokens:      row.UncostedInputTokens,
-			UncostedOutputTokens:     row.UncostedOutputTokens,
-			UncostedCacheReadTokens:  row.UncostedCacheReadTokens,
-			UncostedCacheWriteTokens: row.UncostedCacheWriteTokens,
-			TaskCount:                row.TaskCount,
+			InputTokens:              int64(row.InputTokens.Float64),
+			OutputTokens:             int64(row.OutputTokens.Float64),
+			CacheReadTokens:          int64(row.CacheReadTokens.Float64),
+			CacheWriteTokens:         int64(row.CacheWriteTokens.Float64),
+			CostUSDTicks:             ifaceInt64(row.CostUsdTicks),
+			UncostedInputTokens:      ifaceInt64(row.UncostedInputTokens),
+			UncostedOutputTokens:     ifaceInt64(row.UncostedOutputTokens),
+			UncostedCacheReadTokens:  ifaceInt64(row.UncostedCacheReadTokens),
+			UncostedCacheWriteTokens: ifaceInt64(row.UncostedCacheWriteTokens),
+			TaskCount:                int32(row.TaskCount),
 		}
 	}
 
@@ -302,9 +297,8 @@ func (h *Handler) GetRuntimeUsageByHour(w http.ResponseWriter, r *http.Request) 
 	since := parseSinceParamInTZ(r, 30, viewTZ)
 
 	rows, err := h.Queries.GetRuntimeUsageByHour(r.Context(), db.GetRuntimeUsageByHourParams{
-		RuntimeID: rt.ID,
+		RuntimeID: nullString(rt.ID),
 		Since:     since,
-		Tz:        viewTZ,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get usage by hour")
@@ -316,16 +310,16 @@ func (h *Handler) GetRuntimeUsageByHour(w http.ResponseWriter, r *http.Request) 
 		resp[i] = RuntimeUsageByHourResponse{
 			Hour:                     int(row.Hour),
 			Model:                    row.Model,
-			InputTokens:              row.InputTokens,
-			OutputTokens:             row.OutputTokens,
-			CacheReadTokens:          row.CacheReadTokens,
-			CacheWriteTokens:         row.CacheWriteTokens,
-			CostUSDTicks:             row.CostUsdTicks,
-			UncostedInputTokens:      row.UncostedInputTokens,
-			UncostedOutputTokens:     row.UncostedOutputTokens,
-			UncostedCacheReadTokens:  row.UncostedCacheReadTokens,
-			UncostedCacheWriteTokens: row.UncostedCacheWriteTokens,
-			TaskCount:                row.TaskCount,
+			InputTokens:              int64(row.InputTokens.Float64),
+			OutputTokens:             int64(row.OutputTokens.Float64),
+			CacheReadTokens:          int64(row.CacheReadTokens.Float64),
+			CacheWriteTokens:         int64(row.CacheWriteTokens.Float64),
+			CostUSDTicks:             ifaceInt64(row.CostUsdTicks),
+			UncostedInputTokens:      ifaceInt64(row.UncostedInputTokens),
+			UncostedOutputTokens:     ifaceInt64(row.UncostedOutputTokens),
+			UncostedCacheReadTokens:  ifaceInt64(row.UncostedCacheReadTokens),
+			UncostedCacheWriteTokens: ifaceInt64(row.UncostedCacheWriteTokens),
+			TaskCount:                int32(row.TaskCount),
 		}
 	}
 
@@ -359,7 +353,7 @@ func sinceFromDays(now time.Time, days int, loc *time.Location) time.Time {
 // `days=N` returns full N+1 calendar buckets in that zone (today's partial
 // bucket + N prior full days). If tzName is empty or unparseable, falls back
 // to UTC — never returns an error so handlers stay simple.
-func parseSinceParamInTZ(r *http.Request, defaultDays int, tzName string) pgtype.Timestamptz {
+func parseSinceParamInTZ(r *http.Request, defaultDays int, tzName string) string {
 	return parseDaysCutoff(r, defaultDays, tzName, 0)
 }
 
@@ -374,7 +368,7 @@ func parseSinceParamInTZ(r *http.Request, defaultDays int, tzName string) pgtype
 // with NO date dimension cannot be trimmed that way, so an aggregate served
 // off the N+1 cutoff silently covers one more day than the chart beside it.
 // Endpoints whose rows carry no date use this variant instead.
-func parseExactSinceParamInTZ(r *http.Request, defaultDays int, tzName string) pgtype.Timestamptz {
+func parseExactSinceParamInTZ(r *http.Request, defaultDays int, tzName string) string {
 	return parseDaysCutoff(r, defaultDays, tzName, 1)
 }
 
@@ -396,7 +390,7 @@ func parseDaysCutoff(
 	defaultDays int,
 	tzName string,
 	trimDays int,
-) pgtype.Timestamptz {
+) string {
 	days := defaultDays
 	if d := r.URL.Query().Get("days"); d != "" {
 		if parsed, err := strconv.Atoi(d); err == nil && parsed > 0 && parsed <= 365 {
@@ -410,10 +404,8 @@ func parseDaysCutoff(
 	// Guard the floor: days is already >= 1 here, and trimming a 1-day
 	// window by one would put the cutoff at start-of-today+0 — still correct
 	// ("today only"), which is exactly what days=1 means.
-	return pgtype.Timestamptz{
-		Time:  sinceFromDays(dayWindowNow(), days-trimDays, loc),
-		Valid: true,
-	}
+	return sinceFromDays(dayWindowNow(), days-trimDays, loc).UTC().Format(time.RFC3339Nano)
+
 }
 
 // resolveViewingTZ resolves the IANA tz to render the response in:
@@ -566,13 +558,13 @@ func (h *Handler) UpdateAgentRuntime(w http.ResponseWriter, r *http.Request) {
 		// An empty / whitespace-only name clears the override (NULL), so the
 		// runtime falls back to its daemon-proposed Name.
 		trimmed := strings.TrimSpace(*req.CustomName)
-		customName := pgtype.Text{String: trimmed, Valid: trimmed != ""}
+		customName := sql.NullString{String: trimmed, Valid: trimmed != ""}
 
 		if req.ApplyToMachine && rt.DaemonID.Valid {
 			// Non-admins may only relabel their own runtimes on the machine;
 			// owners/admins rename every runtime sharing the daemon_id. A NULL
 			// owner filter means "all runtimes on this machine".
-			var ownerFilter pgtype.UUID
+			var ownerFilter string
 			if !roleAllowed(member.Role, "owner", "admin") {
 				ownerFilter = member.UserID
 			}
@@ -627,7 +619,7 @@ func canEditRuntime(member db.Member, rt db.AgentRuntime) bool {
 	if roleAllowed(member.Role, "owner", "admin") {
 		return true
 	}
-	return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID)
+	return rt.OwnerID.Valid && uuidToString(rt.OwnerID.String) == uuidToString(member.UserID)
 }
 
 // getAgentRuntime reads one agent_runtime row by id and attributes the read to
@@ -636,7 +628,7 @@ func canEditRuntime(member db.Member, rt db.AgentRuntime) bool {
 // driving the read, not the file the call happens to live in: a poll loop
 // counted as generic API traffic is exactly the confusion the metric exists to
 // remove.
-func (h *Handler) getAgentRuntime(ctx context.Context, source string, id pgtype.UUID) (db.AgentRuntime, error) {
+func (h *Handler) getAgentRuntime(ctx context.Context, source string, id string) (db.AgentRuntime, error) {
 	return h.runtimeLookup(source).Get(ctx, id)
 }
 
@@ -644,7 +636,7 @@ func (h *Handler) getAgentRuntime(ctx context.Context, source string, id pgtype.
 // ids, attributed to source the same way (MUL-6788). It returns the rows keyed
 // by canonical UUID string and surfaces the read error so batch callers fail
 // closed instead of treating a failed read as "no rows exist".
-func (h *Handler) getAgentRuntimes(ctx context.Context, source string, ids []pgtype.UUID) (map[string]db.AgentRuntime, error) {
+func (h *Handler) getAgentRuntimes(ctx context.Context, source string, ids []string) (map[string]db.AgentRuntime, error) {
 	return h.runtimeLookup(source).GetMany(ctx, ids)
 }
 
@@ -700,11 +692,11 @@ func (h *Handler) runtimeLiveProfile(ctx context.Context, rt db.AgentRuntime) (d
 		return db.RuntimeProfile{}, false, nil
 	}
 	profile, err := h.Queries.GetRuntimeProfileForWorkspace(ctx, db.GetRuntimeProfileForWorkspaceParams{
-		ID:          rt.ProfileID,
+		ID:          rt.ProfileID.String,
 		WorkspaceID: rt.WorkspaceID,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return db.RuntimeProfile{}, false, nil
 		}
 		return db.RuntimeProfile{}, false, err
@@ -827,8 +819,8 @@ type profileInstanceBlockers struct {
 //
 // Already bounded — a single runtime's bound agents, unlike a profile's, are
 // capped by what one machine can host.
-func (h *Handler) profileInstanceRefusalBlockers(ctx context.Context, runtimeID pgtype.UUID) profileInstanceBlockers {
-	agents, err := h.Queries.ListActiveAgentsByRuntime(ctx, runtimeID)
+func (h *Handler) profileInstanceRefusalBlockers(ctx context.Context, runtimeID string) profileInstanceBlockers {
+	agents, err := h.Queries.ListActiveAgentsByRuntime(ctx, nullString(runtimeID))
 	if err != nil {
 		slog.Warn("profile instance refusal: active agent lookup failed",
 			"runtime_id", uuidToString(runtimeID), "error", err)
@@ -841,14 +833,14 @@ func (h *Handler) profileInstanceRefusalBlockers(ctx context.Context, runtimeID 
 	// different machine — an agent moved away leaves its deferred run behind —
 	// so a check scoped to this runtime's own rows reports a row as reclaimable
 	// that the sweeper will pass over every hour.
-	agentIDs, err := h.Queries.ListUserAgentIDsByRuntime(ctx, runtimeID)
+	agentIDs, err := h.Queries.ListUserAgentIDsByRuntime(ctx, nullString(runtimeID))
 	if err != nil {
 		slog.Warn("profile instance refusal: bound agent id lookup failed",
 			"runtime_id", uuidToString(runtimeID), "error", err)
 		return profileInstanceBlockers{}
 	}
 	tasks, err := h.Queries.CountUndrainedTasksByRuntimeOrAgent(ctx, db.CountUndrainedTasksByRuntimeOrAgentParams{
-		RuntimeIds: []pgtype.UUID{runtimeID},
+		RuntimeIds: []string{runtimeID},
 		AgentIds:   agentIDs,
 	})
 	if err != nil {
@@ -883,7 +875,7 @@ func canUseRuntimeForAgent(member db.Member, rt db.AgentRuntime) bool {
 	if rt.Visibility == "public" {
 		return true
 	}
-	return uuidToString(rt.OwnerID) == uuidToString(member.UserID)
+	return uuidToString(rt.OwnerID.String) == uuidToString(member.UserID)
 }
 
 // canSetRuntimeVisibility reports whether a member may flip this runtime
@@ -894,7 +886,7 @@ func canUseRuntimeForAgent(member db.Member, rt db.AgentRuntime) bool {
 // organisational actions — rename, delete — that do not hand anyone else's
 // credentials out.
 func canSetRuntimeVisibility(member db.Member, rt db.AgentRuntime) bool {
-	return rt.OwnerID.Valid && uuidToString(rt.OwnerID) == uuidToString(member.UserID)
+	return rt.OwnerID.Valid && uuidToString(rt.OwnerID.String) == uuidToString(member.UserID)
 }
 
 func (h *Handler) ListAgentRuntimes(w http.ResponseWriter, r *http.Request) {
@@ -914,7 +906,7 @@ func (h *Handler) ListAgentRuntimes(w http.ResponseWriter, r *http.Request) {
 	if ownerFilter := r.URL.Query().Get("owner"); ownerFilter == "me" {
 		runtimes, err = h.Queries.ListAgentRuntimesByOwner(r.Context(), db.ListAgentRuntimesByOwnerParams{
 			WorkspaceID: parseUUID(workspaceID),
-			OwnerID:     parseUUID(userID),
+			OwnerID:     nullString(parseUUID(userID)),
 		})
 	} else if roleAllowed(member.Role, "owner", "admin") {
 		// Governance visibility preserves the existing owner/admin contract:
@@ -924,7 +916,7 @@ func (h *Handler) ListAgentRuntimes(w http.ResponseWriter, r *http.Request) {
 	} else {
 		runtimes, err = h.Queries.ListVisibleAgentRuntimes(r.Context(), db.ListVisibleAgentRuntimesParams{
 			WorkspaceID: parseUUID(workspaceID),
-			OwnerID:     parseUUID(userID),
+			OwnerID:     nullString(parseUUID(userID)),
 		})
 	}
 
@@ -1025,7 +1017,7 @@ func (h *Handler) DeleteAgentRuntime(w http.ResponseWriter, r *http.Request) {
 	if rt.ProfileID.Valid {
 		slog.Warn("deleting orphaned profile-backed runtime instance",
 			"runtime_id", uuidToString(rt.ID),
-			"profile_id", uuidToString(rt.ProfileID),
+			"profile_id", uuidToString(rt.ProfileID.String),
 			"workspace_id", wsID,
 			"deleted_by", userID)
 	}
@@ -1034,7 +1026,7 @@ func (h *Handler) DeleteAgentRuntime(w http.ResponseWriter, r *http.Request) {
 	// Surface them on the 409 so the dialog can render the cascade plan
 	// directly from this response — saves a second round-trip when the
 	// user clicked Delete from a stale list page.
-	activeAgents, err := h.Queries.ListActiveAgentsByRuntime(r.Context(), rt.ID)
+	activeAgents, err := h.Queries.ListActiveAgentsByRuntime(r.Context(), nullString(rt.ID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to check runtime dependencies")
 		return
@@ -1048,12 +1040,12 @@ func (h *Handler) DeleteAgentRuntime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete runtime")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	// Revalidate under the runtime row lock. Agent/task inserts take a
@@ -1063,11 +1055,11 @@ func (h *Handler) DeleteAgentRuntime(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to lock runtime")
 		return
 	}
-	if _, err := qtx.ListUserAgentsByRuntimeForUpdate(r.Context(), rt.ID); err != nil {
+	if _, err := qtx.ListUserAgentsByRuntimeForUpdate(r.Context(), nullString(rt.ID)); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to lock runtime dependencies")
 		return
 	}
-	activeAgents, err = qtx.ListActiveAgentsByRuntimeForUpdate(r.Context(), rt.ID)
+	activeAgents, err = qtx.ListActiveAgentsByRuntimeForUpdate(r.Context(), nullString(rt.ID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to check runtime dependencies")
 		return
@@ -1110,7 +1102,7 @@ func (h *Handler) DeleteAgentRuntime(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete runtime")
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete runtime")
 		return
 	}
@@ -1243,17 +1235,17 @@ func (h *Handler) UnbindAgentsAndDeleteRuntime(w http.ResponseWriter, r *http.Re
 	if rt.ProfileID.Valid {
 		slog.Warn("deleting orphaned profile-backed runtime instance via cascade",
 			"runtime_id", uuidToString(rt.ID),
-			"profile_id", uuidToString(rt.ProfileID),
+			"profile_id", uuidToString(rt.ProfileID.String),
 			"workspace_id", wsID,
 			"deleted_by", userID)
 	}
 
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start transaction")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	// Lock the runtime row first. PostgreSQL's FK validation on
@@ -1266,7 +1258,7 @@ func (h *Handler) UnbindAgentsAndDeleteRuntime(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusInternalServerError, "failed to lock runtime")
 		return
 	}
-	if _, err := qtx.ListUserAgentsByRuntimeForUpdate(r.Context(), rt.ID); err != nil {
+	if _, err := qtx.ListUserAgentsByRuntimeForUpdate(r.Context(), nullString(rt.ID)); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to lock runtime dependencies")
 		return
 	}
@@ -1278,7 +1270,7 @@ func (h *Handler) UnbindAgentsAndDeleteRuntime(w http.ResponseWriter, r *http.Re
 	// teammate creates or archives an agent on this runtime while the
 	// dialog was open, the user is approving exactly the set the server
 	// is about to unbind.
-	currentActive, err := qtx.ListActiveAgentsByRuntimeForUpdate(r.Context(), rt.ID)
+	currentActive, err := qtx.ListActiveAgentsByRuntimeForUpdate(r.Context(), nullString(rt.ID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to enumerate active agents")
 		return
@@ -1322,7 +1314,7 @@ func (h *Handler) UnbindAgentsAndDeleteRuntime(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit transaction")
 		return
 	}
@@ -1360,7 +1352,7 @@ func parseExpectedActiveAgentIDs(raw []string) (map[string]struct{}, bool) {
 	out := make(map[string]struct{}, len(raw))
 	for _, s := range raw {
 		u, err := util.ParseUUID(s)
-		if err != nil || !u.Valid {
+		if err != nil || !(u != "") {
 			return nil, false
 		}
 		out[uuidToString(u)] = struct{}{}

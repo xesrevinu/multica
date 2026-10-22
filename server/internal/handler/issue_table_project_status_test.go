@@ -112,7 +112,7 @@ func TestIssueTableRowsProjectStatusStaysInsideTheWorkspace(t *testing.T) {
 	otherWorkspace := dbfx.Workspace(t,
 		fmt.Sprintf("pstatus other %d", suffix),
 		fmt.Sprintf("pstatus-other-%d", suffix))
-	otherFixture := testutil.New(testPool, otherWorkspace, testUserID)
+	otherFixture := testutil.New(testSQLite, otherWorkspace, testUserID)
 	foreignProject := otherFixture.Project(t, "pstatus foreign",
 		testutil.Cols{"status": "in_progress"})
 

@@ -1,7 +1,5 @@
 package lark
 
-import "github.com/jackc/pgx/v5/pgtype"
-
 // This file holds the Feishu adapter's native-ish inbound/outbound value
 // types. The WS connector decodes a raw Lark event into an InboundMessage;
 // feishuChannel translates that into a channel.InboundMessage for the
@@ -93,12 +91,12 @@ const (
 type DispatchResult struct {
 	Outcome        Outcome
 	DropReason     DropReason
-	InstallationID pgtype.UUID
-	ChatSessionID  pgtype.UUID
+	InstallationID string
+	ChatSessionID  string
 	SenderOpenID   OpenID
-	TaskID         pgtype.UUID
-	IssueID        pgtype.UUID
-	IssueNumber    int32
+	TaskID         string
+	IssueID        string
+	IssueNumber    int64
 	// IssueIdentifier is the workspace-qualified key ("MUL-42") for the
 	// created issue, used verbatim in the confirmation message.
 	IssueIdentifier string

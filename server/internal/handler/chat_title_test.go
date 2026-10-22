@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/llm"
@@ -75,7 +74,7 @@ func withStubLLM(t *testing.T, srv *httptest.Server) {
 }
 
 // chatTitleTestAgentID returns the seeded workspace test agent id.
-func chatTitleTestAgentID(t *testing.T) pgtype.UUID {
+func chatTitleTestAgentID(t *testing.T) string {
 	t.Helper()
 	var agentID string
 	if err := testPool.QueryRow(context.Background(),
@@ -106,7 +105,7 @@ func newChatTitleTestSession(t *testing.T, title string) db.ChatSession {
 	return session
 }
 
-func chatSessionTitleFromDB(t *testing.T, sessionID pgtype.UUID) string {
+func chatSessionTitleFromDB(t *testing.T, sessionID string) string {
 	t.Helper()
 	var title string
 	if err := testPool.QueryRow(context.Background(),

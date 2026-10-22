@@ -2,13 +2,12 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/metrics"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -122,8 +121,8 @@ func (r *ChannelMediaReconciler) logger() *slog.Logger {
 // itself. Every settle/lease/retry decision compares against the database
 // clock, so a replica whose own clock has drifted cannot settle a row early,
 // hand out a lease that is born expired, or compress the tombstone schedule.
-func pgInterval(d time.Duration) pgtype.Interval {
-	return pgtype.Interval{Microseconds: d.Microseconds(), Valid: true}
+func pgInterval(d time.Duration) string {
+	return ""
 }
 
 // Run loops RunOnce until ctx ends. Started as its own goroutine from
@@ -159,13 +158,13 @@ func (r *ChannelMediaReconciler) RunOnce(ctx context.Context) {
 		return
 	}
 	for settles := 0; settles < channelMediaReconcileSweepLimit; settles++ {
-		leaseToken := pgtype.UUID{Bytes: uuid.New(), Valid: true}
+		leaseToken := uuid.NewString()
 		row, err := r.Queries.ClaimNextChannelMediaPendingObjectForReconcile(ctx, db.ClaimNextChannelMediaPendingObjectForReconcileParams{
-			LeaseToken:  leaseToken,
+			LeaseToken:  nullString(leaseToken),
 			Lease:       pgInterval(channelMediaReconcileLease),
 			SettleDelay: pgInterval(ChannelMediaReconcileSettleDelay),
 		})
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			break
 		}
 		if err != nil {
@@ -186,7 +185,7 @@ func (r *ChannelMediaReconciler) RunOnce(ctx context.Context) {
 // heartbeat is needed: the claim was taken moments ago and every write below
 // is lease-token guarded, so a row reclaimed after an expiry ignores the old
 // owner's writes rather than being corrupted by them.
-func (r *ChannelMediaReconciler) settle(ctx context.Context, row db.ChannelMediaPendingObject, leaseToken pgtype.UUID) {
+func (r *ChannelMediaReconciler) settle(ctx context.Context, row db.ChannelMediaPendingObject, leaseToken string) {
 	// The reference check runs AFTER the claim flipped the row to 'deleting':
 	// from that point BindMediaRefs cannot attach this key, so a negative
 	// answer is terminal, not a snapshot race. It runs on tombstone passes too:
@@ -194,7 +193,7 @@ func (r *ChannelMediaReconciler) settle(ctx context.Context, row db.ChannelMedia
 	// the same key, so skipping the check would let a re-delete manufacture the
 	// dangling attachment this whole ledger exists to prevent.
 	referenced, err := r.Queries.ChannelMediaObjectIsReferenced(ctx, db.ChannelMediaObjectIsReferencedParams{
-		ChatMessageID: row.ChatMessageID,
+		ChatMessageID: nullString(row.ChatMessageID),
 		WorkspaceID:   row.WorkspaceID,
 		StorageUrl:    row.StorageUrl,
 	})
@@ -241,7 +240,7 @@ func (r *ChannelMediaReconciler) settle(ctx context.Context, row db.ChannelMedia
 // settleDeletedObject deletes the object and then either tombstones the row
 // for a later re-delete pass or, once the schedule is exhausted, clears it.
 // Shared by the first (unreferenced) settle and every tombstone revisit.
-func (r *ChannelMediaReconciler) settleDeletedObject(ctx context.Context, row db.ChannelMediaPendingObject, leaseToken pgtype.UUID) {
+func (r *ChannelMediaReconciler) settleDeletedObject(ctx context.Context, row db.ChannelMediaPendingObject, leaseToken string) {
 	// The delete runs OUTSIDE any transaction (no DB connection or row lock
 	// held across storage I/O), gated by the lease and bounded by its own
 	// timeout so one stalled connection cannot wedge the sequential sweep.
@@ -311,7 +310,7 @@ func (r *ChannelMediaReconciler) nextTombstonePass(row db.ChannelMediaPendingObj
 	return channelMediaTombstoneRedelete[idx], idx, true
 }
 
-func (r *ChannelMediaReconciler) tombstoneRow(ctx context.Context, row db.ChannelMediaPendingObject, leaseToken pgtype.UUID, next time.Duration, idx int) bool {
+func (r *ChannelMediaReconciler) tombstoneRow(ctx context.Context, row db.ChannelMediaPendingObject, leaseToken string, next time.Duration, idx int) bool {
 	if ctx.Err() != nil {
 		// Same as release: a cancelled context cannot carry the write, and
 		// shutdown is not a failure. The row stays claimed until its lease
@@ -321,9 +320,9 @@ func (r *ChannelMediaReconciler) tombstoneRow(ctx context.Context, row db.Channe
 	n, err := r.Queries.TombstoneChannelMediaPendingObject(ctx, db.TombstoneChannelMediaPendingObjectParams{
 		StorageKey:    row.StorageKey,
 		WorkspaceID:   row.WorkspaceID,
-		LeaseToken:    leaseToken,
+		LeaseToken:    nullString(leaseToken),
 		RedeleteDelay: pgInterval(next),
-		TombstonePass: int32(idx),
+		TombstonePass: int64(int32(idx)),
 	})
 	if err != nil {
 		r.logger().Warn("channel media reconciler: tombstone failed", "storage_key", row.StorageKey, "error", err)
@@ -334,7 +333,7 @@ func (r *ChannelMediaReconciler) tombstoneRow(ctx context.Context, row db.Channe
 
 // release keeps the row in 'deleting' (a bind must still never attach it),
 // drops the lease, and backs off the next attempt.
-func (r *ChannelMediaReconciler) release(ctx context.Context, row db.ChannelMediaPendingObject, leaseToken pgtype.UUID, cause error) {
+func (r *ChannelMediaReconciler) release(ctx context.Context, row db.ChannelMediaPendingObject, leaseToken string, cause error) {
 	if ctx.Err() != nil {
 		// Shutdown cancelled the settle itself (a DELETE or a query in
 		// flight). The backoff write would fail on the same cancelled context,
@@ -355,16 +354,16 @@ func (r *ChannelMediaReconciler) release(ctx context.Context, row db.ChannelMedi
 	if err := r.Queries.ReleaseChannelMediaPendingObject(ctx, db.ReleaseChannelMediaPendingObjectParams{
 		StorageKey:  row.StorageKey,
 		WorkspaceID: row.WorkspaceID,
-		LeaseToken:  leaseToken,
+		LeaseToken:  nullString(leaseToken),
 		Backoff:     pgInterval(backoff),
-		LastError:   pgtype.Text{String: cause.Error(), Valid: true},
+		LastError:   sql.NullString{String: cause.Error(), Valid: true},
 	}); err != nil {
 		// The lease expiry reclaims the row regardless.
 		r.logger().Warn("channel media reconciler: release failed", "storage_key", row.StorageKey, "error", err)
 	}
 }
 
-func (r *ChannelMediaReconciler) clearRow(ctx context.Context, row db.ChannelMediaPendingObject, leaseToken pgtype.UUID) bool {
+func (r *ChannelMediaReconciler) clearRow(ctx context.Context, row db.ChannelMediaPendingObject, leaseToken string) bool {
 	if ctx.Err() != nil {
 		// See release: shutdown mid-settle leaves the row to its lease expiry
 		// rather than logging a write that never had a chance to land.
@@ -373,7 +372,7 @@ func (r *ChannelMediaReconciler) clearRow(ctx context.Context, row db.ChannelMed
 	n, err := r.Queries.DeleteChannelMediaPendingObject(ctx, db.DeleteChannelMediaPendingObjectParams{
 		StorageKey:  row.StorageKey,
 		WorkspaceID: row.WorkspaceID,
-		LeaseToken:  leaseToken,
+		LeaseToken:  nullString(leaseToken),
 	})
 	if err != nil {
 		r.logger().Warn("channel media reconciler: clear row failed", "storage_key", row.StorageKey, "error", err)

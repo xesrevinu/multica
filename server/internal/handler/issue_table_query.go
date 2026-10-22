@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -15,8 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -32,16 +31,16 @@ func withIssueTableQueryTimeout(r *http.Request) (*http.Request, context.CancelF
 	return r.WithContext(ctx), cancel
 }
 
-func (h *Handler) beginIssueTableSnapshot(ctx context.Context) (*Handler, pgx.Tx, error) {
+func (h *Handler) beginIssueTableSnapshot(ctx context.Context) (*Handler, *sql.Tx, error) {
 	if h.TxStarter == nil {
 		return nil, nil, errors.New("transaction starter is unavailable")
 	}
-	tx, err := h.TxStarter.Begin(ctx)
+	tx, err := h.TxStarter.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, nil, err
 	}
-	if _, err := tx.Exec(ctx, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"); err != nil {
-		_ = tx.Rollback(context.Background())
+	if _, err := tx.ExecContext(ctx, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"); err != nil {
+		_ = tx.Rollback()
 		return nil, nil, err
 	}
 	snapshot := *h
@@ -163,7 +162,7 @@ type issueTableSQL struct {
 	where       string
 	args        []any
 	fingerprint string
-	workspaceID pgtype.UUID
+	workspaceID string
 }
 
 type issueTableCursor struct {
@@ -367,8 +366,8 @@ func issueTableContainsString(values []string, candidate string) bool {
 	return false
 }
 
-func parseIssueTableUUIDList(w http.ResponseWriter, values []string, field string) ([]pgtype.UUID, bool) {
-	result := make([]pgtype.UUID, 0, len(values))
+func parseIssueTableUUIDList(w http.ResponseWriter, values []string, field string) ([]string, bool) {
+	result := make([]string, 0, len(values))
 	for _, raw := range values {
 		parsed, err := util.ParseUUID(raw)
 		if err != nil {
@@ -393,7 +392,7 @@ func parseIssueTableActor(w http.ResponseWriter, actor issueTableActorRef, field
 	return issueActorFilter{actorType: actor.Type, actorID: id}, true
 }
 
-func appendIssueTableInvolvedPredicate(where []string, addArg func(any) string, userID pgtype.UUID) []string {
+func appendIssueTableInvolvedPredicate(where []string, addArg func(any) string, userID string) []string {
 	ref := addArg(userID)
 	return append(where, fmt.Sprintf(`(
     (i.assignee_type = 'agent' AND i.assignee_id IN (

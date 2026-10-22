@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/events"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -67,11 +66,11 @@ func (f *fakeLivenessStore) touchCount() int {
 }
 
 type recordingHeartbeatScheduler struct {
-	ids []pgtype.UUID
+	ids []string
 	err error
 }
 
-func (s *recordingHeartbeatScheduler) Schedule(_ context.Context, id, _ pgtype.UUID) error {
+func (s *recordingHeartbeatScheduler) Schedule(_ context.Context, id, _ string) error {
 	s.ids = append(s.ids, id)
 	return s.err
 }
@@ -120,8 +119,8 @@ func loadRuntime(t *testing.T, runtimeID string) db.AgentRuntime {
 	return rt
 }
 
-func pgUUID(s string) (pgtype.UUID, error) {
-	var u pgtype.UUID
+func pgUUID(s string) (string, error) {
+	var u string
 	if err := u.Scan(s); err != nil {
 		return u, err
 	}
@@ -217,7 +216,7 @@ func TestRecordHeartbeat_NoopStoreAlwaysWritesDB(t *testing.T) {
 	// what's driving the write.
 	setRuntimeLastSeenAt(t, runtimeID, time.Now())
 	rt := loadRuntime(t, runtimeID)
-	before := rt.LastSeenAt.Time
+	before := parseDBTime(rt.LastSeenAt.String)
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -248,7 +247,7 @@ func TestRecordHeartbeat_RedisAvailableSkipsDBWithinFlushWindow(t *testing.T) {
 	// Pin last_seen_at to "just now" so we are inside the flush window.
 	setRuntimeLastSeenAt(t, runtimeID, time.Now())
 	rt := loadRuntime(t, runtimeID)
-	before := rt.LastSeenAt.Time
+	before := parseDBTime(rt.LastSeenAt.String)
 
 	if err := testHandler.recordHeartbeat(context.Background(), rt); err != nil {
 		t.Fatalf("recordHeartbeat: %v", err)
@@ -405,7 +404,7 @@ func TestRecordHeartbeat_TouchErrorFallsBackToDB(t *testing.T) {
 
 	setRuntimeLastSeenAt(t, runtimeID, time.Now())
 	rt := loadRuntime(t, runtimeID)
-	before := rt.LastSeenAt.Time
+	before := parseDBTime(rt.LastSeenAt.String)
 
 	time.Sleep(50 * time.Millisecond)
 

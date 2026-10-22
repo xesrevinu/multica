@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -12,11 +11,11 @@ import (
 
 // seedRecoverySignal drives one delegated failure to the point where the
 // durable recovery comment and its coordinator task exist, and returns both.
-func (f *delegatedFailureFixture) seedRecoverySignal(t *testing.T, svc *TaskService) (recoveryTaskID, recoveryCommentID pgtype.UUID) {
+func (f *delegatedFailureFixture) seedRecoverySignal(t *testing.T, svc *TaskService) (recoveryTaskID, recoveryCommentID string) {
 	t.Helper()
 	ctx := context.Background()
 	failedID := f.insertWorkerTask(t, "failed", "comment", 1, 2)
-	if _, err := f.pool.Exec(ctx, `
+	if _, err := f.pool.ExecContext(ctx, `
 		UPDATE agent_task_queue
 		SET failure_reason = 'agent_error.process_failure', error = 'worker exited', completed_at = now()
 		WHERE id = $1`, failedID); err != nil {
@@ -29,7 +28,7 @@ func (f *delegatedFailureFixture) seedRecoverySignal(t *testing.T, svc *TaskServ
 	if handled, err := svc.recoverDelegatedTaskFailure(ctx, failed); err != nil || !handled {
 		t.Fatalf("initial recovery = handled %v err %v", handled, err)
 	}
-	if err := f.pool.QueryRow(ctx, `
+	if err := f.pool.QueryRowContext(ctx, `
 		SELECT task.id, recovery.id
 		FROM agent_task_queue task
 		JOIN comment recovery ON recovery.id = task.trigger_comment_id
@@ -40,10 +39,10 @@ func (f *delegatedFailureFixture) seedRecoverySignal(t *testing.T, svc *TaskServ
 	return recoveryTaskID, recoveryCommentID
 }
 
-func (f *delegatedFailureFixture) settled(t *testing.T, commentID pgtype.UUID) bool {
+func (f *delegatedFailureFixture) settled(t *testing.T, commentID string) bool {
 	t.Helper()
 	var marked bool
-	if err := f.pool.QueryRow(context.Background(),
+	if err := f.pool.QueryRowContext(context.Background(),
 		`SELECT recovery_settled_at IS NOT NULL FROM comment WHERE id = $1`, commentID).Scan(&marked); err != nil {
 		t.Fatalf("read recovery_settled_at: %v", err)
 	}
@@ -53,9 +52,9 @@ func (f *delegatedFailureFixture) settled(t *testing.T, commentID pgtype.UUID) b
 // markDelivered simulates the dispatch receipt a daemon writes before it runs
 // the coordinator task, and puts the task in the status the terminal callbacks
 // expect.
-func (f *delegatedFailureFixture) markDelivered(t *testing.T, taskID, commentID pgtype.UUID) {
+func (f *delegatedFailureFixture) markDelivered(t *testing.T, taskID, commentID string) {
 	t.Helper()
-	if _, err := f.pool.Exec(context.Background(), `
+	if _, err := f.pool.ExecContext(context.Background(), `
 		UPDATE agent_task_queue
 		SET status = 'running', started_at = now(), dispatched_at = now(),
 		    delivered_comment_ids = ARRAY[$2]::uuid[]
@@ -71,19 +70,19 @@ func (f *delegatedFailureFixture) markDelivered(t *testing.T, taskID, commentID 
 func TestTerminalCoordinatorTaskSettlesDeliveredRecovery(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
-		finalize func(t *testing.T, svc *TaskService, taskID pgtype.UUID)
+		finalize func(t *testing.T, svc *TaskService, taskID string)
 	}{
-		{"complete", func(t *testing.T, svc *TaskService, taskID pgtype.UUID) {
+		{"complete", func(t *testing.T, svc *TaskService, taskID string) {
 			if _, err := svc.CompleteTask(context.Background(), taskID, []byte(`{"ok":true}`), "", "", "", false, "", ""); err != nil {
 				t.Fatalf("CompleteTask: %v", err)
 			}
 		}},
-		{"fail", func(t *testing.T, svc *TaskService, taskID pgtype.UUID) {
+		{"fail", func(t *testing.T, svc *TaskService, taskID string) {
 			if _, err := svc.FailTask(context.Background(), taskID, "coordinator crashed", "", "", "", "agent_error.process_failure", false, "", ""); err != nil {
 				t.Fatalf("FailTask: %v", err)
 			}
 		}},
-		{"cancel", func(t *testing.T, svc *TaskService, taskID pgtype.UUID) {
+		{"cancel", func(t *testing.T, svc *TaskService, taskID string) {
 			if _, err := svc.CancelTask(context.Background(), taskID); err != nil {
 				t.Fatalf("CancelTask: %v", err)
 			}
@@ -182,7 +181,7 @@ func TestUserCancelledRecoveryIsSettled(t *testing.T) {
 	dbfx := testutil.New(f.pool, f.workspaceID, f.userID)
 	for _, tc := range []struct {
 		name      string
-		commentID pgtype.UUID
+		commentID string
 		wantTasks int
 	}{
 		{"user_cancelled", recoveryCommentID, 1},
@@ -208,15 +207,15 @@ func TestExhaustedRecoveryIsSettled(t *testing.T) {
 	_, recoveryCommentID := f.seedRecoverySignal(t, svc)
 
 	for attempt := 1; attempt <= delegatedFailureRecoveryMaxTaskAttempts; attempt++ {
-		var currentTaskID pgtype.UUID
-		if err := f.pool.QueryRow(ctx, `
+		var currentTaskID string
+		if err := f.pool.QueryRowContext(ctx, `
 			SELECT id FROM agent_task_queue
 			WHERE trigger_comment_id = $1 AND status = 'queued'
 			ORDER BY created_at DESC, id DESC
 			LIMIT 1`, recoveryCommentID).Scan(&currentTaskID); err != nil {
 			t.Fatalf("load recovery attempt %d: %v", attempt, err)
 		}
-		if _, err := f.pool.Exec(ctx, `
+		if _, err := f.pool.ExecContext(ctx, `
 			UPDATE agent_task_queue
 			SET status = 'failed', completed_at = now(), failure_reason = 'queued_expired',
 			    delivered_comment_ids = '{}'
@@ -254,7 +253,7 @@ func TestManualRerunSettlesDeliveredRecovery(t *testing.T) {
 
 	// The rerun path only clears tasks that have not begun executing, so leave
 	// the coordinator task queued and give it the dispatch receipt.
-	if _, err := f.pool.Exec(ctx, `
+	if _, err := f.pool.ExecContext(ctx, `
 		UPDATE agent_task_queue SET delivered_comment_ids = ARRAY[$2]::uuid[] WHERE id = $1`,
 		recoveryTaskID, recoveryCommentID); err != nil {
 		t.Fatalf("mark recovery delivered: %v", err)
@@ -268,12 +267,12 @@ func TestManualRerunSettlesDeliveredRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse actor id: %v", err)
 	}
-	if _, err := svc.RerunIssue(ctx, issueID, recoveryTaskID, pgtype.UUID{}, actorID, func(db.Agent) bool { return true }); err != nil {
+	if _, err := svc.RerunIssue(ctx, issueID, recoveryTaskID, "", actorID, func(db.Agent) bool { return true }); err != nil {
 		t.Fatalf("RerunIssue: %v", err)
 	}
 
 	var status string
-	if err := f.pool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, recoveryTaskID).Scan(&status); err != nil {
+	if err := f.pool.QueryRowContext(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, recoveryTaskID).Scan(&status); err != nil {
 		t.Fatalf("read coordinator task status: %v", err)
 	}
 	if status != "cancelled" {
@@ -319,7 +318,7 @@ func TestNonTerminalTaskWithAReceiptIsNotSettled(t *testing.T) {
 			f, svc := seedDelegatedFailureFixture(t)
 			ctx := context.Background()
 			recoveryTaskID, recoveryCommentID := f.seedRecoverySignal(t, svc)
-			if _, err := f.pool.Exec(ctx, `
+			if _, err := f.pool.ExecContext(ctx, `
 				UPDATE agent_task_queue
 				SET status = $2, dispatched_at = now(), delivered_comment_ids = ARRAY[$3]::uuid[]
 				WHERE id = $1`, recoveryTaskID, status, recoveryCommentID); err != nil {
@@ -352,13 +351,13 @@ func TestBulkCancelRollsBackWhenSettlementFails(t *testing.T) {
 
 	// A trigger that fails only on the settlement UPDATE, so the cancel inside
 	// the same transaction has to roll back with it.
-	if _, err := f.pool.Exec(ctx, `
+	if _, err := f.pool.ExecContext(ctx, `
 		CREATE OR REPLACE FUNCTION reject_recovery_settlement() RETURNS trigger AS $$
 		BEGIN RAISE EXCEPTION 'settlement rejected'; END;
 		$$ LANGUAGE plpgsql`); err != nil {
 		t.Fatalf("create settlement trigger function: %v", err)
 	}
-	if _, err := f.pool.Exec(ctx, `
+	if _, err := f.pool.ExecContext(ctx, `
 		CREATE TRIGGER reject_recovery_settlement
 		BEFORE UPDATE OF recovery_settled_at ON comment
 		FOR EACH ROW EXECUTE FUNCTION reject_recovery_settlement()`); err != nil {
@@ -369,8 +368,8 @@ func TestBulkCancelRollsBackWhenSettlementFails(t *testing.T) {
 	// attachable to comment by any later run.
 	t.Cleanup(func() {
 		cleanupCtx := context.Background()
-		_, _ = f.pool.Exec(cleanupCtx, `DROP TRIGGER IF EXISTS reject_recovery_settlement ON comment`)
-		_, _ = f.pool.Exec(cleanupCtx, `DROP FUNCTION IF EXISTS reject_recovery_settlement()`)
+		_, _ = f.pool.ExecContext(cleanupCtx, `DROP TRIGGER IF EXISTS reject_recovery_settlement ON comment`)
+		_, _ = f.pool.ExecContext(cleanupCtx, `DROP FUNCTION IF EXISTS reject_recovery_settlement()`)
 	})
 
 	agentID, err := util.ParseUUID(f.coordinator)
@@ -382,7 +381,7 @@ func TestBulkCancelRollsBackWhenSettlementFails(t *testing.T) {
 	}
 
 	var status string
-	if err := f.pool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, recoveryTaskID).Scan(&status); err != nil {
+	if err := f.pool.QueryRowContext(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, recoveryTaskID).Scan(&status); err != nil {
 		t.Fatalf("read task status: %v", err)
 	}
 	if status == "cancelled" {

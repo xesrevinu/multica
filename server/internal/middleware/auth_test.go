@@ -1,49 +1,14 @@
 package middleware
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/multica-ai/multica/server/internal/auth"
-	"github.com/redis/go-redis/v9"
 )
-
-const redisTestDB = 13
-
-// newRedisTestClient connects to REDIS_TEST_URL, uses this package's logical
-// test DB, flushes, and skips when unset — same gating pattern the rest of the
-// suite uses for Redis-backed tests, so `go test ./...` works on a stock laptop
-// without a Redis.
-func newRedisTestClient(t *testing.T) *redis.Client {
-	t.Helper()
-	url := os.Getenv("REDIS_TEST_URL")
-	if url == "" {
-		t.Skip("REDIS_TEST_URL not set")
-	}
-	opts, err := redis.ParseURL(url)
-	if err != nil {
-		t.Fatalf("parse REDIS_TEST_URL: %v", err)
-	}
-	opts.DB = redisTestDB
-	rdb := redis.NewClient(opts)
-	ctx := context.Background()
-	if err := rdb.Ping(ctx).Err(); err != nil {
-		t.Skipf("REDIS_TEST_URL unreachable: %v", err)
-	}
-	if err := rdb.FlushDB(ctx).Err(); err != nil {
-		t.Fatalf("flushdb: %v", err)
-	}
-	t.Cleanup(func() {
-		rdb.FlushDB(context.Background())
-		rdb.Close()
-	})
-	return rdb
-}
 
 func generateToken(claims jwt.MapClaims, secret []byte) string {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -336,44 +301,6 @@ func TestAuth_StripsForgedAgentIdentityHeaders(t *testing.T) {
 	}
 	if gotAgentID != "" || gotTaskID != "" {
 		t.Fatalf("agent identity headers must be cleared on non-task-token paths, got agent=%q task=%q", gotAgentID, gotTaskID)
-	}
-}
-
-// TestAuth_PATCacheHit pins the optimization: when the PAT cache already
-// holds an entry for this token, the middleware MUST NOT call into queries
-// — it short-circuits before the DB lookup and the last_used_at update.
-//
-// We exploit that by passing nil queries: a cache miss would dereference
-// the nil and panic; a cache hit must not. Reaching the next handler with
-// the cached user_id therefore proves the short-circuit fired.
-func TestAuth_PATCacheHit(t *testing.T) {
-	rdb := newRedisTestClient(t)
-	cache := auth.NewPATCache(rdb)
-	if cache == nil {
-		t.Fatal("expected non-nil cache")
-	}
-
-	const rawToken = "mul_cache_hit_test_token"
-	hash := auth.HashToken(rawToken)
-	cache.Set(context.Background(), hash, "cached-user-id", auth.AuthCacheTTL)
-
-	var gotUserID string
-	mw := Auth(nil, cache, nil, nil) // nil queries — only safe on cache hit
-	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotUserID = r.Header.Get("X-User-ID")
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest("GET", "/api/me", nil)
-	req.Header.Set("Authorization", "Bearer "+rawToken)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 on cache hit, got %d", w.Code)
-	}
-	if gotUserID != "cached-user-id" {
-		t.Fatalf("expected cached X-User-ID, got %q", gotUserID)
 	}
 }
 

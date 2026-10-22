@@ -2,10 +2,9 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -14,36 +13,36 @@ import (
 // rerunQueueFixture seeds the shared (workspace, agent, issue) trio and returns
 // the service under test plus the agent's runtime id, which
 // agent_task_queue.runtime_id needs (NOT NULL).
-func rerunQueueFixture(t *testing.T) (svc *TaskService, pool *pgxpool.Pool, creatorID, agentID, issueID, runtimeID string) {
+func rerunQueueFixture(t *testing.T) (svc *TaskService, pool *sql.DB, creatorID, agentID, issueID, runtimeID string) {
 	t.Helper()
 	pool = newResolveOriginatorPool(t)
 	_, creatorID, agentID, issueID = seedAttributionFixture(t, pool)
 
-	if err := pool.QueryRow(context.Background(), `SELECT runtime_id::text FROM agent WHERE id = $1`, agentID).Scan(&runtimeID); err != nil {
+	if err := pool.QueryRowContext(context.Background(), `SELECT runtime_id::text FROM agent WHERE id = $1`, agentID).Scan(&runtimeID); err != nil {
 		t.Fatalf("read agent runtime: %v", err)
 	}
 	svc = &TaskService{Queries: db.New(pool), TxStarter: pool, Bus: events.New()}
 	return svc, pool, creatorID, agentID, issueID, runtimeID
 }
 
-func seedRerunTask(t *testing.T, pool *pgxpool.Pool, agentID, runtimeID, issueID, status string) pgtype.UUID {
+func seedRerunTask(t *testing.T, pool *sql.DB, agentID, runtimeID, issueID, status string) string {
 	t.Helper()
-	var id pgtype.UUID
-	if err := pool.QueryRow(context.Background(), `
+	var id string
+	if err := pool.QueryRowContext(context.Background(), `
 		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority)
 		VALUES ($1, $2, $3, $4, 0)
 		RETURNING id
 	`, agentID, runtimeID, issueID, status).Scan(&id); err != nil {
 		t.Fatalf("insert %s task: %v", status, err)
 	}
-	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, id) })
+	t.Cleanup(func() { pool.ExecContext(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, id) })
 	return id
 }
 
-func taskStatus(t *testing.T, pool *pgxpool.Pool, id pgtype.UUID) string {
+func taskStatus(t *testing.T, pool *sql.DB, id string) string {
 	t.Helper()
 	var status string
-	if err := pool.QueryRow(context.Background(),
+	if err := pool.QueryRowContext(context.Background(),
 		`SELECT status FROM agent_task_queue WHERE id = $1`, id).Scan(&status); err != nil {
 		t.Fatalf("read task status: %v", err)
 	}
@@ -66,11 +65,11 @@ func TestRerunIssueQueuesBehindActiveTaskWithoutCancelling(t *testing.T) {
 			svc, pool, creatorID, agentID, issueID, runtimeID := rerunQueueFixture(t)
 			activeID := seedRerunTask(t, pool, agentID, runtimeID, issueID, activeStatus)
 
-			task, err := svc.RerunIssue(context.Background(), util.MustParseUUID(issueID), pgtype.UUID{}, pgtype.UUID{}, util.MustParseUUID(creatorID), nil)
+			task, err := svc.RerunIssue(context.Background(), util.MustParseUUID(issueID), "", "", util.MustParseUUID(creatorID), nil)
 			if err != nil {
 				t.Fatalf("RerunIssue: %v", err)
 			}
-			t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, task.ID) })
+			t.Cleanup(func() { pool.ExecContext(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, task.ID) })
 
 			if got := taskStatus(t, pool, activeID); got != activeStatus {
 				t.Fatalf("rerun must NOT cancel an executing task; %s task is now %q", activeStatus, got)
@@ -81,7 +80,7 @@ func TestRerunIssueQueuesBehindActiveTaskWithoutCancelling(t *testing.T) {
 			if task.Status != "queued" {
 				t.Fatalf("the rerun row must wait its turn as queued, got %q", task.Status)
 			}
-			if !task.ForceFreshSession {
+			if task.ForceFreshSession == 0 {
 				t.Fatal("a rerun row must carry force_fresh_session (MUL-4869)")
 			}
 		})
@@ -100,11 +99,11 @@ func TestRerunIssueReplacesNotYetStartedTask(t *testing.T) {
 			svc, pool, creatorID, agentID, issueID, runtimeID := rerunQueueFixture(t)
 			pendingID := seedRerunTask(t, pool, agentID, runtimeID, issueID, pendingStatus)
 
-			task, err := svc.RerunIssue(context.Background(), util.MustParseUUID(issueID), pgtype.UUID{}, pgtype.UUID{}, util.MustParseUUID(creatorID), nil)
+			task, err := svc.RerunIssue(context.Background(), util.MustParseUUID(issueID), "", "", util.MustParseUUID(creatorID), nil)
 			if err != nil {
 				t.Fatalf("RerunIssue: %v", err)
 			}
-			t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, task.ID) })
+			t.Cleanup(func() { pool.ExecContext(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, task.ID) })
 
 			if util.UUIDToString(task.ID) == util.UUIDToString(pendingID) {
 				t.Fatal("expected a fresh rerun task, got the pre-existing pending row")

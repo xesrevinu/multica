@@ -2,15 +2,13 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -192,9 +190,9 @@ func (s *TaskService) GenerateChatQuickActionsForTask(ctx context.Context, task 
 	// window, the write, and the broadcast must all describe the same assistant
 	// message: this runs on a detached goroutine, so by the time it executes the
 	// session may already have moved on by a full turn.
-	target, err := s.Queries.GetChatMessageByTaskAssistant(ctx, task.ID)
+	target, err := s.Queries.GetChatMessageByTaskAssistant(ctx, nullString(task.ID))
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			// No assistant row to attach to (no_response, channel empty-drop).
 			// No client is waiting either — the pending flag is only raised for
 			// a written ordinary message.
@@ -255,7 +253,7 @@ func (s *TaskService) GenerateChatQuickActionsAsync(task db.AgentTaskQueue, orig
 	if s.QuickActions == nil || !s.QuickActions.Enabled() {
 		return
 	}
-	sessionKey := util.UUIDToString(task.ChatSessionID)
+	sessionKey := util.UUIDToString(task.ChatSessionID.String)
 	if sessionKey == "" {
 		return
 	}
@@ -309,7 +307,7 @@ func (s *TaskService) GenerateChatQuickActionsAsync(task db.AgentTaskQueue, orig
 // session. The refresh endpoint checks it so a duplicate request is refused
 // with a 409 the client can act on, instead of being accepted and silently
 // dropped by the admission gate in GenerateChatQuickActionsAsync.
-func (s *TaskService) chatQuickActionsInFlight(sessionID pgtype.UUID) bool {
+func (s *TaskService) chatQuickActionsInFlight(sessionID string) bool {
 	_, running := s.quickActionsInFlight.Load(util.UUIDToString(sessionID))
 	return running
 }
@@ -336,7 +334,7 @@ func (s *TaskService) resolveChatQuickActionsPlaceholder(task db.AgentTaskQueue)
 // completion callback and this read would otherwise supply the context while
 // the result is still written to the older turn, and a newly-sent user message
 // would leave the window ending on a user row with no reply to build on.
-func (s *TaskService) buildChatQuickActionsPrompt(ctx context.Context, target db.ChatMessage, inputOwnerID pgtype.UUID) (string, error) {
+func (s *TaskService) buildChatQuickActionsPrompt(ctx context.Context, target db.ChatMessage, inputOwnerID string) (string, error) {
 	// Strictly older than target, newest-first; reversed below. Over-fetch so
 	// dropped rows (no_response, failures) don't shrink the window below the
 	// intended turn count.
@@ -344,7 +342,7 @@ func (s *TaskService) buildChatQuickActionsPrompt(ctx context.Context, target db
 		ChatSessionID:   target.ChatSessionID,
 		Limit:           chatQuickActionsContextMessages * 2,
 		BeforeCreatedAt: target.CreatedAt,
-		BeforeID:        target.ID,
+		BeforeID:        nullString(target.ID),
 	})
 	if err != nil {
 		return "", fmt.Errorf("load chat messages for quick actions: %w", err)
@@ -353,23 +351,23 @@ func (s *TaskService) buildChatQuickActionsPrompt(ctx context.Context, target db
 	return renderChatQuickActionsContext(msgs, collectPreviousChatQuickActions(msgs)), nil
 }
 
-func selectChatQuickActionsContext(rows []db.ChatMessage, target db.ChatMessage, inputOwnerID pgtype.UUID) []db.ChatMessage {
+func selectChatQuickActionsContext(rows []db.ChatMessage, target db.ChatMessage, inputOwnerID string) []db.ChatMessage {
 	// A queued successor's input can be stored before target even though it is
 	// logically the next turn. Keep user rows only when their task has already
 	// answered inside this anchored window (or owns the target task's input;
 	// auto-retry replies use the child task ID while their input keeps the root).
-	answeredTaskIDs := map[pgtype.UUID]struct{}{target.TaskID: {}}
+	answeredTaskIDs := map[string]struct{}{target.TaskID.String: {}}
 	answeredTaskIDs[inputOwnerID] = struct{}{}
 	for _, msg := range rows {
 		if msg.Role == "assistant" && msg.TaskID.Valid {
-			answeredTaskIDs[msg.TaskID] = struct{}{}
+			answeredTaskIDs[msg.TaskID.String] = struct{}{}
 		}
 	}
 	msgs := make([]db.ChatMessage, 0, len(rows)+1)
 	for i := len(rows) - 1; i >= 0; i-- {
 		msg := rows[i]
 		if msg.Role == "user" && msg.TaskID.Valid {
-			if _, answered := answeredTaskIDs[msg.TaskID]; !answered {
+			if _, answered := answeredTaskIDs[msg.TaskID.String]; !answered {
 				continue
 			}
 		}
@@ -410,7 +408,7 @@ func collectPreviousChatQuickActions(msgs []db.ChatMessage) []string {
 			continue
 		}
 		var actions []protocol.ChatQuickAction
-		if err := json.Unmarshal(msgs[i].QuickActions, &actions); err != nil {
+		if err := json.Unmarshal([]byte(msgs[i].QuickActions), &actions); err != nil {
 			continue
 		}
 		for _, action := range actions {

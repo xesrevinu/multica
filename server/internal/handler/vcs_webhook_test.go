@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -14,7 +15,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util/secretbox"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -54,7 +54,7 @@ func seedVCSConnection(t *testing.T, ctx context.Context, box *secretbox.Box, pr
 		AccountLogin:           "acme",
 		AccessTokenEncrypted:   base64.StdEncoding.EncodeToString(tokenSealed),
 		WebhookSecretEncrypted: base64.StdEncoding.EncodeToString(sealed),
-		ConnectedByID:          pgtype.UUID{},
+		ConnectedByID:          sql.NullString{},
 	})
 	if err != nil {
 		t.Fatalf("UpsertVCSConnection: %v", err)
@@ -231,7 +231,7 @@ func TestAutoCompleteSpansProviders(t *testing.T) {
 	box := withVCSBox(t)
 	connID := seedVCSConnection(t, ctx, box, "gitlab", "https://gitlab.test")
 	issue := newVCSIssue(t, "Cross-provider auto-complete")
-	now := pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
+	now := time.Now().UTC().UTC().Format(time.RFC3339Nano)
 	t.Cleanup(func() {
 		testPool.Exec(ctx, `DELETE FROM issue_pull_request WHERE issue_id = $1`, issue.ID)
 		testPool.Exec(ctx, `DELETE FROM github_pull_request WHERE workspace_id = $1`, testWorkspaceID)
@@ -328,7 +328,7 @@ func TestDeleteIssue_VCSLinkCleanupIsWorkspaceScoped(t *testing.T) {
 
 	// Mismatched workspace_id → complete no-op: issue and link both survive.
 	wrongWS := parseUUID("11111111-1111-1111-1111-111111111111")
-	if err := testHandler.Queries.DeleteIssue(ctx, db.DeleteIssueParams{ID: parseUUID(issue.ID), WorkspaceID: wrongWS}); err != nil {
+	if err := testHandler.Queries.DeleteIssue(ctx, db.DeleteIssueParams{IssueID: parseUUID(issue.ID), WorkspaceID: wrongWS}); err != nil {
 		t.Fatalf("DeleteIssue(wrong ws): %v", err)
 	}
 	if _, err := testHandler.Queries.GetIssue(ctx, parseUUID(issue.ID)); err != nil {
@@ -339,7 +339,7 @@ func TestDeleteIssue_VCSLinkCleanupIsWorkspaceScoped(t *testing.T) {
 	}
 
 	// Correct workspace_id → issue and its links both removed.
-	if err := testHandler.Queries.DeleteIssue(ctx, db.DeleteIssueParams{ID: parseUUID(issue.ID), WorkspaceID: parseUUID(testWorkspaceID)}); err != nil {
+	if err := testHandler.Queries.DeleteIssue(ctx, db.DeleteIssueParams{IssueID: parseUUID(issue.ID), WorkspaceID: parseUUID(testWorkspaceID)}); err != nil {
 		t.Fatalf("DeleteIssue(correct ws): %v", err)
 	}
 	if linkCount() != 0 {

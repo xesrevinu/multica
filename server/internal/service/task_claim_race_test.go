@@ -2,19 +2,19 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-func newTaskClaimRacePool(t *testing.T) *pgxpool.Pool {
+func newTaskClaimRacePool(t *testing.T) *sql.DB {
 	t.Helper()
 	return sharedTestPool(t)
 }
@@ -74,7 +74,7 @@ func TestClaimTaskConcurrentCapacityRespected(t *testing.T) {
 	}
 
 	var active int
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		SELECT count(*) FROM agent_task_queue
 		WHERE agent_id = $1 AND status IN ('dispatched', 'running', 'waiting_local_directory')
 	`, agentID).Scan(&active); err != nil {
@@ -85,10 +85,10 @@ func TestClaimTaskConcurrentCapacityRespected(t *testing.T) {
 	}
 }
 
-func createSleepTrigger(t *testing.T, ctx context.Context, pool *pgxpool.Pool, triggerName, functionName, agentID string) {
+func createSleepTrigger(t *testing.T, ctx context.Context, pool *sql.DB, triggerName, functionName, agentID string) {
 	t.Helper()
 
-	if _, err := pool.Exec(ctx, fmt.Sprintf(`
+	if _, err := pool.ExecContext(ctx, fmt.Sprintf(`
 		CREATE FUNCTION %s()
 		RETURNS trigger
 		LANGUAGE plpgsql
@@ -101,7 +101,7 @@ func createSleepTrigger(t *testing.T, ctx context.Context, pool *pgxpool.Pool, t
 	`, quoteIdent(functionName))); err != nil {
 		t.Fatalf("create sleep trigger function: %v", err)
 	}
-	if _, err := pool.Exec(ctx, fmt.Sprintf(`
+	if _, err := pool.ExecContext(ctx, fmt.Sprintf(`
 		CREATE TRIGGER %s
 		BEFORE UPDATE OF status ON agent_task_queue
 		FOR EACH ROW
@@ -113,12 +113,12 @@ func createSleepTrigger(t *testing.T, ctx context.Context, pool *pgxpool.Pool, t
 
 	t.Cleanup(func() {
 		cleanupCtx := context.Background()
-		pool.Exec(cleanupCtx, fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON agent_task_queue", quoteIdent(triggerName)))
-		pool.Exec(cleanupCtx, fmt.Sprintf("DROP FUNCTION IF EXISTS %s()", quoteIdent(functionName)))
+		pool.ExecContext(cleanupCtx, fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON agent_task_queue", quoteIdent(triggerName)))
+		pool.ExecContext(cleanupCtx, fmt.Sprintf("DROP FUNCTION IF EXISTS %s()", quoteIdent(functionName)))
 	})
 }
 
-func createClaimCapacityFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) string {
+func createClaimCapacityFixture(t *testing.T, ctx context.Context, pool *sql.DB) string {
 	t.Helper()
 
 	suffix := time.Now().UnixNano()
@@ -126,7 +126,7 @@ func createClaimCapacityFixture(t *testing.T, ctx context.Context, pool *pgxpool
 	slug := fmt.Sprintf("claim-capacity-%d", suffix)
 
 	var userID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO "user" (name, email)
 		VALUES ($1, $2)
 		RETURNING id
@@ -135,14 +135,14 @@ func createClaimCapacityFixture(t *testing.T, ctx context.Context, pool *pgxpool
 	}
 
 	var workspaceID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO workspace (name, slug, description, issue_prefix)
 		VALUES ($1, $2, $3, $4)
 		RETURNING id
 	`, "Claim Capacity Test", slug, "temporary task claim race test workspace", "CCR").Scan(&workspaceID); err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO member (workspace_id, user_id, role)
 		VALUES ($1, $2, 'owner')
 	`, workspaceID, userID); err != nil {
@@ -150,7 +150,7 @@ func createClaimCapacityFixture(t *testing.T, ctx context.Context, pool *pgxpool
 	}
 
 	var runtimeID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO agent_runtime (
 			workspace_id, daemon_id, name, runtime_mode, provider,
 			status, device_info, metadata, last_seen_at, visibility, owner_id
@@ -162,7 +162,7 @@ func createClaimCapacityFixture(t *testing.T, ctx context.Context, pool *pgxpool
 	}
 
 	var agentID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config,
 			runtime_id, visibility, max_concurrent_tasks, owner_id
@@ -174,25 +174,25 @@ func createClaimCapacityFixture(t *testing.T, ctx context.Context, pool *pgxpool
 	}
 	t.Cleanup(func() {
 		cleanupCtx := context.Background()
-		pool.Exec(cleanupCtx, `DELETE FROM agent_task_queue WHERE agent_id = $1`, agentID)
-		pool.Exec(cleanupCtx, `DELETE FROM issue WHERE workspace_id = $1`, workspaceID)
-		pool.Exec(cleanupCtx, `DELETE FROM agent WHERE id = $1`, agentID)
-		pool.Exec(cleanupCtx, `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
-		pool.Exec(cleanupCtx, `DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`, workspaceID, userID)
-		pool.Exec(cleanupCtx, `DELETE FROM workspace WHERE id = $1`, workspaceID)
-		pool.Exec(cleanupCtx, `DELETE FROM "user" WHERE id = $1`, userID)
+		pool.ExecContext(cleanupCtx, `DELETE FROM agent_task_queue WHERE agent_id = $1`, agentID)
+		pool.ExecContext(cleanupCtx, `DELETE FROM issue WHERE workspace_id = $1`, workspaceID)
+		pool.ExecContext(cleanupCtx, `DELETE FROM agent WHERE id = $1`, agentID)
+		pool.ExecContext(cleanupCtx, `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+		pool.ExecContext(cleanupCtx, `DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`, workspaceID, userID)
+		pool.ExecContext(cleanupCtx, `DELETE FROM workspace WHERE id = $1`, workspaceID)
+		pool.ExecContext(cleanupCtx, `DELETE FROM "user" WHERE id = $1`, userID)
 	})
 
 	for i := 0; i < 2; i++ {
 		var issueID string
-		if err := pool.QueryRow(ctx, `
+		if err := pool.QueryRowContext(ctx, `
 			INSERT INTO issue (workspace_id, title, status, priority, creator_id, creator_type, number, position)
 			VALUES ($1, $2, 'in_progress', 'none', $3, 'member', $4, $5)
 			RETURNING id
 		`, workspaceID, fmt.Sprintf("claim capacity issue %d", i+1), userID, 900000+i, i).Scan(&issueID); err != nil {
 			t.Fatalf("create issue %d: %v", i+1, err)
 		}
-		if _, err := pool.Exec(ctx, `
+		if _, err := pool.ExecContext(ctx, `
 			INSERT INTO agent_task_queue (agent_id, issue_id, status, priority, context, runtime_id)
 			VALUES ($1, $2, 'queued', 0, '{}'::jsonb, $3)
 		`, agentID, issueID, runtimeID); err != nil {

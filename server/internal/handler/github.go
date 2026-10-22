@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -23,9 +24,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
+	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -191,7 +191,7 @@ func githubInstallationToBroadcast(i db.GithubInstallation) GitHubInstallationRe
 
 func githubPullRequestToResponse(p db.GithubPullRequest, snapshotEnabled bool) GitHubPullRequestResponse {
 	snapshotAvailable := currentGitHubSnapshotAvailable(
-		snapshotEnabled, p.HeadSha, p.SnapshotHeadSha, p.SnapshotFetchedAt,
+		snapshotEnabled, p.HeadSha, p.SnapshotHeadSha, p.SnapshotFetchedAt.String,
 	)
 	return GitHubPullRequestResponse{
 		ID:                uuidToString(p.ID),
@@ -199,7 +199,7 @@ func githubPullRequestToResponse(p db.GithubPullRequest, snapshotEnabled bool) G
 		WorkspaceID:       uuidToString(p.WorkspaceID),
 		RepoOwner:         p.RepoOwner,
 		RepoName:          p.RepoName,
-		Number:            p.PrNumber,
+		Number:            int32(p.PrNumber),
 		Title:             p.Title,
 		State:             p.State,
 		HtmlURL:           p.HtmlUrl,
@@ -217,9 +217,9 @@ func githubPullRequestToResponse(p db.GithubPullRequest, snapshotEnabled bool) G
 		// the full snapshot (mergeable / rollup / counts).
 		ChecksConclusion: nil,
 		FailedCheckNames: []string{},
-		Additions:        p.Additions,
-		Deletions:        p.Deletions,
-		ChangedFiles:     p.ChangedFiles,
+		Additions:        int32(p.Additions),
+		Deletions:        int32(p.Deletions),
+		ChangedFiles:     int32(p.ChangedFiles),
 	}
 }
 
@@ -231,23 +231,20 @@ const prSnapshotStaleThreshold = 30 * time.Minute
 
 func issuePullRequestRowToResponse(p db.ListPullRequestsByIssueRow, snapshotEnabled bool) GitHubPullRequestResponse {
 	snapshotAvailable := currentGitHubSnapshotAvailable(
-		snapshotEnabled, p.HeadSha, p.SnapshotHeadSha, p.SnapshotFetchedAt,
+		snapshotEnabled, p.HeadSha, p.SnapshotHeadSha, p.SnapshotFetchedAt.String,
 	)
 	stale := false
 	if snapshotAvailable && (p.State == "open" || p.State == "draft") {
-		stale = time.Since(p.SnapshotFetchedAt.Time) > prSnapshotStaleThreshold
+		stale = time.Since(parseDBTime(p.SnapshotFetchedAt.String)) > prSnapshotStaleThreshold
 	}
-	failedNames := p.FailedCheckNames
-	if failedNames == nil {
-		failedNames = []string{}
-	}
+	failedNames := ifaceStringSlice(p.FailedCheckNames)
 	resp := GitHubPullRequestResponse{
 		ID:                uuidToString(p.ID),
 		Provider:          "github",
 		WorkspaceID:       uuidToString(p.WorkspaceID),
 		RepoOwner:         p.RepoOwner,
 		RepoName:          p.RepoName,
-		Number:            p.PrNumber,
+		Number:            int32(p.PrNumber),
 		Title:             p.Title,
 		State:             p.State,
 		HtmlURL:           p.HtmlUrl,
@@ -262,20 +259,20 @@ func issuePullRequestRowToResponse(p db.ListPullRequestsByIssueRow, snapshotEnab
 		SnapshotAvailable: &snapshotAvailable,
 		FailedCheckNames:  []string{},
 		SnapshotStale:     stale,
-		Additions:         p.Additions,
-		Deletions:         p.Deletions,
-		ChangedFiles:      p.ChangedFiles,
+		Additions:         int32(p.Additions),
+		Deletions:         int32(p.Deletions),
+		ChangedFiles:      int32(p.ChangedFiles),
 	}
 	if snapshotAvailable {
 		resp.Mergeable = lowerTextPtr(p.ApiMergeable)
 		resp.MergeStateStatus = lowerTextPtr(p.ApiMergeStateStatus)
 		resp.ChecksRollup = lowerTextPtr(p.ChecksRollupState)
-		resp.ChecksConclusion = rollupToConclusion(p.ChecksRollupState, p.ChecksFailed, p.ChecksRunning, p.ChecksPassed)
+		resp.ChecksConclusion = rollupToConclusion(p.ChecksRollupState, int64(p.ChecksFailed), int64(p.ChecksRunning), int64(p.ChecksPassed))
 		resp.ChecksTotal = p.ChecksTotal
-		resp.ChecksPassed = p.ChecksPassed
-		resp.ChecksFailed = p.ChecksFailed
-		resp.ChecksRunning = p.ChecksRunning
-		resp.ChecksPending = p.ChecksRunning
+		resp.ChecksPassed = int64(p.ChecksPassed)
+		resp.ChecksFailed = int64(p.ChecksFailed)
+		resp.ChecksRunning = int64(p.ChecksRunning)
+		resp.ChecksPending = int64(p.ChecksRunning)
 		resp.FailedCheckNames = failedNames
 		resp.SnapshotFetchedAt = timestampToPtr(p.SnapshotFetchedAt)
 	}
@@ -286,9 +283,9 @@ func currentGitHubSnapshotAvailable(
 	enabled bool,
 	headSHA string,
 	snapshotHeadSHA string,
-	fetchedAt pgtype.Timestamptz,
+	fetchedAt string,
 ) bool {
-	return enabled && fetchedAt.Valid && snapshotHeadSHA != "" && snapshotHeadSHA == headSHA
+	return enabled && (fetchedAt != "") && snapshotHeadSHA != "" && snapshotHeadSHA == headSHA
 }
 
 // aggregateChecksConclusion collapses per-PR commit-status counts into a
@@ -320,7 +317,7 @@ func aggregateChecksConclusion(failed, passed, pending, total int64) *string {
 // lowerTextPtr returns a lowercased *string for a non-empty pgtype.Text, else
 // nil. Used to expose GraphQL enums (MERGEABLE / CLEAN / SUCCESS …) to the API
 // in the project's lowercase convention.
-func lowerTextPtr(t pgtype.Text) *string {
+func lowerTextPtr(t sql.NullString) *string {
 	if !t.Valid || t.String == "" {
 		return nil
 	}
@@ -331,7 +328,7 @@ func lowerTextPtr(t pgtype.Text) *string {
 // rollupToConclusion derives the coarse compat "checks_conclusion" from the
 // GraphQL rollup, falling back to the run counts when the rollup enum is
 // unfamiliar. A null/empty rollup means "no checks yet" → nil (never "passed").
-func rollupToConclusion(rollup pgtype.Text, failed, running, passed int64) *string {
+func rollupToConclusion(rollup sql.NullString, failed, running, passed int64) *string {
 	if !rollup.Valid || rollup.String == "" {
 		return nil
 	}
@@ -544,7 +541,7 @@ func (h *Handler) GitHubSetupCallback(w http.ResponseWriter, r *http.Request) {
 	// callback was hit without a session — e.g. user wasn't logged in to
 	// Multica when they finished the GitHub install). Either way we save
 	// the row so the workspace owner sees the connection on next reload.
-	connectedBy := pgtype.UUID{}
+	connectedBy := ""
 	if userID := requestUserID(r); userID != "" {
 		if u, err := parseStrictUUID(userID); err == nil {
 			connectedBy = u
@@ -557,7 +554,7 @@ func (h *Handler) GitHubSetupCallback(w http.ResponseWriter, r *http.Request) {
 		AccountLogin:     login,
 		AccountType:      accountType,
 		AccountAvatarUrl: ptrToText(avatar),
-		ConnectedByID:    connectedBy,
+		ConnectedByID:    nullString(connectedBy),
 	})
 	if err != nil {
 		slog.Error("github: failed to persist installation", "err", err, "installation_id", installationID)
@@ -579,7 +576,7 @@ func (h *Handler) GitHubSetupCallback(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) consumePendingGitHubInstallation(ctx context.Context, inst db.GithubInstallation) (db.GithubInstallation, error) {
 	pending, err := h.Queries.GetPendingGitHubInstallation(ctx, inst.InstallationID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return inst, nil
 		}
 		return inst, err
@@ -759,7 +756,7 @@ func (h *Handler) ListGitHubInstallationRepositories(w http.ResponseWriter, r *h
 	}
 	row, err := h.Queries.GetGitHubInstallationByID(r.Context(), rowUUID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "github installation not found")
 			return
 		}
@@ -990,9 +987,7 @@ func (h *Handler) ListPullRequestsForIssue(w http.ResponseWriter, r *http.Reques
 		// current (possibly stale) response is returned immediately and the
 		// fresh snapshot arrives via the pull_request:updated realtime event.
 		h.PRRefresh.MaybeEnqueueOnView(
-			row.InstallationID, row.RepoOwner, row.RepoName, row.PrNumber,
-			row.SnapshotFetchedAt.Time,
-			row.SnapshotFetchedAt.Valid &&
+			row.InstallationID, row.RepoOwner, row.RepoName, int32(row.PrNumber), parseDBTime(row.SnapshotFetchedAt.String), row.SnapshotFetchedAt.Valid &&
 				row.SnapshotHeadSha != "" &&
 				row.SnapshotHeadSha == row.HeadSha,
 		)
@@ -1031,7 +1026,7 @@ func (h *Handler) ListPullRequestsForIssue(w http.ResponseWriter, r *http.Reques
 // once an API snapshot is written to a PR row, re-broadcast the PR so every
 // open issue detail page re-queries its PR list and picks up the fresh CI /
 // mergeability state. Runs on a background pipeline goroutine.
-func (h *Handler) broadcastPRSnapshotApplied(ctx context.Context, prID pgtype.UUID) {
+func (h *Handler) broadcastPRSnapshotApplied(ctx context.Context, prID string) {
 	pr, err := h.Queries.GetGitHubPullRequestByID(ctx, prID)
 	if err != nil {
 		return
@@ -1405,9 +1400,9 @@ func (h *Handler) resolvePRLinkPolicy(ctx context.Context, insts []db.GithubInst
 			}
 			if _, err := h.Queries.GetIssueByNumber(ctx, db.GetIssueByNumberParams{
 				WorkspaceID: inst.WorkspaceID,
-				Number:      number,
+				Number:      int64(number),
 			}); err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
+				if errors.Is(err, sql.ErrNoRows) {
 					continue
 				}
 				return indeterminate("github: cannot resolve identifier in bound workspace, leaving links unchanged for this delivery",
@@ -1529,7 +1524,7 @@ func (h *Handler) triggerPRRefreshFromCIEvent(ctx context.Context, body []byte) 
 		return
 	}
 	for _, number := range numbers {
-		enqueue(number)
+		enqueue(int32(number))
 	}
 }
 
@@ -1541,9 +1536,9 @@ func (h *Handler) triggerPRRefreshFromCIEvent(ctx context.Context, body []byte) 
 //
 // linkPolicy is the delivery-wide verdict on which identifiers this workspace
 // may link; this function only ever narrows it.
-func (h *Handler) mirrorPullRequestForWorkspace(ctx context.Context, wsID pgtype.UUID, installationID int64, p *ghPullRequestPayload, linkPolicy prLinkPolicy) {
+func (h *Handler) mirrorPullRequestForWorkspace(ctx context.Context, wsID string, installationID int64, p *ghPullRequestPayload, linkPolicy prLinkPolicy) {
 	state := derivePRState(p.PullRequest.State, p.PullRequest.Draft, p.PullRequest.Merged)
-	mergeable, clearMergeable := derivePRMergeableState(p.Action, p.PullRequest.MergeableState, baseRefChanged(p.Changes))
+	mergeable, _ := derivePRMergeableState(p.Action, p.PullRequest.MergeableState, baseRefChanged(p.Changes))
 	// The stored state before this event, so a merge is acted on once — when it
 	// happens — and not again on a later edit/label event of a merged PR (that
 	// would re-complete an issue someone reopened on purpose).
@@ -1552,7 +1547,7 @@ func (h *Handler) mirrorPullRequestForWorkspace(ctx context.Context, wsID pgtype
 		WorkspaceID: wsID,
 		RepoOwner:   p.Repository.Owner.Login,
 		RepoName:    p.Repository.Name,
-		PrNumber:    p.PullRequest.Number,
+		PrNumber:    int64(p.PullRequest.Number),
 	}); err == nil {
 		prevState = prev.State
 	}
@@ -1561,25 +1556,24 @@ func (h *Handler) mirrorPullRequestForWorkspace(ctx context.Context, wsID pgtype
 		InstallationID:      installationID,
 		RepoOwner:           p.Repository.Owner.Login,
 		RepoName:            p.Repository.Name,
-		PrNumber:            p.PullRequest.Number,
+		PrNumber:            int64(p.PullRequest.Number),
 		Title:               p.PullRequest.Title,
 		State:               state,
 		HtmlUrl:             p.PullRequest.HTMLURL,
 		Branch:              ptrToText(strPtrOrNil(p.PullRequest.Head.Ref)),
 		AuthorLogin:         ptrToText(strPtrOrNil(p.PullRequest.User.Login)),
 		AuthorAvatarUrl:     ptrToText(strPtrOrNil(p.PullRequest.User.AvatarURL)),
-		MergedAt:            parseGHTime(p.PullRequest.MergedAt),
-		ClosedAt:            parseGHTime(p.PullRequest.ClosedAt),
+		MergedAt:            nullString(parseGHTime(p.PullRequest.MergedAt)),
+		ClosedAt:            nullString(parseGHTime(p.PullRequest.ClosedAt)),
 		PrCreatedAt:         parseGHTimeRequired(p.PullRequest.CreatedAt),
 		PrUpdatedAt:         parseGHTimeRequired(p.PullRequest.UpdatedAt),
 		HeadSha:             p.PullRequest.Head.SHA,
-		MergeableState:      mergeable,
-		ClearMergeableState: pgtype.Bool{Bool: clearMergeable, Valid: true},
-		Additions:           p.PullRequest.Additions,
-		Deletions:           p.PullRequest.Deletions,
-		ChangedFiles:        p.PullRequest.ChangedFiles,
+		MergeableState: mergeable,
+		Additions:      int64(p.PullRequest.Additions),
+		Deletions:           int64(p.PullRequest.Deletions),
+		ChangedFiles:        int64(p.PullRequest.ChangedFiles),
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		// A stale redelivery: the stored row is newer, and the newer event
 		// already linked and published. Acting on this one would roll links
 		// and merge detection back.
@@ -1599,20 +1593,20 @@ func (h *Handler) mirrorPullRequestForWorkspace(ctx context.Context, wsID pgtype
 	// changes are side-effects gated by the master `github_enabled` switch.
 	ws, err := h.Queries.GetWorkspace(ctx, wsID)
 	if err == nil && githubFeaturesEnabled(ws) && !linkPolicy.indeterminate {
-		touched := map[pgtype.UUID]struct{}{}
+		touched := map[string]struct{}{}
 		idents := prClaimedIdentifiers(p.PullRequest.Title, p.PullRequest.Body, p.PullRequest.Head.Ref)
 		if autoLink, _ := autoLinkPRsEnabledForWorkspace(ws); autoLink {
 			linkedIssueIDs, touched = h.reconcileAutoLinks(ctx, ws, pr.ID, state, prAutoLinkInput{
 				idents:    idents,
 				permits:   func(id string) bool { return linkPolicy.permits(id, workspaceID) },
 				ambiguous: func(id string) bool { return linkPolicy.ambiguous[id] },
-				link: func(issueID pgtype.UUID) (int64, error) {
+				link: func(issueID string) (int64, error) {
 					return h.Queries.LinkIssueToPullRequest(ctx, db.LinkIssueToPullRequestParams{IssueID: issueID, PullRequestID: pr.ID})
 				},
-				unlink: func(issueID pgtype.UUID) (int64, error) {
+				unlink: func(issueID string) (int64, error) {
 					return h.Queries.UnlinkIssueFromPullRequest(ctx, db.UnlinkIssueFromPullRequestParams{IssueID: issueID, PullRequestID: pr.ID})
 				},
-				listAuto: func() ([]pgtype.UUID, error) {
+				listAuto: func() ([]string, error) {
 					return h.Queries.ListAutoLinkedIssueIDsForPullRequest(ctx, pr.ID)
 				},
 			})
@@ -1646,12 +1640,12 @@ func (h *Handler) mirrorPullRequestForWorkspace(ctx context.Context, wsID pgtype
 
 // prAutoLinkInput is what reconcileAutoLinks needs from one provider.
 type prAutoLinkInput struct {
-	idents    []string                         // identifiers the PR claims (see prClaimedIdentifiers)
-	permits   func(identifier string) bool     // cross-workspace verdict (always true for VCS)
-	ambiguous func(identifier string) bool     // resolved in several workspaces
-	link      func(pgtype.UUID) (int64, error) // automatic link; 1 when new
-	unlink    func(pgtype.UUID) (int64, error) // drop a link; 1 when removed
-	listAuto  func() ([]pgtype.UUID, error)    // issues currently auto-linked to the PR
+	idents    []string                     // identifiers the PR claims (see prClaimedIdentifiers)
+	permits   func(identifier string) bool // cross-workspace verdict (always true for VCS)
+	ambiguous func(identifier string) bool // resolved in several workspaces
+	link      func(string) (int64, error)  // automatic link; 1 when new
+	unlink    func(string) (int64, error)  // drop a link; 1 when removed
+	listAuto  func() ([]string, error)     // issues currently auto-linked to the PR
 }
 
 // reconcileAutoLinks makes the PR's automatic links match its claims. It
@@ -1667,11 +1661,11 @@ type prAutoLinkInput struct {
 //     across bound workspaces is always dropped (see prLinkPolicy).
 //
 // Manual links are never touched here.
-func (h *Handler) reconcileAutoLinks(ctx context.Context, ws db.Workspace, prID pgtype.UUID, state string, in prAutoLinkInput) ([]string, map[pgtype.UUID]struct{}) {
-	touched := map[pgtype.UUID]struct{}{}
+func (h *Handler) reconcileAutoLinks(ctx context.Context, ws db.Workspace, prID string, state string, in prAutoLinkInput) ([]string, map[string]struct{}) {
+	touched := map[string]struct{}{}
 	linked := make([]string, 0)
-	claimed := map[pgtype.UUID]struct{}{}
-	ambiguousIssues := map[pgtype.UUID]struct{}{}
+	claimed := map[string]struct{}{}
+	ambiguousIssues := map[string]struct{}{}
 	prefix := issuePrefixForWorkspace(ws)
 	for _, id := range in.idents {
 		issue, ok := h.lookupIssueByIdentifier(ctx, ws.ID, prefix, id)
@@ -1747,17 +1741,17 @@ func (h *Handler) reconcileAutoLinks(ctx context.Context, ws db.Workspace, prID 
 //     payloads with mergeable_state empty even when the previous verdict is
 //     still accurate, and silently overwriting clean/dirty with NULL would
 //     drop information GitHub only refreshes lazily.
-func derivePRMergeableState(action, payload string, baseRefChanged bool) (pgtype.Text, bool) {
+func derivePRMergeableState(action, payload string, baseRefChanged bool) (sql.NullString, bool) {
 	if action == "opened" || action == "synchronize" || action == "reopened" {
-		return pgtype.Text{}, true
+		return sql.NullString{}, true
 	}
 	if action == "edited" && baseRefChanged {
-		return pgtype.Text{}, true
+		return sql.NullString{}, true
 	}
 	if payload == "" {
-		return pgtype.Text{}, false
+		return sql.NullString{}, false
 	}
-	return pgtype.Text{String: payload, Valid: true}, false
+	return sql.NullString{String: payload, Valid: true}, false
 }
 
 // ghPRChanges captures the only field of `pull_request.edited`'s `changes`
@@ -1791,21 +1785,21 @@ func derivePRState(state string, draft, merged bool) string {
 	return "open"
 }
 
-func parseGHTime(s string) pgtype.Timestamptz {
+func parseGHTime(s string) string {
 	if s == "" {
-		return pgtype.Timestamptz{}
+		return ""
 	}
 	t, err := time.Parse(time.RFC3339, s)
 	if err != nil {
-		return pgtype.Timestamptz{}
+		return ""
 	}
-	return pgtype.Timestamptz{Time: t, Valid: true}
+	return t.UTC().Format(time.RFC3339Nano)
 }
 
-func parseGHTimeRequired(s string) pgtype.Timestamptz {
+func parseGHTimeRequired(s string) string {
 	t := parseGHTime(s)
-	if !t.Valid {
-		return pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
+	if !(t != "") {
+		return time.Now().UTC().UTC().Format(time.RFC3339Nano)
 	}
 	return t
 }
@@ -1870,7 +1864,7 @@ func autoLinkPRsEnabledForWorkspace(ws db.Workspace) (bool, error) {
 		GitHubEnabled            *bool `json:"github_enabled"`
 		GitHubAutoLinkPRsEnabled *bool `json:"github_auto_link_prs_enabled"`
 	}
-	if err := json.Unmarshal(ws.Settings, &s); err != nil {
+	if err := json.Unmarshal([]byte(ws.Settings), &s); err != nil {
 		return true, err
 	}
 	if s.GitHubEnabled != nil && !*s.GitHubEnabled {
@@ -1890,7 +1884,7 @@ func githubFeaturesEnabled(ws db.Workspace) bool {
 	var s struct {
 		GitHubEnabled *bool `json:"github_enabled"`
 	}
-	if err := json.Unmarshal(ws.Settings, &s); err != nil {
+	if err := json.Unmarshal([]byte(ws.Settings), &s); err != nil {
 		return true
 	}
 	return s.GitHubEnabled == nil || *s.GitHubEnabled
@@ -1919,14 +1913,14 @@ func issueNumberForPrefix(identifier, prefix string) (int32, bool) {
 // lookupIssueByIdentifier looks up an issue in the given workspace by its
 // "PREFIX-NUMBER" identifier. Returns the row + true if the prefix matches
 // the workspace's configured prefix and the number resolves to a real issue.
-func (h *Handler) lookupIssueByIdentifier(ctx context.Context, workspaceID pgtype.UUID, prefix, identifier string) (db.Issue, bool) {
+func (h *Handler) lookupIssueByIdentifier(ctx context.Context, workspaceID string, prefix, identifier string) (db.Issue, bool) {
 	number, ok := issueNumberForPrefix(identifier, prefix)
 	if !ok {
 		return db.Issue{}, false
 	}
 	issue, err := h.Queries.GetIssueByNumber(ctx, db.GetIssueByNumberParams{
 		WorkspaceID: workspaceID,
-		Number:      number,
+		Number:      int64(number),
 	})
 	if err != nil {
 		return db.Issue{}, false
@@ -1936,12 +1930,8 @@ func (h *Handler) lookupIssueByIdentifier(ctx context.Context, workspaceID pgtyp
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-func parseStrictUUID(s string) (pgtype.UUID, error) {
-	var u pgtype.UUID
-	if err := u.Scan(s); err != nil {
-		return pgtype.UUID{}, err
-	}
-	return u, nil
+func parseStrictUUID(s string) (string, error) {
+	return util.ParseUUID(s)
 }
 
 func coalesce(a, fallback string) string {

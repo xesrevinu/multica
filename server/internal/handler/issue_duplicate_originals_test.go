@@ -74,8 +74,8 @@ func TestDuplicateOriginalsResolveInOneReadPerPage(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
-	spy := &issueRefSpy{inner: testPool}
-	h := New(db.New(spy), testPool, testHandler.Hub, testHandler.Bus, testHandler.EmailService,
+	spy := &issueRefSpy{inner: testSQLite}
+	h := New(db.New(spy), sqlDBBeginner{DB: testSQLite}, testHandler.Hub, testHandler.Bus, testHandler.EmailService,
 		nil, nil, analytics.NoopClient{}, Config{})
 
 	project := dbfx.Project(t, "dup-originals-page")

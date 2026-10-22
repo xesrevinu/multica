@@ -2,11 +2,10 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -18,7 +17,7 @@ import (
 // autopilot and issue wakeups can wait for the next tick. A caller that is
 // answering a person right now wants the error instead, so it can retry rather
 // than tell them they have no permission: use memberMayInvokeAgent.
-func CanMemberInvokeAgent(ctx context.Context, queries *db.Queries, agent db.Agent, memberUserID pgtype.UUID, workspaceID pgtype.UUID) bool {
+func CanMemberInvokeAgent(ctx context.Context, queries *db.Queries, agent db.Agent, memberUserID string, workspaceID string) bool {
 	allowed, err := memberMayInvokeAgent(ctx, queries, agent, memberUserID, workspaceID)
 	return err == nil && allowed
 }
@@ -28,17 +27,17 @@ func CanMemberInvokeAgent(ctx context.Context, queries *db.Queries, agent db.Age
 //
 // (false, nil) is a real verdict: no user id, not the owner of a private
 // agent, or a public_to agent this member is not a target of — including the
-// member row simply not being there, which is what pgx.ErrNoRows means here.
+// member row simply not being there, which is what sql.ErrNoRows means here.
 //
 // (false, err) is "we do not know". Collapsing the two is what turns one
 // transient database error into a message the platform will never redeliver
 // and a person told they lack a permission they have.
-func memberMayInvokeAgent(ctx context.Context, queries *db.Queries, agent db.Agent, memberUserID pgtype.UUID, workspaceID pgtype.UUID) (bool, error) {
+func memberMayInvokeAgent(ctx context.Context, queries *db.Queries, agent db.Agent, memberUserID string, workspaceID string) (bool, error) {
 	userID := util.UUIDToString(memberUserID)
 	if userID == "" {
 		return false, nil
 	}
-	if util.UUIDToString(agent.OwnerID) == userID {
+	if util.UUIDToString(agent.OwnerID.String) == userID {
 		return true, nil
 	}
 	if agent.PermissionMode != "public_to" {
@@ -55,7 +54,7 @@ func memberMayInvokeAgent(ctx context.Context, queries *db.Queries, agent db.Age
 	}); {
 	case err == nil:
 		isWorkspaceMember = true
-	case errors.Is(err, pgx.ErrNoRows):
+	case errors.Is(err, sql.ErrNoRows):
 		// Not a member. A fact, not a failure.
 	default:
 		return false, fmt.Errorf("load workspace member: %w", err)

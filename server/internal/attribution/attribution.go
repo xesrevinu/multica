@@ -27,7 +27,7 @@
 // here only records who authorized the run.
 package attribution
 
-import "github.com/jackc/pgx/v5/pgtype"
+import "database/sql"
 
 // Source is the waterfall level that resolved the accountable human for a run.
 // Stored verbatim in agent_task_queue.originator_source. Kept as free strings
@@ -163,15 +163,15 @@ const (
 // DirectHumanRun / Unattributed / RuleOwner so AccountableUserID is always
 // finalized; never stamp a hand-built literal onto the queue.
 type Result struct {
-	UserID              pgtype.UUID
-	AccountableUserID   pgtype.UUID
+	UserID              sql.NullString
+	AccountableUserID   sql.NullString
 	Source              Source
-	DelegatedFromTaskID pgtype.UUID
-	RuleVersionID       pgtype.UUID
-	RetryOfTaskID       pgtype.UUID
-	RerunOfTaskID       pgtype.UUID
+	DelegatedFromTaskID sql.NullString
+	RuleVersionID       sql.NullString
+	RetryOfTaskID       sql.NullString
+	RerunOfTaskID       sql.NullString
 	EvidenceKind        EvidenceKind
-	EvidenceRefID       pgtype.UUID
+	EvidenceRefID       sql.NullString
 }
 
 // finalizeAttribution enforces the one-way Phase 1 accountability invariant
@@ -193,16 +193,16 @@ func finalizeAttribution(r Result) Result {
 // CommentFacts are the already-fetched facts about a trigger comment, gathered
 // by the caller from the DB and passed in so classification stays pure.
 type CommentFacts struct {
-	CommentID  pgtype.UUID
+	CommentID  sql.NullString
 	AuthorType string // "member" | "agent" | other
-	AuthorID   pgtype.UUID
+	AuthorID   sql.NullString
 
 	// For agent-authored comments: the source task the comment was written
 	// from (comment.source_task_id) and that task's originator_user_id. The
 	// caller resolves ParentOriginator by loading the source task; it is left
 	// invalid when the source task is missing or itself unattributed.
-	SourceTaskID     pgtype.UUID
-	ParentOriginator pgtype.UUID
+	SourceTaskID     sql.NullString
+	ParentOriginator sql.NullString
 
 	// ParentAccountable is the source task's accountable_user_id (MUL-4302 §3.2).
 	// It lets an autopilot-rooted chain — where the parent has NO authorizing human
@@ -210,7 +210,7 @@ type CommentFacts struct {
 	// publisher) — copy that responsible human down the delegation, instead of
 	// dropping the chain root to unattributed. Loaded by the caller alongside
 	// ParentOriginator; invalid when the parent has no accountable human either.
-	ParentAccountable pgtype.UUID
+	ParentAccountable sql.NullString
 }
 
 // ClassifyComment resolves attribution for a comment-triggered run from
@@ -261,9 +261,9 @@ func ClassifyComment(f CommentFacts, agentAuthoredSource Source) Result {
 // DirectFacts are the facts for a run with no trigger comment: a direct issue
 // assignment/creation, or an agent-created issue with a quick-create origin.
 type DirectFacts struct {
-	IssueID     pgtype.UUID
+	IssueID     sql.NullString
 	CreatorType string
-	CreatorID   pgtype.UUID
+	CreatorID   sql.NullString
 
 	// ActorUserID is the member who PERFORMED the action that enqueued this run
 	// (assigned the issue, promoted the backlog child, created-with-assignee).
@@ -274,21 +274,21 @@ type DirectFacts struct {
 	// elsewhere and fall back to the creator. Because a direct action is the human
 	// lending authority, the actor becomes BOTH originator (authorization) and
 	// accountable — finalizeAttribution keeps them equal, honoring the invariant.
-	ActorUserID pgtype.UUID
+	ActorUserID sql.NullString
 
 	// OriginType/OriginTaskID describe an agent-created issue's provenance
 	// ("quick_create" or "agent_create"); OriginOriginator is that origin task's
 	// originator_user_id, loaded by the caller. Empty OriginType means none.
 	OriginType       string
-	OriginTaskID     pgtype.UUID
-	OriginOriginator pgtype.UUID
+	OriginTaskID     sql.NullString
+	OriginOriginator sql.NullString
 
 	// OriginAccountable is the origin task's accountable_user_id — the DirectFacts
 	// analogue of CommentFacts.ParentAccountable (MUL-4302 §3.2). An agent-created
 	// sub-issue whose origin task is autopilot-rooted (OriginOriginator NULL,
 	// accountable set) inherits that accountable via delegation instead of dropping
 	// to unattributed.
-	OriginAccountable pgtype.UUID
+	OriginAccountable sql.NullString
 }
 
 // ClassifyDirect resolves attribution for a run with no trigger comment.
@@ -343,7 +343,7 @@ func ClassifyDirect(f DirectFacts) Result {
 // quick-create requester) and becomes both originator and accountable. An invalid
 // userID (e.g. a Lark group message whose sender could not be resolved) yields an
 // explicit unattributed result rather than a NULL-source bypass.
-func DirectHumanRun(userID pgtype.UUID, evidenceKind EvidenceKind, evidenceRefID pgtype.UUID) Result {
+func DirectHumanRun(userID sql.NullString, evidenceKind EvidenceKind, evidenceRefID sql.NullString) Result {
 	if !userID.Valid {
 		return finalizeAttribution(Result{Source: SourceUnattributed, EvidenceKind: evidenceKind, EvidenceRefID: evidenceRefID})
 	}
@@ -363,7 +363,7 @@ func DirectHumanRun(userID pgtype.UUID, evidenceKind EvidenceKind, evidenceRefID
 // off the NULL-source bypass and distinguishes "classified, no human" from a
 // pre-migration NULL, while leaving originator/accountable NULL so authorization
 // still correctly says "no human authorized this run".
-func Unattributed(evidenceKind EvidenceKind, evidenceRefID pgtype.UUID) Result {
+func Unattributed(evidenceKind EvidenceKind, evidenceRefID sql.NullString) Result {
 	return finalizeAttribution(Result{Source: SourceUnattributed, EvidenceKind: evidenceKind, EvidenceRefID: evidenceRefID})
 }
 
@@ -385,7 +385,7 @@ func Unattributed(evidenceKind EvidenceKind, evidenceRefID pgtype.UUID) Result {
 // supplies (autopilot_run for run_only, the issue for create_issue). A missing
 // publisher (system-published rule, or no version resolved yet) degrades to
 // unattributed so we never fabricate a human.
-func RuleOwner(publisherUserID, ruleVersionID pgtype.UUID, evidenceKind EvidenceKind, evidenceRefID pgtype.UUID) Result {
+func RuleOwner(publisherUserID, ruleVersionID sql.NullString, evidenceKind EvidenceKind, evidenceRefID sql.NullString) Result {
 	r := Result{
 		RuleVersionID: ruleVersionID,
 		EvidenceKind:  evidenceKind,
@@ -427,7 +427,7 @@ func RuleOwner(publisherUserID, ruleVersionID pgtype.UUID, evidenceKind Evidence
 // automation runs with. The same
 // resolver feeds dispatch admission, so one run can never be admitted as one human
 // and executed as another.
-func TriggerOwner(creatorUserID pgtype.UUID, evidenceKind EvidenceKind, evidenceRefID pgtype.UUID) Result {
+func TriggerOwner(creatorUserID sql.NullString, evidenceKind EvidenceKind, evidenceRefID sql.NullString) Result {
 	r := Result{
 		EvidenceKind:  evidenceKind,
 		EvidenceRefID: evidenceRefID,
@@ -454,7 +454,7 @@ type SubscriptionFacts struct {
 	// OriginType / OriginOriginator mirror DirectFacts: the issue's provenance
 	// stamp and the origin task's originator_user_id, loaded by the caller.
 	OriginType       string
-	OriginOriginator pgtype.UUID
+	OriginOriginator sql.NullString
 
 	// OriginRootSource is the originator_source of the CHAIN ROOT behind the
 	// origin task — the run that actually resolved OriginOriginator, not the hop
@@ -479,12 +479,12 @@ type SubscriptionFacts struct {
 // delegated tier. Lineage lookup is bounded to 32 hops; exceeding it leaves the
 // root unproven and subscribes nobody. New root-source kinds require an explicit
 // decision before they can opt people into notifications.
-func DelegatedSubscriber(f SubscriptionFacts) (pgtype.UUID, string, bool) {
+func DelegatedSubscriber(f SubscriptionFacts) (sql.NullString, string, bool) {
 	if f.CreatorType != "agent" || !f.OriginOriginator.Valid {
-		return pgtype.UUID{}, "", false
+		return sql.NullString{}, "", false
 	}
 	if f.OriginRootSource != SourceDirectHuman {
-		return pgtype.UUID{}, "", false
+		return sql.NullString{}, "", false
 	}
 	switch f.OriginType {
 	case "quick_create":
@@ -492,7 +492,7 @@ func DelegatedSubscriber(f SubscriptionFacts) (pgtype.UUID, string, bool) {
 	case "agent_create":
 		return f.OriginOriginator, "delegated", true
 	default:
-		return pgtype.UUID{}, "", false
+		return sql.NullString{}, "", false
 	}
 }
 
@@ -504,7 +504,7 @@ func DelegatedSubscriber(f SubscriptionFacts) (pgtype.UUID, string, bool) {
 // resolved source is unattributed and the workspace has not opted into fail-closed;
 // a precise result, or an invalid ownerUserID (nothing to fall back to), passes
 // through unchanged so a human is never fabricated.
-func OwnerFallback(r Result, ownerUserID pgtype.UUID) Result {
+func OwnerFallback(r Result, ownerUserID sql.NullString) Result {
 	if r.Source != SourceUnattributed || !ownerUserID.Valid {
 		return r
 	}

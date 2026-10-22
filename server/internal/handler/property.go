@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,8 +17,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/issueproperty"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -130,7 +129,7 @@ func propertyToResponse(p db.IssueProperty, usageCount int64) PropertyResponse {
 		Type:        p.Type,
 		Description: p.Description,
 		Icon:        p.Icon,
-		Config:      parsePropertyConfig(p.Config),
+		Config:      parsePropertyConfig([]byte(p.Config)),
 		Position:    p.Position,
 		Archived:    p.ArchivedAt.Valid,
 		UsageCount:  usageCount,
@@ -138,7 +137,7 @@ func propertyToResponse(p db.IssueProperty, usageCount int64) PropertyResponse {
 		UpdatedAt:   timestampToString(p.UpdatedAt),
 	}
 	if p.ArchivedAt.Valid {
-		s := timestampToString(p.ArchivedAt)
+		s := timestampToString(p.ArchivedAt.String)
 		resp.ArchivedAt = &s
 	}
 	return resp
@@ -372,9 +371,10 @@ func describeOptionsInUse(existingConfig []byte, rows []db.CountIssuesUsingPrope
 	}
 	parts := make([]string, len(rows))
 	for i, row := range rows {
-		name := names[row.OptionID]
+		optionID := ifaceString(row.OptionID)
+		name := names[optionID]
 		if name == "" {
-			name = row.OptionID
+			name = optionID
 		}
 		parts[i] = fmt.Sprintf("%q (%d issues)", name, row.UsageCount)
 	}
@@ -445,7 +445,7 @@ func (h *Handler) GetProperty(w http.ResponseWriter, r *http.Request) {
 	}
 	property, err := h.Queries.GetIssueProperty(r.Context(), db.GetIssuePropertyParams{ID: idUUID, WorkspaceID: wsUUID})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "property not found")
 			return
 		}
@@ -511,7 +511,7 @@ func (h *Handler) CreateProperty(w http.ResponseWriter, r *http.Request) {
 			Type:        req.Type,
 			Description: sanitizeNullBytes(strings.TrimSpace(req.Description)),
 			Icon:        icon,
-			Config:      configJSON,
+			Config:      string(configJSON),
 		})
 		return err
 	})
@@ -568,7 +568,7 @@ func (h *Handler) UpdateProperty(w http.ResponseWriter, r *http.Request) {
 	err := h.withPropertyLock(r, []string{"props:" + workspaceID, "prop:" + uuidToString(idUUID)}, func(q *db.Queries) error {
 		existing, err := q.GetIssueProperty(r.Context(), db.GetIssuePropertyParams{ID: idUUID, WorkspaceID: wsUUID})
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+			if errors.Is(err, sql.ErrNoRows) {
 				return fail(http.StatusNotFound, "property not found")
 			}
 			return err
@@ -580,45 +580,45 @@ func (h *Handler) UpdateProperty(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return fail(http.StatusBadRequest, err.Error())
 			}
-			params.Name = pgtype.Text{String: name, Valid: true}
+			params.Name = sql.NullString{String: name, Valid: true}
 		}
 		if req.Description != nil {
 			if utf8.RuneCountInString(*req.Description) > maxPropertyDescriptionLen {
 				return fail(http.StatusBadRequest, fmt.Sprintf("description must be %d characters or fewer", maxPropertyDescriptionLen))
 			}
-			params.Description = pgtype.Text{String: sanitizeNullBytes(strings.TrimSpace(*req.Description)), Valid: true}
+			params.Description = sql.NullString{String: sanitizeNullBytes(strings.TrimSpace(*req.Description)), Valid: true}
 		}
 		if req.Icon != nil {
 			icon, err := validatePropertyIcon(*req.Icon)
 			if err != nil {
 				return fail(http.StatusBadRequest, err.Error())
 			}
-			params.Icon = pgtype.Text{String: icon, Valid: true}
+			params.Icon = sql.NullString{String: icon, Valid: true}
 		}
 		if req.Config != nil {
 			configJSON, err := validatePropertyConfig(existing.Type, req.Config)
 			if err != nil {
 				return fail(http.StatusBadRequest, err.Error())
 			}
-			if removed := removedOptionIDs(existing.Config, configJSON); len(removed) > 0 {
+			if removed := removedOptionIDs([]byte(existing.Config), configJSON); len(removed) > 0 {
 				rows, err := q.CountIssuesUsingPropertyOptions(r.Context(), db.CountIssuesUsingPropertyOptionsParams{
 					OptionIds:   removed,
 					WorkspaceID: wsUUID,
-					PropertyKey: uuidToString(existing.ID),
+					PropertyKey: nullString(uuidToString(existing.ID)),
 				})
 				if err != nil {
 					return err
 				}
 				if len(rows) > 0 {
-					return fail(http.StatusConflict, describeOptionsInUse(existing.Config, rows))
+					return fail(http.StatusConflict, describeOptionsInUse([]byte(existing.Config), rows))
 				}
 			}
-			params.Config = configJSON
+			params.Config = nullString(string(configJSON))
 		}
 		if req.Archived != nil {
-			params.ArchivedSet = true
+			params.ArchivedSet = flagSet(true)
 			if *req.Archived {
-				params.ArchivedAt = pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
+				params.ArchivedAt = nullString(time.Now().UTC().UTC().Format(time.RFC3339Nano))
 			} else if existing.ArchivedAt.Valid {
 				active, err := q.CountActiveIssueProperties(r.Context(), wsUUID)
 				if err != nil {
@@ -632,7 +632,7 @@ func (h *Handler) UpdateProperty(w http.ResponseWriter, r *http.Request) {
 
 		property, err = q.UpdateIssueProperty(r.Context(), params)
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+			if errors.Is(err, sql.ErrNoRows) {
 				return fail(http.StatusNotFound, "property not found")
 			}
 			if isUniqueViolation(err) {
@@ -698,7 +698,7 @@ func (h *Handler) SetIssueProperty(w http.ResponseWriter, r *http.Request) {
 	err := h.withPropertyLock(r, []string{"prop:" + uuidToString(propertyID)}, func(q *db.Queries) error {
 		def, err := q.GetIssueProperty(r.Context(), db.GetIssuePropertyParams{ID: propertyID, WorkspaceID: issue.WorkspaceID})
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+			if errors.Is(err, sql.ErrNoRows) {
 				return fail(http.StatusNotFound, "property not found")
 			}
 			return err
@@ -725,7 +725,7 @@ func (h *Handler) SetIssueProperty(w http.ResponseWriter, r *http.Request) {
 		updated, err = q.SetIssuePropertyValue(r.Context(), db.SetIssuePropertyValueParams{
 			ID:          issue.ID,
 			WorkspaceID: issue.WorkspaceID,
-			Key:         uuidToString(def.ID),
+			Key:         nullString(uuidToString(def.ID)),
 			Value:       value,
 		})
 		if err != nil {
@@ -748,7 +748,7 @@ func (h *Handler) SetIssueProperty(w http.ResponseWriter, r *http.Request) {
 
 	workspaceID := uuidToString(updated.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	properties := parseIssueProperties(updated.Properties)
+	properties := parseIssueProperties([]byte(updated.Properties))
 	h.publish(protocol.EventIssuePropertiesChanged, workspaceID, actorType, actorID, map[string]any{
 		"issue_id":       uuidToString(updated.ID),
 		"properties":     properties,
@@ -778,7 +778,7 @@ func (h *Handler) DeleteIssueProperty(w http.ResponseWriter, r *http.Request) {
 	// must never be blocked. Unknown property ids only need to belong to the
 	// workspace; `properties - key` is a no-op when the key is absent.
 	if _, err := h.Queries.GetIssueProperty(r.Context(), db.GetIssuePropertyParams{ID: propertyID, WorkspaceID: issue.WorkspaceID}); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "property not found")
 			return
 		}
@@ -791,7 +791,7 @@ func (h *Handler) DeleteIssueProperty(w http.ResponseWriter, r *http.Request) {
 		return q.DeleteIssuePropertyValue(r.Context(), db.DeleteIssuePropertyValueParams{
 			ID:          issue.ID,
 			WorkspaceID: issue.WorkspaceID,
-			Key:         uuidToString(propertyID),
+			Key:         nullString(uuidToString(propertyID)),
 		})
 	})
 	if err != nil {
@@ -802,7 +802,7 @@ func (h *Handler) DeleteIssueProperty(w http.ResponseWriter, r *http.Request) {
 
 	workspaceID := uuidToString(updated.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	properties := parseIssueProperties(updated.Properties)
+	properties := parseIssueProperties([]byte(updated.Properties))
 	h.publish(protocol.EventIssuePropertiesChanged, workspaceID, actorType, actorID, map[string]any{
 		"issue_id":       uuidToString(updated.ID),
 		"properties":     properties,
@@ -822,18 +822,18 @@ func (h *Handler) withPropertyLock(r *http.Request, lockKeys []string, fn func(q
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	// Callers pass keys in a fixed global order (workspace before property)
 	// so overlapping lock sets cannot deadlock.
 	for _, key := range lockKeys {
-		if _, err := tx.Exec(r.Context(), "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", key); err != nil {
+		if _, err := tx.ExecContext(r.Context(), "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", key); err != nil {
 			return err
 		}
 	}
 	if err := fn(h.Queries.WithTx(tx)); err != nil {
 		return err
 	}
-	return tx.Commit(r.Context())
+	return tx.Commit()
 }
 
 // List-endpoint support: properties filter + property sort expressions
@@ -1223,12 +1223,10 @@ func (h *Handler) propertySortExpr(r *http.Request, workspaceID string, sortValu
 	if wsErr != nil {
 		return "", true, errors.New("invalid workspace id")
 	}
-	var defUUID pgtype.UUID
-	copy(defUUID.Bytes[:], parsedID[:])
-	defUUID.Valid = true
+	defUUID := parsedID.String()
 	def, dbErr := h.Queries.GetIssueProperty(r.Context(), db.GetIssuePropertyParams{ID: defUUID, WorkspaceID: wsUUID})
 	if dbErr != nil {
-		if errors.Is(dbErr, pgx.ErrNoRows) {
+		if errors.Is(dbErr, sql.ErrNoRows) {
 			return "", true, nil // stale sort → position order
 		}
 		return "", true, fmt.Errorf("resolve sort property: %w", dbErr)
@@ -1251,7 +1249,7 @@ func (h *Handler) propertySortExpr(r *http.Request, workspaceID string, sortValu
 	case "number":
 		return fmt.Sprintf("CASE WHEN jsonb_typeof(i.properties->'%s') = 'number' THEN (i.properties->>'%s')::numeric END", id, id), true, nil
 	case "select":
-		return selectPropertySortExpr(id, parsePropertyConfig(def.Config)), true, nil
+		return selectPropertySortExpr(id, parsePropertyConfig([]byte(def.Config))), true, nil
 	case "date", "text", "url":
 		return fmt.Sprintf("NULLIF(i.properties->>'%s', '')", id), true, nil
 	default: // multi_select, checkbox, future types: no meaningful order

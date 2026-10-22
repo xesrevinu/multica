@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
-
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -89,12 +87,12 @@ func TestTelegramInstallationResponseNeverExposesStoredCredential(t *testing.T) 
 		AgentID:         parseUUID("33333333-3333-3333-3333-333333333333"),
 		InstallerUserID: parseUUID("44444444-4444-4444-4444-444444444444"),
 		Status:          "active",
-		Config: json.RawMessage(
+		Config: string(json.RawMessage(
 			`{"app_id":"123456789","bot_username":"my_test_bot","bot_token_encrypted":"ciphertext-sentinel"}`,
-		),
-		InstalledAt: pgtype.Timestamptz{Time: now, Valid: true},
-		CreatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
-		UpdatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+		)),
+		InstalledAt: now.UTC().Format(time.RFC3339Nano),
+		CreatedAt:   now.UTC().Format(time.RFC3339Nano),
+		UpdatedAt:   now.UTC().Format(time.RFC3339Nano),
 	}
 
 	got := telegramInstallationToResponse(row)

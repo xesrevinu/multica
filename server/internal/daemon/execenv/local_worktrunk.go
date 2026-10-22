@@ -309,4 +309,3 @@ func AppendUserBinDirs(path string) string {
 	}
 	return appendPathDirs(path, UserBinDirs(home))
 }
-

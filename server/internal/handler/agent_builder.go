@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,8 +10,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
@@ -84,19 +83,19 @@ func (h *Handler) CreateAgentBuilderSession(w http.ResponseWriter, r *http.Reque
 	flowID := uuid.NewString()
 	ownerUUID := parseUUID(userID)
 	model := strings.TrimSpace(req.Model)
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start agent builder session")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	// FOR KEY SHARE on the workspace row before creating the builder's chat_session
 	// — the creator half of the #5219 delete/create protocol, so a session cannot
 	// be created into a workspace mid-delete (see LockWorkspaceForChatSessionCreate).
 	if _, err := qtx.LockWorkspaceForChatSessionCreate(r.Context(), workspaceUUID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "workspace not found")
 			return
 		}
@@ -108,11 +107,11 @@ func (h *Handler) CreateAgentBuilderSession(w http.ResponseWriter, r *http.Reque
 		WorkspaceID:  workspaceUUID,
 		Name:         fmt.Sprintf(".multica-agent-builder-%s", flowID),
 		RuntimeMode:  runtime.RuntimeMode,
-		RuntimeID:    runtime.ID,
-		OwnerID:      ownerUUID,
+		RuntimeID:    nullString(runtime.ID),
+		OwnerID:      nullString(ownerUUID),
 		Instructions: agentBuilderInstructions,
-		Model:        pgtype.Text{String: model, Valid: model != ""},
-		SystemKey: pgtype.Text{
+		Model:        sql.NullString{String: model, Valid: model != ""},
+		SystemKey: sql.NullString{
 			String: agentBuilderSystemKeyPrefix + flowID,
 			Valid:  true,
 		},
@@ -138,7 +137,7 @@ func (h *Handler) CreateAgentBuilderSession(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, "failed to mark agent builder session explicit")
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit agent builder session")
 		return
 	}
@@ -214,13 +213,13 @@ func (h *Handler) ListAgentBuilderSessions(w http.ResponseWriter, r *http.Reques
 		sessions = append(sessions, AgentBuilderSessionSummary{
 			SessionID:          uuidToString(row.ID),
 			Title:              row.Title,
-			RuntimeID:          uuidToString(row.RuntimeID),
+			RuntimeID:          uuidToString(row.RuntimeID.String),
 			CreatedAt:          timestampToString(row.CreatedAt),
 			UpdatedAt:          timestampToString(row.UpdatedAt),
 			LastMessageContent: row.LastMessageContent,
 			LastMessageRole:    row.LastMessageRole,
-			LastMessageAt:      timestampToString(row.LastMessageAt),
-			Draft:              json.RawMessage(row.StoredDraft),
+			LastMessageAt:      timestampToString(row.LastMessageAt.String),
+			Draft:              nullJSON(row.StoredDraft),
 		})
 	}
 	writeJSON(w, http.StatusOK, ListAgentBuilderSessionsResponse{Sessions: sessions})
@@ -297,12 +296,12 @@ func (h *Handler) SaveAgentBuilderDraft(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save agent builder draft")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	// Everything a concurrent writer can still change about this session —
@@ -312,7 +311,7 @@ func (h *Handler) SaveAgentBuilderDraft(w http.ResponseWriter, r *http.Request) 
 	// read cannot be trusted for either.
 	locked, err := qtx.LockChatSessionForDraftWrite(r.Context(), session.ID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "chat session not found")
 			return
 		}
@@ -327,12 +326,12 @@ func (h *Handler) SaveAgentBuilderDraft(w http.ResponseWriter, r *http.Request) 
 	if _, err := qtx.UpsertAgentBuilderDraft(r.Context(), db.UpsertAgentBuilderDraftParams{
 		ChatSessionID: locked.ID,
 		WorkspaceID:   locked.WorkspaceID,
-		Draft:         req.Draft,
+		Draft:         string(req.Draft),
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save agent builder draft")
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save agent builder draft")
 		return
 	}
@@ -345,7 +344,7 @@ func (h *Handler) SaveAgentBuilderDraft(w http.ResponseWriter, r *http.Request) 
 // this member may use it (private runtimes stay owner/admin-only), and it is
 // online. verb names the attempted action in the offline error so the two call
 // sites read naturally.
-func (h *Handler) resolveBuilderRuntime(w http.ResponseWriter, r *http.Request, workspaceID string, workspaceUUID pgtype.UUID, runtimeID, verb string) (db.AgentRuntime, bool) {
+func (h *Handler) resolveBuilderRuntime(w http.ResponseWriter, r *http.Request, workspaceID string, workspaceUUID string, runtimeID, verb string) (db.AgentRuntime, bool) {
 	runtimeUUID, ok := parseUUIDOrBadRequest(w, runtimeID, "runtime_id")
 	if !ok {
 		return db.AgentRuntime{}, false
@@ -448,16 +447,16 @@ func (h *Handler) SwitchAgentBuilderRuntime(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to switch agent builder runtime")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	if _, err := qtx.LockChatSessionForRuntimeBind(r.Context(), session.ID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "chat session not found")
 			return
 		}
@@ -468,10 +467,10 @@ func (h *Handler) SwitchAgentBuilderRuntime(w http.ResponseWriter, r *http.Reque
 	// Checked under the lock, so a send cannot slip in behind it. A task that is
 	// still queued on an offline runtime also counts as pending — the client is
 	// expected to stop it first, which restores the message to the composer.
-	if _, err := qtx.GetPendingChatTask(r.Context(), session.ID); err == nil {
+	if _, err := qtx.GetPendingChatTask(r.Context(), nullString(session.ID)); err == nil {
 		writeError(w, http.StatusConflict, "stop the current reply before switching runtime")
 		return
-	} else if !errors.Is(err, pgx.ErrNoRows) {
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusInternalServerError, "failed to check pending builder task")
 		return
 	}
@@ -480,24 +479,24 @@ func (h *Handler) SwitchAgentBuilderRuntime(w http.ResponseWriter, r *http.Reque
 	// carried over; the new runtime resolves its own default.
 	updated, err := qtx.RebindAgentBuilderRuntime(r.Context(), db.RebindAgentBuilderRuntimeParams{
 		ID:          agent.ID,
-		RuntimeID:   runtime.ID,
+		RuntimeID:   nullString(runtime.ID),
 		RuntimeMode: runtime.RuntimeMode,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "agent builder session not found")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "failed to switch agent builder runtime")
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit agent builder runtime switch")
 		return
 	}
 
 	writeJSON(w, http.StatusOK, SwitchAgentBuilderRuntimeResponse{
-		RuntimeID: uuidToString(updated.RuntimeID),
+		RuntimeID: uuidToString(updated.RuntimeID.String),
 	})
 }
 

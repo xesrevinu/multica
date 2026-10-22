@@ -1,11 +1,11 @@
 -- name: ListAgentRuntimes :many
 SELECT * FROM agent_runtime
-WHERE workspace_id = $1
+WHERE workspace_id = ?1
 ORDER BY created_at ASC;
 
 -- name: ListAgentRuntimeIDsByWorkspace :many
 SELECT id FROM agent_runtime
-WHERE workspace_id = $1
+WHERE workspace_id = ?1
 ORDER BY id ASC;
 
 -- name: ListVisibleAgentRuntimes :many
@@ -13,13 +13,13 @@ ORDER BY id ASC;
 -- runtime list. The owner can always see their own runtime; everyone else
 -- sees only runtimes the owner has explicitly shared with the workspace.
 SELECT * FROM agent_runtime
-WHERE workspace_id = $1
-  AND (owner_id = $2 OR visibility = 'public')
+WHERE workspace_id = ?1
+  AND (owner_id = ?2 OR visibility = 'public')
 ORDER BY created_at ASC;
 
 -- name: GetAgentRuntime :one
 SELECT * FROM agent_runtime
-WHERE id = $1;
+WHERE id = ?1;
 
 -- name: GetAgentRuntimes :many
 -- Batch variant of GetAgentRuntime (MUL-4257): loads every runtime in the
@@ -28,7 +28,7 @@ WHERE id = $1;
 -- runtime. Rows are returned only for ids that exist; the caller matches them
 -- back by id and skips any that are missing.
 SELECT * FROM agent_runtime
-WHERE id = ANY(@ids::uuid[]);
+WHERE id IN (SELECT value FROM json_each(@ids));
 
 -- name: GetAgentRuntimeHeartbeatLeases :many
 -- Narrow connection-time and heartbeat-reconciliation projection. The daemon
@@ -37,14 +37,14 @@ WHERE id = ANY(@ids::uuid[]);
 -- lease, avoiding a GetAgentRuntime call on every heartbeat.
 SELECT id, workspace_id, daemon_id, status, last_seen_at
 FROM agent_runtime
-WHERE id = ANY(@ids::uuid[]);
+WHERE id IN (SELECT value FROM json_each(@ids));
 
 -- name: LockAgentRuntime :one
 -- Acquires a row-level exclusive lock on the runtime row. Used at the
 -- top of the cascade-delete transaction so that:
 --   1. PostgreSQL's FK validation on agent.runtime_id (FK ... ON DELETE
---      RESTRICT) needs FOR KEY SHARE on the parent runtime row, which
---      conflicts with FOR UPDATE — so any concurrent INSERT or UPDATE
+--      RESTRICT) needs on the parent runtime row, which
+--      conflicts with - so any concurrent INSERT or UPDATE
 --      that would point a new/moved agent at this runtime blocks until
 --      our transaction finishes; and
 --   2. concurrent UPDATE/DELETE of the runtime row itself (e.g. another
@@ -53,12 +53,11 @@ WHERE id = ANY(@ids::uuid[]);
 -- archived user agents) this closes both plan drift and archived-agent restore
 -- races under read-committed isolation.
 SELECT * FROM agent_runtime
-WHERE id = $1
-FOR UPDATE;
+WHERE id = ?1;
 
 -- name: GetAgentRuntimeForWorkspace :one
 SELECT * FROM agent_runtime
-WHERE id = $1 AND workspace_id = $2;
+WHERE id = ?1 AND workspace_id = ?2;
 
 -- name: UpsertAgentRuntime :one
 -- (xmax = 0) AS inserted distinguishes a fresh insert (true) from an upsert
@@ -75,7 +74,7 @@ INSERT INTO agent_runtime (
     metadata,
     owner_id,
     last_seen_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, now())
 -- Built-in runtimes carry no profile_id. The arbiter is the partial unique
 -- index from migration 121 (WHERE profile_id IS NULL); the predicate must be
 -- spelled out so Postgres selects that partial index, not the custom-runtime
@@ -112,7 +111,7 @@ INSERT INTO agent_runtime (
     owner_id,
     profile_id,
     last_seen_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, now())
 ON CONFLICT (workspace_id, daemon_id, profile_id) WHERE profile_id IS NOT NULL
 DO UPDATE SET
     name = EXCLUDED.name,
@@ -158,14 +157,14 @@ UPDATE agent_runtime
 SET custom_name = @custom_name, updated_at = now()
 WHERE workspace_id = @workspace_id
   AND daemon_id = @daemon_id
-  AND (@owner_id::uuid IS NULL OR owner_id = @owner_id)
+  AND (@owner_id IS NULL OR owner_id = @owner_id)
 RETURNING *;
 
 -- name: ListDaemonCustomNames :many
 -- Lists the custom_name of every OTHER runtime on (workspace_id, daemon_id)
 -- (MUL-4217). @exclude_id drops the just-registered row. The caller derives
--- the machine-level name in Go — the same "all runtimes share one non-null
--- name" rule the frontend applies in sharedCustomName — so a freshly-added
+-- the machine-level name in Go - the same "all runtimes share one non-null
+-- name" rule the frontend applies in sharedCustomName - so a freshly-added
 -- runtime on an already-named machine can inherit that name and keep the
 -- machine's display name stable. A daemon hosts only a handful of runtimes
 -- (one per provider), so this is a tiny read.
@@ -190,7 +189,7 @@ WHERE workspace_id = @workspace_id
 -- MarkAgentRuntimeOnline to flip the row back online.
 UPDATE agent_runtime
 SET last_seen_at = now()
-WHERE id = $1 AND status = 'online';
+WHERE id = ?1 AND status = 'online';
 
 -- name: TouchAgentRuntimesLastSeenBatch :many
 -- Bulk variant of TouchAgentRuntimeLastSeen used by the BatchedHeartbeatScheduler:
@@ -204,16 +203,16 @@ WHERE id = $1 AND status = 'online';
 -- sweeper-raced offline rows and invalidating connections for deleted rows.
 UPDATE agent_runtime
 SET last_seen_at = now()
-WHERE id = ANY(@ids::uuid[]) AND status = 'online'
+WHERE id IN (SELECT value FROM json_each(@ids)) AND status = 'online'
 RETURNING id;
 
 -- name: MarkAgentRuntimeOnline :one
--- Used on the offline→online transition (and on first heartbeat after
+-- Used on the offline->online transition (and on first heartbeat after
 -- registration). Writes status, last_seen_at, and updated_at because the
 -- status flip is a real state change and we want updated_at to reflect it.
 UPDATE agent_runtime
 SET status = 'online', last_seen_at = now(), updated_at = now()
-WHERE id = $1
+WHERE id = ?1
 RETURNING *;
 
 -- name: MarkAgentRuntimeOnlineIfOffline :execrows
@@ -223,28 +222,28 @@ RETURNING *;
 -- recovered the runtime.
 UPDATE agent_runtime
 SET status = 'online', last_seen_at = now(), updated_at = now()
-WHERE id = $1 AND status <> 'online';
+WHERE id = ?1 AND status <> 'online';
 
 -- name: SetAgentRuntimeOffline :exec
 UPDATE agent_runtime
 SET status = 'offline', updated_at = now()
-WHERE id = $1;
+WHERE id = ?1;
 
 -- name: SetAgentRuntimeOfflineWithReason :exec
 -- Takes a runtime offline and records WHY, for the one class of cause the user
 -- has to repair before the runtime can come back (MUL-6164). Everything that
--- merely stops — daemon shutdown, laptop asleep — uses SetAgentRuntimeOffline
+-- merely stops - daemon shutdown, laptop asleep - uses SetAgentRuntimeOffline
 -- and leaves no reason, because "wait for it" needs no explanation.
 --
 -- Merged into metadata rather than a column: registration overwrites metadata
 -- wholesale (`metadata = EXCLUDED.metadata`), so a runtime that comes back
--- drops the reason as a side effect of being usable again — there is no stale
+-- drops the reason as a side effect of being usable again - there is no stale
 -- explanation to clean up and no code path that has to remember to clear it.
 UPDATE agent_runtime
 SET status = 'offline',
-    metadata = metadata || jsonb_build_object('offline_reason', @offline_reason::jsonb),
+    metadata = json_patch(COALESCE(metadata, '{}'), json_object('offline_reason', @offline_reason)),
     updated_at = now()
-WHERE id = $1;
+WHERE id = ?1;
 
 -- name: SelectStaleOnlineRuntimes :many
 -- Lists online runtimes whose last_seen_at exceeds the stale window. The
@@ -253,7 +252,7 @@ WHERE id = $1;
 -- record means the DB row is just lagging, not actually dead).
 SELECT id, workspace_id, owner_id, daemon_id, provider FROM agent_runtime
 WHERE status = 'online'
-  AND last_seen_at < now() - make_interval(secs => @stale_seconds::double precision);
+  AND last_seen_at < datetime(now(), '-' || (@stale_seconds) || ' seconds');
 
 -- name: MarkRuntimesOfflineByIDs :many
 -- Flips a known set of runtime IDs from online to offline. Paired with
@@ -270,8 +269,8 @@ WHERE status = 'online'
 UPDATE agent_runtime
 SET status = 'offline', updated_at = now()
 WHERE status = 'online'
-  AND id = ANY(@ids::uuid[])
-  AND last_seen_at < now() - make_interval(secs => @stale_seconds::double precision)
+  AND id IN (SELECT value FROM json_each(@ids))
+  AND last_seen_at < datetime(now(), '-' || (@stale_seconds) || ' seconds')
 RETURNING id, workspace_id, owner_id, daemon_id, provider;
 
 -- name: FailTasksForOfflineRuntimes :many
@@ -284,41 +283,41 @@ RETURNING id, workspace_id, owner_id, daemon_id, provider;
 -- the first heartbeat; updated_at is only the fallback for a never-heartbeated
 -- runtime, and a forced-offline write starts its grace from that update.
 WITH victims AS (
-  SELECT task.id
+  SELECT task.id AS id
   FROM agent_task_queue task
   JOIN agent_runtime runtime ON runtime.id = task.runtime_id
   WHERE task.status IN ('dispatched', 'running', 'waiting_local_directory')
     AND runtime.status = 'offline'
     AND COALESCE(runtime.last_seen_at, runtime.updated_at) <
-        now() - make_interval(secs => @reconnect_grace_secs::double precision)
+        datetime(now(), '-' || (@reconnect_grace_secs) || ' seconds')
   ORDER BY COALESCE(runtime.last_seen_at, runtime.updated_at), task.created_at
-  LIMIT @max_per_tick::int
-  FOR UPDATE OF task SKIP LOCKED
+  LIMIT @max_per_tick
 )
-UPDATE agent_task_queue AS task
-SET status = 'failed', completed_at = now(), error = 'runtime went offline',
+UPDATE agent_task_queue
+SET status = 'failed',
+    completed_at = now(),
+    error = 'runtime went offline',
     failure_reason = 'runtime_offline',
     wait_reason = NULL
-FROM victims
-WHERE task.id = victims.id
-  AND task.status IN ('dispatched', 'running', 'waiting_local_directory')
-RETURNING task.*;
+WHERE id IN (SELECT id FROM victims)
+  AND status IN ('dispatched', 'running', 'waiting_local_directory')
+RETURNING *;
 
 -- name: ListAgentRuntimesByOwner :many
 SELECT * FROM agent_runtime
-WHERE workspace_id = $1 AND owner_id = $2
+WHERE workspace_id = ?1 AND owner_id = ?2
 ORDER BY created_at ASC;
 
 -- name: ForceOfflineRuntimesByIDs :many
 -- Unconditionally flips a known set of runtime IDs to offline. Distinct from
 -- MarkRuntimesOfflineByIDs (which keeps a stale-window predicate so the
 -- sweeper cannot demote a runtime that just heartbeated): this variant is
--- used by intentional revocation paths — e.g. removing a workspace member —
+-- used by intentional revocation paths - e.g. removing a workspace member -
 -- where the caller has already decided the runtime should be offline
 -- regardless of recent liveness.
 UPDATE agent_runtime
 SET status = 'offline', updated_at = now()
-WHERE id = ANY(@runtime_ids::uuid[]) AND status = 'online'
+WHERE id IN (SELECT value FROM json_each(@runtime_ids)) AND status = 'online'
 RETURNING id, workspace_id, owner_id, daemon_id, provider;
 
 -- name: CancelAgentTasksByRuntimeOrAgent :many
@@ -328,7 +327,7 @@ RETURNING id, workspace_id, owner_id, daemon_id, provider;
 -- the agent-side covers tasks pinned to a different runtime that those agents
 -- left behind from a prior UpdateAgent (agent.runtime_id can change, but
 -- agent_task_queue.runtime_id does not get rewritten when it does, so a task
--- queued on runtime A by agent X — later moved to runtime B — survives the
+-- queued on runtime A by agent X - later moved to runtime B - survives the
 -- runtime-only revoke and could still be claimed because ClaimAgentTask does
 -- not gate on agent.archived_at).
 --
@@ -342,12 +341,12 @@ RETURNING id, workspace_id, owner_id, daemon_id, provider;
 -- escalation) was missing here and only went unnoticed because the runtime
 -- delete used to cascade those rows away. Since MUL-5559 the runtime delete
 -- unbinds history rows instead, and agent_task_queue_active_requires_runtime
--- rejects an active row without a runtime — so a missed status now surfaces as
+-- rejects an active row without a runtime - so a missed status now surfaces as
 -- a failed delete (runtime_delete_not_drained) instead of silent data loss.
 UPDATE agent_task_queue
 SET status = 'cancelled', completed_at = now(),
     cancelled_by_type = 'system', cancelled_by_id = NULL, cancelled_by_name = NULL
-WHERE (runtime_id = ANY(@runtime_ids::uuid[]) OR agent_id = ANY(@agent_ids::uuid[]))
+WHERE (runtime_id IN (SELECT value FROM json_each(@runtime_ids)) OR agent_id IN (SELECT value FROM json_each(@agent_ids)))
   AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'deferred')
 RETURNING *;
 
@@ -357,11 +356,11 @@ RETURNING *;
 -- (completed_at IS NOT NULL) before the unbind UPDATE runs. The agent-side
 -- predicate must mirror CancelAgentTasksByRuntimeOrAgent: a task can remain
 -- pinned to another runtime after its agent moves. Non-zero means some
--- non-terminal status escaped the cancel query — the handler aborts with 409
+-- non-terminal status escaped the cancel query - the handler aborts with 409
 -- runtime_delete_not_drained rather than letting the CHECK constraint turn it
 -- into an opaque 500, and rather than deleting rows to make it go away.
 SELECT count(*) FROM agent_task_queue
-WHERE (runtime_id = ANY(@runtime_ids::uuid[]) OR agent_id = ANY(@agent_ids::uuid[]))
+WHERE (runtime_id IN (SELECT value FROM json_each(@runtime_ids)) OR agent_id IN (SELECT value FROM json_each(@agent_ids)))
   AND completed_at IS NULL;
 
 -- name: UnbindTasksFromRuntime :execrows
@@ -375,7 +374,7 @@ WHERE (runtime_id = ANY(@runtime_ids::uuid[]) OR agent_id = ANY(@agent_ids::uuid
 -- every row on the runtime.
 UPDATE agent_task_queue
 SET runtime_id = NULL
-WHERE runtime_id = $1 AND completed_at IS NOT NULL;
+WHERE runtime_id = ?1 AND completed_at IS NOT NULL;
 
 -- name: UnbindUserAgentsFromRuntime :many
 -- MUL-5559: the runtime-delete replacement for archive-then-hard-delete. Every
@@ -390,20 +389,20 @@ WHERE runtime_id = $1 AND completed_at IS NOT NULL;
 -- one can repair.
 UPDATE agent
 SET runtime_id = NULL, updated_at = now()
-WHERE runtime_id = $1 AND kind = 'user'
+WHERE runtime_id = ?1 AND kind = 'user'
 RETURNING *;
 
 -- name: DeleteAgentRuntime :exec
-DELETE FROM agent_runtime WHERE id = $1;
+DELETE FROM agent_runtime WHERE id = ?1;
 
 -- name: DeleteSystemAgentsByRuntime :exec
 -- System agents are invisible execution infrastructure (for example the Agent
 -- Builder). Remove them before deleting their runtime so the RESTRICT runtime
 -- FK cannot block an otherwise dependency-free delete.
-DELETE FROM agent WHERE runtime_id = $1 AND kind = 'system';
+DELETE FROM agent WHERE runtime_id = ?1 AND kind = 'system';
 
 -- name: CountActiveAgentsByRuntime :one
-SELECT count(*) FROM agent WHERE runtime_id = $1 AND archived_at IS NULL;
+SELECT count(*) FROM agent WHERE runtime_id = ?1 AND archived_at IS NULL;
 
 -- name: FindLegacyRuntimesByDaemonID :many
 -- Looks up runtime rows keyed on a prior (hostname-derived) daemon_id. Used
@@ -434,26 +433,25 @@ WHERE runtime_id = @old_runtime_id;
 
 -- name: LockWorkspaceForRuntimeMerge :exec
 -- Step 1 of the legacy runtime merge's fence, and the same first step every task
--- write takes (lock_task_owner_rows, migration 284): the workspace row, FOR KEY
+-- write takes (owner-row fence, migration 284): the workspace row, FOR KEY
 -- SHARE. Taking it here rather than relying on the fence inside the reassignment
--- keeps the merge's lock order identical to the writers' — workspaces before owner
--- rows — so the two can never hold each other's next lock (MUL-5999).
+-- keeps the merge's lock order identical to the writers' - workspaces before owner
+-- rows - so the two can never hold each other's next lock (MUL-5999).
 SELECT 1 FROM workspace w
 WHERE w.id IN (
-    SELECT r.workspace_id FROM agent_runtime r WHERE r.id = ANY(@runtime_ids::uuid[])
+    SELECT r.workspace_id FROM agent_runtime r WHERE r.id IN (SELECT value FROM json_each(@runtime_ids))
 )
-ORDER BY w.id
-FOR KEY SHARE;
+ORDER BY w.id;
 
 -- name: LockRuntimesForMerge :many
--- Step 2: the runtime rows themselves, FOR UPDATE, in id order.
+-- Step 2: the runtime rows themselves,, in id order.
 --
--- FOR UPDATE is the point. A task write's fence takes FOR KEY SHARE on the runtime
+-- is the point. A task write's fence takes on the runtime
 -- it references, and KEY SHARE conflicts with UPDATE but not with another KEY
--- SHARE — so while the merge held only the workspace's KEY SHARE, a concurrent
+-- SHARE - so while the merge held only the workspace's KEY SHARE, a concurrent
 -- enqueue against the OLD runtime went straight through after the task scan and was
 -- then silently removed by ON DELETE CASCADE when the old runtime was deleted.
--- Holding FOR UPDATE on both runtimes from before the scan until COMMIT means a
+-- Holding on both runtimes from before the scan until COMMIT means a
 -- late writer either commits first (and the scan sees its task) or waits and finds
 -- the runtime gone, which its fence reports as "no row written".
 --
@@ -463,12 +461,11 @@ FOR KEY SHARE;
 -- Returns the ids it actually locked: a caller that asked for two and got fewer
 -- knows a runtime disappeared before it got there and must abandon the merge.
 SELECT id FROM agent_runtime
-WHERE id = ANY(@runtime_ids::uuid[])
-ORDER BY id
-FOR UPDATE;
+WHERE id IN (SELECT value FROM json_each(@runtime_ids))
+ORDER BY id;
 
 -- name: ReassignTasksToRuntime :one
--- Fenced against workspace teardown: lock_task_owner_rows (migration 284)
+-- Fenced against workspace teardown: owner-row fence (migration 284)
 -- locks the owners' workspace rows in the writer's own transaction and returns
 -- false once they are gone, so this statement writes no row instead of stranding
 -- a task in a workspace that has just been deleted (MUL-5999).
@@ -477,26 +474,26 @@ FOR UPDATE;
 -- an ON DELETE CASCADE FK that would otherwise drop historical tasks.
 --
 -- Returns the fence verdict separately from the row count on purpose. "0 rows"
--- is ambiguous — it means either "the old runtime had no tasks" or "the fence
--- refused" — and a caller that cannot tell them apart would go on to delete the
+-- is ambiguous - it means either "the old runtime had no tasks" or "the fence
+-- refused" - and a caller that cannot tell them apart would go on to delete the
 -- old runtime, letting that same ON DELETE CASCADE drop the very history this
 -- statement exists to preserve. FenceOk = false must abort the merge.
-WITH fence AS MATERIALIZED (
-    -- Once per statement rather than once per row: the predicate is VOLATILE, so
-    -- calling it from the WHERE clause of a bulk UPDATE would re-run it for every
-    -- candidate row.
-    SELECT lock_task_owner_rows(NULL, NULL, @new_runtime_id) AS ok
-),
-reassigned AS (
-    UPDATE agent_task_queue
-    SET runtime_id = @new_runtime_id
-    WHERE runtime_id = @old_runtime_id
-      AND (SELECT ok FROM fence)
-    RETURNING id
-)
+-- SQLite has no lock_task_owner_rows; the fence is "the new runtime row exists".
+-- Order: ReassignTasksToRuntime, then ReassignTasksToRuntime_Step2. This
+-- statement reports fence_ok and how many tasks Step2 will move.
 SELECT
-    (SELECT ok FROM fence) AS fence_ok,
-    (SELECT count(*) FROM reassigned) AS reassigned_tasks;
+    (@new_runtime_id IS NULL OR EXISTS (SELECT 1 FROM agent_runtime WHERE id = @new_runtime_id)) AS fence_ok,
+    (
+        SELECT count(*) FROM agent_task_queue
+        WHERE runtime_id = @old_runtime_id
+          AND (@new_runtime_id IS NULL OR EXISTS (SELECT 1 FROM agent_runtime WHERE id = @new_runtime_id))
+    ) AS reassigned_tasks;
+
+-- name: ReassignTasksToRuntime_Step2 :exec
+UPDATE agent_task_queue
+SET runtime_id = @new_runtime_id
+WHERE runtime_id = @old_runtime_id
+  AND (@new_runtime_id IS NULL OR EXISTS (SELECT 1 FROM agent_runtime WHERE id = @new_runtime_id));
 
 -- name: RecordRuntimeLegacyDaemonID :exec
 -- Remembers the most recent hostname-derived daemon_id that was merged into
@@ -504,18 +501,18 @@ SELECT
 -- subsumed an old one, and only overwrites NULL so the earliest merge is
 -- preserved.
 UPDATE agent_runtime
-SET legacy_daemon_id = COALESCE(legacy_daemon_id, $2)
-WHERE id = $1;
+SET legacy_daemon_id = COALESCE(legacy_daemon_id, ?2)
+WHERE id = ?1;
 
 -- name: ListStaleOfflineRuntimeGCCandidates :many
 -- Bounded gather for runtime GC. Non-terminal task owners are deliberately
 -- excluded here so one permanently-deferred task cannot monopolise the front
 -- of every batch and starve otherwise-drainable runtimes. The per-runtime
--- transaction re-checks every predicate after taking FOR UPDATE, so this is an
+-- transaction re-checks every predicate after taking, so this is an
 -- efficiency filter rather than the correctness boundary.
 SELECT id FROM agent_runtime
 WHERE status = 'offline'
-  AND last_seen_at < now() - make_interval(secs => @stale_seconds::double precision)
+  AND last_seen_at < datetime(now(), '-' || (@stale_seconds) || ' seconds')
   AND NOT EXISTS (
     SELECT 1
     FROM agent
@@ -530,18 +527,18 @@ WHERE status = 'offline'
       AND agent_task_queue.completed_at IS NULL
   )
 ORDER BY last_seen_at ASC, id ASC
-LIMIT @max_per_tick::int;
+LIMIT @max_per_tick;
 
 -- name: IsAgentRuntimeEligibleForGC :one
 -- Re-checks the mutable GC predicates after the caller has locked the runtime
--- row FOR UPDATE. Agent inserts/updates and task ownership writes take FOR KEY
+-- row. Agent inserts/updates and task ownership writes take FOR KEY
 -- SHARE on that row, so no new dependency can commit between this check and
 -- DeleteAgentRuntime in the same transaction.
 SELECT EXISTS (
   SELECT 1 FROM agent_runtime
   WHERE agent_runtime.id = @id
     AND status = 'offline'
-    AND last_seen_at < now() - make_interval(secs => @stale_seconds::double precision)
+    AND last_seen_at < datetime(now(), '-' || (@stale_seconds) || ' seconds')
     AND NOT EXISTS (
       SELECT 1
       FROM agent
@@ -554,4 +551,4 @@ SELECT EXISTS (
 -- name: CountTasksByRuntime :one
 -- Final fail-closed assertion after UnbindTasksFromRuntime. A non-zero result
 -- aborts the transaction instead of relying on the legacy ON DELETE CASCADE.
-SELECT count(*) FROM agent_task_queue WHERE runtime_id = $1;
+SELECT count(*) FROM agent_task_queue WHERE runtime_id = ?1;

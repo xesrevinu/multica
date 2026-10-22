@@ -1,10 +1,10 @@
 package handler
 
 import (
+	"database/sql"
 	"fmt"
 	"strings"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -72,7 +72,7 @@ func blockingAgentClassFromKey(key string) blockingAgentClass {
 	}
 }
 
-func classifyBlockingAgent(systemKey pgtype.Text) blockingAgentClass {
+func classifyBlockingAgent(systemKey sql.NullString) blockingAgentClass {
 	key := strings.TrimSpace(systemKey.String)
 	if !systemKey.Valid || key == "" {
 		return blockingAgentUser

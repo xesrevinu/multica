@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,8 +10,6 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -49,7 +48,7 @@ type RuntimeProfileResponse struct {
 func runtimeProfileToResponse(p db.RuntimeProfile) RuntimeProfileResponse {
 	args := []string{}
 	if len(p.FixedArgs) > 0 {
-		_ = json.Unmarshal(p.FixedArgs, &args)
+		_ = json.Unmarshal([]byte(p.FixedArgs), &args)
 		if args == nil {
 			args = []string{}
 		}
@@ -65,7 +64,7 @@ func runtimeProfileToResponse(p db.RuntimeProfile) RuntimeProfileResponse {
 		FixedArgs:      args,
 		Visibility:     p.Visibility,
 		CreatedBy:      uuidToPtr(p.CreatedBy),
-		Enabled:        p.Enabled,
+		Enabled:        int64ToBool(p.Enabled),
 		CreatedAt:      timestampToString(p.CreatedAt),
 		UpdatedAt:      timestampToString(p.UpdatedAt),
 	}
@@ -188,10 +187,10 @@ func (h *Handler) CreateRuntimeProfile(w http.ResponseWriter, r *http.Request) {
 		RuntimeType:    req.RuntimeType,
 		CommandName:    req.CommandName,
 		Description:    ptrToText(req.Description),
-		FixedArgs:      fixedArgs,
+		FixedArgs:      string(fixedArgs),
 		Visibility:     runtimeProfileDefaultVisibility,
-		CreatedBy:      member.UserID,
-		Enabled:        enabled,
+		CreatedBy:      nullString(member.UserID),
+		Enabled:        boolToInt64(enabled),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -327,15 +326,15 @@ func (h *Handler) UpdateRuntimeProfile(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		params.FixedArgs = fixedArgs
+		params.FixedArgs = nullString(string(fixedArgs))
 	}
 	if req.Enabled != nil {
-		params.Enabled = pgtype.Bool{Bool: *req.Enabled, Valid: true}
+		params.Enabled = sql.NullInt64{Int64: boolToInt64(*req.Enabled), Valid: true}
 	}
 
 	profile, err := h.Queries.UpdateRuntimeProfile(r.Context(), params)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "runtime profile not found")
 			return
 		}
@@ -399,10 +398,10 @@ func profileDeleteBlockedByAgents(profileName string, agents []db.ListActiveAgen
 	total := summary.TotalCount
 
 	classes := map[blockingAgentClass]bool{
-		blockingAgentUser:           summary.UserCount > 0,
-		blockingAgentMika:           summary.MikaCount > 0,
-		blockingAgentBuilderCarrier: summary.AgentBuilderCount > 0,
-		blockingAgentOtherSystem:    summary.OtherSystemCount > 0,
+		blockingAgentUser:           summary.UserCount.Valid && summary.UserCount.Float64 > 0,
+		blockingAgentMika:           summary.MikaCount.Valid && summary.MikaCount.Float64 > 0,
+		blockingAgentBuilderCarrier: summary.AgentBuilderCount.Valid && summary.AgentBuilderCount.Float64 > 0,
+		blockingAgentOtherSystem:    summary.OtherSystemCount.Valid && summary.OtherSystemCount.Float64 > 0,
 	}
 
 	named := make([]string, 0, maxNamedBlockingAgents)
@@ -494,12 +493,12 @@ func (h *Handler) DeleteRuntimeProfile(w http.ResponseWriter, r *http.Request) {
 	// the profile's runtimes. Keep this a 409 — the profile is the thing that
 	// defines those runtimes, so the user should retire the agents or move them
 	// deliberately instead of having them silently unbound in bulk.
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to begin transaction")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	// Lock the profile before planning the cascade. Daemon registration takes
@@ -510,7 +509,7 @@ func (h *Handler) DeleteRuntimeProfile(w http.ResponseWriter, r *http.Request) {
 		ID:          profileUUID,
 		WorkspaceID: wsUUID,
 	})
-	profileMissing := errors.Is(profileErr, pgx.ErrNoRows)
+	profileMissing := errors.Is(profileErr, sql.ErrNoRows)
 	if profileErr != nil && !profileMissing {
 		writeError(w, http.StatusInternalServerError, "failed to load runtime profile")
 		return
@@ -520,7 +519,7 @@ func (h *Handler) DeleteRuntimeProfile(w http.ResponseWriter, r *http.Request) {
 	// inserts take KEY SHARE locks, preventing dependencies from appearing after
 	// the active-agent check.
 	runtimeIDs, err := qtx.ListAgentRuntimeIDsByProfile(r.Context(), db.ListAgentRuntimeIDsByProfileParams{
-		ProfileID:   profileUUID,
+		ProfileID:   nullString(profileUUID),
 		WorkspaceID: wsUUID,
 	})
 	if err != nil {
@@ -532,7 +531,7 @@ func (h *Handler) DeleteRuntimeProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, runtimeID := range runtimeIDs {
-		if _, err := qtx.ListUserAgentsByRuntimeForUpdate(r.Context(), runtimeID); err != nil {
+		if _, err := qtx.ListUserAgentsByRuntimeForUpdate(r.Context(), nullString(runtimeID)); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to lock profile dependencies")
 			return
 		}
@@ -541,7 +540,7 @@ func (h *Handler) DeleteRuntimeProfile(w http.ResponseWriter, r *http.Request) {
 	// Bounded read: the guard only needs "is there at least one", and the
 	// refusal needs a few names plus the exact total, which rides on each row.
 	blockingAgents, err := qtx.ListActiveAgentsByProfile(r.Context(), db.ListActiveAgentsByProfileParams{
-		ProfileID:   profileUUID,
+		ProfileID:   nullString(profileUUID),
 		WorkspaceID: wsUUID,
 		MaxRows:     maxReportedBlockingAgents,
 	})
@@ -595,7 +594,7 @@ func (h *Handler) DeleteRuntimeProfile(w http.ResponseWriter, r *http.Request) {
 	// Now the runtime rows have no agent references; remove them, then the
 	// profile itself.
 	deletedRuntimes, err := qtx.DeleteAgentRuntimesByProfile(r.Context(), db.DeleteAgentRuntimesByProfileParams{
-		ProfileID:   profileUUID,
+		ProfileID:   nullString(profileUUID),
 		WorkspaceID: wsUUID,
 	})
 	if err != nil {
@@ -613,7 +612,7 @@ func (h *Handler) DeleteRuntimeProfile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit transaction")
 		return
 	}

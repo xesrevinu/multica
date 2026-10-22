@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,8 +13,6 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -88,7 +87,7 @@ func prMergeStatusSetting(ws db.Workspace) string {
 		return issuestatus.Done
 	}
 	var s map[string]any
-	if err := json.Unmarshal(ws.Settings, &s); err != nil {
+	if err := json.Unmarshal([]byte(ws.Settings), &s); err != nil {
 		return prMergeStatusNone
 	}
 	return prMergeStatusFromSettings(s)
@@ -196,7 +195,7 @@ func (h *Handler) decidePRAutoComplete(ctx context.Context, ws db.Workspace, iss
 	case issue.TriageState.Valid:
 		d.State = prAutoCompleteTriage
 		return d, nil
-	case d.Target == "" || h.Orchestrator.Owns(uuidToString(issue.ProjectID)):
+	case d.Target == "" || h.Orchestrator.Owns(uuidToString(issue.ProjectID.String)):
 		// pr_merge_status=none for orchestrated projects: the orchestrator
 		// merges and moves the issue itself, a webhook must not race it.
 		d.State = prAutoCompleteWorkspaceDisabled
@@ -234,10 +233,10 @@ func (h *Handler) decidePRAutoComplete(ctx context.Context, ws db.Workspace, iss
 // the status write is conditional on the status the decision saw, so
 // concurrent merges move the issue once. It starts no agent run: a merge is not
 // a person handing the issue to anyone.
-func (h *Handler) maybeAutoCompleteIssue(ctx context.Context, workspaceID, issueID pgtype.UUID, resolver *issuestatus.Resolver) {
+func (h *Handler) maybeAutoCompleteIssue(ctx context.Context, workspaceID, issueID string, resolver *issuestatus.Resolver) {
 	issue, err := h.Queries.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{ID: issueID, WorkspaceID: workspaceID})
 	if err != nil {
-		if !errors.Is(err, pgx.ErrNoRows) {
+		if !errors.Is(err, sql.ErrNoRows) {
 			slog.Warn("pr auto-complete: load issue failed", "err", err, "issue_id", uuidToString(issueID))
 		}
 		return
@@ -256,12 +255,12 @@ func (h *Handler) maybeAutoCompleteIssue(ctx context.Context, workspaceID, issue
 		return
 	}
 
-	tx, err := h.TxStarter.Begin(ctx)
+	tx, err := h.TxStarter.BeginTx(ctx, nil)
 	if err != nil {
 		slog.Warn("pr auto-complete: begin failed", "err", err)
 		return
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 	updated, err := qtx.MoveIssueFromPullRequests(ctx, db.MoveIssueFromPullRequestsParams{
 		ID:             issue.ID,
@@ -269,7 +268,7 @@ func (h *Handler) maybeAutoCompleteIssue(ctx context.Context, workspaceID, issue
 		TargetStatus:   d.Target,
 		ExpectedStatus: issue.Status,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		// Someone changed the status since the decision; their write wins.
 		return
 	}
@@ -279,7 +278,7 @@ func (h *Handler) maybeAutoCompleteIssue(ctx context.Context, workspaceID, issue
 		cancelledWakeups, err = service.StopClosedIssueWakeups(ctx, qtx, updated)
 	}
 	if err == nil {
-		err = tx.Commit(ctx)
+		err = tx.Commit()
 	}
 	if err != nil {
 		slog.Warn("pr auto-complete: status write failed", "err", err, "issue_id", uuidToString(issueID))
@@ -289,7 +288,7 @@ func (h *Handler) maybeAutoCompleteIssue(ctx context.Context, workspaceID, issue
 	// A merged PR is the most common way a sub-issue reaches done; the parent
 	// hears about it on the same path as a manual status change.
 	if updated.ParentIssueID.Valid {
-		h.processChildEvents(ctx, updated.ParentIssueID)
+		h.processChildEvents(ctx, updated.ParentIssueID.String)
 	}
 
 	prefix := h.getIssuePrefix(ctx, issue.WorkspaceID)
@@ -305,8 +304,8 @@ func (h *Handler) maybeAutoCompleteIssue(ctx context.Context, workspaceID, issue
 		"pull_requests":  prNumberList(d.PRs),
 		// Moving out of cancelled clears a duplicate mark (MUL-7349); carry
 		// both ends so the activity log and clients see the mark go.
-		"duplicate_of_issue_id":      liveDuplicateMark(updated.Status, updated.DuplicateOfIssueID),
-		"prev_duplicate_of_issue_id": liveDuplicateMark(issue.Status, issue.DuplicateOfIssueID),
+		"duplicate_of_issue_id":      liveDuplicateMark(updated.Status, updated.DuplicateOfIssueID.String),
+		"prev_duplicate_of_issue_id": liveDuplicateMark(issue.Status, issue.DuplicateOfIssueID.String),
 	})
 }
 
@@ -409,13 +408,13 @@ func normalizePullRequestURL(raw string) (string, bool) {
 
 // linkedPR is a PR resolved from either provider table.
 type linkedPR struct {
-	ID       pgtype.UUID
+	ID       string
 	Provider string // "github" or the VCS provider name
 	Number   int32
 	github   bool
 }
 
-func (h *Handler) findPullRequestForLink(ctx context.Context, workspaceID pgtype.UUID, req LinkIssuePullRequestRequest) (linkedPR, bool, error) {
+func (h *Handler) findPullRequestForLink(ctx context.Context, workspaceID string, req LinkIssuePullRequestRequest) (linkedPR, bool, error) {
 	if req.PullRequestID != "" {
 		id, err := util.ParseUUID(req.PullRequestID)
 		if err != nil {
@@ -428,27 +427,27 @@ func (h *Handler) findPullRequestForLink(ctx context.Context, workspaceID pgtype
 		return linkedPR{}, false, nil
 	}
 	if pr, err := h.Queries.FindGitHubPullRequestByURL(ctx, db.FindGitHubPullRequestByURLParams{WorkspaceID: workspaceID, HtmlUrl: normalized}); err == nil {
-		return linkedPR{ID: pr.ID, Provider: "github", Number: pr.PrNumber, github: true}, true, nil
-	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return linkedPR{ID: pr.ID, Provider: "github", Number: int32(pr.PrNumber), github: true}, true, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		return linkedPR{}, false, err
 	}
 	if pr, err := h.Queries.FindVCSPullRequestByURL(ctx, db.FindVCSPullRequestByURLParams{WorkspaceID: workspaceID, HtmlUrl: normalized}); err == nil {
-		return linkedPR{ID: pr.ID, Provider: pr.Provider, Number: pr.PrNumber}, true, nil
-	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return linkedPR{ID: pr.ID, Provider: pr.Provider, Number: int32(pr.PrNumber)}, true, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		return linkedPR{}, false, err
 	}
 	return linkedPR{}, false, nil
 }
 
-func (h *Handler) findPullRequestByID(ctx context.Context, workspaceID, id pgtype.UUID) (linkedPR, bool, error) {
+func (h *Handler) findPullRequestByID(ctx context.Context, workspaceID, id string) (linkedPR, bool, error) {
 	if pr, err := h.Queries.GetGitHubPullRequestInWorkspace(ctx, db.GetGitHubPullRequestInWorkspaceParams{ID: id, WorkspaceID: workspaceID}); err == nil {
-		return linkedPR{ID: pr.ID, Provider: "github", Number: pr.PrNumber, github: true}, true, nil
-	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return linkedPR{ID: pr.ID, Provider: "github", Number: int32(pr.PrNumber), github: true}, true, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		return linkedPR{}, false, err
 	}
 	if pr, err := h.Queries.GetVCSPullRequestInWorkspace(ctx, db.GetVCSPullRequestInWorkspaceParams{ID: id, WorkspaceID: workspaceID}); err == nil {
-		return linkedPR{ID: pr.ID, Provider: pr.Provider, Number: pr.PrNumber}, true, nil
-	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return linkedPR{ID: pr.ID, Provider: pr.Provider, Number: int32(pr.PrNumber)}, true, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		return linkedPR{}, false, err
 	}
 	return linkedPR{}, false, nil
@@ -488,18 +487,18 @@ func (h *Handler) LinkIssuePullRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	workspaceID := uuidToString(issue.WorkspaceID)
 	_, actorID := h.resolveActor(r, userID, workspaceID)
-	linkedBy := pgtype.UUID{}
+	linkedBy := ""
 	if parsed, err := util.ParseUUID(actorID); err == nil {
 		linkedBy = parsed
 	}
 	var rows int64
 	if pr.github {
 		rows, err = h.Queries.LinkIssueToPullRequestManually(r.Context(), db.LinkIssueToPullRequestManuallyParams{
-			IssueID: issue.ID, PullRequestID: pr.ID, LinkedByID: linkedBy,
+			IssueID: issue.ID, PullRequestID: pr.ID, LinkedByID: nullString(linkedBy),
 		})
 	} else {
 		rows, err = h.Queries.LinkIssueToVCSPullRequestManually(r.Context(), db.LinkIssueToVCSPullRequestManuallyParams{
-			IssueID: issue.ID, PullRequestID: pr.ID, LinkedByID: linkedBy,
+			IssueID: issue.ID, PullRequestID: pr.ID, LinkedByID: nullString(linkedBy),
 		})
 	}
 	if err == nil {
@@ -544,17 +543,17 @@ func (h *Handler) UnlinkIssuePullRequest(w http.ResponseWriter, r *http.Request)
 	}
 	workspaceID := uuidToString(issue.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	excludedBy := pgtype.UUID{}
+	excludedBy := ""
 	if parsed, err := util.ParseUUID(actorID); err == nil {
 		excludedBy = parsed
 	}
 
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to unlink pull request")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 	var rows int64
 	if pr.github {
@@ -568,11 +567,11 @@ func (h *Handler) UnlinkIssuePullRequest(w http.ResponseWriter, r *http.Request)
 			PullRequestID:  pr.ID,
 			WorkspaceID:    issue.WorkspaceID,
 			ExcludedByType: strToText(actorType),
-			ExcludedByID:   excludedBy,
+			ExcludedByID:   nullString(excludedBy),
 		})
 	}
 	if err == nil {
-		err = tx.Commit(r.Context())
+		err = tx.Commit()
 	}
 	if err != nil {
 		slog.Warn("unlink pull request failed", "err", err)
@@ -611,7 +610,7 @@ func (h *Handler) SetIssuePRAutoComplete(w http.ResponseWriter, r *http.Request)
 	}
 	workspaceID := uuidToString(issue.WorkspaceID)
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	actorUUID := pgtype.UUID{}
+	actorUUID := ""
 	if parsed, err := util.ParseUUID(actorID); err == nil {
 		actorUUID = parsed
 	}
@@ -620,9 +619,9 @@ func (h *Handler) SetIssuePRAutoComplete(w http.ResponseWriter, r *http.Request)
 		err = h.Queries.SetIssuePRAutoCompleteDisabled(r.Context(), db.SetIssuePRAutoCompleteDisabledParams{
 			IssueID:              issue.ID,
 			WorkspaceID:          issue.WorkspaceID,
-			AutoCompleteDisabled: *req.Disabled,
+			AutoCompleteDisabled: boolToInt64(*req.Disabled),
 			UpdatedByType:        strToText(actorType),
-			UpdatedByID:          actorUUID,
+			UpdatedByID:          nullString(actorUUID),
 		})
 	}
 	if err != nil {
@@ -642,11 +641,11 @@ func (h *Handler) recordPRAutoCompleteActivity(ctx context.Context, issue db.Iss
 	activity, err := h.Queries.CreateActivity(ctx, db.CreateActivityParams{
 		ID:          dbid.NewV7(),
 		WorkspaceID: issue.WorkspaceID,
-		IssueID:     issue.ID,
+		IssueID:     nullString(issue.ID),
 		ActorType:   strToText(actorType),
-		ActorID:     optionalActorUUID(actorID),
+		ActorID:     nullString(optionalActorUUID(actorID)),
 		Action:      "pr_auto_complete_changed",
-		Details:     details,
+		Details:     string(details),
 	})
 	if err != nil {
 		slog.Warn("record pr auto-complete activity failed", "err", err)
@@ -666,16 +665,16 @@ func (h *Handler) recordPRAutoCompleteActivity(ctx context.Context, issue db.Iss
 	})
 }
 
-func optionalActorUUID(id string) pgtype.UUID {
+func optionalActorUUID(id string) string {
 	parsed, err := util.ParseUUID(id)
 	if err != nil {
-		return pgtype.UUID{}
+		return ""
 	}
 	return parsed
 }
 
 // publishIssuePullRequestsChanged makes open issue pages refetch their PR list.
-func (h *Handler) publishIssuePullRequestsChanged(workspaceID string, issueID pgtype.UUID) {
+func (h *Handler) publishIssuePullRequestsChanged(workspaceID string, issueID string) {
 	h.publish(protocol.EventPullRequestUpdated, workspaceID, "system", "", map[string]any{
 		"issue_id":         uuidToString(issueID),
 		"linked_issue_ids": []string{uuidToString(issueID)},

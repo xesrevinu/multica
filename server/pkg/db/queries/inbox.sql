@@ -4,7 +4,7 @@ SELECT i.*,
        iss.priority AS issue_priority
 FROM inbox_item i
 LEFT JOIN issue iss ON iss.id = i.issue_id
-WHERE i.workspace_id = $1 AND i.recipient_type = $2 AND i.recipient_id = $3 AND i.archived = false
+WHERE i.workspace_id = ?1 AND i.recipient_type = ?2 AND i.recipient_id = ?3 AND i.archived = false
 ORDER BY i.created_at DESC;
 
 -- name: ListArchivedInboxItems :many
@@ -15,7 +15,7 @@ ORDER BY i.created_at DESC;
 -- issue-level, so a NEW notification on an already-archived issue leaves the
 -- old archived rows in place alongside the fresh active one. The issue belongs
 -- in the main inbox at that point, and the two lists must stay mutually
--- exclusive per issue group — otherwise the same issue renders in both. The
+-- exclusive per issue group - otherwise the same issue renders in both. The
 -- exclusion lives here rather than in the client so neither list depends on
 -- the other's cache being loaded. Items without an issue_id group on their own
 -- id and can never have an active sibling, hence the IS NULL short-circuit.
@@ -27,17 +27,17 @@ ORDER BY i.created_at DESC;
 -- renders plus, when different, the newest row carrying a comment anchor. The
 -- client already merges those two rows while deduplicating, preserving direct
 -- comment landing without sending every historical notification in the group.
--- Keep the materialized working set narrow: full row data is joined only for
+-- Keep the working set narrow: full row data is joined only for
 -- the final selected ids, not copied for every archived notification scanned.
-WITH eligible_archived AS MATERIALIZED (
+WITH eligible_archived AS (
     SELECT i.id,
            COALESCE(i.issue_id, i.id) AS group_id,
            i.created_at,
            i.details
     FROM inbox_item i
-    WHERE i.workspace_id = $1
-      AND i.recipient_type = $2
-      AND i.recipient_id = $3
+    WHERE i.workspace_id = ?1
+      AND i.recipient_type = ?2
+      AND i.recipient_id = ?3
       AND i.archived = true
       AND (i.issue_id IS NULL OR NOT EXISTS (
           SELECT 1
@@ -49,25 +49,34 @@ WITH eligible_archived AS MATERIALIZED (
             AND active.archived = false
       ))
 ), newest_groups AS (
-    SELECT DISTINCT ON (group_id)
-           group_id,
-           id AS newest_id,
-           created_at AS newest_created_at
-    FROM eligible_archived
-    ORDER BY group_id, created_at DESC, id DESC
+    SELECT group_id, newest_id, newest_created_at
+    FROM (
+        SELECT group_id,
+               id AS newest_id,
+               created_at AS newest_created_at,
+               row_number() OVER (PARTITION BY group_id ORDER BY created_at DESC, id DESC) AS rn
+        FROM eligible_archived
+    )
+    WHERE rn = 1
 ), limited_groups AS (
     SELECT group_id, newest_id
     FROM newest_groups
     ORDER BY newest_created_at DESC, newest_id DESC
     LIMIT 200
 ), comment_anchors AS (
-    SELECT DISTINCT ON (archived.group_id)
-           archived.group_id,
-           archived.id
-    FROM eligible_archived archived
-    JOIN limited_groups selected USING (group_id)
-    WHERE NULLIF(archived.details->>'comment_id', '') IS NOT NULL
-    ORDER BY archived.group_id, archived.created_at DESC, archived.id DESC
+    SELECT group_id, id
+    FROM (
+        SELECT archived.group_id,
+               archived.id,
+               row_number() OVER (
+                   PARTITION BY archived.group_id
+                   ORDER BY archived.created_at DESC, archived.id DESC
+               ) AS rn
+        FROM eligible_archived archived
+        JOIN limited_groups selected USING (group_id)
+        WHERE NULLIF(json_extract(archived.details, '$.comment_id'), '') IS NOT NULL
+    )
+    WHERE rn = 1
 ), selected_ids AS (
     SELECT newest_id AS id FROM limited_groups
     UNION
@@ -83,11 +92,11 @@ ORDER BY i.created_at DESC, i.id DESC;
 
 -- name: GetInboxItem :one
 SELECT * FROM inbox_item
-WHERE id = $1;
+WHERE id = ?1;
 
 -- name: GetInboxItemInWorkspace :one
 SELECT * FROM inbox_item
-WHERE id = $1 AND workspace_id = $2;
+WHERE id = ?1 AND workspace_id = ?2;
 
 -- name: CreateInboxItem :one
 -- A missing recipient is a quiet skip (pgx.ErrNoRows), not a delivery failure.
@@ -97,17 +106,20 @@ INSERT INTO inbox_item (
     type, severity, issue_id, title, body,
     actor_type, actor_id, details, id
 )
-SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE(sqlc.narg('id')::uuid, gen_random_uuid())
-WHERE ($2::text = 'member' AND EXISTS (
-    SELECT 1 FROM member WHERE workspace_id = $1 AND user_id = $3
-)) OR ($2::text = 'agent' AND EXISTS (
-    SELECT 1 FROM agent WHERE workspace_id = $1 AND id = $3
+SELECT ?1 AS workspace_id, ?2 AS recipient_type, ?3 AS recipient_id,
+       ?4 AS type, ?5 AS severity, ?6 AS issue_id, ?7 AS title, ?8 AS body,
+       ?9 AS actor_type, ?10 AS actor_id, ?11 AS details,
+       COALESCE(sqlc.narg('id'), gen_random_uuid()) AS id
+WHERE (?2 = 'member' AND EXISTS (
+    SELECT 1 FROM member WHERE workspace_id = ?1 AND user_id = ?3
+)) OR (?2 = 'agent' AND EXISTS (
+    SELECT 1 FROM agent WHERE workspace_id = ?1 AND id = ?3
 ))
 RETURNING *;
 
 -- name: MarkInboxRead :one
 UPDATE inbox_item SET read = true
-WHERE id = $1
+WHERE id = ?1
 RETURNING *;
 
 -- name: MarkInboxUnread :one
@@ -118,24 +130,24 @@ RETURNING *;
 -- inflate CountUnreadInbox (which counts raw rows), while changing nothing the
 -- UI shows.
 UPDATE inbox_item SET read = false
-WHERE id = $1
+WHERE id = ?1
 RETURNING *;
 
 -- name: ArchiveInboxItem :one
 UPDATE inbox_item SET archived = true
-WHERE id = $1
+WHERE id = ?1
 RETURNING *;
 
 -- name: ArchiveInboxByIssue :execrows
 UPDATE inbox_item SET archived = true
-WHERE workspace_id = $1 AND recipient_type = $2 AND recipient_id = $3 AND issue_id = $4 AND archived = false;
+WHERE workspace_id = ?1 AND recipient_type = ?2 AND recipient_id = ?3 AND issue_id = ?4 AND archived = false;
 
 -- name: UnarchiveInboxItem :one
 -- Deliberately does not touch `read`: unarchiving restores an item to the main
 -- inbox in the exact read/unread state it was archived in, so restoring an
 -- unread item legitimately raises the unread badge again (MUL-3736).
 UPDATE inbox_item SET archived = false
-WHERE id = $1
+WHERE id = ?1
 RETURNING *;
 
 -- name: UnarchiveInboxByIssue :execrows
@@ -143,16 +155,16 @@ RETURNING *;
 -- archives every sibling for the same issue, so unarchiving must bring the
 -- whole group back. Leaves `read` untouched for the same reason as above.
 UPDATE inbox_item SET archived = false
-WHERE workspace_id = $1 AND recipient_type = $2 AND recipient_id = $3 AND issue_id = $4 AND archived = true;
+WHERE workspace_id = ?1 AND recipient_type = ?2 AND recipient_id = ?3 AND issue_id = ?4 AND archived = true;
 
 -- name: ArchiveInboxByIssueAndType :many
 UPDATE inbox_item SET archived = true
-WHERE workspace_id = $1 AND issue_id = $2 AND type = $3 AND archived = false
+WHERE workspace_id = ?1 AND issue_id = ?2 AND type = ?3 AND archived = false
 RETURNING recipient_type, recipient_id;
 
 -- name: CountUnreadInbox :one
 SELECT count(*) FROM inbox_item
-WHERE workspace_id = $1 AND recipient_type = $2 AND recipient_id = $3 AND read = false AND archived = false;
+WHERE workspace_id = ?1 AND recipient_type = ?2 AND recipient_id = ?3 AND read = false AND archived = false;
 
 -- name: CountUnreadInboxByWorkspace :many
 -- Per-workspace unread inbox counts for a recipient member, matching the
@@ -167,25 +179,31 @@ WHERE workspace_id = $1 AND recipient_type = $2 AND recipient_id = $3 AND read =
 -- light the dot.
 SELECT newest.workspace_id, count(*) AS count
 FROM (
-    SELECT DISTINCT ON (i.workspace_id, COALESCE(i.issue_id, i.id))
-        i.workspace_id, i.read
-    FROM inbox_item i
-    JOIN member m ON m.workspace_id = i.workspace_id AND m.user_id = i.recipient_id
-    WHERE i.recipient_type = 'member'
-      AND i.recipient_id = $1
-      AND i.archived = false
-    ORDER BY i.workspace_id, COALESCE(i.issue_id, i.id), i.created_at DESC
+    SELECT workspace_id, read
+    FROM (
+        SELECT i.workspace_id, i.read,
+               row_number() OVER (
+                   PARTITION BY i.workspace_id, COALESCE(i.issue_id, i.id)
+                   ORDER BY i.created_at DESC
+               ) AS rn
+        FROM inbox_item i
+        JOIN member m ON m.workspace_id = i.workspace_id AND m.user_id = i.recipient_id
+        WHERE i.recipient_type = 'member'
+          AND i.recipient_id = ?1
+          AND i.archived = false
+    )
+    WHERE rn = 1
 ) newest
 WHERE newest.read = false
 GROUP BY newest.workspace_id;
 
 -- name: MarkAllInboxRead :execrows
 UPDATE inbox_item SET read = true
-WHERE workspace_id = $1 AND recipient_type = 'member' AND recipient_id = $2 AND archived = false AND read = false;
+WHERE workspace_id = ?1 AND recipient_type = 'member' AND recipient_id = ?2 AND archived = false AND read = false;
 
 -- name: ArchiveAllInbox :execrows
 UPDATE inbox_item SET archived = true
-WHERE workspace_id = $1 AND recipient_type = 'member' AND recipient_id = $2 AND archived = false;
+WHERE workspace_id = ?1 AND recipient_type = 'member' AND recipient_id = ?2 AND archived = false;
 
 -- name: ArchiveAllReadInbox :execrows
 -- "Read" is the state of the one issue row the inbox renders: the newest
@@ -194,33 +212,39 @@ WHERE workspace_id = $1 AND recipient_type = 'member' AND recipient_id = $2 AND 
 -- read rows instead makes an older unread sibling reappear after the newest
 -- row is archived (and can archive an older read sibling under an unread row).
 WITH newest_groups AS (
-    SELECT DISTINCT ON (COALESCE(i.issue_id, i.id))
-           COALESCE(i.issue_id, i.id) AS group_id,
-           i.read
-    FROM inbox_item i
-    WHERE i.workspace_id = $1
-      AND i.recipient_type = 'member'
-      AND i.recipient_id = $2
-      AND i.archived = false
-    ORDER BY COALESCE(i.issue_id, i.id), i.created_at DESC, i.id DESC
+    SELECT group_id, read
+    FROM (
+        SELECT COALESCE(i.issue_id, i.id) AS group_id,
+               i.read AS read,
+               row_number() OVER (
+                   PARTITION BY COALESCE(i.issue_id, i.id)
+                   ORDER BY i.created_at DESC, i.id DESC
+               ) AS rn
+        FROM inbox_item i
+        WHERE i.workspace_id = ?1
+          AND i.recipient_type = 'member'
+          AND i.recipient_id = ?2
+          AND i.archived = false
+    ) grouped
+    WHERE rn = 1
 ), read_groups AS (
     SELECT group_id
     FROM newest_groups
     WHERE read = true
 )
-UPDATE inbox_item i SET archived = true
-FROM read_groups selected
-WHERE i.workspace_id = $1
+UPDATE inbox_item AS i
+SET archived = true
+WHERE i.workspace_id = ?1
   AND i.recipient_type = 'member'
-  AND i.recipient_id = $2
+  AND i.recipient_id = ?2
   AND i.archived = false
-  AND COALESCE(i.issue_id, i.id) = selected.group_id;
+  AND COALESCE(i.issue_id, i.id) IN (SELECT group_id FROM read_groups);
 
 -- name: ArchiveCompletedInbox :execrows
-UPDATE inbox_item i SET archived = true
-WHERE i.workspace_id = $1 AND i.recipient_type = 'member' AND i.recipient_id = $2 AND i.archived = false
+UPDATE inbox_item AS i SET archived = true
+WHERE i.workspace_id = ?1 AND i.recipient_type = 'member' AND i.recipient_id = ?2 AND i.archived = false
   AND i.issue_id IN (
     SELECT id FROM issue
-    WHERE workspace_id = $1
-      AND status = ANY(sqlc.arg('terminal_status_keys')::text[])
+    WHERE workspace_id = ?1
+      AND status IN (SELECT value FROM json_each(sqlc.arg('terminal_status_keys')))
   );

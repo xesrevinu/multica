@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -13,7 +12,7 @@ import (
 
 // wakeWaitingRun queues an ordinary run of the agent on the issue that runs
 // as runAs, like an assignment or a comment would.
-func wakeWaitingRun(t *testing.T, f principalFixture, issue pgtype.UUID, agent, runAs string) string {
+func wakeWaitingRun(t *testing.T, f principalFixture, issue string, agent, runAs string) string {
 	t.Helper()
 	return f.Task(t, agent, testutil.Cols{"issue_id": issue, "runtime_id": testutil.Raw("(SELECT runtime_id FROM agent WHERE id='" + agent + "')"),
 		"originator_user_id": runAs, "accountable_user_id": runAs})
@@ -77,7 +76,7 @@ func TestJoinedWakeupCountsTowardTheCap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Enabled || got.PausedReason.String != wakeupPausedMaxFires || got.FireCount != 1 {
+	if (got.Enabled != 0) || got.PausedReason.String != wakeupPausedMaxFires || got.FireCount != 1 {
 		t.Fatalf("after joining once with max_fires=1: enabled=%t paused=%q fire_count=%d", got.Enabled, got.PausedReason.String, got.FireCount)
 	}
 }
@@ -89,16 +88,16 @@ func TestTurnedOffWakeupHandsNothingOver(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		afterClaim bool
-		off        func(*IssueWakeupService, pgtype.UUID, db.IssueWakeup, pgtype.UUID) error
+		off        func(*IssueWakeupService, string, db.IssueWakeup, string) error
 	}{
-		{"deleted before the claim", false, func(s *IssueWakeupService, issue pgtype.UUID, w db.IssueWakeup, member pgtype.UUID) error {
+		{"deleted before the claim", false, func(s *IssueWakeupService, issue string, w db.IssueWakeup, member string) error {
 			return s.Delete(ctx, issue, w.ID, member)
 		}},
-		{"turned off before the claim", false, func(s *IssueWakeupService, issue pgtype.UUID, w db.IssueWakeup, member pgtype.UUID) error {
+		{"turned off before the claim", false, func(s *IssueWakeupService, issue string, w db.IssueWakeup, member string) error {
 			_, err := s.Disable(ctx, issue, w.ID, member)
 			return err
 		}},
-		{"turned off before a repeated claim", true, func(s *IssueWakeupService, issue pgtype.UUID, w db.IssueWakeup, member pgtype.UUID) error {
+		{"turned off before a repeated claim", true, func(s *IssueWakeupService, issue string, w db.IssueWakeup, member string) error {
 			_, err := s.Disable(ctx, issue, w.ID, member)
 			return err
 		}},
@@ -168,7 +167,7 @@ func TestWakeupJoinsOnlyRunsOfTheSamePerson(t *testing.T) {
 	f, s, issue, agent := conditionFixture(t)
 	invocableByWorkspace(t, f, agent)
 	other := f.member(t, "wake-other")
-	w, err := s.Create(context.Background(), issue, parseTestUUID(t, other), pgtype.UUID{}, WakeupInput{AgentID: agent, Kind: "event", EventTypes: []string{"comment.created"}, Instruction: "Other member's instruction"})
+	w, err := s.Create(context.Background(), issue, parseTestUUID(t, other), "", WakeupInput{AgentID: agent, Kind: "event", EventTypes: []string{"comment.created"}, Instruction: "Other member's instruction"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +187,7 @@ func TestJoinRechecksTheCreatorsAccess(t *testing.T) {
 	f, s, issue, agent := conditionFixture(t)
 	invocableByWorkspace(t, f, agent)
 	other := f.member(t, "wake-revoked")
-	w, err := s.Create(context.Background(), issue, parseTestUUID(t, other), pgtype.UUID{}, WakeupInput{AgentID: agent, Kind: "event", EventTypes: []string{"comment.created"}, Instruction: "Check access"})
+	w, err := s.Create(context.Background(), issue, parseTestUUID(t, other), "", WakeupInput{AgentID: agent, Kind: "event", EventTypes: []string{"comment.created"}, Instruction: "Check access"})
 	if err != nil {
 		t.Fatal(err)
 	}

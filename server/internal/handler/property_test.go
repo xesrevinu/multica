@@ -22,7 +22,7 @@ import (
 
 func makePropertyDef(propType string, options []PropertyOption) db.IssueProperty {
 	cfg, _ := json.Marshal(PropertyConfig{Options: options})
-	return db.IssueProperty{Type: propType, Config: cfg}
+	return db.IssueProperty{Type: propType, Config: string(cfg)}
 }
 
 // withIssuePropertyParams sets both chi URL params in one route context —

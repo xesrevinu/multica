@@ -7,12 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/plugincontract"
 )
 
-func testInstallationID(t *testing.T) pgtype.UUID {
+func testInstallationID(t *testing.T) string {
 	t.Helper()
 	parsed, err := parseUUIDValue("11111111-1111-4111-8111-111111111111")
 	if err != nil {
@@ -159,7 +158,7 @@ func TestScheduledHookBodyExtendsVersionOneProtocol(t *testing.T) {
 		Trigger:    plugincontract.TriggerSchedule,
 		Actor:      HookActor{Type: "plugin", ID: installationID},
 		DeliveryID: "psd_stable",
-		PlannedAt:  pgtype.Timestamptz{Time: plannedAt, Valid: true},
+		PlannedAt:  nullTime(plannedAt, true),
 		Attempt:    2,
 	})
 	if err != nil {
@@ -179,7 +178,7 @@ func TestScheduledHookBodyExtendsVersionOneProtocol(t *testing.T) {
 	}
 }
 
-func parseUUIDValueForTest(t *testing.T, value string) pgtype.UUID {
+func parseUUIDValueForTest(t *testing.T, value string) string {
 	t.Helper()
 	parsed, err := parseUUIDValue(value)
 	if err != nil {

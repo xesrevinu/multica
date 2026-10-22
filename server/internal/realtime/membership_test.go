@@ -162,12 +162,6 @@ func TestMembershipRemovalAcrossHubsAndScopes(t *testing.T) {
 	wantMembershipFrame(t, otherWS, "issue:updated")
 }
 
-type failedMembershipPublisher struct{}
-
-func (failedMembershipPublisher) PublishWithID(string, string, string, []byte, string) error {
-	return errors.New("relay unavailable")
-}
-
 func TestMembershipRelayFailureAndLookupError(t *testing.T) {
 	for _, lookupError := range []bool{false, true} {
 		t.Run(map[bool]string{false: "revoked", true: "database unavailable"}[lookupError], func(t *testing.T) {
@@ -186,7 +180,7 @@ func TestMembershipRelayFailureAndLookupError(t *testing.T) {
 			failed.Store(true)
 			// The remote node processes a new local event while the removal
 			// signal is missing and Redis publication also fails.
-			NewDualWriteBroadcaster(hub, failedMembershipPublisher{}).BroadcastToWorkspace(testWorkspaceID, []byte(`{"type":"issue:updated"}`))
+			hub.BroadcastToWorkspace(testWorkspaceID, []byte(`{"type":"issue:updated"}`))
 			wantMembershipClosed(t, conn)
 		})
 	}

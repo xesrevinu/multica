@@ -62,7 +62,7 @@ WHERE seat_capacity_outbox.action IN (
 RETURNING *;
 
 -- name: GetSeatCapacityIntent :one
-SELECT * FROM seat_capacity_outbox WHERE operation_token = $1;
+SELECT * FROM seat_capacity_outbox WHERE operation_token = ?1;
 
 -- name: GetClaimedSeatCapacityIntent :one
 SELECT * FROM seat_capacity_outbox
@@ -99,8 +99,8 @@ RETURNING *;
 
 -- name: GetMemberReleaseCapacityIntent :one
 SELECT * FROM seat_capacity_outbox
-WHERE workspace_id = $1
-  AND member_id = $2
+WHERE workspace_id = ?1
+  AND member_id = ?2
   AND action = 'release_member'
 ORDER BY created_at DESC
 LIMIT 1;
@@ -135,7 +135,9 @@ INSERT INTO seat_capacity_outbox (
     workspace_id, operation_token, action, subject_id, invitation_id,
     next_attempt_at
 )
-SELECT invitation.workspace_id, invitation.id, 'release', invitation.id, invitation.id, now()
+SELECT invitation.workspace_id AS workspace_id, invitation.id AS operation_token,
+       'release' AS release_action, invitation.id AS subject_id, invitation.id AS invitation_id,
+       now() AS next_attempt_at
 FROM workspace_invitation AS invitation
 WHERE invitation.workspace_id = sqlc.arg('workspace_id')
   AND invitation.status = 'pending'
@@ -157,7 +159,8 @@ WHERE seat_capacity_outbox.action IN (
 INSERT INTO seat_capacity_outbox (
     workspace_id, operation_token, action, member_id, next_attempt_at
 )
-SELECT m.workspace_id, gen_random_uuid(), 'release_member', m.id, now()
+SELECT m.workspace_id AS workspace_id, gen_random_uuid() AS operation_token,
+       'release_member' AS release_action, m.id AS member_id, now() AS next_attempt_at
 FROM member AS m
 WHERE m.workspace_id = sqlc.arg('workspace_id')
   AND NOT EXISTS (
@@ -175,16 +178,14 @@ WITH due AS (
     WHERE dead_lettered_at IS NULL
       AND next_attempt_at <= now()
     ORDER BY next_attempt_at, created_at
-    FOR UPDATE SKIP LOCKED
     LIMIT 1
 )
-UPDATE seat_capacity_outbox AS outbox
+UPDATE seat_capacity_outbox
 SET next_attempt_at = sqlc.arg('lease_until'),
     lease_token = gen_random_uuid(),
     updated_at = now()
-FROM due
-WHERE outbox.operation_token = due.operation_token
-RETURNING outbox.*;
+WHERE operation_token = (SELECT operation_token FROM due)
+RETURNING *;
 
 -- name: MarkSeatCapacityIntentDelivered :exec
 UPDATE seat_capacity_outbox
@@ -193,12 +194,12 @@ SET delivered_at = now(),
     lease_token = NULL,
     last_error = NULL,
     updated_at = now()
-WHERE operation_token = $1 AND action = $2;
+WHERE operation_token = ?1 AND action = ?2;
 
 -- name: MarkSeatCapacityIntentFailed :exec
 UPDATE seat_capacity_outbox
 SET attempt_count = attempt_count + 1,
-    last_error = left(sqlc.arg('last_error'), 1000),
+    last_error = substr(sqlc.arg('last_error'), 1, 1000),
     next_attempt_at = sqlc.arg('next_attempt_at'),
     lease_token = NULL,
     updated_at = now()
@@ -207,7 +208,7 @@ WHERE operation_token = sqlc.arg('operation_token') AND action = sqlc.arg('actio
 -- name: MarkClaimedSeatCapacityIntentDeadLettered :execrows
 UPDATE seat_capacity_outbox
 SET attempt_count = attempt_count + 1,
-    last_error = left(sqlc.arg('last_error'), 1000),
+    last_error = substr(sqlc.arg('last_error'), 1, 1000),
     dead_lettered_at = now(),
     lease_token = NULL,
     updated_at = now()
@@ -248,7 +249,7 @@ WHERE operation_token = sqlc.arg('operation_token')
 -- name: MarkClaimedSeatCapacityIntentFailed :execrows
 UPDATE seat_capacity_outbox
 SET attempt_count = attempt_count + 1,
-    last_error = left(sqlc.arg('last_error'), 1000),
+    last_error = substr(sqlc.arg('last_error'), 1, 1000),
     next_attempt_at = sqlc.arg('next_attempt_at'),
     lease_token = NULL,
     updated_at = now()
@@ -258,7 +259,7 @@ WHERE operation_token = sqlc.arg('operation_token')
 
 -- name: DeferClaimedSeatCapacityIntent :execrows
 UPDATE seat_capacity_outbox
-SET last_error = left(sqlc.arg('last_error'), 1000),
+SET last_error = substr(sqlc.arg('last_error'), 1, 1000),
     next_attempt_at = sqlc.arg('next_attempt_at'),
     lease_token = NULL,
     updated_at = now()
@@ -269,7 +270,7 @@ WHERE operation_token = sqlc.arg('operation_token')
 
 -- name: DeleteSeatCapacityIntentForAction :exec
 DELETE FROM seat_capacity_outbox
-WHERE operation_token = $1 AND action = $2;
+WHERE operation_token = ?1 AND action = ?2;
 
 -- name: DeleteClaimedSeatCapacityIntent :execrows
 DELETE FROM seat_capacity_outbox
@@ -280,4 +281,4 @@ WHERE operation_token = sqlc.arg('operation_token')
 -- name: ExpireInvitationForCapacityRecovery :exec
 UPDATE workspace_invitation
 SET status = 'expired', updated_at = now()
-WHERE id = $1 AND status = 'pending';
+WHERE id = ?1 AND status = 'pending';

@@ -15,7 +15,7 @@ import (
 func TestIssueWakeupLargeSingleFactPreservesReferences(t *testing.T) {
 	payload, _ := json.Marshal(map[string]any{"comment_id": "source-comment", "changed_fields": strings.Repeat("字段", 20000)})
 	w := db.IssueWakeup{Instruction: strings.Repeat("指", 4000)}
-	note, _ := mergeWakeupEvidence(w, db.AgentTaskQueue{}, []db.IssueWakeupReceipt{{EventType: "comment.updated", Payload: payload}})
+	note, _ := mergeWakeupEvidence(w, db.AgentTaskQueue{}, []db.IssueWakeupReceipt{{EventType: "comment.updated", Payload: string(payload)}})
 	if len(note) > wakeupNoteLimit || !utf8.ValidString(note) || !strings.Contains(note, w.Instruction) || !strings.Contains(note, "source-comment") || !strings.Contains(note, wakeupOmittedEvidence) {
 		t.Fatalf("oversized fact not safely condensed: %d bytes", len(note))
 	}
@@ -47,7 +47,7 @@ func TestIssueWakeupOversizedPendingEvidenceStillConsumesInputs(t *testing.T) {
 	w := wakeCreate(t, f, s, issue, WakeupInput{AgentID: agent, Kind: "event", Mode: "continuous", EventTypes: []string{"comment.created"}, Instruction: "Keep this instruction"})
 	f.Comment(t, util.UUIDToString(issue), "first")
 	wakeDispatch(t, s, w)
-	task, err := f.q.FindPendingWakeupTask(context.Background(), util.UUIDToString(w.ID))
+	task, err := f.q.FindPendingWakeupTask(context.Background(), nullString(util.UUIDToString(w.ID)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestIssueWakeupDispatchedWaitIsObservableAndResumes(t *testing.T) {
 	w := wakeCreate(t, f, s, issue, WakeupInput{AgentID: agent, Kind: "event", Mode: "continuous", EventTypes: []string{"comment.created"}, Instruction: "Wait for input"})
 	f.Comment(t, util.UUIDToString(issue), "first")
 	wakeDispatch(t, s, w)
-	task, err := f.q.FindPendingWakeupTask(context.Background(), util.UUIDToString(w.ID))
+	task, err := f.q.FindPendingWakeupTask(context.Background(), nullString(util.UUIDToString(w.ID)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestIssueWakeupDispatchedWaitIsObservableAndResumes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.LastError.Valid || got.LastTaskID == task.ID {
+	if got.LastError.Valid || got.LastTaskID.String == task.ID {
 		t.Fatal("did not resume/clear error after start")
 	}
 	if n := f.Count(t, "SELECT count(*) FROM issue_wakeup_receipt WHERE wakeup_id=$1 AND processed_at IS NULL", w.ID); n != 0 {

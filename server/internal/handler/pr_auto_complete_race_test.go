@@ -2,10 +2,10 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -16,7 +16,7 @@ type hookedTxStarter struct {
 	hook func() error
 }
 
-func (h hookedTxStarter) Begin(ctx context.Context) (pgx.Tx, error) {
+func (h hookedTxStarter) BeginTx(ctx context.Context, _ *sql.TxOptions) (*sql.Tx, error) {
 	if err := h.hook(); err != nil {
 		return nil, err
 	}

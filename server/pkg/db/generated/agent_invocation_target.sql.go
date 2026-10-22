@@ -7,23 +7,22 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const createAgentInvocationTarget = `-- name: CreateAgentInvocationTarget :exec
 INSERT INTO agent_invocation_target (agent_id, target_type, target_id, created_by)
-VALUES ($1, $2, $3, $4)
+VALUES (?1, ?2, ?3, ?4)
 ON CONFLICT (agent_id, target_type, target_id) DO UPDATE SET
     created_by = EXCLUDED.created_by,
     created_at = now()
 `
 
 type CreateAgentInvocationTargetParams struct {
-	AgentID    pgtype.UUID `json:"agent_id"`
-	TargetType string      `json:"target_type"`
-	TargetID   pgtype.UUID `json:"target_id"`
-	CreatedBy  pgtype.UUID `json:"created_by"`
+	AgentID    string         `json:"agent_id"`
+	TargetType string         `json:"target_type"`
+	TargetID   string         `json:"target_id"`
+	CreatedBy  sql.NullString `json:"created_by"`
 }
 
 // Idempotent upsert: re-adding an existing (agent, target_type, target)
@@ -31,7 +30,7 @@ type CreateAgentInvocationTargetParams struct {
 // whole set via DeleteAgentInvocationTargets + a series of these, so the
 // ON CONFLICT is belt-and-suspenders against races.
 func (q *Queries) CreateAgentInvocationTarget(ctx context.Context, arg CreateAgentInvocationTargetParams) error {
-	_, err := q.db.Exec(ctx, createAgentInvocationTarget,
+	_, err := q.db.ExecContext(ctx, createAgentInvocationTarget,
 		arg.AgentID,
 		arg.TargetType,
 		arg.TargetID,
@@ -42,29 +41,29 @@ func (q *Queries) CreateAgentInvocationTarget(ctx context.Context, arg CreateAge
 
 const deleteAgentInvocationTargets = `-- name: DeleteAgentInvocationTargets :exec
 DELETE FROM agent_invocation_target
-WHERE agent_id = $1
+WHERE agent_id = ?1
 `
 
 // Clears every target for an agent. Used before re-writing the allow-list so
 // the update is a wholesale replace, matching the composio_toolkit_allowlist
 // write model.
-func (q *Queries) DeleteAgentInvocationTargets(ctx context.Context, agentID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteAgentInvocationTargets, agentID)
+func (q *Queries) DeleteAgentInvocationTargets(ctx context.Context, agentID string) error {
+	_, err := q.db.ExecContext(ctx, deleteAgentInvocationTargets, agentID)
 	return err
 }
 
 const deleteAgentInvocationTargetsByMember = `-- name: DeleteAgentInvocationTargetsByMember :exec
-DELETE FROM agent_invocation_target ait
-USING agent a
-WHERE ait.agent_id = a.id
-  AND a.workspace_id = $1
-  AND ait.target_type = 'member'
-  AND ait.target_id = $2
+DELETE FROM agent_invocation_target
+WHERE target_type = 'member'
+  AND target_id = ?1
+  AND agent_id IN (
+    SELECT a.id FROM agent a WHERE a.workspace_id = ?2
+  )
 `
 
 type DeleteAgentInvocationTargetsByMemberParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	TargetID    pgtype.UUID `json:"target_id"`
+	TargetID    string `json:"target_id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // Removes member-target grants pointing at a leaving user, SCOPED to a single
@@ -73,14 +72,14 @@ type DeleteAgentInvocationTargetsByMemberParams struct {
 // through agent (agent_invocation_target has no workspace_id column and no FK)
 // to bound the delete to @workspace_id.
 func (q *Queries) DeleteAgentInvocationTargetsByMember(ctx context.Context, arg DeleteAgentInvocationTargetsByMemberParams) error {
-	_, err := q.db.Exec(ctx, deleteAgentInvocationTargetsByMember, arg.WorkspaceID, arg.TargetID)
+	_, err := q.db.ExecContext(ctx, deleteAgentInvocationTargetsByMember, arg.TargetID, arg.WorkspaceID)
 	return err
 }
 
 const deleteAgentInvocationTargetsBySystemRuntimeAgents = `-- name: DeleteAgentInvocationTargetsBySystemRuntimeAgents :exec
 DELETE FROM agent_invocation_target
 WHERE agent_id IN (
-    SELECT id FROM agent WHERE runtime_id = $1 AND kind = 'system'
+    SELECT id FROM agent WHERE runtime_id = ?1 AND kind = 'system'
 )
 `
 
@@ -94,22 +93,22 @@ WHERE agent_id IN (
 // with their runtime (they are unbound and keep their configuration), so
 // clearing THEIR invocation targets here would silently strip a surviving
 // agent's allow-list.
-func (q *Queries) DeleteAgentInvocationTargetsBySystemRuntimeAgents(ctx context.Context, runtimeID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteAgentInvocationTargetsBySystemRuntimeAgents, runtimeID)
+func (q *Queries) DeleteAgentInvocationTargetsBySystemRuntimeAgents(ctx context.Context, runtimeID sql.NullString) error {
+	_, err := q.db.ExecContext(ctx, deleteAgentInvocationTargetsBySystemRuntimeAgents, runtimeID)
 	return err
 }
 
 const listAgentInvocationTargets = `-- name: ListAgentInvocationTargets :many
 
 SELECT id, agent_id, target_type, target_id, created_by, created_at FROM agent_invocation_target
-WHERE agent_id = $1
+WHERE agent_id = ?1
 ORDER BY target_type ASC, created_at ASC
 `
 
 // Agent invocation permission targets (MUL-3963). Rows are the allow-list for
 // agents whose permission_mode = 'public_to'. See migration 130.
-func (q *Queries) ListAgentInvocationTargets(ctx context.Context, agentID pgtype.UUID) ([]AgentInvocationTarget, error) {
-	rows, err := q.db.Query(ctx, listAgentInvocationTargets, agentID)
+func (q *Queries) ListAgentInvocationTargets(ctx context.Context, agentID string) ([]AgentInvocationTarget, error) {
+	rows, err := q.db.QueryContext(ctx, listAgentInvocationTargets, agentID)
 	if err != nil {
 		return nil, err
 	}
@@ -128,6 +127,9 @@ func (q *Queries) ListAgentInvocationTargets(ctx context.Context, agentID pgtype
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -137,13 +139,13 @@ func (q *Queries) ListAgentInvocationTargets(ctx context.Context, agentID pgtype
 
 const listAgentInvocationTargetsByAgentIDs = `-- name: ListAgentInvocationTargetsByAgentIDs :many
 SELECT id, agent_id, target_type, target_id, created_by, created_at FROM agent_invocation_target
-WHERE agent_id = ANY($1::uuid[])
+WHERE agent_id IN (SELECT value FROM json_each(?1))
 ORDER BY agent_id, target_type ASC, created_at ASC
 `
 
 // Batch load for the agent list endpoint so we don't N+1 per agent.
-func (q *Queries) ListAgentInvocationTargetsByAgentIDs(ctx context.Context, agentIds []pgtype.UUID) ([]AgentInvocationTarget, error) {
-	rows, err := q.db.Query(ctx, listAgentInvocationTargetsByAgentIDs, agentIds)
+func (q *Queries) ListAgentInvocationTargetsByAgentIDs(ctx context.Context, agentIds interface{}) ([]AgentInvocationTarget, error) {
+	rows, err := q.db.QueryContext(ctx, listAgentInvocationTargetsByAgentIDs, agentIds)
 	if err != nil {
 		return nil, err
 	}
@@ -162,6 +164,9 @@ func (q *Queries) ListAgentInvocationTargetsByAgentIDs(ctx context.Context, agen
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

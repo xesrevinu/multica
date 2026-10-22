@@ -8,14 +8,32 @@ import (
 	"strings"
 	"time"
 
+	"database/sql"
+
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-func uuidToString(u pgtype.UUID) string { return util.UUIDToString(u) }
+func uuidToString(u string) string { return util.UUIDToString(u) }
+
+func parseDBTime(s string) time.Time {
+	return nullDBTime(sql.NullString{String: s, Valid: s != ""})
+}
+
+func nullDBTime(v sql.NullString) time.Time {
+	if !v.Valid || v.String == "" {
+		return time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339Nano, v.String); err == nil {
+		return t
+	}
+	if t, err := time.Parse(time.RFC3339, v.String); err == nil {
+		return t
+	}
+	return time.Time{}
+}
 
 func rejectTemporarilyDisabledUser(w http.ResponseWriter, r *http.Request, userID, email, authPath string) bool {
 	if !auth.IsTemporarilyDisabledUser(userID, email) {
@@ -234,10 +252,7 @@ func Auth(queries *db.Queries, patCache *auth.PATCache, cloudPAT *auth.CloudPATV
 				// Clamp cache TTL to the token's remaining lifetime so a
 				// PAT expiring in <AuthCacheTTL can't continue passing
 				// auth on a cache hit after expires_at.
-				var expiresAt time.Time
-				if pat.ExpiresAt.Valid {
-					expiresAt = pat.ExpiresAt.Time
-				}
+				expiresAt := nullDBTime(pat.ExpiresAt)
 				patCache.Set(r.Context(), hash, userID, auth.TTLForExpiry(time.Now(), expiresAt))
 
 				// Cache miss = TTL expired (or first use after revoke /

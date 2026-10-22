@@ -90,7 +90,7 @@ func TestPluginToolNameDistinguishesValidHookKeys(t *testing.T) {
 func TestAgentHookToolsOnlyIncludesDeclaredAgentHooks(t *testing.T) {
 	installation := db.PluginInstallation{
 		ID:      testInstallationID(t),
-		Enabled: true,
+		Enabled: 1,
 		Manifest: []byte(`{
 			"manifest_version": 1,
 			"key": "com.example.mixed",
@@ -132,7 +132,7 @@ func TestAgentToolDescriptionIsTheManifestText(t *testing.T) {
 	const wanted = "Summarize the discussion so far into decisions and open questions."
 	installation := db.PluginInstallation{
 		ID:      testInstallationID(t),
-		Enabled: true,
+		Enabled: 1,
 		Manifest: json.RawMessage(`{
 			"manifest_version": 1,
 			"key": "com.example.sum",

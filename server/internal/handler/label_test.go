@@ -289,7 +289,7 @@ func TestLabelNotFoundAcrossWorkspaces(t *testing.T) {
 }
 
 // TestUpdateLabelCrossWorkspace — PUT with a foreign workspace header must not
-// allow updating a label in another workspace (404 via pgx.ErrNoRows from the
+// allow updating a label in another workspace (404 via sql.ErrNoRows from the
 // UPDATE ... WHERE id = $1 AND workspace_id = $2 clause).
 func TestUpdateLabelCrossWorkspace(t *testing.T) {
 	// Create in real workspace

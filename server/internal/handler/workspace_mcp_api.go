@@ -1,13 +1,13 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -78,7 +78,7 @@ func workspaceMcpServerToResponse(server db.WorkspaceMcpServer) WorkspaceMcpServ
 		ID:          uuidToString(server.ID),
 		WorkspaceID: uuidToString(server.WorkspaceID),
 		Name:        server.Name,
-		Transport:   mcpTransportOf(server.Config),
+		Transport:   mcpTransportOf(json.RawMessage(server.Config)),
 		CreatedAt:   timestampToString(server.CreatedAt),
 		UpdatedAt:   timestampToString(server.UpdatedAt),
 	}
@@ -175,12 +175,12 @@ func (h *Handler) CreateWorkspaceMcpServer(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create the MCP server")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	// Join the workspace teardown fence (#5219): this table has no FK, so
@@ -194,8 +194,8 @@ func (h *Handler) CreateWorkspaceMcpServer(w http.ResponseWriter, r *http.Reques
 	server, err := qtx.CreateWorkspaceMcpServer(r.Context(), db.CreateWorkspaceMcpServerParams{
 		WorkspaceID: idUUID,
 		Name:        name,
-		Config:      append([]byte(nil), req.Config...),
-		CreatedBy:   parseUUID(requestUserID(r)),
+		Config:      string(append([]byte(nil), req.Config...)),
+		CreatedBy:   nullString(parseUUID(requestUserID(r))),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -206,7 +206,7 @@ func (h *Handler) CreateWorkspaceMcpServer(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to create the MCP server")
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create the MCP server")
 		return
 	}
@@ -244,14 +244,14 @@ func (h *Handler) UpdateWorkspaceMcpServer(w http.ResponseWriter, r *http.Reques
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		params.Name = pgtype.Text{String: name, Valid: true}
+		params.Name = sql.NullString{String: name, Valid: true}
 	}
 	if len(req.Config) > 0 {
 		if err := validateWorkspaceMcpServerEntry(req.Config); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		params.Config = append([]byte(nil), req.Config...)
+		params.Config = nullString(string(append([]byte(nil), req.Config...)))
 	}
 
 	server, err := h.Queries.UpdateWorkspaceMcpServer(r.Context(), params)
@@ -285,12 +285,12 @@ func (h *Handler) DeleteWorkspaceMcpServer(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete the MCP server")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	// Exclusive row lock first: an assignment writer holds this row FOR SHARE
@@ -324,7 +324,7 @@ func (h *Handler) DeleteWorkspaceMcpServer(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "failed to delete the MCP server")
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete the MCP server")
 		return
 	}
@@ -347,12 +347,12 @@ func (h *Handler) ListAgentMcpServers(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := make([]WorkspaceMcpServerResponse, 0, len(rows))
 	for _, row := range rows {
-		enabled := row.Enabled
+		enabled := int64ToBool(row.Enabled)
 		resp = append(resp, WorkspaceMcpServerResponse{
 			ID:          uuidToString(row.ID),
 			WorkspaceID: uuidToString(row.WorkspaceID),
 			Name:        row.Name,
-			Transport:   mcpTransportOf(row.Config),
+			Transport:   mcpTransportOf(json.RawMessage(row.Config)),
 			Enabled:     &enabled,
 			CreatedAt:   timestampToString(row.CreatedAt),
 			UpdatedAt:   timestampToString(row.UpdatedAt),
@@ -406,12 +406,12 @@ func (h *Handler) AddAgentMcpServer(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.TxStarter.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to add the MCP server")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	// Same fence as every other workspace-scoped insert (#5219): the binding
@@ -440,7 +440,7 @@ func (h *Handler) AddAgentMcpServer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to add the MCP server")
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to add the MCP server")
 		return
 	}
@@ -477,7 +477,7 @@ func (h *Handler) SetAgentMcpServerEnabled(w http.ResponseWriter, r *http.Reques
 	rows, err := h.Queries.SetAgentMcpServerEnabled(r.Context(), db.SetAgentMcpServerEnabledParams{
 		AgentID:  agent.ID,
 		ServerID: serverUUID,
-		Enabled:  *req.Enabled,
+		Enabled:  boolToInt64(*req.Enabled),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update the MCP server")
@@ -522,7 +522,7 @@ func (h *Handler) RemoveAgentMcpServer(w http.ResponseWriter, r *http.Request) {
 
 // writeAgentMcpServers returns the agent's binding list after a mutation, so
 // the client never has to guess the resulting state.
-func (h *Handler) writeAgentMcpServers(w http.ResponseWriter, r *http.Request, agentID pgtype.UUID) {
+func (h *Handler) writeAgentMcpServers(w http.ResponseWriter, r *http.Request, agentID string) {
 	rows, err := h.Queries.ListAgentMcpServers(r.Context(), agentID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list the agent's MCP servers")
@@ -530,12 +530,12 @@ func (h *Handler) writeAgentMcpServers(w http.ResponseWriter, r *http.Request, a
 	}
 	resp := make([]WorkspaceMcpServerResponse, 0, len(rows))
 	for _, row := range rows {
-		enabled := row.Enabled
+		enabled := int64ToBool(row.Enabled)
 		resp = append(resp, WorkspaceMcpServerResponse{
 			ID:          uuidToString(row.ID),
 			WorkspaceID: uuidToString(row.WorkspaceID),
 			Name:        row.Name,
-			Transport:   mcpTransportOf(row.Config),
+			Transport:   mcpTransportOf(json.RawMessage(row.Config)),
 			Enabled:     &enabled,
 			CreatedAt:   timestampToString(row.CreatedAt),
 			UpdatedAt:   timestampToString(row.UpdatedAt),

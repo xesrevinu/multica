@@ -2,12 +2,7 @@ package handler
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"log/slog"
 	"time"
-
-	"github.com/redis/go-redis/v9"
 )
 
 // LivenessStore tracks short-lived "this runtime heartbeated recently" records.
@@ -63,78 +58,3 @@ func (noopLivenessStore) IsAliveBatch(_ context.Context, _ []string) (map[string
 }
 
 func (noopLivenessStore) Forget(_ context.Context, _ string) {}
-
-// runtimeLivenessKeyPrefix is the Redis key prefix for runtime liveness
-// records. Mirrors the namespacing used by the other runtime stores
-// (mul:update:*, mul:model_list:*, mul:local_skill_list:*).
-const runtimeLivenessKeyPrefix = "mul:runtime:hb:"
-
-func runtimeLivenessKey(runtimeID string) string {
-	return runtimeLivenessKeyPrefix + runtimeID
-}
-
-// RedisLivenessStore writes one TTL'd key per runtime heartbeat. The presence
-// of an unexpired key is the signal "this runtime is alive right now"; the
-// sweeper consults this before marking a stale-in-DB runtime offline.
-type RedisLivenessStore struct {
-	rdb redis.UniversalClient
-}
-
-func NewRedisLivenessStore(rdb redis.UniversalClient) *RedisLivenessStore {
-	return &RedisLivenessStore{rdb: rdb}
-}
-
-func (s *RedisLivenessStore) Available() bool { return s != nil && s.rdb != nil }
-
-func (s *RedisLivenessStore) Touch(ctx context.Context, runtimeID string, ttl time.Duration) error {
-	if !s.Available() {
-		return errors.New("redis liveness store: unavailable")
-	}
-	if runtimeID == "" {
-		return errors.New("redis liveness store: empty runtime id")
-	}
-	if err := s.rdb.Set(ctx, runtimeLivenessKey(runtimeID), "1", ttl).Err(); err != nil {
-		return fmt.Errorf("liveness touch: %w", err)
-	}
-	return nil
-}
-
-func (s *RedisLivenessStore) IsAliveBatch(ctx context.Context, runtimeIDs []string) (map[string]bool, bool) {
-	if !s.Available() || len(runtimeIDs) == 0 {
-		return map[string]bool{}, s.Available()
-	}
-	keys := make([]string, len(runtimeIDs))
-	for i, id := range runtimeIDs {
-		keys[i] = runtimeLivenessKey(id)
-	}
-	pipe := s.rdb.Pipeline()
-	commands := make([]*redis.StringCmd, len(keys))
-	for i, key := range keys {
-		commands[i] = pipe.Get(ctx, key)
-	}
-	_, err := pipe.Exec(ctx)
-	if err != nil && !errors.Is(err, redis.Nil) {
-		slog.Warn("liveness mget failed; falling back to DB",
-			"error", err, "count", len(keys))
-		return nil, false
-	}
-	out := make(map[string]bool, len(runtimeIDs))
-	for i, command := range commands {
-		if err := command.Err(); err != nil && !errors.Is(err, redis.Nil) {
-			slog.Warn("liveness get failed; falling back to DB",
-				"error", err, "count", len(keys))
-			return nil, false
-		}
-		out[runtimeIDs[i]] = command.Err() == nil
-	}
-	return out, true
-}
-
-func (s *RedisLivenessStore) Forget(ctx context.Context, runtimeID string) {
-	if !s.Available() || runtimeID == "" {
-		return
-	}
-	if err := s.rdb.Del(ctx, runtimeLivenessKey(runtimeID)).Err(); err != nil {
-		slog.Warn("liveness forget failed", "error", err, "runtime_id", runtimeID)
-	}
-}

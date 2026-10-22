@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strconv"
 	"strings"
@@ -9,9 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -21,11 +20,11 @@ import (
 func enqueueViaRealQuery(ctx context.Context, q *db.Queries, agentID, runtimeID, issueID string) error {
 	params := db.CreateAgentTaskParams{
 		AgentID:   parseUUID(agentID),
-		RuntimeID: parseUUID(runtimeID),
+		RuntimeID: nullString(parseUUID(runtimeID)),
 		Priority:  0,
 	}
 	if issueID != "" {
-		params.IssueID = parseUUID(issueID)
+		params.IssueID = nullString(parseUUID(issueID))
 	}
 	_, err := q.CreateAgentTask(ctx, params)
 	return err
@@ -120,7 +119,7 @@ func TestTaskWriteFence_BlocksOnWorkspaceLockAlone(t *testing.T) {
 	}
 	_, err = testHandler.Queries.WithTx(reassign).ReassignTasksToRuntime(ctx, db.ReassignTasksToRuntimeParams{
 		NewRuntimeID: parseUUID(f.victimRuntime),
-		OldRuntimeID: parseUUID(f.neighbourRuntime),
+		OldRuntimeID: nullString(parseUUID(f.neighbourRuntime)),
 	})
 	var pgErr *pgconn.PgError
 	if err == nil || !errors.As(err, &pgErr) || pgErr.Code != "55P03" {
@@ -163,7 +162,7 @@ func TestTaskWriteFence_BlocksOnWorkspaceLockAlone(t *testing.T) {
 //
 // It also discriminates the fence from the foreign keys. The writer's failure is
 // "no row written" — CreateAgentTask is a :one, so it comes back as
-// pgx.ErrNoRows because the fence's predicate was false. An FK doing the work
+// sql.ErrNoRows because the fence's predicate was false. An FK doing the work
 // instead would surface as SQLSTATE 23503, which the assertion rejects.
 func TestTaskWriteFence_QueuedWriterCannotLandAfterTeardownCommits(t *testing.T) {
 	if testPool == nil {
@@ -243,13 +242,13 @@ func TestTaskWriteFence_QueuedWriterCannotLandAfterTeardownCommits(t *testing.T)
 	if writerErr == nil {
 		t.Fatal("the queued enqueue landed a task after teardown committed; the fence did not hold")
 	}
-	if !errors.Is(writerErr, pgx.ErrNoRows) {
+	if !errors.Is(writerErr, sql.ErrNoRows) {
 		var pgErr *pgconn.PgError
 		if errors.As(writerErr, &pgErr) && pgErr.Code == "23503" {
 			t.Fatalf("the write was rejected by a foreign key (%s), not by the fence; "+
 				"the fence must hold on its own once the legacy FKs go away", pgErr.Code)
 		}
-		t.Fatalf("writer error = %v, want pgx.ErrNoRows from the fence returning false", writerErr)
+		t.Fatalf("writer error = %v, want sql.ErrNoRows from the fence returning false", writerErr)
 	}
 
 	var leftover int
@@ -547,18 +546,18 @@ RETURNING id
 		t.Fatalf("create merge target: %v", err)
 	}
 
-	merge, err := testHandler.TxStarter.Begin(ctx)
+	merge, err := testHandler.TxStarter.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatalf("begin merge tx: %v", err)
 	}
 	committed := false
 	defer func() {
 		if !committed {
-			_ = merge.Rollback(ctx)
+			_ = merge.Rollback()
 		}
 	}()
 	qtx := testHandler.Queries.WithTx(merge)
-	runtimeIDs := []pgtype.UUID{parseUUID(f.victimRuntime), parseUUID(target)}
+	runtimeIDs := []string{parseUUID(f.victimRuntime), parseUUID(target)}
 
 	// The merge, up to the point just before the old runtime is deleted.
 	if err := qtx.LockWorkspaceForRuntimeMerge(ctx, runtimeIDs); err != nil {
@@ -573,7 +572,7 @@ RETURNING id
 	}
 	reassignment, err := qtx.ReassignTasksToRuntime(ctx, db.ReassignTasksToRuntimeParams{
 		NewRuntimeID: parseUUID(target),
-		OldRuntimeID: parseUUID(f.victimRuntime),
+		OldRuntimeID: nullString(parseUUID(f.victimRuntime)),
 	})
 	if err != nil {
 		t.Fatalf("reassign tasks: %v", err)
@@ -582,8 +581,8 @@ RETURNING id
 		t.Fatal("the merge's own fence refused a live target")
 	}
 	if _, err := qtx.ReassignAgentsToRuntime(ctx, db.ReassignAgentsToRuntimeParams{
-		NewRuntimeID: parseUUID(target),
-		OldRuntimeID: parseUUID(f.victimRuntime),
+		NewRuntimeID: nullString(parseUUID(target)),
+		OldRuntimeID: nullString(parseUUID(f.victimRuntime)),
 	}); err != nil {
 		t.Fatalf("reassign agents: %v", err)
 	}
@@ -624,7 +623,7 @@ RETURNING id
 	if err := qtx.DeleteAgentRuntime(ctx, parseUUID(f.victimRuntime)); err != nil {
 		t.Fatalf("delete old runtime: %v", err)
 	}
-	if err := merge.Commit(ctx); err != nil {
+	if err := merge.Commit(); err != nil {
 		t.Fatalf("commit merge: %v", err)
 	}
 	committed = true
@@ -639,8 +638,8 @@ RETURNING id
 	if errors.As(writerErr, &pgErr) && pgErr.Code == "23503" {
 		t.Fatalf("the late write was rejected by a foreign key (%s), not by the fence", pgErr.Code)
 	}
-	if !errors.Is(writerErr, pgx.ErrNoRows) {
-		t.Fatalf("writer error = %v, want pgx.ErrNoRows from the fence returning false", writerErr)
+	if !errors.Is(writerErr, sql.ErrNoRows) {
+		t.Fatalf("writer error = %v, want sql.ErrNoRows from the fence returning false", writerErr)
 	}
 
 	// The merge's own history survived, and nothing is pointing at the deleted runtime.
@@ -696,4 +695,4 @@ func TestLockTaskOwnerRows_RejectsUnresolvableOwner(t *testing.T) {
 	}
 }
 
-var _ = pgtype.UUID{}
+var _ = ""

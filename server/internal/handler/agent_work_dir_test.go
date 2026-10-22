@@ -1,9 +1,9 @@
 package handler
 
 import (
+	"database/sql"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -215,7 +215,7 @@ func TestRelativeWorkDir(t *testing.T) {
 
 func TestTaskToResponseDerivesPrivateDurableWorkDir(t *testing.T) {
 	response := taskToResponse(db.AgentTaskQueue{
-		DurableWorkDir: pgtype.Text{
+		DurableWorkDir: sql.NullString{
 			String: "/Users/alice/repos/multica",
 			Valid:  true,
 		},

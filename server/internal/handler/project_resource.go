@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,8 +13,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/util"
 	agentpkg "github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -44,7 +44,7 @@ func projectResourceToResponse(r db.ProjectResource) ProjectResourceResponse {
 		ResourceType: r.ResourceType,
 		ResourceRef:  ref,
 		Label:        textToPtr(r.Label),
-		Position:     r.Position,
+		Position:     int32(r.Position),
 		CreatedAt:    timestampToString(r.CreatedAt),
 		CreatedBy:    uuidToPtr(r.CreatedBy),
 	}
@@ -163,7 +163,7 @@ type localDirectoryRef struct {
 // Returns true to proceed; on false the 422 response has already been written,
 // using the same daemon_version_unsupported code as the quick-create gate so
 // clients can branch on it.
-func (h *Handler) requireWorktreeCapableDaemon(w http.ResponseWriter, r *http.Request, workspaceID pgtype.UUID, resourceType string, normalizedRef json.RawMessage) bool {
+func (h *Handler) requireWorktreeCapableDaemon(w http.ResponseWriter, r *http.Request, workspaceID string, resourceType string, normalizedRef json.RawMessage) bool {
 	if resourceType != "local_directory" {
 		return true
 	}
@@ -231,7 +231,7 @@ func daemonAdvertisesWorktree(runtimes []db.AgentRuntime, daemonID string) bool 
 	if newest == nil {
 		return false
 	}
-	return runtimeHasCapability(newest.Metadata, protocol.DaemonCapabilityLocalWorktreeV1)
+	return runtimeHasCapability([]byte(newest.Metadata), protocol.DaemonCapabilityLocalWorktreeV1)
 }
 
 // runtimeSeenAfter orders two rows of the same daemon by last_seen_at. A row
@@ -244,7 +244,7 @@ func runtimeSeenAfter(candidate, current *db.AgentRuntime) bool {
 	if !current.LastSeenAt.Valid {
 		return true
 	}
-	return candidate.LastSeenAt.Time.After(current.LastSeenAt.Time)
+	return parseDBTime(candidate.LastSeenAt.String).After(parseDBTime(current.LastSeenAt.String))
 }
 
 // latestDaemonCLIVersion returns the cli_version of the freshest runtime row
@@ -254,18 +254,18 @@ func runtimeSeenAfter(candidate, current *db.AgentRuntime) bool {
 // row reflects the binary currently running there.
 func latestDaemonCLIVersion(runtimes []db.AgentRuntime, daemonID string) string {
 	current := ""
-	var currentSeen pgtype.Timestamptz
+	var currentSeen string
 	for _, rt := range runtimes {
 		if !rt.DaemonID.Valid || rt.DaemonID.String != daemonID {
 			continue
 		}
-		v := readRuntimeCLIVersion(rt.Metadata)
+		v := readRuntimeCLIVersion([]byte(rt.Metadata))
 		if v == "" {
 			continue
 		}
-		if current == "" || (rt.LastSeenAt.Valid && rt.LastSeenAt.Time.After(currentSeen.Time)) {
+		if current == "" || (rt.LastSeenAt.Valid && parseDBTime(rt.LastSeenAt.String).After(parseDBTime(currentSeen))) {
 			current = v
-			currentSeen = rt.LastSeenAt
+			currentSeen = rt.LastSeenAt.String
 		}
 	}
 	return current
@@ -365,7 +365,7 @@ func localDirectoryRefDiffersOnlyByLabel(a, b json.RawMessage) bool {
 // this binary's struct would drop them — the exact failure mode this PR exists
 // to close. Key order and whitespace are not preserved (nor promised by JSONB);
 // every key and value is.
-func withLocalDirectoryRefLabel(ref json.RawMessage, label pgtype.Text) (json.RawMessage, error) {
+func withLocalDirectoryRefLabel(ref json.RawMessage, label sql.NullString) (json.RawMessage, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(ref, &fields); err != nil {
 		return nil, err
@@ -569,7 +569,7 @@ func (h *Handler) CreateProjectResource(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if conflict, err := h.findLocalDirectoryConflict(r.Context(), project.ID, req.ResourceType, normalizedRef, pgtype.UUID{}); err != nil {
+	if conflict, err := h.findLocalDirectoryConflict(r.Context(), project.ID, req.ResourceType, normalizedRef, ""); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to check existing resources")
 		return
 	} else if conflict {
@@ -581,9 +581,9 @@ func (h *Handler) CreateProjectResource(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var label pgtype.Text
+	var label sql.NullString
 	if req.Label != nil && strings.TrimSpace(*req.Label) != "" {
-		label = pgtype.Text{String: strings.TrimSpace(*req.Label), Valid: true}
+		label = sql.NullString{String: strings.TrimSpace(*req.Label), Valid: true}
 	}
 	var position int32
 	if req.Position != nil {
@@ -599,10 +599,10 @@ func (h *Handler) CreateProjectResource(w http.ResponseWriter, r *http.Request) 
 		ProjectID:    project.ID,
 		WorkspaceID:  project.WorkspaceID,
 		ResourceType: req.ResourceType,
-		ResourceRef:  normalizedRef,
+		ResourceRef:  string(normalizedRef),
 		Label:        label,
-		Position:     position,
-		CreatedBy:    creator,
+		Position:     int64(position),
+		CreatedBy:    nullString(creator),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -689,7 +689,7 @@ func (h *Handler) UpdateProjectResource(w http.ResponseWriter, r *http.Request) 
 	// ref changing does mean it might have been.
 	refRenameOnly := refProvided &&
 		existing.ResourceType == "local_directory" &&
-		localDirectoryRefDiffersOnlyByLabel(nextRef, existing.ResourceRef)
+		localDirectoryRefDiffersOnlyByLabel(nextRef, json.RawMessage(existing.ResourceRef))
 
 	// Gate only when the caller is actually changing what would run: a label or
 	// position update — including an old client's rename, which carries the ref
@@ -715,10 +715,10 @@ func (h *Handler) UpdateProjectResource(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if labelStr == nil || strings.TrimSpace(*labelStr) == "" {
-			nextLabel = pgtype.Text{}
+			nextLabel = sql.NullString{}
 			labelCleared = true
 		} else {
-			nextLabel = pgtype.Text{String: strings.TrimSpace(*labelStr), Valid: true}
+			nextLabel = sql.NullString{String: strings.TrimSpace(*labelStr), Valid: true}
 		}
 	} else if refRenameOnly {
 		// No label field, and the ref differs ONLY by its embedded label: that
@@ -731,12 +731,12 @@ func (h *Handler) UpdateProjectResource(w http.ResponseWriter, r *http.Request) 
 		// different its label looks: the mode dialog snapshots the ref when it
 		// opens, so a rename on another device in the meantime would otherwise
 		// be undone by whoever saves an execution mode next.
-		if refLabel := localDirectoryRefLabel(nextRef); refLabel != localDirectoryRefLabel(existing.ResourceRef) {
+		if refLabel := localDirectoryRefLabel(nextRef); refLabel != localDirectoryRefLabel(json.RawMessage(existing.ResourceRef)) {
 			if refLabel == "" {
-				nextLabel = pgtype.Text{}
+				nextLabel = sql.NullString{}
 				labelCleared = true
 			} else {
-				nextLabel = pgtype.Text{String: refLabel, Valid: true}
+				nextLabel = sql.NullString{String: refLabel, Valid: true}
 			}
 		}
 	}
@@ -749,7 +749,7 @@ func (h *Handler) UpdateProjectResource(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if pos != nil {
-			nextPosition = *pos
+			nextPosition = int64(*pos)
 		}
 	}
 
@@ -767,8 +767,8 @@ func (h *Handler) UpdateProjectResource(w http.ResponseWriter, r *http.Request) 
 		// edit.
 		name := nextLabel
 		if !nextLabel.Valid && !labelCleared {
-			if stored := localDirectoryRefLabel(existing.ResourceRef); stored != "" {
-				name = pgtype.Text{String: stored, Valid: true}
+			if stored := localDirectoryRefLabel(json.RawMessage(existing.ResourceRef)); stored != "" {
+				name = sql.NullString{String: stored, Valid: true}
 			}
 		}
 		// Rows that have never had a name at all are left alone, and so is the
@@ -786,7 +786,7 @@ func (h *Handler) UpdateProjectResource(w http.ResponseWriter, r *http.Request) 
 
 	updated, err := h.Queries.UpdateProjectResource(r.Context(), db.UpdateProjectResourceParams{
 		ID:          existing.ID,
-		ResourceRef: nextRef,
+		ResourceRef: string(nextRef),
 		Label:       nextLabel,
 		Position:    nextPosition,
 	})
@@ -823,7 +823,7 @@ func (h *Handler) UpdateProjectResource(w http.ResponseWriter, r *http.Request) 
 // through. We do the daemon-scoped check here in application code instead.
 //
 // `excludeID` lets the update path ignore the row being edited.
-func (h *Handler) findLocalDirectoryConflict(ctx context.Context, projectID pgtype.UUID, resourceType string, normalizedRef json.RawMessage, excludeID pgtype.UUID) (bool, error) {
+func (h *Handler) findLocalDirectoryConflict(ctx context.Context, projectID string, resourceType string, normalizedRef json.RawMessage, excludeID string) (bool, error) {
 	if resourceType != "local_directory" {
 		return false, nil
 	}
@@ -839,11 +839,11 @@ func (h *Handler) findLocalDirectoryConflict(ctx context.Context, projectID pgty
 		if row.ResourceType != "local_directory" {
 			continue
 		}
-		if excludeID.Valid && uuidToString(row.ID) == uuidToString(excludeID) {
+		if (excludeID != "") && uuidToString(row.ID) == uuidToString(excludeID) {
 			continue
 		}
 		var existing localDirectoryRef
-		if err := json.Unmarshal(row.ResourceRef, &existing); err != nil {
+		if err := json.Unmarshal([]byte(row.ResourceRef), &existing); err != nil {
 			continue
 		}
 		// Daemon-scoped uniqueness: one local_directory per daemon per
@@ -902,25 +902,21 @@ func (h *Handler) DeleteProjectResource(w http.ResponseWriter, r *http.Request) 
 // parseUserUUIDOrZero converts a user ID string to a pgtype.UUID, returning a
 // zero value on any error so the caller can store NULL for created_by when the
 // authenticated principal is not a workspace member (e.g. internal-server use).
-func (h *Handler) parseUserUUIDOrZero(userID string) (pgtype.UUID, bool) {
+func (h *Handler) parseUserUUIDOrZero(userID string) (string, bool) {
 	if userID == "" {
-		return pgtype.UUID{}, false
+		return "", false
 	}
 	u, err := parseUUIDLoose(userID)
 	if err != nil {
-		return pgtype.UUID{}, false
+		return "", false
 	}
 	return u, true
 }
 
 // parseUUIDLoose mirrors util.ParseUUID but lives here to avoid pulling util
 // into a tiny one-off helper. Keep the body minimal.
-func parseUUIDLoose(s string) (pgtype.UUID, error) {
-	var u pgtype.UUID
-	if err := u.Scan(s); err != nil {
-		return pgtype.UUID{}, err
-	}
-	return u, nil
+func parseUUIDLoose(s string) (string, error) {
+	return util.ParseUUID(s)
 }
 
 // claimProjectContext is the project-scoped context a daemon claim exposes to
@@ -971,10 +967,10 @@ func (c claimProjectContext) applyTo(resp *AgentTaskResponse) {
 // explicitly attached its repos, those are the authoritative set. With no
 // project, no github_repo resources, or a stale reference, the workspace repos
 // are the fallback.
-func (h *Handler) resolveClaimProjectContext(ctx context.Context, projectID, workspaceID pgtype.UUID) (claimProjectContext, error) {
+func (h *Handler) resolveClaimProjectContext(ctx context.Context, projectID, workspaceID string) (claimProjectContext, error) {
 	var out claimProjectContext
 
-	if projectID.Valid {
+	if projectID != "" {
 		project, err := h.Queries.GetProjectInWorkspace(ctx, db.GetProjectInWorkspaceParams{
 			ID:          projectID,
 			WorkspaceID: workspaceID,
@@ -993,7 +989,7 @@ func (h *Handler) resolveClaimProjectContext(ctx context.Context, projectID, wor
 				return claimProjectContext{}, fmt.Errorf("list project resources: %w", resErr)
 			}
 			out.Resources, out.Repos = projectResourcesForClaim(rows)
-		case errors.Is(err, pgx.ErrNoRows):
+		case errors.Is(err, sql.ErrNoRows):
 			// Stale/deleted/foreign reference: degrade to workspace context.
 		default:
 			return claimProjectContext{}, fmt.Errorf("get project: %w", err)
@@ -1008,9 +1004,9 @@ func (h *Handler) resolveClaimProjectContext(ctx context.Context, projectID, wor
 	if err != nil {
 		return claimProjectContext{}, fmt.Errorf("get workspace: %w", err)
 	}
-	if ws.Repos != nil {
+	if ws.Repos != "" {
 		var repos []RepoData
-		if jsonErr := json.Unmarshal(ws.Repos, &repos); jsonErr != nil {
+		if jsonErr := json.Unmarshal([]byte(ws.Repos), &repos); jsonErr != nil {
 			// Corrupt stored JSON is not transient: failing the claim would
 			// wedge every claim in this workspace until someone repairs the
 			// row. Degrade to no repos and leave a trail instead.
@@ -1052,7 +1048,7 @@ func projectResourcesForClaim(rows []db.ProjectResource) ([]ProjectResourceData,
 				URL string `json:"url"`
 				Ref string `json:"ref,omitempty"`
 			}
-			if json.Unmarshal(row.ResourceRef, &payload) == nil && payload.URL != "" {
+			if json.Unmarshal([]byte(row.ResourceRef), &payload) == nil && payload.URL != "" {
 				repos = append(repos, RepoData{URL: payload.URL, Ref: strings.TrimSpace(payload.Ref)})
 			}
 		}

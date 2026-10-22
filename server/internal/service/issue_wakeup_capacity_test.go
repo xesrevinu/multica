@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -27,28 +26,28 @@ func TestIssueWakeupBusyRuleDoesNotBlockOtherWorkspace(t *testing.T) {
 			f.Comment(t, util.UUIDToString(issue), "more")
 			other.Comment(t, util.UUIDToString(otherIssue), "other workspace")
 			f.Exec(t, "UPDATE issue_wakeup SET updated_at=now()-interval '1 day' WHERE id=$1", first.ID)
-			holder, err := f.Pool.Begin(context.Background())
+			holder, err := f.Pool.BeginTx(context.Background(), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer holder.Rollback(context.Background())
-			var sql string
+			defer holder.Rollback()
+			var query string
 			var key any
 			switch lock {
 			case "issue":
-				sql, key = "SELECT id FROM issue WHERE id=$1 FOR NO KEY UPDATE", issue
+				query, key = "SELECT id FROM issue WHERE id=$1 FOR NO KEY UPDATE", issue
 			case "rule":
-				sql, key = "SELECT id FROM issue_wakeup WHERE id=$1 FOR UPDATE", first.ID
+				query, key = "SELECT id FROM issue_wakeup WHERE id=$1 FOR UPDATE", first.ID
 			case "task":
-				task, err := f.q.FindPendingWakeupTask(context.Background(), util.UUIDToString(first.ID))
+				task, err := f.q.FindPendingWakeupTask(context.Background(), nullString(util.UUIDToString(first.ID)))
 				if err != nil {
 					t.Fatal(err)
 				}
-				sql, key = "SELECT id FROM agent_task_queue WHERE id=$1 FOR UPDATE", task.ID
+				query, key = "SELECT id FROM agent_task_queue WHERE id=$1 FOR UPDATE", task.ID
 			case "workspace":
-				sql, key = "SELECT id FROM workspace WHERE id=$1 FOR UPDATE", f.WorkspaceID
+				query, key = "SELECT id FROM workspace WHERE id=$1 FOR UPDATE", f.WorkspaceID
 			}
-			if _, err = holder.Exec(context.Background(), sql, key); err != nil {
+			if _, err = holder.ExecContext(context.Background(), query, key); err != nil {
 				t.Fatal(err)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -80,7 +79,7 @@ func TestIssueWakeupPendingEventsAreBoundedAndLegacyInputsDrain(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := f.Pool.Exec(context.Background(), `INSERT INTO comment(issue_id,workspace_id,author_type,author_id,content,type) VALUES($1,$2,'member',$3,'burst','comment')`, issue, f.WorkspaceID, f.UserID)
+			_, err := f.Pool.ExecContext(context.Background(), `INSERT INTO comment(issue_id,workspace_id,author_type,author_id,content,type) VALUES($1,$2,'member',$3,'burst','comment')`, issue, f.WorkspaceID, f.UserID)
 			errs <- err
 		}()
 	}
@@ -96,7 +95,7 @@ func TestIssueWakeupPendingEventsAreBoundedAndLegacyInputsDrain(t *testing.T) {
 		t.Fatalf("unbounded pending receipts: %d", got)
 	}
 	var payload []byte
-	if err := f.Pool.QueryRow(context.Background(), "SELECT payload FROM issue_wakeup_receipt WHERE wakeup_id=$1 AND coalesce_key IS NOT NULL", w.ID).Scan(&payload); err != nil {
+	if err := f.Pool.QueryRowContext(context.Background(), "SELECT payload FROM issue_wakeup_receipt WHERE wakeup_id=$1 AND coalesce_key IS NOT NULL", w.ID).Scan(&payload); err != nil {
 		t.Fatal(err)
 	}
 	var fact struct {
@@ -111,7 +110,7 @@ func TestIssueWakeupPendingEventsAreBoundedAndLegacyInputsDrain(t *testing.T) {
 		t.Fatalf("lost burst summary: %s", payload)
 	}
 	wakeDispatch(t, s, w)
-	task, err := f.q.FindPendingWakeupTask(context.Background(), util.UUIDToString(w.ID))
+	task, err := f.q.FindPendingWakeupTask(context.Background(), nullString(util.UUIDToString(w.ID)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,11 +128,11 @@ func TestIssueWakeupCaptureRacingConsumptionKeepsNewInput(t *testing.T) {
 	w := wakeCreate(t, f, s, issue, WakeupInput{AgentID: agent, Kind: "event", Mode: "continuous", EventTypes: []string{"comment.created"}, Instruction: "check"})
 	f.Comment(t, util.UUIDToString(issue), "first")
 	ctx := context.Background()
-	tx, err := f.Pool.Begin(ctx)
+	tx, err := f.Pool.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	q := f.q.WithTx(tx)
 	receipts, err := q.ListPendingWakeupReceipts(ctx, db.ListPendingWakeupReceiptsParams{WakeupID: w.ID, Revision: w.Revision})
 	if err != nil {
@@ -143,7 +142,7 @@ func TestIssueWakeupCaptureRacingConsumptionKeepsNewInput(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := f.Pool.Exec(writerCtx, `INSERT INTO comment(issue_id,workspace_id,author_type,author_id,content,type) VALUES($1,$2,'member',$3,'racing','comment')`, issue, f.WorkspaceID, f.UserID)
+		_, err := f.Pool.ExecContext(writerCtx, `INSERT INTO comment(issue_id,workspace_id,author_type,author_id,content,type) VALUES($1,$2,'member',$3,'racing','comment')`, issue, f.WorkspaceID, f.UserID)
 		done <- err
 	}()
 	// A bounded wait proves capture cannot update evidence after dispatch read it.
@@ -152,10 +151,10 @@ func TestIssueWakeupCaptureRacingConsumptionKeepsNewInput(t *testing.T) {
 		t.Fatalf("writer bypassed receipt lock: %v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
-	if err = q.ConsumeWakeupReceipts(ctx, db.ConsumeWakeupReceiptsParams{Ids: []pgtype.UUID{receipts[0].ID}}); err != nil {
+	if err = q.ConsumeWakeupReceipts(ctx, db.ConsumeWakeupReceiptsParams{Ids: []string{receipts[0].ID}}); err != nil {
 		t.Fatal(err)
 	}
-	if err = tx.Commit(ctx); err != nil {
+	if err = tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	if err = <-done; err != nil {
@@ -170,24 +169,24 @@ func TestIssueWakeupReceiptExpiryIsBoundedAndKeepsPending(t *testing.T) {
 	f, s, issue, agent := wakeFixture(t)
 	w := wakeCreate(t, f, s, issue, WakeupInput{AgentID: agent, Kind: "event", EventTypes: []string{"comment.created"}, Instruction: "check"})
 	ctx := context.Background()
-	tx, err := f.Pool.Begin(ctx)
+	tx, err := f.Pool.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	q := f.q.WithTx(tx)
-	_, err = tx.Exec(ctx, `INSERT INTO issue_wakeup_receipt(id,wakeup_id,revision,event_key,event_type,payload,created_at,processed_at)
+	_, err = tx.ExecContext(ctx, `INSERT INTO issue_wakeup_receipt(id,wakeup_id,revision,event_key,event_type,payload,created_at,processed_at)
  SELECT gen_random_uuid(),$1,1,n::text,'comment.created','{}',now()-interval '10 days',now()-interval '8 days' FROM generate_series(1,1050) n`, w.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO issue_wakeup_receipt(id,wakeup_id,revision,event_key,event_type,payload,created_at,processed_at)
+	_, err = tx.ExecContext(ctx, `INSERT INTO issue_wakeup_receipt(id,wakeup_id,revision,event_key,event_type,payload,created_at,processed_at)
  VALUES(gen_random_uuid(),$1,1,'pending','comment.created','{}',now()-interval '10 days',NULL),
  (gen_random_uuid(),$1,1,'recent','comment.created','{}',now()-interval '10 days',now())`, w.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	removed, err := q.DeleteExpiredWakeupReceipts(ctx, pgtype.Timestamptz{Time: time.Now().Add(-7 * 24 * time.Hour), Valid: true})
+	removed, err := q.DeleteExpiredWakeupReceipts(ctx, nullTime(time.Now().Add(-7*24*time.Hour), true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +194,7 @@ func TestIssueWakeupReceiptExpiryIsBoundedAndKeepsPending(t *testing.T) {
 		t.Fatalf("cleanup not bounded: %d", removed)
 	}
 	var kept int
-	if err = tx.QueryRow(ctx, "SELECT count(*) FROM issue_wakeup_receipt WHERE wakeup_id=$1 AND event_key IN ('pending','recent')", w.ID).Scan(&kept); err != nil {
+	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM issue_wakeup_receipt WHERE wakeup_id=$1 AND event_key IN ('pending','recent')", w.ID).Scan(&kept); err != nil {
 		t.Fatal(err)
 	}
 	if kept != 2 {
@@ -213,7 +212,7 @@ func TestIssueWakeupActivationCapacityAndReenable(t *testing.T) {
 			first = w
 		}
 	}
-	_, err := s.Create(context.Background(), issue, parseTestUUID(t, f.UserID), pgtype.UUID{}, in)
+	_, err := s.Create(context.Background(), issue, parseTestUUID(t, f.UserID), "", in)
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) || pgErr.ConstraintName != "issue_wakeup_active_limit" {
 		t.Fatalf("capacity not enforced: %v", err)
@@ -223,7 +222,7 @@ func TestIssueWakeupActivationCapacityAndReenable(t *testing.T) {
 		t.Fatal(err)
 	}
 	wakeCreate(t, f, s, issue, in)
-	_, err = s.Enable(context.Background(), issue, parseTestUUID(t, f.UserID), pgtype.UUID{}, first.ID, WakeupEnableInput{Revision: disabled.Revision})
+	_, err = s.Enable(context.Background(), issue, parseTestUUID(t, f.UserID), "", first.ID, WakeupEnableInput{Revision: disabled.Revision})
 	if !errors.As(err, &pgErr) || pgErr.ConstraintName != "issue_wakeup_active_limit" {
 		t.Fatalf("re-enable bypassed capacity: %v", err)
 	}
@@ -232,7 +231,7 @@ func TestIssueWakeupActivationCapacityAndReenable(t *testing.T) {
 func TestIssueWakeupWorkspaceCapacitySerializesDifferentIssues(t *testing.T) {
 	f, s, issue, agent := wakeFixture(t)
 	f.Cleanup(t, "DELETE FROM issue_wakeup WHERE workspace_id=$1", f.WorkspaceID)
-	issues := []pgtype.UUID{issue}
+	issues := []string{issue}
 	for n := 0; n < 33; n++ {
 		issues = append(issues, parseTestUUID(t, f.Issue(t, "capacity issue")))
 	}
@@ -240,8 +239,8 @@ func TestIssueWakeupWorkspaceCapacitySerializesDifferentIssues(t *testing.T) {
  SELECT gen_random_uuid(),$1,($2::uuid[])[1+(n%34)],$3,$4,'check','event','continuous' FROM generate_series(1,999) n`, f.WorkspaceID, issues, agent, f.UserID)
 	errs := make(chan error, 2)
 	for _, id := range issues[:2] {
-		go func(id pgtype.UUID) {
-			_, err := s.Create(context.Background(), id, parseTestUUID(t, f.UserID), pgtype.UUID{}, WakeupInput{AgentID: agent, Kind: "event", EventTypes: []string{"comment.created"}, Instruction: "check"})
+		go func(id string) {
+			_, err := s.Create(context.Background(), id, parseTestUUID(t, f.UserID), "", WakeupInput{AgentID: agent, Kind: "event", EventTypes: []string{"comment.created"}, Instruction: "check"})
 			errs <- err
 		}(id)
 	}
@@ -269,19 +268,19 @@ func TestIssueWakeupLegacyConsumerCannotConsumeUnseenMerge(t *testing.T) {
 	w := wakeCreate(t, f, s, issue, WakeupInput{AgentID: agent, Kind: "event", Mode: "continuous", EventTypes: []string{"comment.created"}, Instruction: "check"})
 	f.Comment(t, util.UUIDToString(issue), "first")
 	ctx := context.Background()
-	var observed pgtype.UUID
-	if err := f.Pool.QueryRow(ctx, "SELECT id FROM issue_wakeup_receipt WHERE wakeup_id=$1 AND processed_at IS NULL", w.ID).Scan(&observed); err != nil {
+	var observed string
+	if err := f.Pool.QueryRowContext(ctx, "SELECT id FROM issue_wakeup_receipt WHERE wakeup_id=$1 AND processed_at IS NULL", w.ID).Scan(&observed); err != nil {
 		t.Fatal(err)
 	}
 	latest := f.Comment(t, util.UUIDToString(issue), "arrived after old consumer read")
-	if err := f.q.ConsumeWakeupReceipts(ctx, db.ConsumeWakeupReceiptsParams{Ids: []pgtype.UUID{observed}}); err != nil {
+	if err := f.q.ConsumeWakeupReceipts(ctx, db.ConsumeWakeupReceiptsParams{Ids: []string{observed}}); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.Count(t, "SELECT count(*) FROM issue_wakeup_receipt WHERE wakeup_id=$1 AND processed_at IS NULL AND payload->>'comment_id'=$2", w.ID, latest); got != 1 {
 		t.Fatalf("old consumer lost new evidence: %d", got)
 	}
 	wakeDispatch(t, s, w)
-	task, err := f.q.FindPendingWakeupTask(ctx, util.UUIDToString(w.ID))
+	task, err := f.q.FindPendingWakeupTask(ctx, nullString(util.UUIDToString(w.ID)))
 	if err != nil {
 		t.Fatal(err)
 	}

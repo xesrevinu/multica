@@ -2,13 +2,12 @@ package seatcapacity
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -36,12 +35,12 @@ type WorkerConfig struct {
 }
 
 type workerQueries interface {
-	ClaimNextDueSeatCapacityIntent(context.Context, pgtype.Timestamptz) (db.SeatCapacityOutbox, error)
+	ClaimNextDueSeatCapacityIntent(context.Context, string) (db.SeatCapacityOutbox, error)
 	DeferClaimedSeatCapacityIntent(context.Context, db.DeferClaimedSeatCapacityIntentParams) (int64, error)
 	DeleteClaimedSeatCapacityIntent(context.Context, db.DeleteClaimedSeatCapacityIntentParams) (int64, error)
-	ExpireInvitationForCapacityRecovery(context.Context, pgtype.UUID) error
+	ExpireInvitationForCapacityRecovery(context.Context, string) error
 	GetClaimedSeatCapacityIntent(context.Context, db.GetClaimedSeatCapacityIntentParams) (db.SeatCapacityOutbox, error)
-	GetInvitation(context.Context, pgtype.UUID) (db.WorkspaceInvitation, error)
+	GetInvitation(context.Context, string) (db.WorkspaceInvitation, error)
 	MarkClaimedSeatCapacityIntentDeadLettered(context.Context, db.MarkClaimedSeatCapacityIntentDeadLetteredParams) (int64, error)
 	MarkClaimedSeatCapacityIntentFailed(context.Context, db.MarkClaimedSeatCapacityIntentFailedParams) (int64, error)
 	TransitionClaimedSeatCapacityIntent(context.Context, db.TransitionClaimedSeatCapacityIntentParams) (int64, error)
@@ -118,16 +117,14 @@ func (w *Worker) ReconcileOnce(ctx context.Context) error {
 	}
 	workspaceDeferrals := make(map[uuid.UUID]rateLimitDeferral)
 	for i := int32(0); i < w.batchSize; i++ {
-		intent, err := w.queries.ClaimNextDueSeatCapacityIntent(ctx, pgtype.Timestamptz{
-			Time: w.now().Add(defaultClaimLease), Valid: true,
-		})
-		if errors.Is(err, pgx.ErrNoRows) {
+		intent, err := w.queries.ClaimNextDueSeatCapacityIntent(ctx, w.now().Add(defaultClaimLease).UTC().Format(time.RFC3339))
+		if errors.Is(err, sql.ErrNoRows) {
 			break
 		}
 		if err != nil {
 			return err
 		}
-		workspaceID := uuidFromPG(intent.WorkspaceID)
+		workspaceID := uuidFromString(intent.WorkspaceID)
 		if deferral, ok := workspaceDeferrals[workspaceID]; ok && deferral.until.After(w.now()) {
 			if err := w.deferClaimedUntil(ctx, intent, deferral.reason, deferral.until); err != nil {
 				return err
@@ -174,7 +171,7 @@ func (w *Worker) deferRateLimited(ctx context.Context, intent db.SeatCapacityOut
 
 func (w *Worker) deferClaimedUntil(ctx context.Context, intent db.SeatCapacityOutbox, reason string, deferredUntil time.Time) error {
 	_, err := w.queries.DeferClaimedSeatCapacityIntent(ctx, db.DeferClaimedSeatCapacityIntentParams{
-		LastError: reason, NextAttemptAt: pgtype.Timestamptz{Time: deferredUntil, Valid: true},
+		LastError: reason, NextAttemptAt: deferredUntil.UTC().Format(time.RFC3339),
 		OperationToken: intent.OperationToken, Action: intent.Action, LeaseToken: intent.LeaseToken,
 	})
 	return err
@@ -186,7 +183,7 @@ func (w *Worker) settleWithWorkspaceLimit(ctx context.Context, intent db.SeatCap
 	}
 	lockCtx, cancel := context.WithTimeout(ctx, defaultWorkspaceLockWait)
 	defer cancel()
-	lockedDB, unlock, err := w.workspaceLocker.Lock(lockCtx, uuidFromPG(intent.WorkspaceID))
+	lockedDB, unlock, err := w.workspaceLocker.Lock(lockCtx, uuidFromString(intent.WorkspaceID))
 	if err != nil {
 		return err
 	}
@@ -198,7 +195,7 @@ func (w *Worker) settleWithWorkspaceLimit(ctx context.Context, intent db.SeatCap
 	current, err := lockedQueries.GetClaimedSeatCapacityIntent(ctx, db.GetClaimedSeatCapacityIntentParams{
 		OperationToken: intent.OperationToken, Action: intent.Action, LeaseToken: intent.LeaseToken,
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
@@ -213,15 +210,15 @@ func (w *Worker) settle(ctx context.Context, intent db.SeatCapacityOutbox) error
 	if !intent.LeaseToken.Valid {
 		return errors.New("claimed seat capacity intent omitted lease token")
 	}
-	workspaceID := uuidFromPG(intent.WorkspaceID)
-	token := uuidFromPG(intent.OperationToken)
+	workspaceID := uuidFromString(intent.WorkspaceID)
+	token := uuidFromString(intent.OperationToken)
 	switch intent.Action {
 	case ActionReserveInvitation:
 		return w.recoverReserve(ctx, intent, workspaceID, token)
 	case ActionConsumeInvitation, ActionClaimShareJoin:
 		return w.recoverConsuming(ctx, intent, workspaceID, token)
 	case ActionConfirm:
-		decision, err := w.executor.Confirm(ctx, workspaceID, token, uuidFromPG(intent.MemberID))
+		decision, err := w.executor.Confirm(ctx, workspaceID, token, uuidFromNull(intent.MemberID))
 		if err != nil {
 			return err
 		}
@@ -239,7 +236,7 @@ func (w *Worker) settle(ctx context.Context, intent db.SeatCapacityOutbox) error
 		}
 		return w.deleteCurrent(ctx, intent)
 	case ActionReleaseMember:
-		decision, err := w.executor.ReleaseMember(ctx, workspaceID, uuidFromPG(intent.MemberID))
+		decision, err := w.executor.ReleaseMember(ctx, workspaceID, uuidFromNull(intent.MemberID))
 		if err != nil && !IsNotFound(err) {
 			return err
 		}
@@ -269,17 +266,17 @@ func (w *Worker) recoverReserve(ctx context.Context, intent db.SeatCapacityOutbo
 	case "reserved":
 		invitationID := intent.InvitationID
 		if !invitationID.Valid {
-			_, transitionErr := w.transition(ctx, intent, ActionRelease, pgtype.UUID{})
+			_, transitionErr := w.transition(ctx, intent, ActionRelease, sql.NullString{})
 			return transitionErr
 		}
-		invitation, getErr := w.queries.GetInvitation(ctx, invitationID)
+		invitation, getErr := w.queries.GetInvitation(ctx, invitationID.String)
 		if getErr == nil && invitation.Status == "pending" {
 			return w.deleteCurrent(ctx, intent)
 		}
-		if getErr != nil && !errors.Is(getErr, pgx.ErrNoRows) {
+		if getErr != nil && !errors.Is(getErr, sql.ErrNoRows) {
 			return getErr
 		}
-		_, transitionErr := w.transition(ctx, intent, ActionRelease, pgtype.UUID{})
+		_, transitionErr := w.transition(ctx, intent, ActionRelease, sql.NullString{})
 		return transitionErr
 	default:
 		return errors.New("unexpected recovered invitation reservation state " + decision.Operation.State)
@@ -307,7 +304,7 @@ func (w *Worker) recoverConsuming(ctx context.Context, intent db.SeatCapacityOut
 		return w.deleteCurrent(ctx, intent)
 	case "released":
 		if intent.Action == ActionConsumeInvitation && intent.InvitationID.Valid {
-			if err := w.queries.ExpireInvitationForCapacityRecovery(ctx, intent.InvitationID); err != nil {
+			if err := w.queries.ExpireInvitationForCapacityRecovery(ctx, intent.InvitationID.String); err != nil {
 				return err
 			}
 		}
@@ -316,12 +313,12 @@ func (w *Worker) recoverConsuming(ctx context.Context, intent db.SeatCapacityOut
 		// No product transaction committed: that transaction would atomically
 		// change this row to confirm. Retire the abandoned user request rather
 		// than hold capacity forever.
-		changed, err := w.transition(ctx, intent, ActionRelease, pgtype.UUID{})
+		changed, err := w.transition(ctx, intent, ActionRelease, sql.NullString{})
 		if err != nil || !changed {
 			return err
 		}
 		if intent.Action == ActionConsumeInvitation && intent.InvitationID.Valid {
-			if err := w.queries.ExpireInvitationForCapacityRecovery(ctx, intent.InvitationID); err != nil {
+			if err := w.queries.ExpireInvitationForCapacityRecovery(ctx, intent.InvitationID.String); err != nil {
 				return err
 			}
 		}
@@ -331,10 +328,10 @@ func (w *Worker) recoverConsuming(ctx context.Context, intent db.SeatCapacityOut
 	}
 }
 
-func (w *Worker) transition(ctx context.Context, intent db.SeatCapacityOutbox, action string, memberID pgtype.UUID) (bool, error) {
+func (w *Worker) transition(ctx context.Context, intent db.SeatCapacityOutbox, action string, memberID sql.NullString) (bool, error) {
 	rows, err := w.queries.TransitionClaimedSeatCapacityIntent(ctx, db.TransitionClaimedSeatCapacityIntentParams{
 		NextAction: action, CurrentAction: intent.Action, MemberID: memberID, OperationToken: intent.OperationToken,
-		NextAttemptAt: pgtype.Timestamptz{Time: w.now(), Valid: true}, LeaseToken: intent.LeaseToken,
+		NextAttemptAt: w.now().UTC().Format(time.RFC3339), LeaseToken: intent.LeaseToken,
 	})
 	return rows == 1, err
 }
@@ -349,7 +346,7 @@ func (w *Worker) deleteCurrent(ctx context.Context, intent db.SeatCapacityOutbox
 }
 
 func (w *Worker) recordFailure(ctx context.Context, intent db.SeatCapacityOutbox, settleErr error) {
-	if intent.AttemptCount+1 >= w.maxAttempts {
+	if intent.AttemptCount+1 >= int64(w.maxAttempts) {
 		rows, err := w.queries.MarkClaimedSeatCapacityIntentDeadLettered(ctx, db.MarkClaimedSeatCapacityIntentDeadLetteredParams{
 			LastError: settleErr.Error(), OperationToken: intent.OperationToken, Action: intent.Action,
 			LeaseToken: intent.LeaseToken,
@@ -366,14 +363,14 @@ func (w *Worker) recordFailure(ctx context.Context, intent db.SeatCapacityOutbox
 		return
 	}
 	backoff := 5 * time.Second
-	for i := int32(0); i < intent.AttemptCount && backoff < 5*time.Minute; i++ {
+	for i := int64(0); i < intent.AttemptCount && backoff < 5*time.Minute; i++ {
 		backoff *= 2
 	}
 	if backoff > 5*time.Minute {
 		backoff = 5 * time.Minute
 	}
 	rows, err := w.queries.MarkClaimedSeatCapacityIntentFailed(ctx, db.MarkClaimedSeatCapacityIntentFailedParams{
-		LastError: settleErr.Error(), NextAttemptAt: pgtype.Timestamptz{Time: w.now().Add(backoff), Valid: true},
+		LastError: settleErr.Error(), NextAttemptAt: w.now().Add(backoff).UTC().Format(time.RFC3339),
 		OperationToken: intent.OperationToken, Action: intent.Action, LeaseToken: intent.LeaseToken,
 	})
 	if err != nil {
@@ -386,19 +383,27 @@ func (w *Worker) recordFailure(ctx context.Context, intent db.SeatCapacityOutbox
 	}
 }
 
-func uuidFromPG(value pgtype.UUID) uuid.UUID {
+func uuidFromString(value string) uuid.UUID {
+	id, err := uuid.Parse(value)
+	if err != nil {
+		return uuid.Nil
+	}
+	return id
+}
+
+func uuidFromNull(value sql.NullString) uuid.UUID {
 	if !value.Valid {
 		return uuid.Nil
 	}
-	return uuid.UUID(value.Bytes)
+	return uuidFromString(value.String)
 }
 
-func workspaceIDString(value pgtype.UUID) string { return uuidFromPG(value).String() }
+func workspaceIDString(value string) string { return value }
 
-func RecoveryDue(now time.Time) pgtype.Timestamptz {
-	return pgtype.Timestamptz{Time: now.Add(defaultRecoveryGrace), Valid: true}
+func RecoveryDue(now time.Time) string {
+	return now.Add(defaultRecoveryGrace).UTC().Format(time.RFC3339)
 }
 
-func RetryDue(now time.Time) pgtype.Timestamptz {
-	return pgtype.Timestamptz{Time: now, Valid: true}
+func RetryDue(now time.Time) string {
+	return now.UTC().Format(time.RFC3339)
 }

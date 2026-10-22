@@ -2,19 +2,19 @@ package service
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/events"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/taskfailure"
 )
 
-// mockRow implements pgx.Row, returning either a scanned task or pgx.ErrNoRows.
+// mockRow implements *sql.Row, returning either a scanned task or sql.ErrNoRows.
 type mockRow struct {
 	task *db.AgentTaskQueue
 	err  error
@@ -38,18 +38,16 @@ func (r *mockRow) Scan(dest ...any) error {
 		}
 		// Copy value from source to dest by assigning through the pointer.
 		switch d := dest[i].(type) {
-		case *pgtype.UUID:
-			*d = *(p.(*pgtype.UUID))
 		case *string:
 			*d = *(p.(*string))
+		case *int64:
+			*d = *(p.(*int64))
 		case *int32:
 			*d = *(p.(*int32))
-		case *pgtype.Timestamptz:
-			*d = *(p.(*pgtype.Timestamptz))
+		case *sql.NullString:
+			*d = *(p.(*sql.NullString))
 		case *[]byte:
 			*d = *(p.(*[]byte))
-		case *pgtype.Text:
-			*d = *(p.(*pgtype.Text))
 		}
 	}
 	return nil
@@ -61,28 +59,27 @@ type mockDBTX struct {
 	task db.AgentTaskQueue
 }
 
-func (m *mockDBTX) Exec(_ context.Context, _ string, _ ...interface{}) (pgconn.CommandTag, error) {
-	return pgconn.NewCommandTag(""), nil
+func (m *mockDBTX) ExecContext(_ context.Context, _ string, _ ...interface{}) (sql.Result, error) {
+	return stubResult{}, nil
 }
 
-func (m *mockDBTX) Query(_ context.Context, _ string, _ ...interface{}) (pgx.Rows, error) {
-	return nil, pgx.ErrNoRows
+func (m *mockDBTX) QueryContext(_ context.Context, _ string, _ ...interface{}) (*sql.Rows, error) {
+	return nil, sql.ErrNoRows
 }
 
-func (m *mockDBTX) QueryRow(_ context.Context, sql string, _ ...interface{}) pgx.Row {
+func (m *mockDBTX) QueryRowContext(_ context.Context, query string, _ ...interface{}) *sql.Row {
 	// CompleteAgentTask and FailAgentTask SQL contain "SET status ="
-	if strings.Contains(sql, "SET status =") {
-		return &mockRow{err: pgx.ErrNoRows}
+	if strings.Contains(query, "SET status =") {
+		return errQueryRow()
 	}
 	// GetAgentTask — return the existing task
-	return &mockRow{task: &m.task}
+	return errQueryRow()
 }
 
-func testUUID(b byte) pgtype.UUID {
-	var u pgtype.UUID
-	u.Valid = true
-	u.Bytes[0] = b
-	return u
+func testUUID(b byte) string {
+	var u uuid.UUID
+	u[0] = b
+	return u.String()
 }
 
 func TestCompleteTask_AlreadyFinalized(t *testing.T) {
@@ -224,9 +221,9 @@ func TestProviderNetworkRetrySchedule(t *testing.T) {
 	// autopilot run so only the reason/attempt/ceiling gate is exercised.
 	mkTask := func(attempt, max int32) db.AgentTaskQueue {
 		return db.AgentTaskQueue{
-			Attempt:     attempt,
-			MaxAttempts: max,
-			IssueID:     pgtype.UUID{Bytes: [16]byte{1}, Valid: true},
+			Attempt:     int64(attempt),
+			MaxAttempts: int64(max),
+			IssueID:     nullString(uuid.UUID([16]byte{1}).String()),
 		}
 	}
 	eligCases := []struct {
@@ -363,9 +360,9 @@ func TestOpencodeStreamEndedFailureRetries(t *testing.T) {
 
 	mkTask := func(attempt, max int32) db.AgentTaskQueue {
 		return db.AgentTaskQueue{
-			Attempt:     attempt,
-			MaxAttempts: max,
-			IssueID:     pgtype.UUID{Bytes: [16]byte{1}, Valid: true},
+			Attempt:     int64(attempt),
+			MaxAttempts: int64(max),
+			IssueID:     nullString(uuid.UUID([16]byte{1}).String()),
 		}
 	}
 
@@ -450,7 +447,7 @@ func TestSkillBundleFailureFromLegacyDaemonRetries(t *testing.T) {
 	task := db.AgentTaskQueue{
 		Attempt:     1,
 		MaxAttempts: 2,
-		IssueID:     pgtype.UUID{Bytes: [16]byte{1}, Valid: true},
+		IssueID:     nullString(uuid.UUID([16]byte{1}).String()),
 	}
 
 	// What an old daemon puts on the wire, and what FailTask does with it.
@@ -513,4 +510,8 @@ func TestContextOverflowFromLegacyDaemonRetiresSession(t *testing.T) {
 	if !ResumeUnsafeFailure(current, overflowErr) {
 		t.Errorf("an overflow reported by a current daemon must retire the session; got reason %q", current)
 	}
+}
+
+func (*mockDBTX) PrepareContext(context.Context, string) (*sql.Stmt, error) {
+	return nil, fmt.Errorf("prepare not supported")
 }

@@ -7,56 +7,105 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const deleteTaskBatch = `-- name: DeleteTaskBatch :exec
-WITH
-batch AS MATERIALIZED (
-    SELECT id FROM unnest($1::uuid[]) AS t(id)
-),
-deleted_task_usage AS (
-    DELETE FROM task_usage WHERE task_id IN (SELECT id FROM batch)
-),
-deleted_task_messages AS (
-    DELETE FROM task_message WHERE task_id IN (SELECT id FROM batch)
-),
-deleted_task_tokens AS (
-    DELETE FROM task_token WHERE task_id IN (SELECT id FROM batch)
-),
-deleted_task_supplements AS (
-    DELETE FROM task_supplement WHERE task_id IN (SELECT id FROM batch)
-),
-deleted_task_supplement_capabilities AS (
-    DELETE FROM task_supplement_capability WHERE task_id IN (SELECT id FROM batch)
-),
-deleted_channel_outbound_cards AS (
-    DELETE FROM channel_outbound_card_message WHERE task_id IN (SELECT id FROM batch)
-),
-deleted_lark_outbound_cards AS (
-    DELETE FROM lark_outbound_card_message WHERE task_id IN (SELECT id FROM batch)
-),
-deleted_channel_task_deliveries AS (
-    DELETE FROM channel_task_delivery WHERE task_id IN (SELECT id FROM batch)
-),
-deleted_draft_restores AS (
-    DELETE FROM chat_draft_restore WHERE task_id IN (SELECT id FROM batch)
-)
-DELETE FROM agent_task_queue WHERE id IN (SELECT id FROM batch)
+DELETE FROM task_usage WHERE task_id IN (SELECT id FROM (SELECT value AS id FROM json_each(?1)))
 `
 
 // Deletes one bounded batch of tasks together with everything that hangs off
 // them, every arm keyed by task_id against an existing index, then the task rows
 // by primary key. The legacy FK cascades stay a safety net only: this statement
 // is what actually removes the rows, so teardown keeps working when they go.
-func (q *Queries) DeleteTaskBatch(ctx context.Context, taskIds []pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteTaskBatch, taskIds)
+func (q *Queries) DeleteTaskBatch(ctx context.Context, taskIds interface{}) error {
+	_, err := q.db.ExecContext(ctx, deleteTaskBatch, taskIds)
+	return err
+}
+
+const deleteTaskBatch_Step10 = `-- name: DeleteTaskBatch_Step10 :exec
+DELETE FROM agent_task_queue WHERE id IN (SELECT id FROM (SELECT value AS id FROM json_each(?1)))
+`
+
+func (q *Queries) DeleteTaskBatch_Step10(ctx context.Context, taskIds interface{}) error {
+	_, err := q.db.ExecContext(ctx, deleteTaskBatch_Step10, taskIds)
+	return err
+}
+
+const deleteTaskBatch_Step2 = `-- name: DeleteTaskBatch_Step2 :exec
+DELETE FROM task_message WHERE task_id IN (SELECT id FROM (SELECT value AS id FROM json_each(?1)))
+`
+
+func (q *Queries) DeleteTaskBatch_Step2(ctx context.Context, taskIds interface{}) error {
+	_, err := q.db.ExecContext(ctx, deleteTaskBatch_Step2, taskIds)
+	return err
+}
+
+const deleteTaskBatch_Step3 = `-- name: DeleteTaskBatch_Step3 :exec
+DELETE FROM task_token WHERE task_id IN (SELECT id FROM (SELECT value AS id FROM json_each(?1)))
+`
+
+func (q *Queries) DeleteTaskBatch_Step3(ctx context.Context, taskIds interface{}) error {
+	_, err := q.db.ExecContext(ctx, deleteTaskBatch_Step3, taskIds)
+	return err
+}
+
+const deleteTaskBatch_Step4 = `-- name: DeleteTaskBatch_Step4 :exec
+DELETE FROM task_supplement WHERE task_id IN (SELECT id FROM (SELECT value AS id FROM json_each(?1)))
+`
+
+func (q *Queries) DeleteTaskBatch_Step4(ctx context.Context, taskIds interface{}) error {
+	_, err := q.db.ExecContext(ctx, deleteTaskBatch_Step4, taskIds)
+	return err
+}
+
+const deleteTaskBatch_Step5 = `-- name: DeleteTaskBatch_Step5 :exec
+DELETE FROM task_supplement_capability WHERE task_id IN (SELECT id FROM (SELECT value AS id FROM json_each(?1)))
+`
+
+func (q *Queries) DeleteTaskBatch_Step5(ctx context.Context, taskIds interface{}) error {
+	_, err := q.db.ExecContext(ctx, deleteTaskBatch_Step5, taskIds)
+	return err
+}
+
+const deleteTaskBatch_Step6 = `-- name: DeleteTaskBatch_Step6 :exec
+DELETE FROM channel_outbound_card_message WHERE task_id IN (SELECT id FROM (SELECT value AS id FROM json_each(?1)))
+`
+
+func (q *Queries) DeleteTaskBatch_Step6(ctx context.Context, taskIds interface{}) error {
+	_, err := q.db.ExecContext(ctx, deleteTaskBatch_Step6, taskIds)
+	return err
+}
+
+const deleteTaskBatch_Step7 = `-- name: DeleteTaskBatch_Step7 :exec
+DELETE FROM lark_outbound_card_message WHERE task_id IN (SELECT id FROM (SELECT value AS id FROM json_each(?1)))
+`
+
+func (q *Queries) DeleteTaskBatch_Step7(ctx context.Context, taskIds interface{}) error {
+	_, err := q.db.ExecContext(ctx, deleteTaskBatch_Step7, taskIds)
+	return err
+}
+
+const deleteTaskBatch_Step8 = `-- name: DeleteTaskBatch_Step8 :exec
+DELETE FROM channel_task_delivery WHERE task_id IN (SELECT id FROM (SELECT value AS id FROM json_each(?1)))
+`
+
+func (q *Queries) DeleteTaskBatch_Step8(ctx context.Context, taskIds interface{}) error {
+	_, err := q.db.ExecContext(ctx, deleteTaskBatch_Step8, taskIds)
+	return err
+}
+
+const deleteTaskBatch_Step9 = `-- name: DeleteTaskBatch_Step9 :exec
+DELETE FROM chat_draft_restore WHERE task_id IN (SELECT id FROM (SELECT value AS id FROM json_each(?1)))
+`
+
+func (q *Queries) DeleteTaskBatch_Step9(ctx context.Context, taskIds interface{}) error {
+	_, err := q.db.ExecContext(ctx, deleteTaskBatch_Step9, taskIds)
 	return err
 }
 
 const deleteTaskTokensByAgent = `-- name: DeleteTaskTokensByAgent :exec
-DELETE FROM task_token WHERE agent_id = $1
+DELETE FROM task_token WHERE agent_id = ?1
 `
 
 // The third explicit task_token path. workspace_id (in DeleteWorkspaceLeafData)
@@ -65,437 +114,805 @@ DELETE FROM task_token WHERE agent_id = $1
 // back on the agent_id cascade for it. Uses idx_task_token_agent_id
 // (migration 275); one agent key per call for the same planner reason as
 // ListTaskIDsByAgentBatch.
-func (q *Queries) DeleteTaskTokensByAgent(ctx context.Context, agentID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteTaskTokensByAgent, agentID)
+func (q *Queries) DeleteTaskTokensByAgent(ctx context.Context, agentID string) error {
+	_, err := q.db.ExecContext(ctx, deleteTaskTokensByAgent, agentID)
 	return err
 }
 
 const deleteWorkspaceAdministration = `-- name: DeleteWorkspaceAdministration :exec
-WITH
-deleted_members AS (
-    DELETE FROM member WHERE member.workspace_id = $1
-),
-deleted_notification_preferences AS (
-    DELETE FROM notification_preference
-    WHERE notification_preference.workspace_id = $1
-),
-deleted_pins AS (
-    DELETE FROM pinned_item WHERE pinned_item.workspace_id = $1
-),
-deleted_daemon_tokens AS (
-    DELETE FROM daemon_token WHERE daemon_token.workspace_id = $1
-),
-detached_feedback AS (
-    UPDATE feedback
-    SET workspace_id = NULL
-    WHERE feedback.workspace_id = $1
-),
-detached_client_usage AS (
-    UPDATE client_usage_daily
-    SET workspace_id = NULL
-    WHERE client_usage_daily.workspace_id = $1
-),
-deleted_share_links AS (
-    DELETE FROM workspace_share_link
-    WHERE workspace_share_link.workspace_id = $1
-)
-DELETE FROM workspace_invitation
-WHERE workspace_invitation.workspace_id = $1
+DELETE FROM member WHERE member.workspace_id = ?1
 `
 
-func (q *Queries) DeleteWorkspaceAdministration(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteWorkspaceAdministration, workspaceID)
+func (q *Queries) DeleteWorkspaceAdministration(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceAdministration, workspaceID)
+	return err
+}
+
+const deleteWorkspaceAdministration_Step2 = `-- name: DeleteWorkspaceAdministration_Step2 :exec
+DELETE FROM notification_preference
+    WHERE notification_preference.workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceAdministration_Step2(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceAdministration_Step2, workspaceID)
+	return err
+}
+
+const deleteWorkspaceAdministration_Step3 = `-- name: DeleteWorkspaceAdministration_Step3 :exec
+DELETE FROM pinned_item WHERE pinned_item.workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceAdministration_Step3(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceAdministration_Step3, workspaceID)
+	return err
+}
+
+const deleteWorkspaceAdministration_Step4 = `-- name: DeleteWorkspaceAdministration_Step4 :exec
+DELETE FROM daemon_token WHERE daemon_token.workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceAdministration_Step4(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceAdministration_Step4, workspaceID)
+	return err
+}
+
+const deleteWorkspaceAdministration_Step5 = `-- name: DeleteWorkspaceAdministration_Step5 :exec
+UPDATE feedback
+    SET workspace_id = NULL
+    WHERE feedback.workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceAdministration_Step5(ctx context.Context, workspaceID sql.NullString) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceAdministration_Step5, workspaceID)
+	return err
+}
+
+const deleteWorkspaceAdministration_Step6 = `-- name: DeleteWorkspaceAdministration_Step6 :exec
+UPDATE client_usage_daily
+    SET workspace_id = NULL
+    WHERE client_usage_daily.workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceAdministration_Step6(ctx context.Context, workspaceID sql.NullString) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceAdministration_Step6, workspaceID)
+	return err
+}
+
+const deleteWorkspaceAdministration_Step7 = `-- name: DeleteWorkspaceAdministration_Step7 :exec
+DELETE FROM workspace_share_link
+    WHERE workspace_share_link.workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceAdministration_Step7(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceAdministration_Step7, workspaceID)
+	return err
+}
+
+const deleteWorkspaceAdministration_Step8 = `-- name: DeleteWorkspaceAdministration_Step8 :exec
+DELETE FROM workspace_invitation
+WHERE workspace_invitation.workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceAdministration_Step8(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceAdministration_Step8, workspaceID)
 	return err
 }
 
 const deleteWorkspaceAgents = `-- name: DeleteWorkspaceAgents :exec
-DELETE FROM agent WHERE agent.workspace_id = $1
+DELETE FROM agent_mcp_server
+WHERE agent_id IN (SELECT id FROM agent WHERE agent.workspace_id = ?1)
+   OR server_id IN (SELECT id FROM workspace_mcp_server WHERE workspace_mcp_server.workspace_id = ?1)
 `
 
-func (q *Queries) DeleteWorkspaceAgents(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteWorkspaceAgents, workspaceID)
+func (q *Queries) DeleteWorkspaceAgents(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceAgents, workspaceID)
+	return err
+}
+
+const deleteWorkspaceAgents_Step2 = `-- name: DeleteWorkspaceAgents_Step2 :exec
+DELETE FROM agent WHERE agent.workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceAgents_Step2(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceAgents_Step2, workspaceID)
 	return err
 }
 
 const deleteWorkspaceAutopilotChildren = `-- name: DeleteWorkspaceAutopilotChildren :exec
-WITH
-deleted_triggers AS (
-    DELETE FROM autopilot_trigger
+DELETE FROM autopilot_trigger
     WHERE autopilot_id IN (
-        SELECT id FROM autopilot WHERE autopilot.workspace_id = $1
+        SELECT id FROM autopilot WHERE autopilot.workspace_id = ?1
     )
-)
-DELETE FROM autopilot_rule_version
-WHERE autopilot_rule_version.workspace_id = $1
 `
 
-func (q *Queries) DeleteWorkspaceAutopilotChildren(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteWorkspaceAutopilotChildren, workspaceID)
+func (q *Queries) DeleteWorkspaceAutopilotChildren(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceAutopilotChildren, workspaceID)
+	return err
+}
+
+const deleteWorkspaceAutopilotChildren_Step2 = `-- name: DeleteWorkspaceAutopilotChildren_Step2 :exec
+DELETE FROM autopilot_rule_version
+WHERE autopilot_rule_version.workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceAutopilotChildren_Step2(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceAutopilotChildren_Step2, workspaceID)
 	return err
 }
 
 const deleteWorkspaceAutopilotQuotaPeriods = `-- name: DeleteWorkspaceAutopilotQuotaPeriods :exec
 DELETE FROM autopilot_quota_period
-WHERE autopilot_quota_period.workspace_id = $1
+WHERE autopilot_quota_period.workspace_id = ?1
 `
 
-func (q *Queries) DeleteWorkspaceAutopilotQuotaPeriods(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteWorkspaceAutopilotQuotaPeriods, workspaceID)
+func (q *Queries) DeleteWorkspaceAutopilotQuotaPeriods(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceAutopilotQuotaPeriods, workspaceID)
 	return err
 }
 
 const deleteWorkspaceAutopilotQuotaReservations = `-- name: DeleteWorkspaceAutopilotQuotaReservations :exec
 DELETE FROM autopilot_quota_reservation
-WHERE autopilot_quota_reservation.workspace_id = $1
+WHERE autopilot_quota_reservation.workspace_id = ?1
 `
 
-func (q *Queries) DeleteWorkspaceAutopilotQuotaReservations(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteWorkspaceAutopilotQuotaReservations, workspaceID)
+func (q *Queries) DeleteWorkspaceAutopilotQuotaReservations(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceAutopilotQuotaReservations, workspaceID)
 	return err
 }
 
 const deleteWorkspaceAutopilotRuns = `-- name: DeleteWorkspaceAutopilotRuns :exec
 DELETE FROM autopilot_run
 WHERE autopilot_id IN (
-    SELECT id FROM autopilot WHERE autopilot.workspace_id = $1
+    SELECT id FROM autopilot WHERE autopilot.workspace_id = ?1
 )
 `
 
-func (q *Queries) DeleteWorkspaceAutopilotRuns(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteWorkspaceAutopilotRuns, workspaceID)
+func (q *Queries) DeleteWorkspaceAutopilotRuns(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceAutopilotRuns, workspaceID)
 	return err
 }
 
 const deleteWorkspaceAutopilots = `-- name: DeleteWorkspaceAutopilots :exec
-DELETE FROM autopilot WHERE autopilot.workspace_id = $1
+DELETE FROM autopilot WHERE autopilot.workspace_id = ?1
 `
 
-func (q *Queries) DeleteWorkspaceAutopilots(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteWorkspaceAutopilots, workspaceID)
+func (q *Queries) DeleteWorkspaceAutopilots(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceAutopilots, workspaceID)
 	return err
 }
 
 const deleteWorkspaceChatMessages = `-- name: DeleteWorkspaceChatMessages :exec
 DELETE FROM chat_message
 WHERE chat_session_id IN (
-    SELECT id FROM chat_session WHERE chat_session.workspace_id = $1
+    SELECT id FROM chat_session WHERE chat_session.workspace_id = ?1
 )
 `
 
-func (q *Queries) DeleteWorkspaceChatMessages(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteWorkspaceChatMessages, workspaceID)
+func (q *Queries) DeleteWorkspaceChatMessages(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceChatMessages, workspaceID)
 	return err
 }
 
 const deleteWorkspaceComments = `-- name: DeleteWorkspaceComments :exec
-DELETE FROM comment WHERE comment.workspace_id = $1
+DELETE FROM comment WHERE comment.workspace_id = ?1
 `
 
-func (q *Queries) DeleteWorkspaceComments(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteWorkspaceComments, workspaceID)
+func (q *Queries) DeleteWorkspaceComments(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceComments, workspaceID)
 	return err
 }
 
 const deleteWorkspaceCommunicationRoots = `-- name: DeleteWorkspaceCommunicationRoots :exec
-WITH
-deleted_sessions AS (
-    DELETE FROM chat_session WHERE chat_session.workspace_id = $1
-),
-deleted_dingtalk_group_presence AS (
-    DELETE FROM dingtalk_group_presence WHERE workspace_id = $1
-),
-deleted_dingtalk_bot_identity AS (
-    DELETE FROM dingtalk_bot_identity WHERE workspace_id = $1
-),
-deleted_channel_installations AS (
-    DELETE FROM channel_installation
-    WHERE channel_installation.workspace_id = $1
-)
-DELETE FROM lark_installation WHERE lark_installation.workspace_id = $1
+DELETE FROM chat_session WHERE chat_session.workspace_id = ?1
 `
 
-func (q *Queries) DeleteWorkspaceCommunicationRoots(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteWorkspaceCommunicationRoots, workspaceID)
+func (q *Queries) DeleteWorkspaceCommunicationRoots(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceCommunicationRoots, workspaceID)
+	return err
+}
+
+const deleteWorkspaceCommunicationRoots_Step2 = `-- name: DeleteWorkspaceCommunicationRoots_Step2 :exec
+DELETE FROM dingtalk_group_presence WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceCommunicationRoots_Step2(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceCommunicationRoots_Step2, workspaceID)
+	return err
+}
+
+const deleteWorkspaceCommunicationRoots_Step3 = `-- name: DeleteWorkspaceCommunicationRoots_Step3 :exec
+DELETE FROM dingtalk_bot_identity WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceCommunicationRoots_Step3(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceCommunicationRoots_Step3, workspaceID)
+	return err
+}
+
+const deleteWorkspaceCommunicationRoots_Step4 = `-- name: DeleteWorkspaceCommunicationRoots_Step4 :exec
+DELETE FROM channel_installation
+    WHERE channel_installation.workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceCommunicationRoots_Step4(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceCommunicationRoots_Step4, workspaceID)
+	return err
+}
+
+const deleteWorkspaceCommunicationRoots_Step5 = `-- name: DeleteWorkspaceCommunicationRoots_Step5 :exec
+DELETE FROM lark_installation WHERE lark_installation.workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceCommunicationRoots_Step5(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceCommunicationRoots_Step5, workspaceID)
 	return err
 }
 
 const deleteWorkspaceConnections = `-- name: DeleteWorkspaceConnections :exec
-WITH deleted_github_installations AS (
-    DELETE FROM github_installation
-    WHERE github_installation.workspace_id = $1
-)
-DELETE FROM vcs_connection WHERE vcs_connection.workspace_id = $1
+DELETE FROM github_installation
+    WHERE github_installation.workspace_id = ?1
 `
 
-func (q *Queries) DeleteWorkspaceConnections(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteWorkspaceConnections, workspaceID)
+func (q *Queries) DeleteWorkspaceConnections(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceConnections, workspaceID)
+	return err
+}
+
+const deleteWorkspaceConnections_Step2 = `-- name: DeleteWorkspaceConnections_Step2 :exec
+DELETE FROM vcs_connection WHERE vcs_connection.workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceConnections_Step2(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceConnections_Step2, workspaceID)
 	return err
 }
 
 const deleteWorkspaceIssueRoots = `-- name: DeleteWorkspaceIssueRoots :exec
-WITH deleted_wakeup_receipts AS (
- DELETE FROM issue_wakeup_receipt WHERE wakeup_id IN (SELECT id FROM issue_wakeup WHERE workspace_id=$1)
-), deleted_wakeups AS (
- DELETE FROM issue_wakeup WHERE workspace_id=$1
-),
-deleted_child_events AS (
- DELETE FROM issue_child_event WHERE workspace_id=$1
-),
-deleted_issues AS (
-    DELETE FROM issue WHERE issue.workspace_id = $1
-),
-deleted_labels AS (
-    DELETE FROM issue_label WHERE issue_label.workspace_id = $1
-),
-deleted_properties AS (
-    DELETE FROM issue_property WHERE issue_property.workspace_id = $1
-),
-deleted_issue_views AS (
-    DELETE FROM issue_view WHERE issue_view.workspace_id = $1
-),
-deleted_issue_view_preferences AS (
-    DELETE FROM issue_view_preference
-    WHERE issue_view_preference.workspace_id = $1
-)
-DELETE FROM quick_action WHERE quick_action.workspace_id = $1
+DELETE FROM issue_wakeup_receipt WHERE wakeup_id IN (SELECT id FROM issue_wakeup WHERE workspace_id=?1)
 `
 
-func (q *Queries) DeleteWorkspaceIssueRoots(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteWorkspaceIssueRoots, workspaceID)
+func (q *Queries) DeleteWorkspaceIssueRoots(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceIssueRoots, workspaceID)
+	return err
+}
+
+const deleteWorkspaceIssueRoots_Step2 = `-- name: DeleteWorkspaceIssueRoots_Step2 :exec
+DELETE FROM issue_wakeup WHERE workspace_id=?1
+`
+
+func (q *Queries) DeleteWorkspaceIssueRoots_Step2(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceIssueRoots_Step2, workspaceID)
+	return err
+}
+
+const deleteWorkspaceIssueRoots_Step3 = `-- name: DeleteWorkspaceIssueRoots_Step3 :exec
+DELETE FROM issue_child_event WHERE workspace_id=?1
+`
+
+func (q *Queries) DeleteWorkspaceIssueRoots_Step3(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceIssueRoots_Step3, workspaceID)
+	return err
+}
+
+const deleteWorkspaceIssueRoots_Step4 = `-- name: DeleteWorkspaceIssueRoots_Step4 :exec
+DELETE FROM issue WHERE issue.workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceIssueRoots_Step4(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceIssueRoots_Step4, workspaceID)
+	return err
+}
+
+const deleteWorkspaceIssueRoots_Step5 = `-- name: DeleteWorkspaceIssueRoots_Step5 :exec
+DELETE FROM issue_label WHERE issue_label.workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceIssueRoots_Step5(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceIssueRoots_Step5, workspaceID)
+	return err
+}
+
+const deleteWorkspaceIssueRoots_Step6 = `-- name: DeleteWorkspaceIssueRoots_Step6 :exec
+DELETE FROM issue_property WHERE issue_property.workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceIssueRoots_Step6(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceIssueRoots_Step6, workspaceID)
+	return err
+}
+
+const deleteWorkspaceIssueRoots_Step7 = `-- name: DeleteWorkspaceIssueRoots_Step7 :exec
+DELETE FROM issue_view WHERE issue_view.workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceIssueRoots_Step7(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceIssueRoots_Step7, workspaceID)
+	return err
+}
+
+const deleteWorkspaceIssueRoots_Step8 = `-- name: DeleteWorkspaceIssueRoots_Step8 :exec
+DELETE FROM issue_view_preference
+    WHERE issue_view_preference.workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceIssueRoots_Step8(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceIssueRoots_Step8, workspaceID)
+	return err
+}
+
+const deleteWorkspaceIssueRoots_Step9 = `-- name: DeleteWorkspaceIssueRoots_Step9 :exec
+DELETE FROM quick_action WHERE quick_action.workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceIssueRoots_Step9(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceIssueRoots_Step9, workspaceID)
 	return err
 }
 
 const deleteWorkspaceLeafData = `-- name: DeleteWorkspaceLeafData :exec
-WITH
-ws_agents AS MATERIALIZED (
-    SELECT id FROM agent WHERE workspace_id = $1
-),
-ws_issues AS MATERIALIZED (
-    SELECT id FROM issue WHERE workspace_id = $1
-),
-ws_labels AS MATERIALIZED (
-    SELECT id FROM issue_label WHERE workspace_id = $1
-),
-ws_skills AS MATERIALIZED (
-    SELECT id FROM skill WHERE workspace_id = $1
-),
-ws_squads AS MATERIALIZED (
-    SELECT id FROM squad WHERE workspace_id = $1
-),
-ws_sessions AS MATERIALIZED (
-    SELECT id FROM chat_session WHERE workspace_id = $1
-),
-ws_autopilots AS MATERIALIZED (
-    SELECT id FROM autopilot WHERE workspace_id = $1
-),
-ws_github_prs AS MATERIALIZED (
-    SELECT id FROM github_pull_request WHERE workspace_id = $1
-),
-ws_vcs_prs AS MATERIALIZED (
-    SELECT id FROM vcs_pull_request WHERE workspace_id = $1
-),
-ws_vcs_connections AS MATERIALIZED (
-    SELECT id FROM vcs_connection WHERE workspace_id = $1
-),
-ws_channel_installations AS MATERIALIZED (
-    SELECT id FROM channel_installation WHERE workspace_id = $1
-),
-ws_lark_installations AS MATERIALIZED (
-    SELECT id FROM lark_installation WHERE workspace_id = $1
-),
-deleted_task_tokens AS (
-    DELETE FROM task_token
-    WHERE workspace_id = $1
-),
-deleted_orphan_task_supplements AS (
-    DELETE FROM task_supplement WHERE workspace_id = $1
-),
-deleted_orphan_task_supplement_capabilities AS (
-    DELETE FROM task_supplement_capability WHERE workspace_id = $1
-),
-deleted_hourly_dirty AS (
-    DELETE FROM task_usage_hourly_dirty WHERE workspace_id = $1
-),
-deleted_hourly AS (
-    DELETE FROM task_usage_hourly WHERE workspace_id = $1
-),
-deleted_attachments AS (
-    DELETE FROM attachment WHERE workspace_id = $1
-),
-deleted_channel_outbound_cards AS (
-    DELETE FROM channel_outbound_card_message
-    WHERE chat_session_id IN (SELECT id FROM ws_sessions)
-),
-deleted_lark_outbound_cards AS (
-    DELETE FROM lark_outbound_card_message
-    WHERE chat_session_id IN (SELECT id FROM ws_sessions)
-),
-deleted_draft_restores AS (
-    DELETE FROM chat_draft_restore
-    WHERE chat_session_id IN (SELECT id FROM ws_sessions)
-),
-deleted_agent_builder_drafts AS (
-    DELETE FROM agent_builder_draft WHERE workspace_id = $1
-),
-deleted_comment_reactions AS (
-    DELETE FROM comment_reaction WHERE workspace_id = $1
-),
-deleted_issue_reactions AS (
-    DELETE FROM issue_reaction WHERE workspace_id = $1
-),
-deleted_activity AS (
-    DELETE FROM activity_log WHERE workspace_id = $1
-),
-deleted_inbox AS (
-    DELETE FROM inbox_item WHERE workspace_id = $1
-),
-deleted_issue_dependencies AS (
-    DELETE FROM issue_dependency
-    WHERE issue_id IN (SELECT id FROM ws_issues)
-       OR depends_on_issue_id IN (SELECT id FROM ws_issues)
-),
-deleted_issue_subscribers AS (
-    DELETE FROM issue_subscriber
-    WHERE issue_id IN (SELECT id FROM ws_issues)
-),
-deleted_issue_labels AS (
-    DELETE FROM issue_to_label
-    WHERE issue_id IN (SELECT id FROM ws_issues)
-       OR label_id IN (SELECT id FROM ws_labels)
-),
-deleted_agent_labels AS (
-    DELETE FROM agent_to_label
-    WHERE agent_id IN (SELECT id FROM ws_agents)
-       OR label_id IN (SELECT id FROM ws_labels)
-),
-deleted_skill_labels AS (
-    DELETE FROM skill_to_label
-    WHERE skill_id IN (SELECT id FROM ws_skills)
-       OR label_id IN (SELECT id FROM ws_labels)
-),
-deleted_issue_github_links AS (
-    DELETE FROM issue_pull_request
-    WHERE issue_id IN (SELECT id FROM ws_issues)
-       OR pull_request_id IN (SELECT id FROM ws_github_prs)
-),
-deleted_issue_vcs_links AS (
-    DELETE FROM issue_vcs_pull_request
-    WHERE issue_id IN (SELECT id FROM ws_issues)
-       OR pull_request_id IN (SELECT id FROM ws_vcs_prs)
-),
-deleted_issue_pr_automation AS (
-    DELETE FROM issue_pr_automation WHERE workspace_id = $1
-),
-deleted_issue_pr_exclusions AS (
-    DELETE FROM issue_pull_request_exclusion WHERE workspace_id = $1
-),
-deleted_agent_invocation_targets AS (
-    DELETE FROM agent_invocation_target
-    WHERE agent_id IN (SELECT id FROM ws_agents)
-),
-deleted_agent_skills AS (
-    DELETE FROM agent_skill
-    WHERE agent_id IN (SELECT id FROM ws_agents)
-       OR skill_id IN (SELECT id FROM ws_skills)
-),
-deleted_skill_files AS (
-    DELETE FROM skill_file
-    WHERE skill_id IN (SELECT id FROM ws_skills)
-),
-deleted_daemon_connections AS (
-    DELETE FROM daemon_connection
-    WHERE agent_id IN (SELECT id FROM ws_agents)
-),
-deleted_squad_members AS (
-    DELETE FROM squad_member
-    WHERE squad_id IN (SELECT id FROM ws_squads)
-),
-deleted_project_resources AS (
-    DELETE FROM project_resource WHERE workspace_id = $1
-),
-deleted_autopilot_collaborators AS (
-    DELETE FROM autopilot_collaborator
-    WHERE autopilot_id IN (SELECT id FROM ws_autopilots)
-),
-deleted_autopilot_subscribers AS (
-    DELETE FROM autopilot_subscriber
-    WHERE autopilot_id IN (SELECT id FROM ws_autopilots)
-),
-deleted_webhook_deliveries AS (
-    DELETE FROM webhook_delivery WHERE workspace_id = $1
-),
-deleted_github_check_runs AS (
-    DELETE FROM github_pull_request_check_run
-    WHERE pr_id IN (SELECT id FROM ws_github_prs)
-),
-deleted_github_check_suites AS (
-    DELETE FROM github_pull_request_check_suite
-    WHERE pr_id IN (SELECT id FROM ws_github_prs)
-),
-deleted_pending_github_suites AS (
-    DELETE FROM github_pending_check_suite WHERE workspace_id = $1
-),
-deleted_channel_task_deliveries AS (
-    DELETE FROM channel_task_delivery
-    WHERE installation_id IN (SELECT id FROM ws_channel_installations)
-),
-deleted_channel_outbound_messages AS (
-    DELETE FROM channel_outbound_message
-    WHERE installation_id IN (SELECT id FROM ws_channel_installations)
-),
-deleted_channel_reply_deliveries AS (
-    DELETE FROM channel_reply_delivery
-    WHERE installation_id IN (SELECT id FROM ws_channel_installations)
-),
-deleted_channel_chat_contexts AS (
-    DELETE FROM channel_chat_context_generation
-    WHERE chat_session_id IN (SELECT id FROM ws_sessions)
-),
-deleted_vcs_commit_statuses AS (
-    DELETE FROM vcs_commit_status
-    WHERE connection_id IN (SELECT id FROM ws_vcs_connections)
-),
-deleted_channel_chat_bindings AS (
-    DELETE FROM channel_chat_session_binding
-    WHERE installation_id IN (SELECT id FROM ws_channel_installations)
-       OR chat_session_id IN (SELECT id FROM ws_sessions)
-),
-deleted_dingtalk_group_routes AS (
-    DELETE FROM dingtalk_group_route WHERE workspace_id = $1
-),
-deleted_channel_inbound_dedup AS (
-    DELETE FROM channel_inbound_message_dedup
-    WHERE installation_id IN (SELECT id FROM ws_channel_installations)
-),
-deleted_channel_inbound_audit AS (
-    DELETE FROM channel_inbound_audit
-    WHERE installation_id IN (SELECT id FROM ws_channel_installations)
-),
-deleted_channel_user_bindings AS (
-    DELETE FROM channel_user_binding WHERE workspace_id = $1
-),
-deleted_channel_binding_tokens AS (
-    DELETE FROM channel_binding_token WHERE workspace_id = $1
-),
-deleted_lark_chat_bindings AS (
-    DELETE FROM lark_chat_session_binding
-    WHERE installation_id IN (SELECT id FROM ws_lark_installations)
-       OR chat_session_id IN (SELECT id FROM ws_sessions)
-),
-deleted_lark_inbound_dedup AS (
-    DELETE FROM lark_inbound_message_dedup
-    WHERE installation_id IN (SELECT id FROM ws_lark_installations)
-),
-deleted_lark_inbound_audit AS (
-    DELETE FROM lark_inbound_audit
-    WHERE installation_id IN (SELECT id FROM ws_lark_installations)
-),
-deleted_lark_user_bindings AS (
-    DELETE FROM lark_user_binding WHERE workspace_id = $1
-),
-deleted_lark_binding_tokens AS (
-    DELETE FROM lark_binding_token WHERE workspace_id = $1
-)
+DELETE FROM task_token
+    WHERE workspace_id = ?1
+`
+
+// Everything task-keyed moved to DeleteTaskBatch, which runs in bounded batches
+// before this step; what is left is keyed by the workspace or by one of the
+// workspace-scoped id sets below.
+func (q *Queries) DeleteWorkspaceLeafData(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step10 = `-- name: DeleteWorkspaceLeafData_Step10 :exec
+DELETE FROM agent_builder_draft WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step10(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step10, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step11 = `-- name: DeleteWorkspaceLeafData_Step11 :exec
+DELETE FROM comment_reaction WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step11(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step11, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step12 = `-- name: DeleteWorkspaceLeafData_Step12 :exec
+DELETE FROM issue_reaction WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step12(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step12, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step13 = `-- name: DeleteWorkspaceLeafData_Step13 :exec
+DELETE FROM activity_log WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step13(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step13, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step14 = `-- name: DeleteWorkspaceLeafData_Step14 :exec
+DELETE FROM inbox_item WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step14(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step14, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step15 = `-- name: DeleteWorkspaceLeafData_Step15 :exec
+DELETE FROM issue_dependency
+    WHERE issue_id IN (SELECT id FROM (SELECT id FROM issue WHERE issue.workspace_id = ?1))
+       OR depends_on_issue_id IN (SELECT id FROM (SELECT id FROM issue WHERE issue.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step15(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step15, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step16 = `-- name: DeleteWorkspaceLeafData_Step16 :exec
+DELETE FROM issue_subscriber
+    WHERE issue_id IN (SELECT id FROM (SELECT id FROM issue WHERE issue.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step16(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step16, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step17 = `-- name: DeleteWorkspaceLeafData_Step17 :exec
+DELETE FROM issue_to_label
+    WHERE issue_id IN (SELECT id FROM (SELECT id FROM issue WHERE issue.workspace_id = ?1))
+       OR label_id IN (SELECT id FROM (SELECT id FROM issue_label WHERE issue_label.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step17(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step17, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step18 = `-- name: DeleteWorkspaceLeafData_Step18 :exec
+DELETE FROM agent_to_label
+    WHERE agent_id IN (SELECT id FROM (SELECT id FROM agent WHERE agent.workspace_id = ?1))
+       OR label_id IN (SELECT id FROM (SELECT id FROM issue_label WHERE issue_label.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step18(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step18, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step19 = `-- name: DeleteWorkspaceLeafData_Step19 :exec
+DELETE FROM skill_to_label
+    WHERE skill_id IN (SELECT id FROM (SELECT id FROM skill WHERE skill.workspace_id = ?1))
+       OR label_id IN (SELECT id FROM (SELECT id FROM issue_label WHERE issue_label.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step19(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step19, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step2 = `-- name: DeleteWorkspaceLeafData_Step2 :exec
+DELETE FROM task_supplement WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step2(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step2, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step20 = `-- name: DeleteWorkspaceLeafData_Step20 :exec
+DELETE FROM issue_pull_request
+    WHERE issue_id IN (SELECT id FROM (SELECT id FROM issue WHERE issue.workspace_id = ?1))
+       OR pull_request_id IN (SELECT id FROM (SELECT id FROM github_pull_request WHERE github_pull_request.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step20(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step20, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step21 = `-- name: DeleteWorkspaceLeafData_Step21 :exec
+DELETE FROM issue_vcs_pull_request
+    WHERE issue_id IN (SELECT id FROM (SELECT id FROM issue WHERE issue.workspace_id = ?1))
+       OR pull_request_id IN (SELECT id FROM (SELECT id FROM vcs_pull_request WHERE vcs_pull_request.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step21(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step21, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step22 = `-- name: DeleteWorkspaceLeafData_Step22 :exec
+DELETE FROM issue_pr_automation WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step22(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step22, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step23 = `-- name: DeleteWorkspaceLeafData_Step23 :exec
+DELETE FROM issue_pull_request_exclusion WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step23(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step23, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step24 = `-- name: DeleteWorkspaceLeafData_Step24 :exec
+DELETE FROM agent_invocation_target
+    WHERE agent_id IN (SELECT id FROM (SELECT id FROM agent WHERE agent.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step24(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step24, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step25 = `-- name: DeleteWorkspaceLeafData_Step25 :exec
+DELETE FROM agent_skill
+    WHERE agent_id IN (SELECT id FROM (SELECT id FROM agent WHERE agent.workspace_id = ?1))
+       OR skill_id IN (SELECT id FROM (SELECT id FROM skill WHERE skill.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step25(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step25, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step26 = `-- name: DeleteWorkspaceLeafData_Step26 :exec
+DELETE FROM skill_file
+    WHERE skill_id IN (SELECT id FROM (SELECT id FROM skill WHERE skill.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step26(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step26, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step27 = `-- name: DeleteWorkspaceLeafData_Step27 :exec
+DELETE FROM daemon_connection
+    WHERE agent_id IN (SELECT id FROM (SELECT id FROM agent WHERE agent.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step27(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step27, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step28 = `-- name: DeleteWorkspaceLeafData_Step28 :exec
+DELETE FROM squad_member
+    WHERE squad_id IN (SELECT id FROM (SELECT id FROM squad WHERE squad.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step28(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step28, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step29 = `-- name: DeleteWorkspaceLeafData_Step29 :exec
+DELETE FROM project_resource WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step29(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step29, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step3 = `-- name: DeleteWorkspaceLeafData_Step3 :exec
+DELETE FROM task_supplement_capability WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step3(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step3, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step30 = `-- name: DeleteWorkspaceLeafData_Step30 :exec
+DELETE FROM autopilot_collaborator
+    WHERE autopilot_id IN (SELECT id FROM (SELECT id FROM autopilot WHERE autopilot.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step30(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step30, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step31 = `-- name: DeleteWorkspaceLeafData_Step31 :exec
+DELETE FROM autopilot_subscriber
+    WHERE autopilot_id IN (SELECT id FROM (SELECT id FROM autopilot WHERE autopilot.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step31(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step31, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step32 = `-- name: DeleteWorkspaceLeafData_Step32 :exec
+DELETE FROM webhook_delivery WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step32(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step32, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step33 = `-- name: DeleteWorkspaceLeafData_Step33 :exec
+DELETE FROM github_pull_request_check_run
+    WHERE pr_id IN (SELECT id FROM (SELECT id FROM github_pull_request WHERE github_pull_request.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step33(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step33, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step34 = `-- name: DeleteWorkspaceLeafData_Step34 :exec
+DELETE FROM github_pull_request_check_suite
+    WHERE pr_id IN (SELECT id FROM (SELECT id FROM github_pull_request WHERE github_pull_request.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step34(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step34, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step35 = `-- name: DeleteWorkspaceLeafData_Step35 :exec
+DELETE FROM github_pending_check_suite WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step35(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step35, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step36 = `-- name: DeleteWorkspaceLeafData_Step36 :exec
+DELETE FROM channel_task_delivery
+    WHERE installation_id IN (SELECT id FROM (SELECT id FROM channel_installation WHERE channel_installation.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step36(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step36, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step37 = `-- name: DeleteWorkspaceLeafData_Step37 :exec
+DELETE FROM channel_outbound_message
+    WHERE installation_id IN (SELECT id FROM (SELECT id FROM channel_installation WHERE channel_installation.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step37(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step37, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step38 = `-- name: DeleteWorkspaceLeafData_Step38 :exec
+DELETE FROM channel_reply_delivery
+    WHERE installation_id IN (SELECT id FROM (SELECT id FROM channel_installation WHERE channel_installation.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step38(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step38, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step39 = `-- name: DeleteWorkspaceLeafData_Step39 :exec
+DELETE FROM channel_chat_context_generation
+    WHERE chat_session_id IN (SELECT id FROM (SELECT id FROM chat_session WHERE chat_session.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step39(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step39, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step4 = `-- name: DeleteWorkspaceLeafData_Step4 :exec
+DELETE FROM task_usage_hourly_dirty WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step4(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step4, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step40 = `-- name: DeleteWorkspaceLeafData_Step40 :exec
+DELETE FROM vcs_commit_status
+    WHERE connection_id IN (SELECT id FROM (SELECT id FROM vcs_connection WHERE vcs_connection.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step40(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step40, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step41 = `-- name: DeleteWorkspaceLeafData_Step41 :exec
+DELETE FROM channel_chat_session_binding
+    WHERE installation_id IN (SELECT id FROM (SELECT id FROM channel_installation WHERE channel_installation.workspace_id = ?1))
+       OR chat_session_id IN (SELECT id FROM (SELECT id FROM chat_session WHERE chat_session.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step41(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step41, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step42 = `-- name: DeleteWorkspaceLeafData_Step42 :exec
+DELETE FROM dingtalk_group_route WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step42(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step42, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step43 = `-- name: DeleteWorkspaceLeafData_Step43 :exec
+DELETE FROM channel_inbound_message_dedup
+    WHERE installation_id IN (SELECT id FROM (SELECT id FROM channel_installation WHERE channel_installation.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step43(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step43, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step44 = `-- name: DeleteWorkspaceLeafData_Step44 :exec
+DELETE FROM channel_inbound_audit
+    WHERE installation_id IN (SELECT id FROM (SELECT id FROM channel_installation WHERE channel_installation.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step44(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step44, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step45 = `-- name: DeleteWorkspaceLeafData_Step45 :exec
+DELETE FROM channel_user_binding WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step45(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step45, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step46 = `-- name: DeleteWorkspaceLeafData_Step46 :exec
+DELETE FROM channel_binding_token WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step46(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step46, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step47 = `-- name: DeleteWorkspaceLeafData_Step47 :exec
+DELETE FROM lark_chat_session_binding
+    WHERE installation_id IN (SELECT id FROM (SELECT id FROM lark_installation WHERE lark_installation.workspace_id = ?1))
+       OR chat_session_id IN (SELECT id FROM (SELECT id FROM chat_session WHERE chat_session.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step47(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step47, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step48 = `-- name: DeleteWorkspaceLeafData_Step48 :exec
+DELETE FROM lark_inbound_message_dedup
+    WHERE installation_id IN (SELECT id FROM (SELECT id FROM lark_installation WHERE lark_installation.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step48(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step48, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step49 = `-- name: DeleteWorkspaceLeafData_Step49 :exec
+DELETE FROM lark_inbound_audit
+    WHERE installation_id IN (SELECT id FROM (SELECT id FROM lark_installation WHERE lark_installation.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step49(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step49, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step5 = `-- name: DeleteWorkspaceLeafData_Step5 :exec
+DELETE FROM task_usage_hourly WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step5(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step5, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step50 = `-- name: DeleteWorkspaceLeafData_Step50 :exec
+DELETE FROM lark_user_binding WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step50(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step50, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step51 = `-- name: DeleteWorkspaceLeafData_Step51 :exec
+DELETE FROM lark_binding_token WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step51(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step51, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step52 = `-- name: DeleteWorkspaceLeafData_Step52 :exec
 UPDATE channel_media_pending_object
 SET state = CASE
         WHEN state = 'tombstoned' THEN 'tombstoned'
@@ -505,136 +922,237 @@ SET state = CASE
     lease_expires_at = NULL,
     next_attempt_at = now(),
     last_error = NULL
-WHERE channel_media_pending_object.workspace_id = $1
+WHERE channel_media_pending_object.workspace_id = ?1
 `
 
-// Everything task-keyed moved to DeleteTaskBatch, which runs in bounded batches
-// before this step; what is left is keyed by the workspace or by one of the
-// workspace-scoped id sets below.
-// One of three explicit task_token paths. This is the workspace-keyed one;
-// DeleteTaskBatch covers task_id and DeleteTaskTokensByAgent covers agent_id, so
-// a token whose workspace_id points at a neighbour while its task or agent lives
-// here is still removed by this teardown rather than by the FK cascade. The
-// former single statement combined all three with OR, which cost a full scan of
-// task_token (MUL-5999); split, each path is an index scan.
-// Same no-FK chore as chat_draft_restore above. Matched on workspace_id rather
-// than the session set because that column exists precisely so this statement
-// does not have to join through chat_session, which it deletes in this same CTE.
 // Keep the two-system cleanup ledger until object storage has been settled.
 // Moving every row out of pending also prevents a concurrent media bind from
 // attaching an object after the workspace teardown commits. The reconciler
 // performs the idempotent object delete and clears the row afterwards.
-func (q *Queries) DeleteWorkspaceLeafData(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteWorkspaceLeafData, workspaceID)
+func (q *Queries) DeleteWorkspaceLeafData_Step52(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step52, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step6 = `-- name: DeleteWorkspaceLeafData_Step6 :exec
+DELETE FROM attachment WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step6(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step6, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step7 = `-- name: DeleteWorkspaceLeafData_Step7 :exec
+DELETE FROM channel_outbound_card_message
+    WHERE chat_session_id IN (SELECT id FROM (SELECT id FROM chat_session WHERE chat_session.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step7(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step7, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step8 = `-- name: DeleteWorkspaceLeafData_Step8 :exec
+DELETE FROM lark_outbound_card_message
+    WHERE chat_session_id IN (SELECT id FROM (SELECT id FROM chat_session WHERE chat_session.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step8(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step8, workspaceID)
+	return err
+}
+
+const deleteWorkspaceLeafData_Step9 = `-- name: DeleteWorkspaceLeafData_Step9 :exec
+DELETE FROM chat_draft_restore
+    WHERE chat_session_id IN (SELECT id FROM (SELECT id FROM chat_session WHERE chat_session.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspaceLeafData_Step9(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceLeafData_Step9, workspaceID)
 	return err
 }
 
 const deleteWorkspacePluginData = `-- name: DeleteWorkspacePluginData :exec
-WITH installations AS MATERIALIZED (
-    SELECT plugin_installation.id
+DELETE FROM plugin_storage
+    WHERE installation_id IN (SELECT id FROM (SELECT plugin_installation.id
     FROM plugin_installation
-    WHERE plugin_installation.workspace_id = $1
-),
-deleted_storage AS (
-    DELETE FROM plugin_storage
-    WHERE installation_id IN (SELECT id FROM installations)
-),
-deleted_secrets AS (
-    DELETE FROM plugin_secret
-    WHERE installation_id IN (SELECT id FROM installations)
-),
-deleted_hook_schedules AS (
-    DELETE FROM plugin_hook_schedule
-    WHERE installation_id IN (SELECT id FROM installations)
-),
-deleted_invocations AS (
-    DELETE FROM plugin_invocation
-    WHERE workspace_id = $1
-),
-versions AS MATERIALIZED (
-    SELECT plugin_package_version.id
-    FROM plugin_package_version
-    WHERE plugin_package_version.workspace_id = $1
-),
-deleted_package_files AS (
-    DELETE FROM plugin_package_file
-    WHERE version_id IN (SELECT id FROM versions)
-),
-deleted_package_versions AS (
-    DELETE FROM plugin_package_version
-    WHERE workspace_id = $1
-),
-deleted_packages AS (
-    DELETE FROM plugin_package
-    WHERE workspace_id = $1
-)
-DELETE FROM plugin_installation WHERE id IN (SELECT id FROM installations)
+    WHERE plugin_installation.workspace_id = ?1))
 `
 
 // Plugin relationships have no foreign keys or cascades. Storage and secrets
 // hang off the installation, so both leaf tables are cleared through the
 // workspace's installation ids before the installations themselves.
-// Hook call records are workspace-scoped in their own right, so this deletes by
-// workspace rather than through the installation ids: a row whose installation
-// was already uninstalled would otherwise survive the workspace it described.
-// Published artifacts are workspace-scoped too, and independent of whether
-// anything installed them. Deleting the workspace without these would leave the
-// stored bundles as the largest orphan the plugin surface can produce.
-func (q *Queries) DeleteWorkspacePluginData(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteWorkspacePluginData, workspaceID)
+func (q *Queries) DeleteWorkspacePluginData(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspacePluginData, workspaceID)
+	return err
+}
+
+const deleteWorkspacePluginData_Step2 = `-- name: DeleteWorkspacePluginData_Step2 :exec
+DELETE FROM plugin_secret
+    WHERE installation_id IN (SELECT id FROM (SELECT plugin_installation.id
+    FROM plugin_installation
+    WHERE plugin_installation.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspacePluginData_Step2(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspacePluginData_Step2, workspaceID)
+	return err
+}
+
+const deleteWorkspacePluginData_Step3 = `-- name: DeleteWorkspacePluginData_Step3 :exec
+DELETE FROM plugin_hook_schedule
+    WHERE installation_id IN (SELECT id FROM (SELECT plugin_installation.id
+    FROM plugin_installation
+    WHERE plugin_installation.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspacePluginData_Step3(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspacePluginData_Step3, workspaceID)
+	return err
+}
+
+const deleteWorkspacePluginData_Step4 = `-- name: DeleteWorkspacePluginData_Step4 :exec
+DELETE FROM plugin_invocation
+    WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspacePluginData_Step4(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspacePluginData_Step4, workspaceID)
+	return err
+}
+
+const deleteWorkspacePluginData_Step5 = `-- name: DeleteWorkspacePluginData_Step5 :exec
+DELETE FROM plugin_package_file
+    WHERE version_id IN (SELECT id FROM (SELECT plugin_package_version.id
+    FROM plugin_package_version
+    WHERE plugin_package_version.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspacePluginData_Step5(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspacePluginData_Step5, workspaceID)
+	return err
+}
+
+const deleteWorkspacePluginData_Step6 = `-- name: DeleteWorkspacePluginData_Step6 :exec
+DELETE FROM plugin_package_version
+    WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspacePluginData_Step6(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspacePluginData_Step6, workspaceID)
+	return err
+}
+
+const deleteWorkspacePluginData_Step7 = `-- name: DeleteWorkspacePluginData_Step7 :exec
+DELETE FROM plugin_package
+    WHERE workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspacePluginData_Step7(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspacePluginData_Step7, workspaceID)
+	return err
+}
+
+const deleteWorkspacePluginData_Step8 = `-- name: DeleteWorkspacePluginData_Step8 :exec
+DELETE FROM plugin_installation WHERE id IN (SELECT id FROM (SELECT plugin_installation.id
+    FROM plugin_installation
+    WHERE plugin_installation.workspace_id = ?1))
+`
+
+func (q *Queries) DeleteWorkspacePluginData_Step8(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspacePluginData_Step8, workspaceID)
 	return err
 }
 
 const deleteWorkspacePullRequests = `-- name: DeleteWorkspacePullRequests :exec
-WITH deleted_github_prs AS (
-    DELETE FROM github_pull_request
-    WHERE github_pull_request.workspace_id = $1
-)
-DELETE FROM vcs_pull_request WHERE vcs_pull_request.workspace_id = $1
+DELETE FROM github_pull_request_check_run
+WHERE pr_id IN (SELECT id FROM github_pull_request WHERE github_pull_request.workspace_id = ?1)
 `
 
-func (q *Queries) DeleteWorkspacePullRequests(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteWorkspacePullRequests, workspaceID)
+func (q *Queries) DeleteWorkspacePullRequests(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspacePullRequests, workspaceID)
+	return err
+}
+
+const deleteWorkspacePullRequests_Step2 = `-- name: DeleteWorkspacePullRequests_Step2 :exec
+DELETE FROM github_pull_request_check_suite
+WHERE pr_id IN (SELECT id FROM github_pull_request WHERE github_pull_request.workspace_id = ?1)
+`
+
+func (q *Queries) DeleteWorkspacePullRequests_Step2(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspacePullRequests_Step2, workspaceID)
+	return err
+}
+
+const deleteWorkspacePullRequests_Step3 = `-- name: DeleteWorkspacePullRequests_Step3 :exec
+DELETE FROM github_pull_request
+    WHERE github_pull_request.workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspacePullRequests_Step3(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspacePullRequests_Step3, workspaceID)
+	return err
+}
+
+const deleteWorkspacePullRequests_Step4 = `-- name: DeleteWorkspacePullRequests_Step4 :exec
+DELETE FROM vcs_pull_request WHERE vcs_pull_request.workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspacePullRequests_Step4(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspacePullRequests_Step4, workspaceID)
 	return err
 }
 
 const deleteWorkspaceRuntimesAndProjects = `-- name: DeleteWorkspaceRuntimesAndProjects :exec
-WITH
-deleted_runtimes AS (
-    DELETE FROM agent_runtime WHERE agent_runtime.workspace_id = $1
-),
-deleted_profiles AS (
-    DELETE FROM runtime_profile WHERE runtime_profile.workspace_id = $1
-)
-DELETE FROM project WHERE project.workspace_id = $1
+DELETE FROM agent_runtime WHERE agent_runtime.workspace_id = ?1
 `
 
-func (q *Queries) DeleteWorkspaceRuntimesAndProjects(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteWorkspaceRuntimesAndProjects, workspaceID)
+func (q *Queries) DeleteWorkspaceRuntimesAndProjects(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceRuntimesAndProjects, workspaceID)
+	return err
+}
+
+const deleteWorkspaceRuntimesAndProjects_Step2 = `-- name: DeleteWorkspaceRuntimesAndProjects_Step2 :exec
+DELETE FROM runtime_profile WHERE runtime_profile.workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceRuntimesAndProjects_Step2(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceRuntimesAndProjects_Step2, workspaceID)
+	return err
+}
+
+const deleteWorkspaceRuntimesAndProjects_Step3 = `-- name: DeleteWorkspaceRuntimesAndProjects_Step3 :exec
+DELETE FROM project WHERE project.workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceRuntimesAndProjects_Step3(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceRuntimesAndProjects_Step3, workspaceID)
 	return err
 }
 
 const deleteWorkspaceSquadsAndSkills = `-- name: DeleteWorkspaceSquadsAndSkills :exec
-WITH deleted_squads AS (
-    DELETE FROM squad WHERE squad.workspace_id = $1
-)
-DELETE FROM skill WHERE skill.workspace_id = $1
+DELETE FROM squad WHERE squad.workspace_id = ?1
 `
 
-func (q *Queries) DeleteWorkspaceSquadsAndSkills(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteWorkspaceSquadsAndSkills, workspaceID)
+func (q *Queries) DeleteWorkspaceSquadsAndSkills(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceSquadsAndSkills, workspaceID)
+	return err
+}
+
+const deleteWorkspaceSquadsAndSkills_Step2 = `-- name: DeleteWorkspaceSquadsAndSkills_Step2 :exec
+DELETE FROM skill WHERE skill.workspace_id = ?1
+`
+
+func (q *Queries) DeleteWorkspaceSquadsAndSkills_Step2(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteWorkspaceSquadsAndSkills_Step2, workspaceID)
 	return err
 }
 
 const detachTaskBatchReferences = `-- name: DetachTaskBatchReferences :exec
-WITH detached_runs AS (
-    UPDATE autopilot_run
+UPDATE autopilot_run
     SET task_id = NULL
-    WHERE task_id = ANY($1::uuid[])
-)
-UPDATE agent_task_queue
-SET parent_task_id = NULL
-WHERE parent_task_id = ANY($1::uuid[])
+    WHERE task_id IN (SELECT value FROM json_each(?1))
 `
 
 // Break inbound references to a task batch before deleting it, in the
@@ -646,40 +1164,53 @@ WHERE parent_task_id = ANY($1::uuid[])
 // Kept separate from DeleteTaskBatch: a task can be both a member of the batch
 // and the parent of another member, and updating plus deleting the same row
 // inside one statement is not well defined.
-func (q *Queries) DetachTaskBatchReferences(ctx context.Context, taskIds []pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, detachTaskBatchReferences, taskIds)
+func (q *Queries) DetachTaskBatchReferences(ctx context.Context, taskIds interface{}) error {
+	_, err := q.db.ExecContext(ctx, detachTaskBatchReferences, taskIds)
+	return err
+}
+
+const detachTaskBatchReferences_Step2 = `-- name: DetachTaskBatchReferences_Step2 :exec
+UPDATE agent_task_queue
+SET parent_task_id = NULL
+WHERE parent_task_id IN (SELECT value FROM json_each(?1))
+`
+
+func (q *Queries) DetachTaskBatchReferences_Step2(ctx context.Context, taskIds interface{}) error {
+	_, err := q.db.ExecContext(ctx, detachTaskBatchReferences_Step2, taskIds)
 	return err
 }
 
 const listTaskIDsByAgentFirstPage = `-- name: ListTaskIDsByAgentFirstPage :many
 SELECT id FROM agent_task_queue
-WHERE agent_id = $1
+WHERE agent_id = ?1
 ORDER BY id
-LIMIT $2
-FOR UPDATE
+LIMIT ?2
 `
 
 type ListTaskIDsByAgentFirstPageParams struct {
-	AgentID pgtype.UUID `json:"agent_id"`
-	Limit   int32       `json:"limit"`
+	AgentID string `json:"agent_id"`
+	Limit   int64  `json:"limit"`
 }
 
 // First page of the same walk; see ListWorkspaceAgentIDFirstPage for why this is
 // a separate query rather than a zero-uuid cursor, and ListTaskIDsByAgentPage for
-// the single-key / keyset / FOR UPDATE rationale.
-func (q *Queries) ListTaskIDsByAgentFirstPage(ctx context.Context, arg ListTaskIDsByAgentFirstPageParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listTaskIDsByAgentFirstPage, arg.AgentID, arg.Limit)
+// the single-key / keyset / rationale.
+func (q *Queries) ListTaskIDsByAgentFirstPage(ctx context.Context, arg ListTaskIDsByAgentFirstPageParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskIDsByAgentFirstPage, arg.AgentID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []string{}
 	for rows.Next() {
-		var id pgtype.UUID
+		var id string
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -689,54 +1220,56 @@ func (q *Queries) ListTaskIDsByAgentFirstPage(ctx context.Context, arg ListTaskI
 
 const listTaskIDsByAgentPage = `-- name: ListTaskIDsByAgentPage :many
 SELECT id FROM agent_task_queue
-WHERE agent_id = $1 AND id > $2
+WHERE agent_id = ?1 AND id > ?2
 ORDER BY id
-LIMIT $3
-FOR UPDATE
+LIMIT ?3
 `
 
 type ListTaskIDsByAgentPageParams struct {
-	AgentID pgtype.UUID `json:"agent_id"`
-	ID      pgtype.UUID `json:"id"`
-	Limit   int32       `json:"limit"`
+	AgentID string `json:"agent_id"`
+	ID      string `json:"id"`
+	Limit   int64  `json:"limit"`
 }
 
 // One owner key per call, one keyset-paged chunk per call.
 //
 // Single-key equality is deliberate. All three ownership paths must stay (nothing
 // enforces that a task's agent/runtime/issue share a workspace), but expressing
-// them as `OR agent_id IN (subquery) OR …` — or as a UNION of joins, or as
-// `= ANY($1::uuid[])` over a whole workspace's agents — makes the planner
+// them as `OR agent_id IN (subquery) OR ...` - or as a UNION of joins, or as
+// `IN (SELECT value FROM json_each(arg1))` over a whole workspace's agents - makes the planner
 // estimate a proportional share of the global table and fall back to a Seq Scan
 // on agent_task_queue. A single-key equality is the only form whose row estimate
 // stays small enough to be index-driven regardless of how the workspace's tasks
 // are distributed (MUL-5999).
 //
-// `id > $2 ORDER BY id LIMIT $3` against idx_agent_task_queue_agent_id_keyset
+// `id > arg2 ORDER BY id LIMIT arg3` against idx_agent_task_queue_agent_id_keyset
 // (migration 278) bounds the SCAN, not just the result: each page is an index
 // range scan that starts where the previous one stopped. Bounding only the result
-// — `ORDER BY id LIMIT n` against the (agent_id, status) index — puts a Sort over
+// - `ORDER BY id LIMIT n` against the (agent_id, status) index - puts a Sort over
 // the agent's entire task set in front of every page, so a busy agent costs
-// roughly O(N² / page) for the sweep.
+// roughly O(N  / page) for the sweep.
 //
-// FOR UPDATE is load-bearing for correctness, not throughput. It locks the rows
+// is load-bearing for correctness, not throughput. It locks the rows
 // this page is about to delete, and under READ COMMITTED PostgreSQL re-checks the
 // WHERE clause after acquiring each lock: a task a concurrent committed UPDATE
 // has already moved to another owner no longer matches and is skipped, and one we
 // did lock cannot be moved away before we delete it.
-func (q *Queries) ListTaskIDsByAgentPage(ctx context.Context, arg ListTaskIDsByAgentPageParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listTaskIDsByAgentPage, arg.AgentID, arg.ID, arg.Limit)
+func (q *Queries) ListTaskIDsByAgentPage(ctx context.Context, arg ListTaskIDsByAgentPageParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskIDsByAgentPage, arg.AgentID, arg.ID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []string{}
 	for rows.Next() {
-		var id pgtype.UUID
+		var id string
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -746,33 +1279,35 @@ func (q *Queries) ListTaskIDsByAgentPage(ctx context.Context, arg ListTaskIDsByA
 
 const listTaskIDsByIssueFirstPage = `-- name: ListTaskIDsByIssueFirstPage :many
 SELECT id FROM agent_task_queue
-WHERE issue_id = $1
+WHERE issue_id = ?1
 ORDER BY id
-LIMIT $2
-FOR UPDATE
+LIMIT ?2
 `
 
 type ListTaskIDsByIssueFirstPageParams struct {
-	IssueID pgtype.UUID `json:"issue_id"`
-	Limit   int32       `json:"limit"`
+	IssueID sql.NullString `json:"issue_id"`
+	Limit   int64          `json:"limit"`
 }
 
 // First page of the same walk; see ListWorkspaceAgentIDFirstPage for why this is
 // a separate query rather than a zero-uuid cursor, and ListTaskIDsByAgentPage for
-// the single-key / keyset / FOR UPDATE rationale.
-func (q *Queries) ListTaskIDsByIssueFirstPage(ctx context.Context, arg ListTaskIDsByIssueFirstPageParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listTaskIDsByIssueFirstPage, arg.IssueID, arg.Limit)
+// the single-key / keyset / rationale.
+func (q *Queries) ListTaskIDsByIssueFirstPage(ctx context.Context, arg ListTaskIDsByIssueFirstPageParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskIDsByIssueFirstPage, arg.IssueID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []string{}
 	for rows.Next() {
-		var id pgtype.UUID
+		var id string
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -782,33 +1317,35 @@ func (q *Queries) ListTaskIDsByIssueFirstPage(ctx context.Context, arg ListTaskI
 
 const listTaskIDsByIssuePage = `-- name: ListTaskIDsByIssuePage :many
 SELECT id FROM agent_task_queue
-WHERE issue_id = $1 AND id > $2
+WHERE issue_id = ?1 AND id > ?2
 ORDER BY id
-LIMIT $3
-FOR UPDATE
+LIMIT ?3
 `
 
 type ListTaskIDsByIssuePageParams struct {
-	IssueID pgtype.UUID `json:"issue_id"`
-	ID      pgtype.UUID `json:"id"`
-	Limit   int32       `json:"limit"`
+	IssueID sql.NullString `json:"issue_id"`
+	ID      string         `json:"id"`
+	Limit   int64          `json:"limit"`
 }
 
 // Uses idx_agent_task_queue_issue_id_keyset (migration 279). See
-// ListTaskIDsByAgentPage for the single-key / keyset / FOR UPDATE rationale.
-func (q *Queries) ListTaskIDsByIssuePage(ctx context.Context, arg ListTaskIDsByIssuePageParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listTaskIDsByIssuePage, arg.IssueID, arg.ID, arg.Limit)
+// ListTaskIDsByAgentPage for the single-key / keyset / rationale.
+func (q *Queries) ListTaskIDsByIssuePage(ctx context.Context, arg ListTaskIDsByIssuePageParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskIDsByIssuePage, arg.IssueID, arg.ID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []string{}
 	for rows.Next() {
-		var id pgtype.UUID
+		var id string
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -818,33 +1355,35 @@ func (q *Queries) ListTaskIDsByIssuePage(ctx context.Context, arg ListTaskIDsByI
 
 const listTaskIDsByRuntimeFirstPage = `-- name: ListTaskIDsByRuntimeFirstPage :many
 SELECT id FROM agent_task_queue
-WHERE runtime_id = $1
+WHERE runtime_id = ?1
 ORDER BY id
-LIMIT $2
-FOR UPDATE
+LIMIT ?2
 `
 
 type ListTaskIDsByRuntimeFirstPageParams struct {
-	RuntimeID pgtype.UUID `json:"runtime_id"`
-	Limit     int32       `json:"limit"`
+	RuntimeID sql.NullString `json:"runtime_id"`
+	Limit     int64          `json:"limit"`
 }
 
 // First page of the same walk; see ListWorkspaceAgentIDFirstPage for why this is
 // a separate query rather than a zero-uuid cursor, and ListTaskIDsByAgentPage for
-// the single-key / keyset / FOR UPDATE rationale.
-func (q *Queries) ListTaskIDsByRuntimeFirstPage(ctx context.Context, arg ListTaskIDsByRuntimeFirstPageParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listTaskIDsByRuntimeFirstPage, arg.RuntimeID, arg.Limit)
+// the single-key / keyset / rationale.
+func (q *Queries) ListTaskIDsByRuntimeFirstPage(ctx context.Context, arg ListTaskIDsByRuntimeFirstPageParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskIDsByRuntimeFirstPage, arg.RuntimeID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []string{}
 	for rows.Next() {
-		var id pgtype.UUID
+		var id string
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -854,34 +1393,36 @@ func (q *Queries) ListTaskIDsByRuntimeFirstPage(ctx context.Context, arg ListTas
 
 const listTaskIDsByRuntimePage = `-- name: ListTaskIDsByRuntimePage :many
 SELECT id FROM agent_task_queue
-WHERE runtime_id = $1 AND id > $2
+WHERE runtime_id = ?1 AND id > ?2
 ORDER BY id
-LIMIT $3
-FOR UPDATE
+LIMIT ?3
 `
 
 type ListTaskIDsByRuntimePageParams struct {
-	RuntimeID pgtype.UUID `json:"runtime_id"`
-	ID        pgtype.UUID `json:"id"`
-	Limit     int32       `json:"limit"`
+	RuntimeID sql.NullString `json:"runtime_id"`
+	ID        string         `json:"id"`
+	Limit     int64          `json:"limit"`
 }
 
 // Uses idx_agent_task_queue_runtime_id (migration 273, (runtime_id, id)); before
 // it every runtime_id index was partial, so this path had none at all. See
-// ListTaskIDsByAgentPage for the single-key / keyset / FOR UPDATE rationale.
-func (q *Queries) ListTaskIDsByRuntimePage(ctx context.Context, arg ListTaskIDsByRuntimePageParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listTaskIDsByRuntimePage, arg.RuntimeID, arg.ID, arg.Limit)
+// ListTaskIDsByAgentPage for the single-key / keyset / rationale.
+func (q *Queries) ListTaskIDsByRuntimePage(ctx context.Context, arg ListTaskIDsByRuntimePageParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskIDsByRuntimePage, arg.RuntimeID, arg.ID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []string{}
 	for rows.Next() {
-		var id pgtype.UUID
+		var id string
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -891,32 +1432,35 @@ func (q *Queries) ListTaskIDsByRuntimePage(ctx context.Context, arg ListTaskIDsB
 
 const listWorkspaceAgentIDFirstPage = `-- name: ListWorkspaceAgentIDFirstPage :many
 SELECT id FROM agent
-WHERE agent.workspace_id = $1
+WHERE agent.workspace_id = ?1
 ORDER BY id
-LIMIT $2
+LIMIT ?2
 `
 
 type ListWorkspaceAgentIDFirstPageParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Limit       int32       `json:"limit"`
+	WorkspaceID string `json:"workspace_id"`
+	Limit       int64  `json:"limit"`
 }
 
 // First page of the same walk. Split from the keyset query rather than seeded
 // with the all-zero uuid, because that value is itself a valid uuid: a row whose
-// id happened to be all zeros would be skipped forever by `id > $2`.
-func (q *Queries) ListWorkspaceAgentIDFirstPage(ctx context.Context, arg ListWorkspaceAgentIDFirstPageParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listWorkspaceAgentIDFirstPage, arg.WorkspaceID, arg.Limit)
+// id happened to be all zeros would be skipped forever by `id > arg2`.
+func (q *Queries) ListWorkspaceAgentIDFirstPage(ctx context.Context, arg ListWorkspaceAgentIDFirstPageParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listWorkspaceAgentIDFirstPage, arg.WorkspaceID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []string{}
 	for rows.Next() {
-		var id pgtype.UUID
+		var id string
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -926,15 +1470,15 @@ func (q *Queries) ListWorkspaceAgentIDFirstPage(ctx context.Context, arg ListWor
 
 const listWorkspaceAgentIDPage = `-- name: ListWorkspaceAgentIDPage :many
 SELECT id FROM agent
-WHERE agent.workspace_id = $1 AND id > $2
+WHERE agent.workspace_id = ?1 AND id > ?2
 ORDER BY id
-LIMIT $3
+LIMIT ?3
 `
 
 type ListWorkspaceAgentIDPageParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	ID          pgtype.UUID `json:"id"`
-	Limit       int32       `json:"limit"`
+	WorkspaceID string `json:"workspace_id"`
+	ID          string `json:"id"`
+	Limit       int64  `json:"limit"`
 }
 
 // Owner enumeration in bounded, keyset-paged chunks. The rows are already locked
@@ -944,19 +1488,22 @@ type ListWorkspaceAgentIDPageParams struct {
 // renaming an agent mid-teardown would otherwise let it sort behind the cursor
 // and escape the sweep. Uses idx_agent_workspace_id_keyset (migration 281), which
 // exists so this page does not sort the whole owner set.
-func (q *Queries) ListWorkspaceAgentIDPage(ctx context.Context, arg ListWorkspaceAgentIDPageParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listWorkspaceAgentIDPage, arg.WorkspaceID, arg.ID, arg.Limit)
+func (q *Queries) ListWorkspaceAgentIDPage(ctx context.Context, arg ListWorkspaceAgentIDPageParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listWorkspaceAgentIDPage, arg.WorkspaceID, arg.ID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []string{}
 	for rows.Next() {
-		var id pgtype.UUID
+		var id string
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -966,32 +1513,35 @@ func (q *Queries) ListWorkspaceAgentIDPage(ctx context.Context, arg ListWorkspac
 
 const listWorkspaceIssueIDFirstPage = `-- name: ListWorkspaceIssueIDFirstPage :many
 SELECT id FROM issue
-WHERE issue.workspace_id = $1
+WHERE issue.workspace_id = ?1
 ORDER BY id
-LIMIT $2
+LIMIT ?2
 `
 
 type ListWorkspaceIssueIDFirstPageParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Limit       int32       `json:"limit"`
+	WorkspaceID string `json:"workspace_id"`
+	Limit       int64  `json:"limit"`
 }
 
 // First page of the same walk. Split from the keyset query rather than seeded
 // with the all-zero uuid, because that value is itself a valid uuid: a row whose
-// id happened to be all zeros would be skipped forever by `id > $2`.
-func (q *Queries) ListWorkspaceIssueIDFirstPage(ctx context.Context, arg ListWorkspaceIssueIDFirstPageParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listWorkspaceIssueIDFirstPage, arg.WorkspaceID, arg.Limit)
+// id happened to be all zeros would be skipped forever by `id > arg2`.
+func (q *Queries) ListWorkspaceIssueIDFirstPage(ctx context.Context, arg ListWorkspaceIssueIDFirstPageParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listWorkspaceIssueIDFirstPage, arg.WorkspaceID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []string{}
 	for rows.Next() {
-		var id pgtype.UUID
+		var id string
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -1001,31 +1551,34 @@ func (q *Queries) ListWorkspaceIssueIDFirstPage(ctx context.Context, arg ListWor
 
 const listWorkspaceIssueIDPage = `-- name: ListWorkspaceIssueIDPage :many
 SELECT id FROM issue
-WHERE issue.workspace_id = $1 AND id > $2
+WHERE issue.workspace_id = ?1 AND id > ?2
 ORDER BY id
-LIMIT $3
+LIMIT ?3
 `
 
 type ListWorkspaceIssueIDPageParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	ID          pgtype.UUID `json:"id"`
-	Limit       int32       `json:"limit"`
+	WorkspaceID string `json:"workspace_id"`
+	ID          string `json:"id"`
+	Limit       int64  `json:"limit"`
 }
 
 // Uses idx_issue_workspace_id_keyset (migration 282).
-func (q *Queries) ListWorkspaceIssueIDPage(ctx context.Context, arg ListWorkspaceIssueIDPageParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listWorkspaceIssueIDPage, arg.WorkspaceID, arg.ID, arg.Limit)
+func (q *Queries) ListWorkspaceIssueIDPage(ctx context.Context, arg ListWorkspaceIssueIDPageParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listWorkspaceIssueIDPage, arg.WorkspaceID, arg.ID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []string{}
 	for rows.Next() {
-		var id pgtype.UUID
+		var id string
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -1035,32 +1588,35 @@ func (q *Queries) ListWorkspaceIssueIDPage(ctx context.Context, arg ListWorkspac
 
 const listWorkspaceRuntimeIDFirstPage = `-- name: ListWorkspaceRuntimeIDFirstPage :many
 SELECT id FROM agent_runtime
-WHERE agent_runtime.workspace_id = $1
+WHERE agent_runtime.workspace_id = ?1
 ORDER BY id
-LIMIT $2
+LIMIT ?2
 `
 
 type ListWorkspaceRuntimeIDFirstPageParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Limit       int32       `json:"limit"`
+	WorkspaceID string `json:"workspace_id"`
+	Limit       int64  `json:"limit"`
 }
 
 // First page of the same walk. Split from the keyset query rather than seeded
 // with the all-zero uuid, because that value is itself a valid uuid: a row whose
-// id happened to be all zeros would be skipped forever by `id > $2`.
-func (q *Queries) ListWorkspaceRuntimeIDFirstPage(ctx context.Context, arg ListWorkspaceRuntimeIDFirstPageParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listWorkspaceRuntimeIDFirstPage, arg.WorkspaceID, arg.Limit)
+// id happened to be all zeros would be skipped forever by `id > arg2`.
+func (q *Queries) ListWorkspaceRuntimeIDFirstPage(ctx context.Context, arg ListWorkspaceRuntimeIDFirstPageParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listWorkspaceRuntimeIDFirstPage, arg.WorkspaceID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []string{}
 	for rows.Next() {
-		var id pgtype.UUID
+		var id string
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -1070,31 +1626,34 @@ func (q *Queries) ListWorkspaceRuntimeIDFirstPage(ctx context.Context, arg ListW
 
 const listWorkspaceRuntimeIDPage = `-- name: ListWorkspaceRuntimeIDPage :many
 SELECT id FROM agent_runtime
-WHERE agent_runtime.workspace_id = $1 AND id > $2
+WHERE agent_runtime.workspace_id = ?1 AND id > ?2
 ORDER BY id
-LIMIT $3
+LIMIT ?3
 `
 
 type ListWorkspaceRuntimeIDPageParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	ID          pgtype.UUID `json:"id"`
-	Limit       int32       `json:"limit"`
+	WorkspaceID string `json:"workspace_id"`
+	ID          string `json:"id"`
+	Limit       int64  `json:"limit"`
 }
 
 // Uses idx_agent_runtime_workspace_id_keyset (migration 283).
-func (q *Queries) ListWorkspaceRuntimeIDPage(ctx context.Context, arg ListWorkspaceRuntimeIDPageParams) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listWorkspaceRuntimeIDPage, arg.WorkspaceID, arg.ID, arg.Limit)
+func (q *Queries) ListWorkspaceRuntimeIDPage(ctx context.Context, arg ListWorkspaceRuntimeIDPageParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listWorkspaceRuntimeIDPage, arg.WorkspaceID, arg.ID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []string{}
 	for rows.Next() {
-		var id pgtype.UUID
+		var id string
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -1103,32 +1662,32 @@ func (q *Queries) ListWorkspaceRuntimeIDPage(ctx context.Context, arg ListWorksp
 }
 
 const lockTaskUsageRollupForWorkspaceDelete = `-- name: LockTaskUsageRollupForWorkspaceDelete :exec
-SELECT pg_advisory_xact_lock(4246)
+SELECT 1
 `
 
 // Advisory lock 4246 is the hourly rollup family's key: the rollup function
 // takes it per transaction (migration 272) and the backfill commands take it
 // per session. An in-flight rollup finishes first, then no new rollup can
 // write the workspace's aggregates until this delete commits. The caller
-// bounds this wait with SET LOCAL lock_timeout — batch jobs hold 4246 for
+// bounds this wait with SET LOCAL lock_timeout - batch jobs hold 4246 for
 // minutes, and an unbounded wait here hangs the delete request (MUL-5983).
 func (q *Queries) LockTaskUsageRollupForWorkspaceDelete(ctx context.Context) error {
-	_, err := q.db.Exec(ctx, lockTaskUsageRollupForWorkspaceDelete)
+	_, err := q.db.ExecContext(ctx, lockTaskUsageRollupForWorkspaceDelete)
 	return err
 }
 
 const lockWorkspaceTaskOwnerAgents = `-- name: LockWorkspaceTaskOwnerAgents :exec
-SELECT 1 FROM agent WHERE agent.workspace_id = $1 FOR UPDATE
+SELECT 1 FROM agent WHERE agent.workspace_id = ?1
 `
 
-// The three LockWorkspaceTaskOwner* statements are a write fence, not a lookup —
+// The three LockWorkspaceTaskOwner* statements are a write fence, not a lookup -
 // they deliberately return nothing, so a workspace with a huge owner set costs
 // the API process no memory at all.
 //
 // agent_task_queue has no workspace_id, so a task becomes this workspace's
-// problem through agent_id, issue_id or runtime_id — and inserting such a task
-// requires FOR KEY SHARE on the referenced owner row, which conflicts with
-// FOR UPDATE. Holding these locks for the rest of the teardown transaction
+// problem through agent_id, issue_id or runtime_id - and inserting such a task
+// requires on the referenced owner row, which conflicts with
+// . Holding these locks for the rest of the teardown transaction
 // therefore blocks any enqueue (or reassignment) that would add a task to this
 // workspace after we have swept it, which row locks on the tasks alone cannot
 // do. Same technique the handler already uses on the workspace row to keep
@@ -1138,47 +1697,34 @@ SELECT 1 FROM agent WHERE agent.workspace_id = $1 FOR UPDATE
 // re-verifies every owner after sweeping it and fails closed if tasks keep
 // appearing, so teardown does not silently leak rows even if the fence is ever
 // weakened (for example by removing the legacy FKs this one leans on).
-func (q *Queries) LockWorkspaceTaskOwnerAgents(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, lockWorkspaceTaskOwnerAgents, workspaceID)
+func (q *Queries) LockWorkspaceTaskOwnerAgents(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, lockWorkspaceTaskOwnerAgents, workspaceID)
 	return err
 }
 
 const lockWorkspaceTaskOwnerIssues = `-- name: LockWorkspaceTaskOwnerIssues :exec
-SELECT 1 FROM issue WHERE issue.workspace_id = $1 FOR UPDATE
+SELECT 1 FROM issue WHERE issue.workspace_id = ?1
 `
 
-func (q *Queries) LockWorkspaceTaskOwnerIssues(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, lockWorkspaceTaskOwnerIssues, workspaceID)
+func (q *Queries) LockWorkspaceTaskOwnerIssues(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, lockWorkspaceTaskOwnerIssues, workspaceID)
 	return err
 }
 
 const lockWorkspaceTaskOwnerRuntimes = `-- name: LockWorkspaceTaskOwnerRuntimes :exec
-SELECT 1 FROM agent_runtime WHERE agent_runtime.workspace_id = $1 FOR UPDATE
+SELECT 1 FROM agent_runtime WHERE agent_runtime.workspace_id = ?1
 `
 
-func (q *Queries) LockWorkspaceTaskOwnerRuntimes(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, lockWorkspaceTaskOwnerRuntimes, workspaceID)
+func (q *Queries) LockWorkspaceTaskOwnerRuntimes(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, lockWorkspaceTaskOwnerRuntimes, workspaceID)
 	return err
 }
 
 const prepareWorkspaceDeletionLinks = `-- name: PrepareWorkspaceDeletionLinks :exec
-WITH
-detached_comments AS (
-    UPDATE comment
+UPDATE comment
     SET parent_id = NULL
-    WHERE comment.workspace_id = $1
+    WHERE comment.workspace_id = ?1
       AND parent_id IS NOT NULL
-),
-detached_issues AS (
-    UPDATE issue
-    SET parent_issue_id = NULL
-    WHERE issue.workspace_id = $1
-      AND parent_issue_id IS NOT NULL
-)
-UPDATE webhook_delivery
-SET replayed_from_delivery_id = NULL
-WHERE webhook_delivery.workspace_id = $1
-  AND replayed_from_delivery_id IS NOT NULL
 `
 
 // Break self-references and the task/run cycle explicitly before deleting
@@ -1187,14 +1733,38 @@ WHERE webhook_delivery.workspace_id = $1
 //
 // The task half of this step now lives in DetachTaskBatchReferences, which runs
 // once per bounded batch instead of once for a whole workspace's task set.
-func (q *Queries) PrepareWorkspaceDeletionLinks(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, prepareWorkspaceDeletionLinks, workspaceID)
+func (q *Queries) PrepareWorkspaceDeletionLinks(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, prepareWorkspaceDeletionLinks, workspaceID)
+	return err
+}
+
+const prepareWorkspaceDeletionLinks_Step2 = `-- name: PrepareWorkspaceDeletionLinks_Step2 :exec
+UPDATE issue
+    SET parent_issue_id = NULL
+    WHERE issue.workspace_id = ?1
+      AND parent_issue_id IS NOT NULL
+`
+
+func (q *Queries) PrepareWorkspaceDeletionLinks_Step2(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, prepareWorkspaceDeletionLinks_Step2, workspaceID)
+	return err
+}
+
+const prepareWorkspaceDeletionLinks_Step3 = `-- name: PrepareWorkspaceDeletionLinks_Step3 :exec
+UPDATE webhook_delivery
+SET replayed_from_delivery_id = NULL
+WHERE webhook_delivery.workspace_id = ?1
+  AND replayed_from_delivery_id IS NOT NULL
+`
+
+func (q *Queries) PrepareWorkspaceDeletionLinks_Step3(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, prepareWorkspaceDeletionLinks_Step3, workspaceID)
 	return err
 }
 
 const setWorkspaceTeardownMode = `-- name: SetWorkspaceTeardownMode :exec
 
-SELECT set_config('multica.workspace_teardown', 'on', true)
+SELECT 1
 `
 
 // Workspace deletion is application-owned. These statements form a fixed,
@@ -1203,6 +1773,6 @@ SELECT set_config('multica.workspace_teardown', 'on', true)
 // The setting is transaction-local. Migration 242 makes only the three DELETE
 // dirty triggers skip their per-row work while this flag is on.
 func (q *Queries) SetWorkspaceTeardownMode(ctx context.Context) error {
-	_, err := q.db.Exec(ctx, setWorkspaceTeardownMode)
+	_, err := q.db.ExecContext(ctx, setWorkspaceTeardownMode)
 	return err
 }

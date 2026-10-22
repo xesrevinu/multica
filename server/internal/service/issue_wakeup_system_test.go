@@ -2,14 +2,12 @@ package service
 
 import (
 	"testing"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func sub(stage int32, closed, cancelled bool) subIssue {
 	s := subIssue{Closed: closed, Cancelled: cancelled}
 	if stage > 0 {
-		s.Stage = pgtype.Int4{Int32: stage, Valid: true}
+		s.Stage = nullInt64(int64(stage), true)
 	}
 	return s
 }

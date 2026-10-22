@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -8,8 +9,6 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -76,12 +75,12 @@ func (h *Handler) childDoneSystemWakeup(r *http.Request, parent db.Issue) (*syst
 	if isClosed, err := closed(parent.Status); err != nil || isClosed {
 		return nil, err
 	}
-	children, err := h.Queries.ListChildIssues(ctx, parent.ID)
+	children, err := h.Queries.ListChildIssues(ctx, nullString(parent.ID))
 	if err != nil || len(children) == 0 {
 		return nil, err
 	}
 	open := make([]db.Issue, 0, len(children))
-	var stage pgtype.Int4
+	var stage sql.NullInt64
 	for _, c := range children {
 		isClosed, err := closed(c.Status)
 		if err != nil {
@@ -91,7 +90,7 @@ func (h *Handler) childDoneSystemWakeup(r *http.Request, parent db.Issue) (*syst
 			continue
 		}
 		open = append(open, c)
-		if c.Stage.Valid && (!stage.Valid || c.Stage.Int32 < stage.Int32) {
+		if c.Stage.Valid && (!stage.Valid || c.Stage.Int64 < stage.Int64) {
 			stage = c.Stage
 		}
 	}
@@ -100,17 +99,18 @@ func (h *Handler) childDoneSystemWakeup(r *http.Request, parent db.Issue) (*syst
 	}
 	out := &systemWakeupResponse{Rule: service.SystemRuleChildDone, Staged: stage.Valid, Waiting: []string{}}
 	if stage.Valid {
-		out.Stage = &stage.Int32
+		v := int32(stage.Int64)
+		out.Stage = &v
 	}
 	prefix := h.getIssuePrefix(ctx, parent.WorkspaceID)
 	for _, c := range children {
-		if stage.Valid && (!c.Stage.Valid || c.Stage.Int32 != stage.Int32) {
+		if stage.Valid && (!c.Stage.Valid || c.Stage.Int64 != stage.Int64) {
 			continue
 		}
 		out.Total++
 	}
 	for _, c := range open {
-		if stage.Valid && (!c.Stage.Valid || c.Stage.Int32 != stage.Int32) {
+		if stage.Valid && (!c.Stage.Valid || c.Stage.Int64 != stage.Int64) {
 			continue
 		}
 		out.Remaining++
@@ -122,15 +122,15 @@ func (h *Handler) childDoneSystemWakeup(r *http.Request, parent db.Issue) (*syst
 	if err != nil {
 		return nil, err
 	}
-	out.WorkspaceDefault, _ = service.SystemWakeupDefault(ws.Settings)
+	out.WorkspaceDefault, _ = service.SystemWakeupDefault([]byte(ws.Settings))
 	out.Enabled = out.WorkspaceDefault
-	out.DefaultInstruction = service.ChildDoneInstruction("", ws.Settings)
-	rule, err := h.Queries.GetSystemWakeup(ctx, db.GetSystemWakeupParams{IssueID: parent.ID, SystemRule: pgtype.Text{String: service.SystemRuleChildDone, Valid: true}})
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	out.DefaultInstruction = service.ChildDoneInstruction("", []byte(ws.Settings))
+	rule, err := h.Queries.GetSystemWakeup(ctx, db.GetSystemWakeupParams{IssueID: parent.ID, SystemRule: sql.NullString{String: service.SystemRuleChildDone, Valid: true}})
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
 	if err == nil {
-		out.ID, out.Revision, out.Enabled, out.Instruction = uuidToString(rule.ID), rule.Revision, rule.Enabled, rule.Instruction
+		out.ID, out.Revision, out.Enabled, out.Instruction = uuidToString(rule.ID), rule.Revision, int64ToBool(rule.Enabled), rule.Instruction
 		out.Customized = rule.CustomizedAt.Valid
 		if rule.PausedReason.Valid {
 			out.PausedReason = &rule.PausedReason.String
@@ -141,15 +141,15 @@ func (h *Handler) childDoneSystemWakeup(r *http.Request, parent db.Issue) (*syst
 		out.Blocked = "no_assignee"
 	case parent.AssigneeType.String == "member":
 		out.Blocked = "member_assignee"
-		if user, e := h.Queries.GetUser(ctx, parent.AssigneeID); e == nil {
+		if user, e := h.Queries.GetUser(ctx, parent.AssigneeID.String); e == nil {
 			out.Target = &systemWakeupTarget{Type: "member", ID: uuidToString(user.ID), Name: user.Name}
 		}
 	case parent.AssigneeType.String == "agent":
-		if agent, e := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: parent.AssigneeID, WorkspaceID: parent.WorkspaceID}); e == nil {
+		if agent, e := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: parent.AssigneeID.String, WorkspaceID: parent.WorkspaceID}); e == nil {
 			out.Target = &systemWakeupTarget{Type: "agent", ID: uuidToString(agent.ID), Name: agent.Name}
 		}
 	case parent.AssigneeType.String == "squad":
-		if squad, e := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{ID: parent.AssigneeID, WorkspaceID: parent.WorkspaceID}); e == nil {
+		if squad, e := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{ID: parent.AssigneeID.String, WorkspaceID: parent.WorkspaceID}); e == nil {
 			out.Target = &systemWakeupTarget{Type: "squad", ID: uuidToString(squad.ID), Name: squad.Name}
 		}
 	}
@@ -256,16 +256,16 @@ type workspaceSystemWakeupResponse struct {
 	Customized int64 `json:"customized"`
 }
 
-func (h *Handler) workspaceSystemWakeups(r *http.Request, workspaceID pgtype.UUID) ([]workspaceSystemWakeupResponse, error) {
+func (h *Handler) workspaceSystemWakeups(r *http.Request, workspaceID string) ([]workspaceSystemWakeupResponse, error) {
 	ws, err := h.Queries.GetWorkspace(r.Context(), workspaceID)
 	if err != nil {
 		return nil, err
 	}
-	customized, err := h.Queries.CountCustomizedSystemWakeups(r.Context(), db.CountCustomizedSystemWakeupsParams{WorkspaceID: workspaceID, SystemRule: pgtype.Text{String: service.SystemRuleChildDone, Valid: true}})
+	customized, err := h.Queries.CountCustomizedSystemWakeups(r.Context(), db.CountCustomizedSystemWakeupsParams{WorkspaceID: workspaceID, SystemRule: sql.NullString{String: service.SystemRuleChildDone, Valid: true}})
 	if err != nil {
 		return nil, err
 	}
-	enabled, instruction := service.SystemWakeupDefault(ws.Settings)
+	enabled, instruction := service.SystemWakeupDefault([]byte(ws.Settings))
 	return []workspaceSystemWakeupResponse{{
 		Rule: service.SystemRuleChildDone, Enabled: enabled, Instruction: instruction,
 		BuiltinInstruction: service.ChildDoneDefaultInstruction, Customized: customized,

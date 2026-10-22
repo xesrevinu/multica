@@ -2,13 +2,14 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -36,11 +37,11 @@ func TestWebhookRecoveryTaskExistenceReadIsBounded(t *testing.T) {
 	tr := &webhookTaskReadTrace{}
 	config := sharedTestPool(t).Config()
 	config.ConnConfig.Tracer = tr
-	pool, err := pgxpool.NewWithConfig(ctx, config)
+	pool, err := sql.Open("sqlite", os.Getenv("DATABASE_URL"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(pool.Close)
+	t.Cleanup(func() { _ = pool.Close() })
 	fx := testutil.New(pool, "", "")
 	suffix := time.Now().UnixNano()
 	fx.UserID = fx.User(t, "webhook reader", fmt.Sprintf("webhook-reader-%d@example.test", suffix))
@@ -64,7 +65,7 @@ func TestWebhookRecoveryTaskExistenceReadIsBounded(t *testing.T) {
 			}
 			tr.reads = 0
 			tr.maxRows = 0
-			if err := svc.ensureWebhookCreateIssueTask(ctx, db.Autopilot{}, db.AutopilotRun{IssueID: util.MustParseUUID(issueID)}); err != nil {
+			if err := svc.ensureWebhookCreateIssueTask(ctx, db.Autopilot{}, db.AutopilotRun{IssueID: nullString(util.MustParseUUID(issueID))}); err != nil {
 				t.Fatal(err)
 			}
 			if tr.reads != 1 || tr.maxRows > 1 {
@@ -75,23 +76,23 @@ func TestWebhookRecoveryTaskExistenceReadIsBounded(t *testing.T) {
 	// No task on this issue must still take the lifecycle/repair path, even
 	// when other issues have tasks; a deleted issue must surface its load error.
 	missing := util.MustParseUUID("ffffffff-ffff-ffff-ffff-fffffffffff1")
-	if err := svc.ensureWebhookCreateIssueTask(ctx, db.Autopilot{}, db.AutopilotRun{IssueID: missing}); err == nil || !strings.Contains(err.Error(), "load linked issue") {
+	if err := svc.ensureWebhookCreateIssueTask(ctx, db.Autopilot{}, db.AutopilotRun{IssueID: nullString(missing)}); err == nil || !strings.Contains(err.Error(), "load linked issue") {
 		t.Fatalf("missing issue: %v", err)
 	}
 	parked := fx.Issue(t, "parked issue", testutil.Cols{"status": "backlog"})
-	if err := svc.ensureWebhookCreateIssueTask(ctx, db.Autopilot{}, db.AutopilotRun{IssueID: util.MustParseUUID(parked)}); err != nil {
+	if err := svc.ensureWebhookCreateIssueTask(ctx, db.Autopilot{}, db.AutopilotRun{IssueID: nullString(util.MustParseUUID(parked))}); err != nil {
 		t.Fatal(err)
 	}
 	runnable := fx.Issue(t, "repair missing task", testutil.Cols{"status": "todo", "assignee_type": "agent", "assignee_id": agentID})
 	svc.TaskSvc = NewTaskService(q, pool, nil, events.New())
 	fx.Cleanup(t, "DELETE FROM agent_task_queue WHERE issue_id=$1", runnable)
 	for range 2 {
-		if err := svc.ensureWebhookCreateIssueTask(ctx, db.Autopilot{}, db.AutopilotRun{IssueID: util.MustParseUUID(runnable)}); err != nil {
+		if err := svc.ensureWebhookCreateIssueTask(ctx, db.Autopilot{}, db.AutopilotRun{IssueID: nullString(util.MustParseUUID(runnable))}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	var taskCount int
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM agent_task_queue WHERE issue_id=$1", runnable).Scan(&taskCount); err != nil {
+	if err := pool.QueryRowContext(ctx, "SELECT count(*) FROM agent_task_queue WHERE issue_id=$1", runnable).Scan(&taskCount); err != nil {
 		t.Fatal(err)
 	}
 	if taskCount != 1 {
@@ -99,7 +100,7 @@ func TestWebhookRecoveryTaskExistenceReadIsBounded(t *testing.T) {
 	}
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
-	if err := svc.ensureWebhookCreateIssueTask(cancelled, db.Autopilot{}, db.AutopilotRun{IssueID: util.MustParseUUID(parked)}); err == nil || !strings.Contains(err.Error(), "inspect issue tasks") {
+	if err := svc.ensureWebhookCreateIssueTask(cancelled, db.Autopilot{}, db.AutopilotRun{IssueID: nullString(util.MustParseUUID(parked))}); err == nil || !strings.Contains(err.Error(), "inspect issue tasks") {
 		t.Fatalf("query failure: %v", err)
 	}
 }

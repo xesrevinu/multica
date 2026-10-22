@@ -3,14 +3,13 @@ package lark
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"time"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
@@ -215,7 +214,7 @@ func newFeishuFactory(deps FeishuChannelDeps) channel.Factory {
 		// agent identity is resolved per message by the Router, not needed here.
 		inst, err := installationFromRow(db.ChannelInstallation{
 			ChannelType: channelTypeFeishu,
-			Config:      cfg.Raw,
+			Config:      string(cfg.Raw),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("decode feishu installation config: %w", err)
@@ -266,7 +265,7 @@ func (s *channelInstallationStore) ListActiveInstallations(ctx context.Context) 
 			ID:          row.ID,
 			ChannelType: channel.Type(row.ChannelType),
 			Fingerprint: rowFingerprint(row),
-			Config:      row.Config,
+			Config:      json.RawMessage(row.Config),
 		})
 	}
 	return out, nil
@@ -276,7 +275,7 @@ func (s *channelInstallationStore) ListActiveInstallations(ctx context.Context) 
 // optimization returns no known holders, so the SQL CAS remains authoritative
 // and each unowned installation is attempted once per poll (never in a blind
 // per-installation loop).
-func (s *channelInstallationStore) ListHeldWSLeases(_ context.Context, _ []pgtype.UUID) (map[string]struct{}, error) {
+func (s *channelInstallationStore) ListHeldWSLeases(_ context.Context, _ []string) (map[string]struct{}, error) {
 	return map[string]struct{}{}, nil
 }
 
@@ -290,12 +289,12 @@ func (s *channelInstallationStore) RenewWSLease(ctx context.Context, arg engine.
 
 func (s *channelInstallationStore) acquireOrRenewWSLease(ctx context.Context, arg engine.AcquireLeaseParams) error {
 	_, err := s.q.AcquireChannelWSLease(ctx, db.AcquireChannelWSLeaseParams{
-		NewToken:     pgtype.Text{String: arg.Token, Valid: true},
-		NewExpiresAt: pgtype.Timestamptz{Time: arg.ExpiresAt, Valid: true},
+		NewToken:     sql.NullString{String: arg.Token, Valid: arg.Token != ""},
+		NewExpiresAt: sql.NullString{String: arg.ExpiresAt.UTC().Format(time.RFC3339Nano), Valid: !arg.ExpiresAt.IsZero()},
 		ID:           arg.ID,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return engine.ErrLeaseNotAcquired
 		}
 		return err
@@ -306,7 +305,7 @@ func (s *channelInstallationStore) acquireOrRenewWSLease(ctx context.Context, ar
 func (s *channelInstallationStore) ReleaseWSLease(ctx context.Context, arg engine.ReleaseLeaseParams) error {
 	return s.q.ReleaseChannelWSLease(ctx, db.ReleaseChannelWSLeaseParams{
 		ID:           arg.ID,
-		CurrentToken: pgtype.Text{String: arg.Token, Valid: true},
+		CurrentToken: sql.NullString{String: arg.Token, Valid: true},
 	})
 }
 
@@ -323,6 +322,6 @@ func rowFingerprint(row db.ChannelInstallation) string {
 	h := sha256.New()
 	_, _ = h.Write([]byte(row.ChannelType))
 	_, _ = h.Write([]byte{0})
-	_, _ = h.Write(row.Config)
+	_, _ = h.Write([]byte(row.Config))
 	return hex.EncodeToString(h.Sum(nil))
 }

@@ -93,7 +93,7 @@ func TestConversationRootOwnersReadOnlyRoutingData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	observer := &rootOwnerReadDB{DBTX: testPool}
+	observer := &rootOwnerReadDB{DBTX: testSQLite}
 	h := *testHandler
 	h.Queries = db.New(observer)
 	triggers, owned := h.routeConversationOwnersForRoot(ctx, issue, root, testUserID, commentTriggerComputeOptions{})

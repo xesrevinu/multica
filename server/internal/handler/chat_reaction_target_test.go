@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -45,7 +45,7 @@ func TestChatSessionRemovalCarriesReactionTargetsAfterCommit(t *testing.T) {
 				}
 				// Observe through the pool, not the transaction: the event must be post-commit.
 				_, err := testHandler.Queries.GetChannelTaskDelivery(context.Background(), parseUUID(e.TaskID))
-				if !errors.Is(err, pgx.ErrNoRows) {
+				if !errors.Is(err, sql.ErrNoRows) {
 					t.Errorf("cancel published before delivery deletion committed: %v", err)
 				}
 				seen <- e

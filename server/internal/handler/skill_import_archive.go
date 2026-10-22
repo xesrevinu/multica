@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	skillpkg "github.com/multica-ai/multica/server/internal/skill"
 )
 
@@ -33,7 +32,7 @@ func isMultipartForm(r *http.Request) bool {
 // hands off to the shared finishSkillImport tail. The archive path always
 // produces structured (status / skill / existing_skill) results — there is no
 // legacy pre-on_conflict client for it to stay compatible with.
-func (h *Handler) importSkillFromArchive(w http.ResponseWriter, r *http.Request, workspaceID string, workspaceUUID, creatorUUID pgtype.UUID, creatorID string) {
+func (h *Handler) importSkillFromArchive(w http.ResponseWriter, r *http.Request, workspaceID string, workspaceUUID, creatorUUID string, creatorID string) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxImportArchiveUploadSize)
 	if err := r.ParseMultipartForm(maxImportArchiveUploadSize); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid multipart upload or file exceeds the size limit")

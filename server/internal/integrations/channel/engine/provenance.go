@@ -3,7 +3,7 @@ package engine
 import (
 	"context"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -11,7 +11,7 @@ import (
 // ChannelProvenanceQueries is the single query the reply-origin check needs.
 // *db.Queries satisfies it.
 type ChannelProvenanceQueries interface {
-	TaskHasChannelIngestedMessages(ctx context.Context, taskID pgtype.UUID) (bool, error)
+	TaskHasChannelIngestedMessages(ctx context.Context, taskID sql.NullString) (bool, error)
 }
 
 // TaskInputIsChannelIngested reports whether a completed chat task took its

@@ -14,7 +14,6 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/integrations/vcs"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -225,7 +224,7 @@ func (h *Handler) ConnectVCS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var connectedBy pgtype.UUID
+	var connectedBy string
 	if member, ok := middleware.MemberFromContext(r.Context()); ok {
 		connectedBy = member.UserID
 	}
@@ -237,7 +236,7 @@ func (h *Handler) ConnectVCS(w http.ResponseWriter, r *http.Request) {
 		AccountLogin:           account.Login,
 		AccessTokenEncrypted:   tokenEnc,
 		WebhookSecretEncrypted: secretEnc,
-		ConnectedByID:          connectedBy,
+		ConnectedByID:          nullString(connectedBy),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save connection")

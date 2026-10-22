@@ -2,12 +2,12 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/testutil"
 )
 
@@ -29,8 +29,8 @@ func TestGuestSquadWorkerRouteOnMemberAssignedIssue_GH8301(t *testing.T) {
 	fx := newSquadCommentTriggerFixture(t)
 	issueID := uuidToString(fx.Issue.ID)
 	dbfx.Exec(t, `UPDATE issue SET assignee_type = 'member', assignee_id = $2 WHERE id = $1`, issueID, testUserID)
-	fx.Issue.AssigneeType = pgtype.Text{String: "member", Valid: true}
-	fx.Issue.AssigneeID = parseUUID(testUserID)
+	fx.Issue.AssigneeType = sql.NullString{String: "member", Valid: true}
+	fx.Issue.AssigneeID = nullString(parseUUID(testUserID))
 
 	leaderTaskID := dbfx.Task(t, fx.LeaderID, testutil.Cols{
 		"runtime_id": testRuntimeID, "issue_id": issueID, "status": "completed",
@@ -445,13 +445,13 @@ func TestCreateComment_WorkerAgentCommentWakesPrivateSquadLeader_MUL4015(t *test
 	// The worker's task MUST have inherited originator=M so the later
 	// canInvokeAgent(private leader) can pass on the private path. This is
 	// the load-bearing assertion.
-	var workerOriginator pgtype.UUID
+	var workerOriginator string
 	if err := testPool.QueryRow(ctx, `SELECT originator_user_id FROM agent_task_queue WHERE id = $1`, workerTaskID).Scan(&workerOriginator); err != nil {
 		t.Fatalf("read worker originator: %v", err)
 	}
-	if !workerOriginator.Valid || uuidToString(workerOriginator) != testUserID {
+	if !(workerOriginator != "") || uuidToString(workerOriginator) != testUserID {
 		t.Fatalf("worker task originator = %v (valid=%v), want %s — originator inheritance broken (comment.source_task_id not stamped)",
-			uuidToString(workerOriginator), workerOriginator.Valid, testUserID)
+			uuidToString(workerOriginator), (workerOriginator != ""), testUserID)
 	}
 
 	// Flip the worker task to running so it can post a comment as an

@@ -2,32 +2,32 @@ package service
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-// noRowsDBTX makes every read return pgx.ErrNoRows so getIssuePrefix's
+// noRowsDBTX makes every read return sql.ErrNoRows so getIssuePrefix's
 // GetWorkspace lookup falls back to an empty prefix without needing a DB. The
 // helper under test still publishes regardless of the prefix result.
 type noRowsDBTX struct{}
 
-func (noRowsDBTX) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
-	return pgconn.NewCommandTag(""), nil
+func (noRowsDBTX) ExecContext(context.Context, string, ...any) (sql.Result, error) {
+	return stubResult{}, nil
 }
-func (noRowsDBTX) Query(context.Context, string, ...any) (pgx.Rows, error) {
-	return nil, pgx.ErrNoRows
+func (noRowsDBTX) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
+	return nil, sql.ErrNoRows
 }
-func (noRowsDBTX) QueryRow(context.Context, string, ...any) pgx.Row { return noRow{} }
+func (noRowsDBTX) QueryRowContext(context.Context, string, ...any) *sql.Row { return errQueryRow() }
 
 type noRow struct{}
 
-func (noRow) Scan(...any) error { return pgx.ErrNoRows }
+func (noRow) Scan(...any) error { return sql.ErrNoRows }
 
 // TestBroadcastIssueUpdated_EmitsStatusChange pins the realtime contract behind
 // #4648 / MUL-3782: when a background path resets an issue's status (e.g. the
@@ -116,4 +116,8 @@ func TestBroadcastIssueUpdated_NoStatusChange(t *testing.T) {
 	if payload["status_changed"] != false {
 		t.Errorf("expected status_changed=false, got %v", payload["status_changed"])
 	}
+}
+
+func (noRowsDBTX) PrepareContext(context.Context, string) (*sql.Stmt, error) {
+	return nil, fmt.Errorf("prepare not supported")
 }

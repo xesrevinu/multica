@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"database/sql"
+
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -69,8 +69,8 @@ type workerTestQueries struct {
 	claimAvailable  bool
 	invitation      db.WorkspaceInvitation
 	invitationError error
-	deferredUntil   pgtype.Timestamptz
-	deferredUntils  []pgtype.Timestamptz
+	deferredUntil   string
+	deferredUntils  []string
 
 	claimCalls  int
 	transitions int
@@ -81,24 +81,24 @@ type workerTestQueries struct {
 	deferrals   int
 }
 
-func (q *workerTestQueries) ClaimNextDueSeatCapacityIntent(context.Context, pgtype.Timestamptz) (db.SeatCapacityOutbox, error) {
+func (q *workerTestQueries) ClaimNextDueSeatCapacityIntent(context.Context, string) (db.SeatCapacityOutbox, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.claimCalls++
 	if len(q.intents) > 0 {
 		if q.nextIntent >= len(q.intents) {
-			return db.SeatCapacityOutbox{}, pgx.ErrNoRows
+			return db.SeatCapacityOutbox{}, sql.ErrNoRows
 		}
 		q.intent = q.intents[q.nextIntent]
 		q.nextIntent++
-		q.intent.LeaseToken = uuidToTestPG(uuid.New())
+		q.intent.LeaseToken = sql.NullString{String: uuid.NewString(), Valid: true}
 		return q.intent, nil
 	}
 	if !q.claimAvailable {
-		return db.SeatCapacityOutbox{}, pgx.ErrNoRows
+		return db.SeatCapacityOutbox{}, sql.ErrNoRows
 	}
 	q.claimAvailable = false
-	q.intent.LeaseToken = uuidToTestPG(uuid.New())
+	q.intent.LeaseToken = sql.NullString{String: uuid.NewString(), Valid: true}
 	return q.intent, nil
 }
 
@@ -111,7 +111,7 @@ func (q *workerTestQueries) DeferClaimedSeatCapacityIntent(_ context.Context, ar
 	q.deferrals++
 	q.deferredUntil = arg.NextAttemptAt
 	q.deferredUntils = append(q.deferredUntils, arg.NextAttemptAt)
-	q.intent.LeaseToken = pgtype.UUID{}
+	q.intent.LeaseToken = sql.NullString{}
 	return 1, nil
 }
 
@@ -125,14 +125,14 @@ func (q *workerTestQueries) DeleteClaimedSeatCapacityIntent(_ context.Context, a
 	return 0, nil
 }
 
-func (q *workerTestQueries) ExpireInvitationForCapacityRecovery(context.Context, pgtype.UUID) error {
+func (q *workerTestQueries) ExpireInvitationForCapacityRecovery(context.Context, string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.expires++
 	return nil
 }
 
-func (q *workerTestQueries) GetInvitation(context.Context, pgtype.UUID) (db.WorkspaceInvitation, error) {
+func (q *workerTestQueries) GetInvitation(context.Context, string) (db.WorkspaceInvitation, error) {
 	return q.invitation, q.invitationError
 }
 
@@ -140,7 +140,7 @@ func (q *workerTestQueries) GetClaimedSeatCapacityIntent(_ context.Context, arg 
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.intent.OperationToken != arg.OperationToken || q.intent.Action != arg.Action || q.intent.LeaseToken != arg.LeaseToken {
-		return db.SeatCapacityOutbox{}, pgx.ErrNoRows
+		return db.SeatCapacityOutbox{}, sql.ErrNoRows
 	}
 	return q.intent, nil
 }
@@ -152,7 +152,7 @@ func (q *workerTestQueries) MarkClaimedSeatCapacityIntentDeadLettered(_ context.
 		return 0, nil
 	}
 	q.deadLetters++
-	q.intent.LeaseToken = pgtype.UUID{}
+	q.intent.LeaseToken = sql.NullString{}
 	return 1, nil
 }
 
@@ -163,7 +163,7 @@ func (q *workerTestQueries) MarkClaimedSeatCapacityIntentFailed(_ context.Contex
 		return 0, nil
 	}
 	q.failures++
-	q.intent.LeaseToken = pgtype.UUID{}
+	q.intent.LeaseToken = sql.NullString{}
 	return 1, nil
 }
 
@@ -174,7 +174,7 @@ func (q *workerTestQueries) TransitionClaimedSeatCapacityIntent(_ context.Contex
 		return 0, nil
 	}
 	q.intent.Action = arg.NextAction
-	q.intent.LeaseToken = pgtype.UUID{}
+	q.intent.LeaseToken = sql.NullString{}
 	q.transitions++
 	return 1, nil
 }
@@ -185,21 +185,22 @@ func (q *workerTestQueries) counts() (transitions, deletes, expires, failures, d
 	return q.transitions, q.deletes, q.expires, q.failures, q.deadLetters
 }
 
-func (q *workerTestQueries) rateLimitState() (claimCalls, deferrals int, attemptCount int32, deferredUntil time.Time) {
+func (q *workerTestQueries) rateLimitState() (claimCalls, deferrals int, attemptCount int64, deferredUntil time.Time) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.claimCalls, q.deferrals, q.intent.AttemptCount, q.deferredUntil.Time
+	parsed, _ := time.Parse(time.RFC3339, q.deferredUntil)
+	return q.claimCalls, q.deferrals, q.intent.AttemptCount, parsed
 }
 
 func workerTestIntent(action string) db.SeatCapacityOutbox {
 	return db.SeatCapacityOutbox{
 		WorkspaceID: uuidToTestPG(uuid.New()), OperationToken: uuidToTestPG(uuid.New()),
-		Action: action, InvitationID: uuidToTestPG(uuid.New()), LeaseToken: uuidToTestPG(uuid.New()),
+		Action: action, InvitationID: sql.NullString{String: uuid.NewString(), Valid: true}, LeaseToken: sql.NullString{String: uuid.NewString(), Valid: true},
 	}
 }
 
-func uuidToTestPG(value uuid.UUID) pgtype.UUID {
-	return pgtype.UUID{Bytes: value, Valid: true}
+func uuidToTestPG(value uuid.UUID) string {
+	return value.String()
 }
 
 func recoveredDecision(state string) Decision {
@@ -211,7 +212,7 @@ func TestRecoverConsumingTransitionsAbandonedOperationToRelease(t *testing.T) {
 	queries := &workerTestQueries{intent: intent}
 	worker := newWorker(queries, &workerTestExecutor{decision: recoveredDecision("consuming")}, WorkerConfig{})
 
-	if err := worker.recoverConsuming(context.Background(), intent, uuidFromPG(intent.WorkspaceID), uuidFromPG(intent.OperationToken)); err != nil {
+	if err := worker.recoverConsuming(context.Background(), intent, uuidFromString(intent.WorkspaceID), uuidFromString(intent.OperationToken)); err != nil {
 		t.Fatal(err)
 	}
 	transitions, deletes, expires, _, _ := queries.counts()
@@ -228,7 +229,7 @@ func TestRecoverConsumingUsedDeletesWithoutReleasing(t *testing.T) {
 	queries := &workerTestQueries{intent: intent}
 	worker := newWorker(queries, &workerTestExecutor{decision: recoveredDecision("used")}, WorkerConfig{})
 
-	if err := worker.recoverConsuming(context.Background(), intent, uuidFromPG(intent.WorkspaceID), uuidFromPG(intent.OperationToken)); err != nil {
+	if err := worker.recoverConsuming(context.Background(), intent, uuidFromString(intent.WorkspaceID), uuidFromString(intent.OperationToken)); err != nil {
 		t.Fatal(err)
 	}
 	transitions, deletes, expires, _, _ := queries.counts()
@@ -242,12 +243,12 @@ func TestRecoverReserveKeepsPendingInvitationReservation(t *testing.T) {
 	queries := &workerTestQueries{
 		intent: intent,
 		invitation: db.WorkspaceInvitation{
-			ID: intent.InvitationID, Status: "pending",
+			ID: intent.InvitationID.String, Status: "pending",
 		},
 	}
 	worker := newWorker(queries, &workerTestExecutor{decision: recoveredDecision("reserved")}, WorkerConfig{})
 
-	if err := worker.recoverReserve(context.Background(), intent, uuidFromPG(intent.WorkspaceID), uuidFromPG(intent.OperationToken)); err != nil {
+	if err := worker.recoverReserve(context.Background(), intent, uuidFromString(intent.WorkspaceID), uuidFromString(intent.OperationToken)); err != nil {
 		t.Fatal(err)
 	}
 	transitions, deletes, expires, _, _ := queries.counts()
@@ -271,7 +272,7 @@ func TestRecoveryCleansUnknownOrUnmanagedOperations(t *testing.T) {
 			queries := &workerTestQueries{intent: intent}
 			worker := newWorker(queries, &workerTestExecutor{decision: tt.decision, err: tt.err}, WorkerConfig{})
 
-			if err := worker.recoverConsuming(context.Background(), intent, uuidFromPG(intent.WorkspaceID), uuidFromPG(intent.OperationToken)); err != nil {
+			if err := worker.recoverConsuming(context.Background(), intent, uuidFromString(intent.WorkspaceID), uuidFromString(intent.OperationToken)); err != nil {
 				t.Fatal(err)
 			}
 			_, deletes, expires, _, _ := queries.counts()
@@ -295,7 +296,7 @@ func TestConcurrentRecoveryOnlyOneReplicaTransitionsIntent(t *testing.T) {
 		wg.Add(1)
 		go func(w *Worker) {
 			defer wg.Done()
-			errs <- w.recoverConsuming(context.Background(), intent, uuidFromPG(intent.WorkspaceID), uuidFromPG(intent.OperationToken))
+			errs <- w.recoverConsuming(context.Background(), intent, uuidFromString(intent.WorkspaceID), uuidFromString(intent.OperationToken))
 		}(worker)
 	}
 	wg.Wait()
@@ -396,8 +397,12 @@ func TestWorkerWorkspaceRateLimitDoesNotStopOtherTenants(t *testing.T) {
 		t.Fatalf("claim calls=%d, want three intents plus end-of-queue check", queries.claimCalls)
 	}
 	for _, deferred := range queries.deferredUntils {
-		if want := now.Add(2 * time.Second); !deferred.Time.Equal(want) {
-			t.Fatalf("deferred until=%s, want %s", deferred.Time, want)
+		parsed, err := time.Parse(time.RFC3339, deferred)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := now.Add(2 * time.Second); !parsed.Equal(want) {
+			t.Fatalf("deferred until=%s, want %s", parsed, want)
 		}
 	}
 }
@@ -437,7 +442,7 @@ func TestWorkerSkipsCloudCallWhenClaimWasReactivatedBeforeWorkspaceLock(t *testi
 	executor := &workerTestExecutor{decision: Decision{Managed: true, Allowed: true}}
 	worker := newWorker(queries, executor, WorkerConfig{})
 	worker.workspaceLocker = &workerTestLocker{}
-	queries.intent.LeaseToken = pgtype.UUID{}
+	queries.intent.LeaseToken = sql.NullString{}
 
 	if err := worker.settleWithWorkspaceLimit(context.Background(), intent); err != nil {
 		t.Fatal(err)
@@ -449,7 +454,11 @@ func TestWorkerSkipsCloudCallWhenClaimWasReactivatedBeforeWorkspaceLock(t *testi
 
 func TestRecoveryDueAllowsRetryableRequestFailuresToSettle(t *testing.T) {
 	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
-	if got := RecoveryDue(now).Time.Sub(now); got != 5*time.Minute {
-		t.Fatalf("RecoveryDue delay=%s, want 5m", got)
+	got, err := time.Parse(time.RFC3339, RecoveryDue(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delay := got.Sub(now); delay != 5*time.Minute {
+		t.Fatalf("RecoveryDue delay=%s, want 5m", delay)
 	}
 }

@@ -3,10 +3,10 @@ package handler
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"github.com/multica-ai/multica/server/internal/orchestrator"
 	"log/slog"
 	"math"
 	"net/http"
@@ -15,10 +15,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/orchestrator"
+
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/daemonws"
@@ -53,13 +53,13 @@ func randomID() string {
 }
 
 type txStarter interface {
-	Begin(ctx context.Context) (pgx.Tx, error)
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
 }
 
 type dbExecutor interface {
-	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
-	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 type Config struct {
@@ -559,7 +559,7 @@ func writeFeatureDisabled(w http.ResponseWriter, code, msg string) {
 	writeErrorCode(w, http.StatusForbidden, code, msg)
 }
 
-func writeRevisionConflict(w http.ResponseWriter, resourceType string, resourceID pgtype.UUID, expected, actual int64) {
+func writeRevisionConflict(w http.ResponseWriter, resourceType string, resourceID string, expected, actual int64) {
 	writeJSON(w, http.StatusConflict, map[string]any{
 		"error":             "resource changed since it was loaded",
 		"code":              "revision_conflict",
@@ -570,7 +570,7 @@ func writeRevisionConflict(w http.ResponseWriter, resourceType string, resourceI
 	})
 }
 
-func writeEditConflict(w http.ResponseWriter, resourceType string, resourceID pgtype.UUID) {
+func writeEditConflict(w http.ResponseWriter, resourceType string, resourceID string) {
 	writeJSON(w, http.StatusConflict, map[string]any{
 		"error":         "resource field changed since it was loaded",
 		"code":          "revision_conflict",
@@ -591,30 +591,71 @@ func writeEditConflict(w http.ResponseWriter, resourceType string, resourceID pg
 // For unvalidated user input at request boundaries, use parseUUIDOrBadRequest
 // (writes 400) — never feed raw chi.URLParam / request-body strings into
 // parseUUID directly when the call writes to the database.
-func parseUUID(s string) pgtype.UUID                { return util.MustParseUUID(s) }
-func uuidToString(u pgtype.UUID) string             { return util.UUIDToString(u) }
-func textToPtr(t pgtype.Text) *string               { return util.TextToPtr(t) }
-func ptrToText(s *string) pgtype.Text               { return util.PtrToText(s) }
-func strToText(s string) pgtype.Text                { return util.StrToText(s) }
-func timestampToString(t pgtype.Timestamptz) string { return util.TimestampToString(t) }
-func timestampToPtr(t pgtype.Timestamptz) *string   { return util.TimestampToPtr(t) }
-func timestampToNanoPtr(t pgtype.Timestamptz) *string {
-	return util.TimestampToNanoPtr(t)
+func parseUUID(s string) string          { return util.MustParseUUID(s) }
+func uuidToString(u string) string       { return util.UUIDToString(u) }
+func textToPtr(t sql.NullString) *string { return nullStringPtr(t) }
+func ptrToText(s *string) sql.NullString {
+	if s == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: *s, Valid: true}
 }
-func dateToPtr(d pgtype.Date) *string { return util.DateToPtr(d) }
-func uuidToPtr(u pgtype.UUID) *string { return util.UUIDToPtr(u) }
+func strToText(s string) sql.NullString {
+	if s == "" {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: s, Valid: true}
+}
+func timestampToString(t string) string           { return t }
+func timestampToPtr(t sql.NullString) *string     { return nullStringPtr(t) }
+func timestampToNanoPtr(t sql.NullString) *string { return nullStringPtr(t) }
+func dateToPtr(d sql.NullString) *string          { return nullStringPtr(d) }
+func uuidToPtr(u sql.NullString) *string {
+	if !u.Valid || u.String == "" {
+		return nil
+	}
+	s := u.String
+	return &s
+}
 
-// uuidsToStrings maps a UUID array column to string ids, skipping NULL/invalid
-// entries. Returns nil (not an empty slice) when there is nothing to emit so
-// `omitempty` JSON fields drop out cleanly (MUL-4195).
-func uuidsToStrings(us []pgtype.UUID) []string {
+func nullStringPtr(t sql.NullString) *string {
+	if !t.Valid {
+		return nil
+	}
+	s := t.String
+	return &s
+}
+
+// uuidsToStrings maps a UUID array column to string ids, skipping empty
+// entries. SQLite stores uuid arrays as JSON text. A []string is accepted for
+// in-memory lists. Returns nil (not an empty slice) when there is nothing to
+// emit so `omitempty` JSON fields drop out cleanly (MUL-4195).
+func uuidsToStrings(v any) []string {
+	switch us := v.(type) {
+	case nil:
+		return nil
+	case []string:
+		return compactIDs(us)
+	case string:
+		return compactIDs(parseIDList(us))
+	case sql.NullString:
+		if !us.Valid {
+			return nil
+		}
+		return uuidsToStrings(us.String)
+	default:
+		return nil
+	}
+}
+
+func compactIDs(us []string) []string {
 	if len(us) == 0 {
 		return nil
 	}
 	out := make([]string, 0, len(us))
 	for _, u := range us {
-		if u.Valid {
-			out = append(out, uuidToString(u))
+		if u != "" {
+			out = append(out, u)
 		}
 	}
 	if len(out) == 0 {
@@ -623,11 +664,23 @@ func uuidsToStrings(us []pgtype.UUID) []string {
 	return out
 }
 
+func parseIDList(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "null" || raw == "[]" {
+		return nil
+	}
+	var ids []string
+	if err := json.Unmarshal([]byte(raw), &ids); err != nil {
+		return nil
+	}
+	return ids
+}
+
 // uuidStringsOrEmpty preserves the distinction between a modern, authoritative
 // empty UUID-array value (`[]`) and a field omitted by a legacy server. Delivery
 // receipts use this so clients never mistake zero delivered comments for an
 // unknown receipt and fall back to the enqueue-time plan.
-func uuidStringsOrEmpty(us []pgtype.UUID) []string {
+func uuidStringsOrEmpty(us []string) []string {
 	out := uuidsToStrings(us)
 	if out == nil {
 		return []string{}
@@ -635,9 +688,26 @@ func uuidStringsOrEmpty(us []pgtype.UUID) []string {
 	return out
 }
 
-func int8ToPtr(v pgtype.Int8) *int64 { return util.Int8ToPtr(v) }
-func int4ToPtr(v pgtype.Int4) *int32 { return util.Int4ToPtr(v) }
-func ptrToInt4(v *int32) pgtype.Int4 { return util.PtrToInt4(v) }
+func int8ToPtr(v sql.NullInt64) *int64 {
+	if !v.Valid {
+		return nil
+	}
+	x := v.Int64
+	return &x
+}
+func int4ToPtr(v sql.NullInt64) *int32 {
+	if !v.Valid {
+		return nil
+	}
+	x := int32(v.Int64)
+	return &x
+}
+func ptrToInt4(v *int32) sql.NullInt64 {
+	if v == nil {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: int64(*v), Valid: true}
+}
 
 // parseUUIDOrBadRequest validates a UUID string sourced from user input
 // (URL params, request body, headers). On invalid input it writes a 400
@@ -646,17 +716,17 @@ func ptrToInt4(v *int32) pgtype.Int4 { return util.PtrToInt4(v) }
 // Use this anywhere a malformed UUID would otherwise reach a write query
 // (DELETE / UPDATE) — the silent zero-UUID behavior of the old ParseUUID
 // caused real silent-data-loss bugs (#1661).
-func parseUUIDOrBadRequest(w http.ResponseWriter, s, fieldName string) (pgtype.UUID, bool) {
+func parseUUIDOrBadRequest(w http.ResponseWriter, s, fieldName string) (string, bool) {
 	u, err := util.ParseUUID(s)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid "+fieldName)
-		return pgtype.UUID{}, false
+		return "", false
 	}
 	return u, true
 }
 
-func parseUUIDSliceOrBadRequest(w http.ResponseWriter, ids []string, fieldName string) ([]pgtype.UUID, bool) {
-	uuids := make([]pgtype.UUID, len(ids))
+func parseUUIDSliceOrBadRequest(w http.ResponseWriter, ids []string, fieldName string) ([]string, bool) {
+	uuids := make([]string, len(ids))
 	for i, id := range ids {
 		u, err := util.ParseUUID(id)
 		if err != nil {
@@ -781,7 +851,7 @@ func (h *Handler) publishChat(eventType, workspaceID, actorType, actorID, chatSe
 }
 
 func isNotFound(err error) bool {
-	return errors.Is(err, pgx.ErrNoRows)
+	return errors.Is(err, sql.ErrNoRows)
 }
 
 func isUniqueViolation(err error) bool {
@@ -1073,7 +1143,7 @@ func (h *Handler) resolveIssueByIdentifier(ctx context.Context, id, workspaceID 
 	}
 	issue, err := h.Queries.GetIssueByNumber(ctx, db.GetIssueByNumberParams{
 		WorkspaceID: wsUUID,
-		Number:      parts.number,
+		Number:      int64(parts.number),
 	})
 	if err != nil {
 		return db.Issue{}, false
@@ -1138,7 +1208,7 @@ func issuePrefixForWorkspace(ws db.Workspace) string {
 
 // getIssuePrefix fetches the effective issue_prefix for a workspace, and
 // returns "" when the workspace row cannot be loaded.
-func (h *Handler) getIssuePrefix(ctx context.Context, workspaceID pgtype.UUID) string {
+func (h *Handler) getIssuePrefix(ctx context.Context, workspaceID string) string {
 	ws, err := h.Queries.GetWorkspace(ctx, workspaceID)
 	if err != nil {
 		return ""

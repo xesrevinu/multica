@@ -9,7 +9,6 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/logger"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -41,32 +40,32 @@ var (
 // shares the status resolution, status_changed event and stage-barrier
 // handling of cancelling by hand. It returns an invalid UUID when the request
 // does not mark, and false after writing an error response.
-func parseDuplicateMark(w http.ResponseWriter, req *UpdateIssueRequest, rawFields map[string]json.RawMessage, issueID pgtype.UUID) (pgtype.UUID, bool) {
+func parseDuplicateMark(w http.ResponseWriter, req *UpdateIssueRequest, rawFields map[string]json.RawMessage, issueID string) (string, bool) {
 	if _, present := rawFields["duplicate_of_issue_id"]; !present {
-		return pgtype.UUID{}, true
+		return "", true
 	}
 	if req.DuplicateOfIssueID == nil {
 		writeError(w, http.StatusBadRequest, "duplicate_of_issue_id cannot be null; change the status to remove a duplicate mark")
-		return pgtype.UUID{}, false
+		return "", false
 	}
 	targetID, ok := parseUUIDOrBadRequest(w, *req.DuplicateOfIssueID, "duplicate_of_issue_id")
 	if !ok {
-		return pgtype.UUID{}, false
+		return "", false
 	}
 	if targetID == issueID {
 		writeError(w, http.StatusBadRequest, "an issue cannot be a duplicate of itself")
-		return pgtype.UUID{}, false
+		return "", false
 	}
 	if req.Status != nil && *req.Status != issuestatus.Cancelled {
 		writeError(w, http.StatusBadRequest, "a duplicate is cancelled; status must be cancelled or omitted")
-		return pgtype.UUID{}, false
+		return "", false
 	}
 	// The description/attachment path locks attachments before the issue row,
 	// while a mark locks two issue rows first. Keeping them apart keeps each
 	// path's lock order fixed.
 	if req.Description != nil || req.TitleBase != nil || req.DescriptionBase != nil || len(req.AttachmentIDs) > 0 {
 		writeError(w, http.StatusBadRequest, "duplicate_of_issue_id cannot be combined with description or attachment changes")
-		return pgtype.UUID{}, false
+		return "", false
 	}
 	cancelled := issuestatus.Cancelled
 	req.Status = &cancelled
@@ -77,10 +76,10 @@ func parseDuplicateMark(w http.ResponseWriter, req *UpdateIssueRequest, rawField
 // Both issues are locked first, so marks that share an issue run one after
 // the other and each validates what the previous one wrote. Deleting the
 // target also locks it, so a mark never commits a pointer to a deleted issue.
-func lockAndCheckDuplicateMark(ctx context.Context, q *db.Queries, workspaceID, issueID, targetID pgtype.UUID) error {
+func lockAndCheckDuplicateMark(ctx context.Context, q *db.Queries, workspaceID, issueID, targetID string) error {
 	rows, err := q.LockIssuesForDuplicateMark(ctx, db.LockIssuesForDuplicateMarkParams{
 		WorkspaceID: workspaceID,
-		IssueIds:    []pgtype.UUID{issueID, targetID},
+		IssueIds:    []string{issueID, targetID},
 	})
 	if err != nil {
 		return fmt.Errorf("lock issues for duplicate mark: %w", err)
@@ -91,7 +90,7 @@ func lockAndCheckDuplicateMark(ctx context.Context, q *db.Queries, workspaceID, 
 			continue
 		}
 		targetFound = true
-		if row.IsDuplicate {
+		if row.IsDuplicate != 0 {
 			return errDuplicateTargetIsDuplicate
 		}
 	}
@@ -100,7 +99,7 @@ func lockAndCheckDuplicateMark(ctx context.Context, q *db.Queries, workspaceID, 
 	}
 	hasDuplicates, err := q.IssueHasDuplicates(ctx, db.IssueHasDuplicatesParams{
 		WorkspaceID: workspaceID,
-		IssueID:     issueID,
+		IssueID:     nullString(issueID),
 	})
 	if err != nil {
 		return fmt.Errorf("check issue duplicates: %w", err)
@@ -131,8 +130,8 @@ func writeDuplicateMarkError(w http.ResponseWriter, err error) bool {
 // payload: the pointer only while it counts, i.e. the issue is cancelled. A
 // pointer an older server left on a reopened issue is no mark, so a write
 // that clears it is not a mark being removed.
-func liveDuplicateMark(status string, id pgtype.UUID) *string {
-	return uuidToPtr(duplicateOfPointer(status, id))
+func liveDuplicateMark(status string, id string) *string {
+	return uuidToPtr(nullString(duplicateOfPointer(status, id)))
 }
 
 // ListIssueDuplicates returns both sides of an issue's duplicate relation: the
@@ -148,7 +147,7 @@ func (h *Handler) ListIssueDuplicates(w http.ResponseWriter, r *http.Request) {
 	var duplicateOf *IssueResponse
 	if issue.Status == issuestatus.Cancelled && issue.DuplicateOfIssueID.Valid {
 		original, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
-			ID:          issue.DuplicateOfIssueID,
+			ID:          issue.DuplicateOfIssueID.String,
 			WorkspaceID: issue.WorkspaceID,
 		})
 		switch {
@@ -165,7 +164,7 @@ func (h *Handler) ListIssueDuplicates(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := h.Queries.ListIssueDuplicates(r.Context(), db.ListIssueDuplicatesParams{
 		WorkspaceID: issue.WorkspaceID,
-		IssueID:     issue.ID,
+		IssueID:     nullString(issue.ID),
 	})
 	if err != nil {
 		slog.Warn("list issue duplicates failed", append(logger.RequestAttrs(r), "error", err, "issue_id", uuidToString(issue.ID))...)

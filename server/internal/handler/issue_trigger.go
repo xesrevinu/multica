@@ -2,11 +2,11 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/issueworkflow"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -28,7 +28,7 @@ func (h *Handler) issueTriggerWriteProbe(r *http.Request, actorType, actorID str
 		IsSelfLoop: func() bool {
 			return h.isAgentRunningOnIssue(r, actorType, issue)
 		},
-		SuppressActiveSelfAssignment: func(agentID pgtype.UUID) bool {
+		SuppressActiveSelfAssignment: func(agentID string) bool {
 			suppress := h.shouldSuppressActiveSelfAssignment(r.Context(), actorType, actorID, issue.ID, agentID)
 			if suppress {
 				slog.Info("suppressing duplicate self-assignment enqueue",
@@ -54,7 +54,7 @@ func (h *Handler) issueTriggerPreviewProbe(r *http.Request, actorType, actorID, 
 		IsSelfLoop: func() bool {
 			return h.isAgentRunningOnIssue(r, actorType, issue)
 		},
-		SuppressActiveSelfAssignment: func(agentID pgtype.UUID) bool {
+		SuppressActiveSelfAssignment: func(agentID string) bool {
 			return h.shouldSuppressActiveSelfAssignment(r.Context(), actorType, actorID, issue.ID, agentID)
 		},
 	}
@@ -69,11 +69,11 @@ func (h *Handler) issueTriggerPreviewProbe(r *http.Request, actorType, actorID, 
 // itself intact. The API still returns success for that ownership write; only
 // the server log exposes the failed advisory lookup, because enqueue is the
 // optional side effect and suppressing it is safer than risking duplicate work.
-func (h *Handler) shouldSuppressActiveSelfAssignment(ctx context.Context, actorType, actorID string, issueID, targetAgentID pgtype.UUID) bool {
+func (h *Handler) shouldSuppressActiveSelfAssignment(ctx context.Context, actorType, actorID string, issueID, targetAgentID string) bool {
 	if actorType != "agent" || actorID == "" || actorID != uuidToString(targetAgentID) {
 		return false
 	}
-	active, err := h.Queries.HasActiveTaskForIssueAndAgent(ctx, db.HasActiveTaskForIssueAndAgentParams{IssueID: issueID, AgentID: targetAgentID})
+	active, err := h.Queries.HasActiveTaskForIssueAndAgent(ctx, db.HasActiveTaskForIssueAndAgentParams{IssueID: nullString(issueID), AgentID: targetAgentID})
 	return active || err != nil
 }
 
@@ -90,7 +90,7 @@ func (h *Handler) dispatchIssueRun(ctx context.Context, issue db.Issue, trigger 
 		// member actor is threaded; otherwise attribution falls back to the chain.
 		_, _ = h.TaskService.EnqueueTaskForIssueWithHandoff(ctx, issue, handoffNote, memberActorUserID(actorType, actorID))
 	case "squad":
-		h.enqueueSquadLeaderTask(ctx, issue, pgtype.UUID{}, actorType, actorID, handoffNote)
+		h.enqueueSquadLeaderTask(ctx, issue, "", actorType, actorID, handoffNote)
 	}
 }
 
@@ -98,13 +98,13 @@ func (h *Handler) dispatchIssueRun(ctx context.Context, issue db.Issue, trigger 
 // actor is a member, and an invalid UUID otherwise (an agent actor id is not a
 // human and must never become an accountable human). Used to thread the
 // assign/promote actor into the attribution resolver (MUL-4302 §4).
-func memberActorUserID(actorType, actorID string) pgtype.UUID {
+func memberActorUserID(actorType, actorID string) string {
 	if actorType != "member" {
-		return pgtype.UUID{}
+		return ""
 	}
 	uid, err := util.ParseUUID(actorID)
 	if err != nil {
-		return pgtype.UUID{}
+		return ""
 	}
 	return uid
 }
@@ -171,8 +171,8 @@ func (h *Handler) PreviewIssueTrigger(w http.ResponseWriter, r *http.Request) {
 	// Resolve the prospective assignee once — a malformed id is a deterministic
 	// 400, never a silent miscount.
 	var (
-		newAssigneeType pgtype.Text
-		newAssigneeID   pgtype.UUID
+		newAssigneeType sql.NullString
+		newAssigneeID   string
 		hasNewAssignee  bool
 	)
 	if req.AssigneeType != nil && *req.AssigneeType != "" && req.AssigneeID != nil && *req.AssigneeID != "" {
@@ -180,7 +180,7 @@ func (h *Handler) PreviewIssueTrigger(w http.ResponseWriter, r *http.Request) {
 		if !parseOK {
 			return
 		}
-		newAssigneeType = pgtype.Text{String: *req.AssigneeType, Valid: true}
+		newAssigneeType = sql.NullString{String: *req.AssigneeType, Valid: true}
 		newAssigneeID = id
 		hasNewAssignee = true
 	}
@@ -213,7 +213,7 @@ func (h *Handler) PreviewIssueTrigger(w http.ResponseWriter, r *http.Request) {
 			WorkspaceID:  wsUUID,
 			Status:       status,
 			AssigneeType: newAssigneeType,
-			AssigneeID:   newAssigneeID,
+			AssigneeID:   nullString(newAssigneeID),
 		}
 		// Mirror CreateIssue's workflow handling: the starting column's
 		// handoff when no assignee was picked. (MUL-7420)
@@ -222,8 +222,8 @@ func (h *Handler) PreviewIssueTrigger(w http.ResponseWriter, r *http.Request) {
 				if def, project, err := issueworkflow.ForProject(r.Context(), h.Queries, wsUUID, projectUUID); err == nil && def != nil {
 					if step, ok := def.Step(candidate.Status); ok && step.HandsOff() && !hasNewAssignee {
 						if t, id, ok := issueworkflow.ResolveHandler(step, project, actorType, parseUUID(actorID)); ok {
-							candidate.AssigneeType = pgtype.Text{String: t, Valid: true}
-							candidate.AssigneeID = id
+							candidate.AssigneeType = sql.NullString{String: t, Valid: true}
+							candidate.AssigneeID = nullString(id)
 						}
 					}
 				}
@@ -252,9 +252,9 @@ func (h *Handler) PreviewIssueTrigger(w http.ResponseWriter, r *http.Request) {
 		in := service.IssueTriggerInput{PrevStatus: loaded.Status}
 		if hasNewAssignee {
 			post.AssigneeType = newAssigneeType
-			post.AssigneeID = newAssigneeID
+			post.AssigneeID = nullString(newAssigneeID)
 			in.AssigneeChanged = loaded.AssigneeType.String != newAssigneeType.String ||
-				uuidToString(loaded.AssigneeID) != uuidToString(newAssigneeID)
+				uuidToString(loaded.AssigneeID.String) != uuidToString(newAssigneeID)
 		}
 		if req.Status != nil && *req.Status != "" {
 			post.Status = *req.Status
@@ -264,7 +264,7 @@ func (h *Handler) PreviewIssueTrigger(w http.ResponseWriter, r *http.Request) {
 			if !hasNewAssignee {
 				params := db.UpdateIssueParams{
 					ProjectID:    loaded.ProjectID,
-					Status:       pgtype.Text{String: *req.Status, Valid: true},
+					Status:       sql.NullString{String: *req.Status, Valid: true},
 					AssigneeType: loaded.AssigneeType,
 					AssigneeID:   loaded.AssigneeID,
 				}

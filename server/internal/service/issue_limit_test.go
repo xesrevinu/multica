@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/entitlement/entitlementtest"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -23,7 +22,7 @@ func (f issueLimitProviderFunc) Gate(ctx context.Context, workspaceID uuid.UUID,
 
 func TestResolveIssueCountPolicyUsesOnlyCloudInstruction(t *testing.T) {
 	workspace := uuid.New()
-	workspaceID := pgtype.UUID{Bytes: workspace, Valid: true}
+	workspaceID := uuid.UUID(workspace).String()
 	limit := 17
 
 	valid := ResolveIssueCountPolicy(context.Background(), issueLimitProviderFunc(
@@ -77,12 +76,12 @@ func TestIssueCountLimitSerializesConcurrentCreatesAndDeleteFreesCapacity(t *tes
 	userID := util.MustParseUUID(userIDString)
 
 	var initialCount int64
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM issue WHERE workspace_id = $1`, workspaceID).Scan(&initialCount); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT COUNT(*) FROM issue WHERE workspace_id = $1`, workspaceID).Scan(&initialCount); err != nil {
 		t.Fatalf("count initial issues: %v", err)
 	}
 	limit := int(initialCount + 1)
 	stub := entitlementtest.New()
-	stub.Set(uuid.UUID(workspaceID.Bytes), entitlement.GateIssueCount, entitlement.Decision{
+	stub.Set(uuid.MustParse(workspaceID), entitlement.GateIssueCount, entitlement.Decision{
 		Gate:           entitlement.Gate{Action: entitlement.ActionEnforce, Limit: &limit},
 		PolicyRevision: 13,
 	})
@@ -145,7 +144,7 @@ func TestIssueCountLimitSerializesConcurrentCreatesAndDeleteFreesCapacity(t *tes
 	}
 
 	var countAtLimit int64
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM issue WHERE workspace_id = $1`, workspaceID).Scan(&countAtLimit); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT COUNT(*) FROM issue WHERE workspace_id = $1`, workspaceID).Scan(&countAtLimit); err != nil {
 		t.Fatalf("count issues at limit: %v", err)
 	}
 	if countAtLimit != int64(limit) {

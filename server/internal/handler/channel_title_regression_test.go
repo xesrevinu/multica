@@ -17,7 +17,7 @@ import (
 
 func TestChannelChatTitle_UsesCurrentSourceForLLMAndPublishesAfterCAS(t *testing.T) {
 	requireDB(t)
-	fx := testutil.New(testPool, testWorkspaceID, testUserID)
+	fx := testutil.New(testSQLite, testWorkspaceID, testUserID)
 	const current = "Investigate the login redirect"
 	sessionID := parseUUID(fx.ChatSession(t, uuidToString(chatTitleTestAgentID(t)), testutil.Cols{"title": current}))
 	requests := make(chan string, 1)

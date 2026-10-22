@@ -7,24 +7,23 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const createMember = `-- name: CreateMember :one
-INSERT INTO member (workspace_id, user_id, role)
-VALUES ($1, $2, $3)
+INSERT INTO member (id, workspace_id, user_id, role)
+VALUES (gen_random_uuid(), ?1, ?2, ?3)
 RETURNING id, workspace_id, user_id, role, created_at
 `
 
 type CreateMemberParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	UserID      pgtype.UUID `json:"user_id"`
-	Role        string      `json:"role"`
+	WorkspaceID string `json:"workspace_id"`
+	UserID      string `json:"user_id"`
+	Role        string `json:"role"`
 }
 
 func (q *Queries) CreateMember(ctx context.Context, arg CreateMemberParams) (Member, error) {
-	row := q.db.QueryRow(ctx, createMember, arg.WorkspaceID, arg.UserID, arg.Role)
+	row := q.db.QueryRowContext(ctx, createMember, arg.WorkspaceID, arg.UserID, arg.Role)
 	var i Member
 	err := row.Scan(
 		&i.ID,
@@ -37,21 +36,21 @@ func (q *Queries) CreateMember(ctx context.Context, arg CreateMemberParams) (Mem
 }
 
 const deleteMember = `-- name: DeleteMember :exec
-DELETE FROM member WHERE id = $1
+DELETE FROM member WHERE id = ?1
 `
 
-func (q *Queries) DeleteMember(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteMember, id)
+func (q *Queries) DeleteMember(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteMember, id)
 	return err
 }
 
 const getMember = `-- name: GetMember :one
 SELECT id, workspace_id, user_id, role, created_at FROM member
-WHERE id = $1
+WHERE id = ?1
 `
 
-func (q *Queries) GetMember(ctx context.Context, id pgtype.UUID) (Member, error) {
-	row := q.db.QueryRow(ctx, getMember, id)
+func (q *Queries) GetMember(ctx context.Context, id string) (Member, error) {
+	row := q.db.QueryRowContext(ctx, getMember, id)
 	var i Member
 	err := row.Scan(
 		&i.ID,
@@ -65,16 +64,16 @@ func (q *Queries) GetMember(ctx context.Context, id pgtype.UUID) (Member, error)
 
 const getMemberByUserAndWorkspace = `-- name: GetMemberByUserAndWorkspace :one
 SELECT id, workspace_id, user_id, role, created_at FROM member
-WHERE user_id = $1 AND workspace_id = $2
+WHERE user_id = ?1 AND workspace_id = ?2
 `
 
 type GetMemberByUserAndWorkspaceParams struct {
-	UserID      pgtype.UUID `json:"user_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      string `json:"user_id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 func (q *Queries) GetMemberByUserAndWorkspace(ctx context.Context, arg GetMemberByUserAndWorkspaceParams) (Member, error) {
-	row := q.db.QueryRow(ctx, getMemberByUserAndWorkspace, arg.UserID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, getMemberByUserAndWorkspace, arg.UserID, arg.WorkspaceID)
 	var i Member
 	err := row.Scan(
 		&i.ID,
@@ -90,24 +89,26 @@ const getRealtimeMemberships = `-- name: GetRealtimeMemberships :many
 SELECT m.user_id, m.workspace_id
 FROM member m
 JOIN (
-    SELECT unnest($1::uuid[]) AS user_id,
-           unnest($2::uuid[]) AS workspace_id
+    -- JSON shape: user_ids and workspace_ids are JSON string arrays zipped by index.
+    SELECT json_extract(u.value, '$') AS user_id, json_extract(w.value, '$') AS workspace_id
+    FROM json_each(?1) AS u
+    JOIN json_each(?2) AS w ON u.key = w.key
 ) AS requested
     ON m.user_id = requested.user_id AND m.workspace_id = requested.workspace_id
 `
 
 type GetRealtimeMembershipsParams struct {
-	UserIds      []pgtype.UUID `json:"user_ids"`
-	WorkspaceIds []pgtype.UUID `json:"workspace_ids"`
+	UserIds      interface{} `json:"user_ids"`
+	WorkspaceIds interface{} `json:"workspace_ids"`
 }
 
 type GetRealtimeMembershipsRow struct {
-	UserID      pgtype.UUID `json:"user_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      string `json:"user_id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 func (q *Queries) GetRealtimeMemberships(ctx context.Context, arg GetRealtimeMembershipsParams) ([]GetRealtimeMembershipsRow, error) {
-	rows, err := q.db.Query(ctx, getRealtimeMemberships, arg.UserIds, arg.WorkspaceIds)
+	rows, err := q.db.QueryContext(ctx, getRealtimeMemberships, arg.UserIds, arg.WorkspaceIds)
 	if err != nil {
 		return nil, err
 	}
@@ -120,6 +121,9 @@ func (q *Queries) GetRealtimeMemberships(ctx context.Context, arg GetRealtimeMem
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -128,12 +132,12 @@ func (q *Queries) GetRealtimeMemberships(ctx context.Context, arg GetRealtimeMem
 
 const listMembers = `-- name: ListMembers :many
 SELECT id, workspace_id, user_id, role, created_at FROM member
-WHERE workspace_id = $1
+WHERE workspace_id = ?1
 ORDER BY created_at ASC
 `
 
-func (q *Queries) ListMembers(ctx context.Context, workspaceID pgtype.UUID) ([]Member, error) {
-	rows, err := q.db.Query(ctx, listMembers, workspaceID)
+func (q *Queries) ListMembers(ctx context.Context, workspaceID string) ([]Member, error) {
+	rows, err := q.db.QueryContext(ctx, listMembers, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -152,6 +156,9 @@ func (q *Queries) ListMembers(ctx context.Context, workspaceID pgtype.UUID) ([]M
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -163,23 +170,23 @@ SELECT m.id, m.workspace_id, m.user_id, m.role, m.created_at,
        u.name as user_name, u.email as user_email, u.avatar_url as user_avatar_url
 FROM member m
 JOIN "user" u ON u.id = m.user_id
-WHERE m.workspace_id = $1
+WHERE m.workspace_id = ?1
 ORDER BY m.created_at ASC
 `
 
 type ListMembersWithUserRow struct {
-	ID            pgtype.UUID        `json:"id"`
-	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
-	UserID        pgtype.UUID        `json:"user_id"`
-	Role          string             `json:"role"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	UserName      string             `json:"user_name"`
-	UserEmail     string             `json:"user_email"`
-	UserAvatarUrl pgtype.Text        `json:"user_avatar_url"`
+	ID            string         `json:"id"`
+	WorkspaceID   string         `json:"workspace_id"`
+	UserID        string         `json:"user_id"`
+	Role          string         `json:"role"`
+	CreatedAt     string         `json:"created_at"`
+	UserName      string         `json:"user_name"`
+	UserEmail     string         `json:"user_email"`
+	UserAvatarUrl sql.NullString `json:"user_avatar_url"`
 }
 
-func (q *Queries) ListMembersWithUser(ctx context.Context, workspaceID pgtype.UUID) ([]ListMembersWithUserRow, error) {
-	rows, err := q.db.Query(ctx, listMembersWithUser, workspaceID)
+func (q *Queries) ListMembersWithUser(ctx context.Context, workspaceID string) ([]ListMembersWithUserRow, error) {
+	rows, err := q.db.QueryContext(ctx, listMembersWithUser, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -201,6 +208,9 @@ func (q *Queries) ListMembersWithUser(ctx context.Context, workspaceID pgtype.UU
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -209,23 +219,26 @@ func (q *Queries) ListMembersWithUser(ctx context.Context, workspaceID pgtype.UU
 
 const listWorkspaceManagerUserIDs = `-- name: ListWorkspaceManagerUserIDs :many
 SELECT user_id FROM member
-WHERE workspace_id = $1 AND role IN ('owner', 'admin')
+WHERE workspace_id = ?1 AND role IN ('owner', 'admin')
 ORDER BY created_at ASC
 `
 
-func (q *Queries) ListWorkspaceManagerUserIDs(ctx context.Context, workspaceID pgtype.UUID) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listWorkspaceManagerUserIDs, workspaceID)
+func (q *Queries) ListWorkspaceManagerUserIDs(ctx context.Context, workspaceID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listWorkspaceManagerUserIDs, workspaceID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []string{}
 	for rows.Next() {
-		var user_id pgtype.UUID
+		var user_id string
 		if err := rows.Scan(&user_id); err != nil {
 			return nil, err
 		}
 		items = append(items, user_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -234,18 +247,18 @@ func (q *Queries) ListWorkspaceManagerUserIDs(ctx context.Context, workspaceID p
 }
 
 const updateMemberRole = `-- name: UpdateMemberRole :one
-UPDATE member SET role = $2
-WHERE id = $1
+UPDATE member SET role = ?2
+WHERE id = ?1
 RETURNING id, workspace_id, user_id, role, created_at
 `
 
 type UpdateMemberRoleParams struct {
-	ID   pgtype.UUID `json:"id"`
-	Role string      `json:"role"`
+	ID   string `json:"id"`
+	Role string `json:"role"`
 }
 
 func (q *Queries) UpdateMemberRole(ctx context.Context, arg UpdateMemberRoleParams) (Member, error) {
-	row := q.db.QueryRow(ctx, updateMemberRole, arg.ID, arg.Role)
+	row := q.db.QueryRowContext(ctx, updateMemberRole, arg.ID, arg.Role)
 	var i Member
 	err := row.Scan(
 		&i.ID,

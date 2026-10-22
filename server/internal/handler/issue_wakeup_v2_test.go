@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/testutil"
 )
@@ -144,7 +143,7 @@ func TestWorkspaceWakeupsListSourcesSystemRulesAndPaused(t *testing.T) {
 	create := func(in service.WakeupInput) string {
 		t.Helper()
 		in.AgentID, in.Instruction = agent, "check"
-		w, err := svc.Create(context.Background(), parseUUID(issue), parseUUID(testUserID), pgtype.UUID{}, in)
+		w, err := svc.Create(context.Background(), parseUUID(issue), parseUUID(testUserID), "", in)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -227,7 +226,7 @@ func TestIssueWakeupManagementEndpoints(t *testing.T) {
 	dbfx.Cleanup(t, "DELETE FROM activity_log WHERE issue_id=$1", issue)
 	dbfx.Cleanup(t, "DELETE FROM agent_task_queue WHERE issue_id=$1", issue)
 	svc := service.IssueWakeupService{Tasks: testHandler.TaskService}
-	w, err := svc.Create(context.Background(), parseUUID(issue), parseUUID(testUserID), pgtype.UUID{}, service.WakeupInput{AgentID: agent, Kind: "every", IntervalSeconds: 3600, Instruction: "check staging"})
+	w, err := svc.Create(context.Background(), parseUUID(issue), parseUUID(testUserID), "", service.WakeupInput{AgentID: agent, Kind: "every", IntervalSeconds: 3600, Instruction: "check staging"})
 	if err != nil {
 		t.Fatal(err)
 	}

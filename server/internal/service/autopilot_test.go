@@ -1,11 +1,11 @@
 package service
 
 import (
+	"database/sql"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -35,16 +35,16 @@ func TestTaskFailureReasonForAutopilotRun(t *testing.T) {
 		{
 			name: "prefers raw error text",
 			task: db.AgentTaskQueue{
-				Error:         pgtype.Text{String: "tests failed", Valid: true},
-				FailureReason: pgtype.Text{String: "agent_error", Valid: true},
+				Error:         sql.NullString{String: "tests failed", Valid: true},
+				FailureReason: sql.NullString{String: "agent_error", Valid: true},
 			},
 			want: "tests failed",
 		},
 		{
 			name: "falls back to classified reason when error is blank",
 			task: db.AgentTaskQueue{
-				Error:         pgtype.Text{String: "   ", Valid: true},
-				FailureReason: pgtype.Text{String: "codex_semantic_inactivity", Valid: true},
+				Error:         sql.NullString{String: "   ", Valid: true},
+				FailureReason: sql.NullString{String: "codex_semantic_inactivity", Valid: true},
 			},
 			want: "codex_semantic_inactivity",
 		},
@@ -66,8 +66,8 @@ func TestTaskFailureReasonForAutopilotRun(t *testing.T) {
 
 func TestBuildIssueDescription_NoTriggerPayload(t *testing.T) {
 	s := &AutopilotService{}
-	ap := db.Autopilot{Description: pgtype.Text{String: "do the thing", Valid: true}}
-	run := db.AutopilotRun{Source: "schedule", TriggeredAt: pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}}
+	ap := db.Autopilot{Description: sql.NullString{String: "do the thing", Valid: true}}
+	run := db.AutopilotRun{Source: "schedule", TriggeredAt: nullTime(time.Now().UTC(), true).String}
 
 	got := s.buildIssueDescription(ap, run, "UTC")
 	if !strings.HasPrefix(got.String, "do the thing") {
@@ -83,10 +83,10 @@ func TestBuildIssueDescription_NoTriggerPayload(t *testing.T) {
 
 func TestBuildIssueDescription_UsesTriggerTimezone(t *testing.T) {
 	s := &AutopilotService{}
-	ap := db.Autopilot{Description: pgtype.Text{String: "daily sync", Valid: true}}
+	ap := db.Autopilot{Description: sql.NullString{String: "daily sync", Valid: true}}
 	run := db.AutopilotRun{
 		Source:      "schedule",
-		TriggeredAt: pgtype.Timestamptz{Time: time.Date(2026, 5, 26, 0, 0, 0, 0, time.UTC), Valid: true},
+		TriggeredAt: nullTime(time.Date(2026, 5, 26, 0, 0, 0, 0, time.UTC), true).String,
 	}
 
 	got := s.buildIssueDescription(ap, run, "Asia/Tokyo")
@@ -102,10 +102,10 @@ func TestBuildIssueDescription_UsesTriggerTimezone(t *testing.T) {
 // timestamp half-formatted in the issue body.
 func TestBuildIssueDescription_InvalidTriggerTimezoneFallsBackToUTC(t *testing.T) {
 	s := &AutopilotService{}
-	ap := db.Autopilot{Description: pgtype.Text{String: "do the thing", Valid: true}}
+	ap := db.Autopilot{Description: sql.NullString{String: "do the thing", Valid: true}}
 	run := db.AutopilotRun{
 		Source:      "schedule",
-		TriggeredAt: pgtype.Timestamptz{Time: time.Date(2026, 5, 26, 0, 0, 0, 0, time.UTC), Valid: true},
+		TriggeredAt: nullTime(time.Date(2026, 5, 26, 0, 0, 0, 0, time.UTC), true).String,
 	}
 
 	got := s.buildIssueDescription(ap, run, "Foo/Bar")
@@ -118,10 +118,10 @@ func TestInterpolateTemplate_InvalidTriggerTimezoneFallsBackToUTC(t *testing.T) 
 	s := &AutopilotService{}
 	ap := db.Autopilot{
 		Title:              "fallback",
-		IssueTitleTemplate: pgtype.Text{String: "report {{date}}", Valid: true},
+		IssueTitleTemplate: sql.NullString{String: "report {{date}}", Valid: true},
 	}
 	run := db.AutopilotRun{
-		TriggeredAt: pgtype.Timestamptz{Time: time.Date(2026, 5, 26, 23, 30, 0, 0, time.UTC), Valid: true},
+		TriggeredAt: nullTime(time.Date(2026, 5, 26, 23, 30, 0, 0, time.UTC), true).String,
 	}
 
 	got := s.interpolateTemplate(ap, run, "Foo/Bar")
@@ -132,9 +132,9 @@ func TestInterpolateTemplate_InvalidTriggerTimezoneFallsBackToUTC(t *testing.T) 
 
 func TestBuildIssueDescription_WithWebhookPayload(t *testing.T) {
 	s := &AutopilotService{}
-	ap := db.Autopilot{Description: pgtype.Text{String: "watch PRs", Valid: true}}
+	ap := db.Autopilot{Description: sql.NullString{String: "watch PRs", Valid: true}}
 	payload := []byte(`{"event":"github.pull_request.opened","eventPayload":{"number":7},"request":{"receivedAt":"2026-05-09T00:00:00Z","contentType":"application/json"}}`)
-	run := db.AutopilotRun{Source: "webhook", TriggerPayload: payload, TriggeredAt: pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}}
+	run := db.AutopilotRun{Source: "webhook", TriggerPayload: nullString(string(payload)), TriggeredAt: nullTime(time.Now().UTC(), true).String}
 
 	got := s.buildIssueDescription(ap, run, "UTC")
 	if !strings.HasPrefix(got.String, "watch PRs") {
@@ -159,9 +159,9 @@ func TestBuildIssueDescription_WebhookSourceMissingEnvelope(t *testing.T) {
 	// trigger_payload, we should still emit a webhook block with sensible
 	// defaults rather than skipping the section entirely.
 	s := &AutopilotService{}
-	ap := db.Autopilot{Description: pgtype.Text{String: "thing", Valid: true}}
+	ap := db.Autopilot{Description: sql.NullString{String: "thing", Valid: true}}
 	payload := []byte(`{"raw":"missing envelope"}`)
-	run := db.AutopilotRun{Source: "webhook", TriggerPayload: payload, TriggeredAt: pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}}
+	run := db.AutopilotRun{Source: "webhook", TriggerPayload: nullString(string(payload)), TriggeredAt: nullTime(time.Now().UTC(), true).String}
 
 	got := s.buildIssueDescription(ap, run, "UTC")
 	if !strings.Contains(got.String, "Webhook event:") {
@@ -172,8 +172,8 @@ func TestBuildIssueDescription_WebhookSourceMissingEnvelope(t *testing.T) {
 func TestBuildIssueDescription_NonWebhookSourceWithPayloadIgnored(t *testing.T) {
 	// Manual / schedule with a payload should not get a webhook block.
 	s := &AutopilotService{}
-	ap := db.Autopilot{Description: pgtype.Text{String: "thing", Valid: true}}
-	run := db.AutopilotRun{Source: "manual", TriggerPayload: []byte(`{"event":"x.y"}`), TriggeredAt: pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}}
+	ap := db.Autopilot{Description: sql.NullString{String: "thing", Valid: true}}
+	run := db.AutopilotRun{Source: "manual", TriggerPayload: nullString(string([]byte(`{"event":"x.y"}`))), TriggeredAt: nullTime(time.Now().UTC(), true).String}
 
 	got := s.buildIssueDescription(ap, run, "UTC")
 	if strings.Contains(got.String, "Webhook event") {
@@ -188,8 +188,8 @@ func TestBuildIssueDescription_NonWebhookSourceWithPayloadIgnored(t *testing.T) 
 // the first place — service-layer interpolation stays substitute-or-leave).
 func TestInterpolateTemplate(t *testing.T) {
 	s := &AutopilotService{}
-	run := db.AutopilotRun{TriggeredAt: pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}}
-	today := run.TriggeredAt.Time.UTC().Format("2006-01-02")
+	run := db.AutopilotRun{TriggeredAt: nullTime(time.Now().UTC(), true).String}
+	today := asTime(run.TriggeredAt).UTC().Format("2006-01-02")
 
 	cases := []struct {
 		name   string
@@ -198,22 +198,22 @@ func TestInterpolateTemplate(t *testing.T) {
 	}{
 		{
 			name:   "date placeholder substituted",
-			ap:     db.Autopilot{Title: "fallback", IssueTitleTemplate: pgtype.Text{String: "probe — {{date}}", Valid: true}},
+			ap:     db.Autopilot{Title: "fallback", IssueTitleTemplate: sql.NullString{String: "probe — {{date}}", Valid: true}},
 			expect: "probe — " + today,
 		},
 		{
 			name:   "date placeholder with whitespace substituted",
-			ap:     db.Autopilot{Title: "fallback", IssueTitleTemplate: pgtype.Text{String: "probe — {{ date }}", Valid: true}},
+			ap:     db.Autopilot{Title: "fallback", IssueTitleTemplate: sql.NullString{String: "probe — {{ date }}", Valid: true}},
 			expect: "probe — " + today,
 		},
 		{
 			name:   "empty template falls back to autopilot title",
-			ap:     db.Autopilot{Title: "fallback title", IssueTitleTemplate: pgtype.Text{Valid: false}},
+			ap:     db.Autopilot{Title: "fallback title", IssueTitleTemplate: sql.NullString{Valid: false}},
 			expect: "fallback title",
 		},
 		{
 			name:   "template without placeholder is returned verbatim",
-			ap:     db.Autopilot{Title: "fallback", IssueTitleTemplate: pgtype.Text{String: "static title", Valid: true}},
+			ap:     db.Autopilot{Title: "fallback", IssueTitleTemplate: sql.NullString{String: "static title", Valid: true}},
 			expect: "static title",
 		},
 	}
@@ -230,10 +230,10 @@ func TestInterpolateTemplate_UsesTriggerTimezoneForDate(t *testing.T) {
 	s := &AutopilotService{}
 	ap := db.Autopilot{
 		Title:              "fallback",
-		IssueTitleTemplate: pgtype.Text{String: "Tokyo report {{date}}", Valid: true},
+		IssueTitleTemplate: sql.NullString{String: "Tokyo report {{date}}", Valid: true},
 	}
 	run := db.AutopilotRun{
-		TriggeredAt: pgtype.Timestamptz{Time: time.Date(2026, 5, 26, 23, 30, 0, 0, time.UTC), Valid: true},
+		TriggeredAt: nullTime(time.Date(2026, 5, 26, 23, 30, 0, 0, time.UTC), true).String,
 	}
 
 	got := s.interpolateTemplate(ap, run, "Asia/Tokyo")

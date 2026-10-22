@@ -7,52 +7,51 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const abandonIssueSourceContext = `-- name: AbandonIssueSourceContext :execrows
 UPDATE issue_source_context
 SET state = 'abandoned', origin_task_id = NULL
-WHERE id = $1
-  AND workspace_id = $2
+WHERE id = ?1
+  AND workspace_id = ?2
   AND state = 'pending'
 `
 
 type AbandonIssueSourceContextParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 func (q *Queries) AbandonIssueSourceContext(ctx context.Context, arg AbandonIssueSourceContextParams) (int64, error) {
-	result, err := q.db.Exec(ctx, abandonIssueSourceContext, arg.ID, arg.WorkspaceID)
+	result, err := q.db.ExecContext(ctx, abandonIssueSourceContext, arg.ID, arg.WorkspaceID)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const attachIssueSourceContext = `-- name: AttachIssueSourceContext :one
 UPDATE issue_source_context
-SET issue_id = $1,
+SET issue_id = ?1,
     state = 'attached',
     attached_at = now()
-WHERE workspace_id = $2
-  AND id = $3
+WHERE workspace_id = ?2
+  AND id = ?3
   AND state = 'pending'
-  AND origin_task_id = $4
+  AND origin_task_id = ?4
 RETURNING id, workspace_id, issue_id, origin_task_id, source_issue_id, anchor_comment_id, captured_by_user_id, snapshot_version, snapshot, capture_digest, state, captured_at, attached_at
 `
 
 type AttachIssueSourceContextParams struct {
-	IssueID      pgtype.UUID `json:"issue_id"`
-	WorkspaceID  pgtype.UUID `json:"workspace_id"`
-	ID           pgtype.UUID `json:"id"`
-	OriginTaskID pgtype.UUID `json:"origin_task_id"`
+	IssueID      sql.NullString `json:"issue_id"`
+	WorkspaceID  string         `json:"workspace_id"`
+	ID           string         `json:"id"`
+	OriginTaskID sql.NullString `json:"origin_task_id"`
 }
 
 func (q *Queries) AttachIssueSourceContext(ctx context.Context, arg AttachIssueSourceContextParams) (IssueSourceContext, error) {
-	row := q.db.QueryRow(ctx, attachIssueSourceContext,
+	row := q.db.QueryRowContext(ctx, attachIssueSourceContext,
 		arg.IssueID,
 		arg.WorkspaceID,
 		arg.ID,
@@ -78,28 +77,27 @@ func (q *Queries) AttachIssueSourceContext(ctx context.Context, arg AttachIssueS
 }
 
 const claimSourceContextObjectIntentForCleanup = `-- name: ClaimSourceContextObjectIntentForCleanup :one
-UPDATE issue_source_context_object_intent AS intent
-SET state = 'deleting',
-    lease_token = $1,
-    lease_expires_at = now() + interval '2 minutes'
-FROM (
-    SELECT candidate.storage_key
+WITH due AS (
+    SELECT candidate.storage_key AS storage_key
     FROM issue_source_context_object_intent candidate
     WHERE candidate.next_attempt_at <= now()
       AND (
-        (candidate.state = 'pending' AND candidate.created_at <= now() - interval '1 hour')
+        (candidate.state = 'pending' AND candidate.created_at <= datetime('now', '-1 hours'))
         OR (candidate.state = 'deleting' AND (candidate.lease_expires_at IS NULL OR candidate.lease_expires_at <= now()))
       )
     ORDER BY candidate.next_attempt_at, candidate.storage_key
     LIMIT 1
-    FOR UPDATE SKIP LOCKED
-) due
-WHERE intent.storage_key = due.storage_key
-RETURNING intent.storage_key, intent.workspace_id, intent.source_context_id, intent.attachment_id, intent.object_url, intent.state, intent.lease_token, intent.lease_expires_at, intent.next_attempt_at, intent.last_error, intent.created_at
+)
+UPDATE issue_source_context_object_intent
+SET state = 'deleting',
+    lease_token = ?1,
+    lease_expires_at = datetime('now', '+2 minutes')
+WHERE storage_key = (SELECT storage_key FROM due)
+RETURNING storage_key, workspace_id, source_context_id, attachment_id, object_url, state, lease_token, lease_expires_at, next_attempt_at, last_error, created_at
 `
 
-func (q *Queries) ClaimSourceContextObjectIntentForCleanup(ctx context.Context, leaseToken pgtype.UUID) (IssueSourceContextObjectIntent, error) {
-	row := q.db.QueryRow(ctx, claimSourceContextObjectIntentForCleanup, leaseToken)
+func (q *Queries) ClaimSourceContextObjectIntentForCleanup(ctx context.Context, leaseToken sql.NullString) (IssueSourceContextObjectIntent, error) {
+	row := q.db.QueryRowContext(ctx, claimSourceContextObjectIntentForCleanup, leaseToken)
 	var i IssueSourceContextObjectIntent
 	err := row.Scan(
 		&i.StorageKey,
@@ -123,33 +121,33 @@ INSERT INTO issue_source_context (
     anchor_comment_id, captured_by_user_id, snapshot_version, snapshot,
     capture_digest, state, captured_at, attached_at
 ) VALUES (
-    $1, $2, $3,
-    $4, $5,
-    $6, $7,
-    $8, $9, $10,
-    $11, $12, $13
+    ?1, ?2, ?3,
+    ?4, ?5,
+    ?6, ?7,
+    ?8, ?9, ?10,
+    ?11, ?12, ?13
 )
 RETURNING id, workspace_id, issue_id, origin_task_id, source_issue_id, anchor_comment_id, captured_by_user_id, snapshot_version, snapshot, capture_digest, state, captured_at, attached_at
 `
 
 type CreateIssueSourceContextParams struct {
-	ID               pgtype.UUID        `json:"id"`
-	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
-	IssueID          pgtype.UUID        `json:"issue_id"`
-	OriginTaskID     pgtype.UUID        `json:"origin_task_id"`
-	SourceIssueID    pgtype.UUID        `json:"source_issue_id"`
-	AnchorCommentID  pgtype.UUID        `json:"anchor_comment_id"`
-	CapturedByUserID pgtype.UUID        `json:"captured_by_user_id"`
-	SnapshotVersion  int16              `json:"snapshot_version"`
-	Snapshot         []byte             `json:"snapshot"`
-	CaptureDigest    string             `json:"capture_digest"`
-	State            string             `json:"state"`
-	CapturedAt       pgtype.Timestamptz `json:"captured_at"`
-	AttachedAt       pgtype.Timestamptz `json:"attached_at"`
+	ID               string         `json:"id"`
+	WorkspaceID      string         `json:"workspace_id"`
+	IssueID          sql.NullString `json:"issue_id"`
+	OriginTaskID     sql.NullString `json:"origin_task_id"`
+	SourceIssueID    string         `json:"source_issue_id"`
+	AnchorCommentID  string         `json:"anchor_comment_id"`
+	CapturedByUserID string         `json:"captured_by_user_id"`
+	SnapshotVersion  int64          `json:"snapshot_version"`
+	Snapshot         string         `json:"snapshot"`
+	CaptureDigest    string         `json:"capture_digest"`
+	State            string         `json:"state"`
+	CapturedAt       string         `json:"captured_at"`
+	AttachedAt       sql.NullString `json:"attached_at"`
 }
 
 func (q *Queries) CreateIssueSourceContext(ctx context.Context, arg CreateIssueSourceContextParams) (IssueSourceContext, error) {
-	row := q.db.QueryRow(ctx, createIssueSourceContext,
+	row := q.db.QueryRowContext(ctx, createIssueSourceContext,
 		arg.ID,
 		arg.WorkspaceID,
 		arg.IssueID,
@@ -185,60 +183,60 @@ func (q *Queries) CreateIssueSourceContext(ctx context.Context, arg CreateIssueS
 
 const deleteAbandonedIssueSourceContext = `-- name: DeleteAbandonedIssueSourceContext :execrows
 DELETE FROM issue_source_context
-WHERE workspace_id = $1
-  AND id = $2
+WHERE workspace_id = ?1
+  AND id = ?2
   AND state = 'abandoned'
 `
 
 type DeleteAbandonedIssueSourceContextParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	ID          pgtype.UUID `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	ID          string `json:"id"`
 }
 
 func (q *Queries) DeleteAbandonedIssueSourceContext(ctx context.Context, arg DeleteAbandonedIssueSourceContextParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteAbandonedIssueSourceContext, arg.WorkspaceID, arg.ID)
+	result, err := q.db.ExecContext(ctx, deleteAbandonedIssueSourceContext, arg.WorkspaceID, arg.ID)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const deleteClaimedSourceContextObjectIntent = `-- name: DeleteClaimedSourceContextObjectIntent :execrows
 DELETE FROM issue_source_context_object_intent
-WHERE storage_key = $1
-  AND workspace_id = $2
-  AND lease_token = $3
+WHERE storage_key = ?1
+  AND workspace_id = ?2
+  AND lease_token = ?3
 `
 
 type DeleteClaimedSourceContextObjectIntentParams struct {
-	StorageKey  string      `json:"storage_key"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	LeaseToken  pgtype.UUID `json:"lease_token"`
+	StorageKey  string         `json:"storage_key"`
+	WorkspaceID string         `json:"workspace_id"`
+	LeaseToken  sql.NullString `json:"lease_token"`
 }
 
 func (q *Queries) DeleteClaimedSourceContextObjectIntent(ctx context.Context, arg DeleteClaimedSourceContextObjectIntentParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteClaimedSourceContextObjectIntent, arg.StorageKey, arg.WorkspaceID, arg.LeaseToken)
+	result, err := q.db.ExecContext(ctx, deleteClaimedSourceContextObjectIntent, arg.StorageKey, arg.WorkspaceID, arg.LeaseToken)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const deleteIssueSourceContextByIssue = `-- name: DeleteIssueSourceContextByIssue :one
 DELETE FROM issue_source_context
-WHERE workspace_id = $1
-  AND issue_id = $2
+WHERE workspace_id = ?1
+  AND issue_id = ?2
   AND state = 'attached'
 RETURNING id, workspace_id, issue_id, origin_task_id, source_issue_id, anchor_comment_id, captured_by_user_id, snapshot_version, snapshot, capture_digest, state, captured_at, attached_at
 `
 
 type DeleteIssueSourceContextByIssueParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	IssueID     pgtype.UUID `json:"issue_id"`
+	WorkspaceID string         `json:"workspace_id"`
+	IssueID     sql.NullString `json:"issue_id"`
 }
 
 func (q *Queries) DeleteIssueSourceContextByIssue(ctx context.Context, arg DeleteIssueSourceContextByIssueParams) (IssueSourceContext, error) {
-	row := q.db.QueryRow(ctx, deleteIssueSourceContextByIssue, arg.WorkspaceID, arg.IssueID)
+	row := q.db.QueryRowContext(ctx, deleteIssueSourceContextByIssue, arg.WorkspaceID, arg.IssueID)
 	var i IssueSourceContext
 	err := row.Scan(
 		&i.ID,
@@ -260,12 +258,12 @@ func (q *Queries) DeleteIssueSourceContextByIssue(ctx context.Context, arg Delet
 
 const deleteIssueSourceContextsForWorkspace = `-- name: DeleteIssueSourceContextsForWorkspace :many
 DELETE FROM issue_source_context
-WHERE workspace_id = $1
+WHERE workspace_id = ?1
 RETURNING id, workspace_id, issue_id, origin_task_id, source_issue_id, anchor_comment_id, captured_by_user_id, snapshot_version, snapshot, capture_digest, state, captured_at, attached_at
 `
 
-func (q *Queries) DeleteIssueSourceContextsForWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]IssueSourceContext, error) {
-	rows, err := q.db.Query(ctx, deleteIssueSourceContextsForWorkspace, workspaceID)
+func (q *Queries) DeleteIssueSourceContextsForWorkspace(ctx context.Context, workspaceID string) ([]IssueSourceContext, error) {
+	rows, err := q.db.QueryContext(ctx, deleteIssueSourceContextsForWorkspace, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -292,6 +290,9 @@ func (q *Queries) DeleteIssueSourceContextsForWorkspace(ctx context.Context, wor
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -300,19 +301,19 @@ func (q *Queries) DeleteIssueSourceContextsForWorkspace(ctx context.Context, wor
 
 const deletePendingSourceContextObjectIntents = `-- name: DeletePendingSourceContextObjectIntents :many
 DELETE FROM issue_source_context_object_intent
-WHERE workspace_id = $1
-  AND source_context_id = $2
+WHERE workspace_id = ?1
+  AND source_context_id = ?2
   AND state = 'pending'
 RETURNING storage_key
 `
 
 type DeletePendingSourceContextObjectIntentsParams struct {
-	WorkspaceID     pgtype.UUID `json:"workspace_id"`
-	SourceContextID pgtype.UUID `json:"source_context_id"`
+	WorkspaceID     string `json:"workspace_id"`
+	SourceContextID string `json:"source_context_id"`
 }
 
 func (q *Queries) DeletePendingSourceContextObjectIntents(ctx context.Context, arg DeletePendingSourceContextObjectIntentsParams) ([]string, error) {
-	rows, err := q.db.Query(ctx, deletePendingSourceContextObjectIntents, arg.WorkspaceID, arg.SourceContextID)
+	rows, err := q.db.QueryContext(ctx, deletePendingSourceContextObjectIntents, arg.WorkspaceID, arg.SourceContextID)
 	if err != nil {
 		return nil, err
 	}
@@ -325,6 +326,9 @@ func (q *Queries) DeletePendingSourceContextObjectIntents(ctx context.Context, a
 		}
 		items = append(items, storage_key)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -333,27 +337,27 @@ func (q *Queries) DeletePendingSourceContextObjectIntents(ctx context.Context, a
 
 const deleteSourceContextObjectIntentsByWorkspace = `-- name: DeleteSourceContextObjectIntentsByWorkspace :exec
 DELETE FROM issue_source_context_object_intent
-WHERE workspace_id = $1
+WHERE workspace_id = ?1
 `
 
-func (q *Queries) DeleteSourceContextObjectIntentsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteSourceContextObjectIntentsByWorkspace, workspaceID)
+func (q *Queries) DeleteSourceContextObjectIntentsByWorkspace(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteSourceContextObjectIntentsByWorkspace, workspaceID)
 	return err
 }
 
 const getIssueSourceContextByID = `-- name: GetIssueSourceContextByID :one
 SELECT id, workspace_id, issue_id, origin_task_id, source_issue_id, anchor_comment_id, captured_by_user_id, snapshot_version, snapshot, capture_digest, state, captured_at, attached_at FROM issue_source_context
-WHERE workspace_id = $1
-  AND id = $2
+WHERE workspace_id = ?1
+  AND id = ?2
 `
 
 type GetIssueSourceContextByIDParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	ID          pgtype.UUID `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	ID          string `json:"id"`
 }
 
 func (q *Queries) GetIssueSourceContextByID(ctx context.Context, arg GetIssueSourceContextByIDParams) (IssueSourceContext, error) {
-	row := q.db.QueryRow(ctx, getIssueSourceContextByID, arg.WorkspaceID, arg.ID)
+	row := q.db.QueryRowContext(ctx, getIssueSourceContextByID, arg.WorkspaceID, arg.ID)
 	var i IssueSourceContext
 	err := row.Scan(
 		&i.ID,
@@ -375,18 +379,18 @@ func (q *Queries) GetIssueSourceContextByID(ctx context.Context, arg GetIssueSou
 
 const getIssueSourceContextByIssue = `-- name: GetIssueSourceContextByIssue :one
 SELECT id, workspace_id, issue_id, origin_task_id, source_issue_id, anchor_comment_id, captured_by_user_id, snapshot_version, snapshot, capture_digest, state, captured_at, attached_at FROM issue_source_context
-WHERE workspace_id = $1
-  AND issue_id = $2
+WHERE workspace_id = ?1
+  AND issue_id = ?2
   AND state = 'attached'
 `
 
 type GetIssueSourceContextByIssueParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	IssueID     pgtype.UUID `json:"issue_id"`
+	WorkspaceID string         `json:"workspace_id"`
+	IssueID     sql.NullString `json:"issue_id"`
 }
 
 func (q *Queries) GetIssueSourceContextByIssue(ctx context.Context, arg GetIssueSourceContextByIssueParams) (IssueSourceContext, error) {
-	row := q.db.QueryRow(ctx, getIssueSourceContextByIssue, arg.WorkspaceID, arg.IssueID)
+	row := q.db.QueryRowContext(ctx, getIssueSourceContextByIssue, arg.WorkspaceID, arg.IssueID)
 	var i IssueSourceContext
 	err := row.Scan(
 		&i.ID,
@@ -408,19 +412,18 @@ func (q *Queries) GetIssueSourceContextByIssue(ctx context.Context, arg GetIssue
 
 const getPendingIssueSourceContextByOriginTask = `-- name: GetPendingIssueSourceContextByOriginTask :one
 SELECT id, workspace_id, issue_id, origin_task_id, source_issue_id, anchor_comment_id, captured_by_user_id, snapshot_version, snapshot, capture_digest, state, captured_at, attached_at FROM issue_source_context
-WHERE workspace_id = $1
-  AND origin_task_id = $2
+WHERE workspace_id = ?1
+  AND origin_task_id = ?2
   AND state = 'pending'
-FOR UPDATE
 `
 
 type GetPendingIssueSourceContextByOriginTaskParams struct {
-	WorkspaceID  pgtype.UUID `json:"workspace_id"`
-	OriginTaskID pgtype.UUID `json:"origin_task_id"`
+	WorkspaceID  string         `json:"workspace_id"`
+	OriginTaskID sql.NullString `json:"origin_task_id"`
 }
 
 func (q *Queries) GetPendingIssueSourceContextByOriginTask(ctx context.Context, arg GetPendingIssueSourceContextByOriginTaskParams) (IssueSourceContext, error) {
-	row := q.db.QueryRow(ctx, getPendingIssueSourceContextByOriginTask, arg.WorkspaceID, arg.OriginTaskID)
+	row := q.db.QueryRowContext(ctx, getPendingIssueSourceContextByOriginTask, arg.WorkspaceID, arg.OriginTaskID)
 	var i IssueSourceContext
 	err := row.Scan(
 		&i.ID,
@@ -445,11 +448,11 @@ SELECT isc.id, isc.workspace_id, isc.issue_id, isc.origin_task_id, isc.source_is
 FROM issue_source_context isc
 WHERE isc.state = 'abandoned'
 ORDER BY isc.captured_at, isc.id
-LIMIT $1
+LIMIT ?1
 `
 
-func (q *Queries) ListAbandonedSourceContextsForCleanup(ctx context.Context, rowLimit int32) ([]IssueSourceContext, error) {
-	rows, err := q.db.Query(ctx, listAbandonedSourceContextsForCleanup, rowLimit)
+func (q *Queries) ListAbandonedSourceContextsForCleanup(ctx context.Context, rowLimit int64) ([]IssueSourceContext, error) {
+	rows, err := q.db.QueryContext(ctx, listAbandonedSourceContextsForCleanup, rowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -475,6 +478,9 @@ func (q *Queries) ListAbandonedSourceContextsForCleanup(ctx context.Context, row
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -487,15 +493,14 @@ SELECT isc.id, isc.workspace_id, isc.issue_id, isc.origin_task_id, isc.source_is
 FROM issue_source_context isc
 JOIN agent_task_queue task ON task.id = isc.origin_task_id
 WHERE isc.state = 'pending'
-  AND isc.captured_at < now() - interval '30 days'
+  AND isc.captured_at < datetime('now', '-30 days')
   AND task.status IN ('completed', 'failed', 'cancelled')
 ORDER BY isc.captured_at, isc.id
-LIMIT $1
-FOR UPDATE OF isc SKIP LOCKED
+LIMIT ?1
 `
 
-func (q *Queries) ListExpiredPendingSourceContextsForCleanup(ctx context.Context, rowLimit int32) ([]IssueSourceContext, error) {
-	rows, err := q.db.Query(ctx, listExpiredPendingSourceContextsForCleanup, rowLimit)
+func (q *Queries) ListExpiredPendingSourceContextsForCleanup(ctx context.Context, rowLimit int64) ([]IssueSourceContext, error) {
+	rows, err := q.db.QueryContext(ctx, listExpiredPendingSourceContextsForCleanup, rowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -521,6 +526,9 @@ func (q *Queries) ListExpiredPendingSourceContextsForCleanup(ctx context.Context
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -530,12 +538,12 @@ func (q *Queries) ListExpiredPendingSourceContextsForCleanup(ctx context.Context
 
 const listIssueSourceContextsForWorkspace = `-- name: ListIssueSourceContextsForWorkspace :many
 SELECT id, workspace_id, issue_id, origin_task_id, source_issue_id, anchor_comment_id, captured_by_user_id, snapshot_version, snapshot, capture_digest, state, captured_at, attached_at FROM issue_source_context
-WHERE workspace_id = $1
+WHERE workspace_id = ?1
 ORDER BY captured_at ASC
 `
 
-func (q *Queries) ListIssueSourceContextsForWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]IssueSourceContext, error) {
-	rows, err := q.db.Query(ctx, listIssueSourceContextsForWorkspace, workspaceID)
+func (q *Queries) ListIssueSourceContextsForWorkspace(ctx context.Context, workspaceID string) ([]IssueSourceContext, error) {
+	rows, err := q.db.QueryContext(ctx, listIssueSourceContextsForWorkspace, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -561,6 +569,9 @@ func (q *Queries) ListIssueSourceContextsForWorkspace(ctx context.Context, works
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -571,12 +582,12 @@ func (q *Queries) ListIssueSourceContextsForWorkspace(ctx context.Context, works
 const listSourceContextObjectIntentURLsByWorkspace = `-- name: ListSourceContextObjectIntentURLsByWorkspace :many
 SELECT object_url
 FROM issue_source_context_object_intent
-WHERE workspace_id = $1
+WHERE workspace_id = ?1
 ORDER BY storage_key
 `
 
-func (q *Queries) ListSourceContextObjectIntentURLsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]string, error) {
-	rows, err := q.db.Query(ctx, listSourceContextObjectIntentURLsByWorkspace, workspaceID)
+func (q *Queries) ListSourceContextObjectIntentURLsByWorkspace(ctx context.Context, workspaceID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listSourceContextObjectIntentURLsByWorkspace, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -589,6 +600,9 @@ func (q *Queries) ListSourceContextObjectIntentURLsByWorkspace(ctx context.Conte
 		}
 		items = append(items, object_url)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -599,22 +613,22 @@ const recordSourceContextDeletionObjectIntent = `-- name: RecordSourceContextDel
 INSERT INTO issue_source_context_object_intent (
     storage_key, workspace_id, source_context_id, attachment_id, object_url
 ) VALUES (
-    $1, $2, $3,
-    $4, $5
+    ?1, ?2, ?3,
+    ?4, ?5
 )
 RETURNING storage_key, workspace_id, source_context_id, attachment_id, object_url, state, lease_token, lease_expires_at, next_attempt_at, last_error, created_at
 `
 
 type RecordSourceContextDeletionObjectIntentParams struct {
-	StorageKey      string      `json:"storage_key"`
-	WorkspaceID     pgtype.UUID `json:"workspace_id"`
-	SourceContextID pgtype.UUID `json:"source_context_id"`
-	AttachmentID    pgtype.UUID `json:"attachment_id"`
-	ObjectUrl       string      `json:"object_url"`
+	StorageKey      string `json:"storage_key"`
+	WorkspaceID     string `json:"workspace_id"`
+	SourceContextID string `json:"source_context_id"`
+	AttachmentID    string `json:"attachment_id"`
+	ObjectUrl       string `json:"object_url"`
 }
 
 func (q *Queries) RecordSourceContextDeletionObjectIntent(ctx context.Context, arg RecordSourceContextDeletionObjectIntentParams) (IssueSourceContextObjectIntent, error) {
-	row := q.db.QueryRow(ctx, recordSourceContextDeletionObjectIntent,
+	row := q.db.QueryRowContext(ctx, recordSourceContextDeletionObjectIntent,
 		arg.StorageKey,
 		arg.WorkspaceID,
 		arg.SourceContextID,
@@ -639,31 +653,27 @@ func (q *Queries) RecordSourceContextDeletionObjectIntent(ctx context.Context, a
 }
 
 const recordSourceContextObjectIntent = `-- name: RecordSourceContextObjectIntent :one
-WITH locked_workspace AS MATERIALIZED (
-    SELECT id
-    FROM workspace
-    WHERE id = $5
-    FOR KEY SHARE
-)
 INSERT INTO issue_source_context_object_intent (
     storage_key, workspace_id, source_context_id, attachment_id, object_url
 )
-SELECT $1, locked_workspace.id, $2,
-       $3, $4
-FROM locked_workspace
+SELECT ?1 AS storage_key, w.id AS workspace_id,
+       ?2 AS source_context_id,
+       ?3 AS attachment_id, ?4 AS object_url
+FROM workspace w
+WHERE w.id = ?5
 RETURNING storage_key, workspace_id, source_context_id, attachment_id, object_url, state, lease_token, lease_expires_at, next_attempt_at, last_error, created_at
 `
 
 type RecordSourceContextObjectIntentParams struct {
-	StorageKey      string      `json:"storage_key"`
-	SourceContextID pgtype.UUID `json:"source_context_id"`
-	AttachmentID    pgtype.UUID `json:"attachment_id"`
-	ObjectUrl       string      `json:"object_url"`
-	WorkspaceID     pgtype.UUID `json:"workspace_id"`
+	StorageKey      string `json:"storage_key"`
+	SourceContextID string `json:"source_context_id"`
+	AttachmentID    string `json:"attachment_id"`
+	ObjectUrl       string `json:"object_url"`
+	WorkspaceID     string `json:"workspace_id"`
 }
 
 func (q *Queries) RecordSourceContextObjectIntent(ctx context.Context, arg RecordSourceContextObjectIntentParams) (IssueSourceContextObjectIntent, error) {
-	row := q.db.QueryRow(ctx, recordSourceContextObjectIntent,
+	row := q.db.QueryRowContext(ctx, recordSourceContextObjectIntent,
 		arg.StorageKey,
 		arg.SourceContextID,
 		arg.AttachmentID,
@@ -691,22 +701,22 @@ const releaseSourceContextObjectIntent = `-- name: ReleaseSourceContextObjectInt
 UPDATE issue_source_context_object_intent
 SET lease_token = NULL,
     lease_expires_at = NULL,
-    next_attempt_at = now() + interval '5 minutes',
-    last_error = $1
-WHERE storage_key = $2
-  AND workspace_id = $3
-  AND lease_token = $4
+    next_attempt_at = datetime('now', '+5 minutes'),
+    last_error = ?1
+WHERE storage_key = ?2
+  AND workspace_id = ?3
+  AND lease_token = ?4
 `
 
 type ReleaseSourceContextObjectIntentParams struct {
-	LastError   pgtype.Text `json:"last_error"`
-	StorageKey  string      `json:"storage_key"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	LeaseToken  pgtype.UUID `json:"lease_token"`
+	LastError   sql.NullString `json:"last_error"`
+	StorageKey  string         `json:"storage_key"`
+	WorkspaceID string         `json:"workspace_id"`
+	LeaseToken  sql.NullString `json:"lease_token"`
 }
 
 func (q *Queries) ReleaseSourceContextObjectIntent(ctx context.Context, arg ReleaseSourceContextObjectIntentParams) (int64, error) {
-	result, err := q.db.Exec(ctx, releaseSourceContextObjectIntent,
+	result, err := q.db.ExecContext(ctx, releaseSourceContextObjectIntent,
 		arg.LastError,
 		arg.StorageKey,
 		arg.WorkspaceID,
@@ -715,28 +725,28 @@ func (q *Queries) ReleaseSourceContextObjectIntent(ctx context.Context, arg Rele
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const sourceContextObjectIntentIsReferenced = `-- name: SourceContextObjectIntentIsReferenced :one
 SELECT EXISTS (
     SELECT 1 FROM attachment
-    WHERE workspace_id = $1
-      AND source_context_id = $2
-      AND id = $3
-      AND url = $4
+    WHERE workspace_id = ?1
+      AND source_context_id = ?2
+      AND id = ?3
+      AND url = ?4
 ) AS referenced
 `
 
 type SourceContextObjectIntentIsReferencedParams struct {
-	WorkspaceID     pgtype.UUID `json:"workspace_id"`
-	SourceContextID pgtype.UUID `json:"source_context_id"`
-	AttachmentID    pgtype.UUID `json:"attachment_id"`
-	ObjectUrl       string      `json:"object_url"`
+	WorkspaceID     string         `json:"workspace_id"`
+	SourceContextID sql.NullString `json:"source_context_id"`
+	AttachmentID    string         `json:"attachment_id"`
+	ObjectUrl       string         `json:"object_url"`
 }
 
 func (q *Queries) SourceContextObjectIntentIsReferenced(ctx context.Context, arg SourceContextObjectIntentIsReferencedParams) (bool, error) {
-	row := q.db.QueryRow(ctx, sourceContextObjectIntentIsReferenced,
+	row := q.db.QueryRowContext(ctx, sourceContextObjectIntentIsReferenced,
 		arg.WorkspaceID,
 		arg.SourceContextID,
 		arg.AttachmentID,
@@ -749,23 +759,23 @@ func (q *Queries) SourceContextObjectIntentIsReferenced(ctx context.Context, arg
 
 const transferPendingIssueSourceContextTask = `-- name: TransferPendingIssueSourceContextTask :one
 UPDATE issue_source_context
-SET origin_task_id = $1
-WHERE workspace_id = $2
-  AND id = $3
+SET origin_task_id = ?1
+WHERE workspace_id = ?2
+  AND id = ?3
   AND state = 'pending'
-  AND origin_task_id = $4
+  AND origin_task_id = ?4
 RETURNING id, workspace_id, issue_id, origin_task_id, source_issue_id, anchor_comment_id, captured_by_user_id, snapshot_version, snapshot, capture_digest, state, captured_at, attached_at
 `
 
 type TransferPendingIssueSourceContextTaskParams struct {
-	NewTaskID   pgtype.UUID `json:"new_task_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	ID          pgtype.UUID `json:"id"`
-	OldTaskID   pgtype.UUID `json:"old_task_id"`
+	NewTaskID   sql.NullString `json:"new_task_id"`
+	WorkspaceID string         `json:"workspace_id"`
+	ID          string         `json:"id"`
+	OldTaskID   sql.NullString `json:"old_task_id"`
 }
 
 func (q *Queries) TransferPendingIssueSourceContextTask(ctx context.Context, arg TransferPendingIssueSourceContextTaskParams) (IssueSourceContext, error) {
-	row := q.db.QueryRow(ctx, transferPendingIssueSourceContextTask,
+	row := q.db.QueryRowContext(ctx, transferPendingIssueSourceContextTask,
 		arg.NewTaskID,
 		arg.WorkspaceID,
 		arg.ID,

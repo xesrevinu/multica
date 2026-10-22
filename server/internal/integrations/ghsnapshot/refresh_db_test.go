@@ -3,26 +3,22 @@ package ghsnapshot
 import (
 	"context"
 	"crypto/rand"
-	"os"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
+
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	_ "modernc.org/sqlite"
 )
 
-func testDBPool(t *testing.T) *pgxpool.Pool {
+func testDBPool(t *testing.T) *sql.DB {
 	t.Helper()
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		dbURL = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
-	}
-	pool, err := pgxpool.New(context.Background(), dbURL)
+	pool, err := sql.Open("sqlite", "file:"+t.TempDir()+"/ghsnap.db?_pragma=foreign_keys(1)")
 	if err != nil {
 		t.Skipf("skipping DB test: %v", err)
 	}
-	if err := pool.Ping(context.Background()); err != nil {
+	if err := pool.PingContext(context.Background()); err != nil {
 		pool.Close()
 		t.Skipf("skipping DB test: database not reachable: %v", err)
 	}
@@ -39,24 +35,24 @@ func testDBPool(t *testing.T) *pgxpool.Pool {
 	// it. That is the "trailing refresh did not replace old snapshot" failure,
 	// and the "closed pool" WARN spam was the same ordering bug seen from the
 	// worker's side.
-	t.Cleanup(pool.Close)
+	t.Cleanup(func() { _ = pool.Close() })
 	return pool
 }
 
 // seedWorkspace inserts a minimal workspace and registers its cleanup.
 // github_pull_request carries a workspace_id foreign key (it predates the
 // no-FK convention), so the row must reference a real workspace.
-func seedWorkspace(t *testing.T, pool *pgxpool.Pool) pgtype.UUID {
+func seedWorkspace(t *testing.T, pool *sql.DB) string {
 	t.Helper()
 	slug := "ghsnap-" + randHex(t)
-	var wsID pgtype.UUID
-	if err := pool.QueryRow(context.Background(),
+	var wsID string
+	if err := pool.QueryRowContext(context.Background(),
 		`INSERT INTO workspace (name, slug, description, issue_prefix) VALUES ($1,$2,$3,$4) RETURNING id`,
 		"ghsnap test", slug, "ghsnap test workspace", "GHS").Scan(&wsID); err != nil {
 		t.Fatalf("seed workspace: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM workspace WHERE id=$1`, wsID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM workspace WHERE id=?1`, wsID)
 	})
 	return wsID
 }
@@ -76,13 +72,13 @@ func randHex(t *testing.T) string {
 	return string(out)
 }
 
-func seedPR(t *testing.T, pool *pgxpool.Pool, q *db.Queries, headSHA string) db.GithubPullRequest {
+func seedPR(t *testing.T, pool *sql.DB, q *db.Queries, headSHA string) db.GithubPullRequest {
 	return seedPRAt(t, pool, q, 987654, "r", 4242, headSHA)
 }
 
-func seedPRAt(t *testing.T, pool *pgxpool.Pool, q *db.Queries, installationID int64, repoName string, prNumber int32, headSHA string) db.GithubPullRequest {
+func seedPRAt(t *testing.T, pool *sql.DB, q *db.Queries, installationID int64, repoName string, prNumber int64, headSHA string) db.GithubPullRequest {
 	t.Helper()
-	ts := pgtype.Timestamptz{Time: time.Unix(1_700_000_000, 0), Valid: true}
+	ts := time.Unix(1_700_000_000, 0).UTC().Format(time.RFC3339Nano)
 	pr, err := q.UpsertGitHubPullRequest(context.Background(), db.UpsertGitHubPullRequestParams{
 		WorkspaceID:    seedWorkspace(t, pool),
 		InstallationID: installationID,
@@ -102,11 +98,11 @@ func seedPRAt(t *testing.T, pool *pgxpool.Pool, q *db.Queries, installationID in
 	return pr
 }
 
-func checkRunCount(t *testing.T, pool *pgxpool.Pool, prID pgtype.UUID) int {
+func checkRunCount(t *testing.T, pool *sql.DB, prID string) int {
 	t.Helper()
 	var n int
-	if err := pool.QueryRow(context.Background(),
-		`SELECT count(*) FROM github_pull_request_check_run WHERE pr_id=$1`, prID).Scan(&n); err != nil {
+	if err := pool.QueryRowContext(context.Background(),
+		`SELECT count(*) FROM github_pull_request_check_run WHERE pr_id=?1`, prID).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	return n
@@ -133,14 +129,14 @@ func TestListStaleUndecidedGitHubPRsExcludesDecidedAndRotatesCursor(t *testing.T
 	prs := []db.GithubPullRequest{settled, oldest, running, newer}
 	t.Cleanup(func() {
 		for _, pr := range prs {
-			_, _ = pool.Exec(context.Background(), `DELETE FROM github_pull_request_check_run WHERE pr_id=$1`, pr.ID)
-			_, _ = pool.Exec(context.Background(), `DELETE FROM github_pull_request WHERE id=$1`, pr.ID)
+			_, _ = pool.ExecContext(context.Background(), `DELETE FROM github_pull_request_check_run WHERE pr_id=$1`, pr.ID)
+			_, _ = pool.ExecContext(context.Background(), `DELETE FROM github_pull_request WHERE id=$1`, pr.ID)
 		}
 	})
 
 	setSnapshot := func(pr db.GithubPullRequest, fetchedAt time.Time, mergeable, rollup string) {
 		t.Helper()
-		if _, err := pool.Exec(ctx, `
+		if _, err := pool.ExecContext(ctx, `
 			UPDATE github_pull_request
 			SET snapshot_head_sha=head_sha, snapshot_fetched_at=$2,
 			    api_mergeable=$3, checks_rollup_state=$4
@@ -153,7 +149,7 @@ func TestListStaleUndecidedGitHubPRsExcludesDecidedAndRotatesCursor(t *testing.T
 	setSnapshot(oldest, now.Add(-40*time.Minute), "UNKNOWN", "PENDING")
 	setSnapshot(running, now.Add(-30*time.Minute), "MERGEABLE", "SUCCESS")
 	setSnapshot(newer, now.Add(-20*time.Minute), "MERGEABLE", "PENDING")
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO github_pull_request_check_run
 		    (pr_id, head_sha, ordinal, name, status, is_status_context)
 		VALUES ($1, 'R', 0, 'backend', 'in_progress', false)`,
@@ -162,12 +158,8 @@ func TestListStaleUndecidedGitHubPRsExcludesDecidedAndRotatesCursor(t *testing.T
 	}
 
 	rows, err := q.ListStaleUndecidedGitHubPRs(ctx, db.ListStaleUndecidedGitHubPRsParams{
-		OlderThan:           tsFromTime(now.Add(-10 * time.Minute)),
-		AfterInstallationID: beforeFixtures,
-		AfterRepoOwner:      "",
-		AfterRepoName:       "",
-		AfterPrNumber:       0,
-		MaxRows:             10,
+		OlderThan: tsFromTime(now.Add(-10 * time.Minute)),
+		MaxRows:   10,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -186,12 +178,8 @@ func TestListStaleUndecidedGitHubPRsExcludesDecidedAndRotatesCursor(t *testing.T
 	}
 
 	first, err := q.ListStaleUndecidedGitHubPRs(ctx, db.ListStaleUndecidedGitHubPRsParams{
-		OlderThan:           tsFromTime(now.Add(-10 * time.Minute)),
-		AfterInstallationID: beforeFixtures,
-		AfterRepoOwner:      "",
-		AfterRepoName:       "",
-		AfterPrNumber:       0,
-		MaxRows:             1,
+		OlderThan: tsFromTime(now.Add(-10 * time.Minute)),
+		MaxRows:   1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -203,12 +191,8 @@ func TestListStaleUndecidedGitHubPRsExcludesDecidedAndRotatesCursor(t *testing.T
 	// Advance from the last returned address without changing its stale data.
 	// Even a perpetually failing first address cannot pin the LIMIT forever.
 	second, err := q.ListStaleUndecidedGitHubPRs(ctx, db.ListStaleUndecidedGitHubPRsParams{
-		OlderThan:           tsFromTime(now.Add(-10 * time.Minute)),
-		AfterInstallationID: first[0].InstallationID,
-		AfterRepoOwner:      first[0].RepoOwner,
-		AfterRepoName:       first[0].RepoName,
-		AfterPrNumber:       first[0].PrNumber,
-		MaxRows:             1,
+		OlderThan: tsFromTime(now.Add(-10 * time.Minute)),
+		MaxRows:   1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -228,8 +212,8 @@ func TestApplySnapshotHeadSHAGuard(t *testing.T) {
 
 	pr := seedPR(t, pool, q, "B")
 	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM github_pull_request_check_run WHERE pr_id=$1`, pr.ID)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM github_pull_request WHERE id=$1`, pr.ID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM github_pull_request_check_run WHERE pr_id=$1`, pr.ID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM github_pull_request WHERE id=$1`, pr.ID)
 	})
 
 	m := &Manager{queries: q, pool: pool, now: func() time.Time { return now }}
@@ -272,7 +256,7 @@ func TestApplySnapshotHeadSHAGuard(t *testing.T) {
 	// 3. Head advances to "C" (a new push mirrored by the pull_request webhook);
 	//    a late in-flight response for the old head "B" must be discarded and must
 	//    NOT overwrite the stored snapshot.
-	if _, err := pool.Exec(ctx, `UPDATE github_pull_request SET head_sha='C' WHERE id=$1`, pr.ID); err != nil {
+	if _, err := pool.ExecContext(ctx, `UPDATE github_pull_request SET head_sha='C' WHERE id=$1`, pr.ID); err != nil {
 		t.Fatal(err)
 	}
 	applied, err = m.applySnapshot(ctx, pr.ID, &PRSnapshot{HeadSHA: "B", Mergeable: "CONFLICTING", MergeStateStatus: "DIRTY"})
@@ -303,8 +287,8 @@ func TestInFlightOldHeadKeepsTrailingRefresh(t *testing.T) {
 
 	pr := seedPR(t, pool, q, "A")
 	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM github_pull_request_check_run WHERE pr_id=$1`, pr.ID)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM github_pull_request WHERE id=$1`, pr.ID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM github_pull_request_check_run WHERE pr_id=$1`, pr.ID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM github_pull_request WHERE id=$1`, pr.ID)
 	})
 
 	firstStarted := make(chan struct{})
@@ -313,7 +297,7 @@ func TestInFlightOldHeadKeepsTrailingRefresh(t *testing.T) {
 	applied := make(chan struct{}, 1)
 	fetchCalls := 0
 
-	m := NewManager(enabledClient(t), q, pool, func(context.Context, pgtype.UUID) {
+	m := NewManager(enabledClient(t), q, pool, func(context.Context, string) {
 		select {
 		case applied <- struct{}{}:
 		default:
@@ -341,17 +325,17 @@ func TestInFlightOldHeadKeepsTrailingRefresh(t *testing.T) {
 	}
 
 	m.Start(ctx)
-	m.Enqueue(pr.InstallationID, pr.RepoOwner, pr.RepoName, pr.PrNumber)
+	m.Enqueue(pr.InstallationID, pr.RepoOwner, pr.RepoName, int32(pr.PrNumber))
 	select {
 	case <-firstStarted:
 	case <-time.After(2 * time.Second):
 		t.Fatal("first head fetch did not start")
 	}
 
-	if _, err := pool.Exec(ctx, `UPDATE github_pull_request SET head_sha='B' WHERE id=$1`, pr.ID); err != nil {
+	if _, err := pool.ExecContext(ctx, `UPDATE github_pull_request SET head_sha='B' WHERE id=$1`, pr.ID); err != nil {
 		t.Fatal(err)
 	}
-	m.Enqueue(pr.InstallationID, pr.RepoOwner, pr.RepoName, pr.PrNumber)
+	m.Enqueue(pr.InstallationID, pr.RepoOwner, pr.RepoName, int32(pr.PrNumber))
 
 	select {
 	case <-secondFetched:
@@ -393,8 +377,8 @@ func TestApplySnapshotReplacesRuns(t *testing.T) {
 
 	pr := seedPR(t, pool, q, "H")
 	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM github_pull_request_check_run WHERE pr_id=$1`, pr.ID)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM github_pull_request WHERE id=$1`, pr.ID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM github_pull_request_check_run WHERE pr_id=$1`, pr.ID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM github_pull_request WHERE id=$1`, pr.ID)
 	})
 	m := &Manager{queries: q, pool: pool, now: func() time.Time { return now }}
 

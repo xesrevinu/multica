@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -432,19 +433,19 @@ func TestBuildClaimedTaskResponse_SourceLoadFailure_PreservesTaskAndEmitsNoConte
 			task := db.AgentTaskQueue{
 				ID:        parseUUID(taskID),
 				AgentID:   parseUUID(agentID),
-				RuntimeID: parseUUID(runtimeID),
+				RuntimeID: nullString(parseUUID(runtimeID)),
 				Status:    "dispatched",
 			}
 			if issueRef, ok := tc.cols["issue_id"].(string); ok {
-				task.IssueID = parseUUID(issueRef)
+				task.IssueID = nullString(parseUUID(issueRef))
 			}
 			if chatRef, ok := tc.cols["chat_session_id"].(string); ok {
-				task.ChatSessionID = parseUUID(chatRef)
+				task.ChatSessionID = nullString(parseUUID(chatRef))
 			}
 
 			brokenHandler := *testHandler
 			brokenHandler.Queries = db.New(failQueryDBTX{
-				DBTX:   testPool,
+				DBTX:   testSQLite,
 				failOn: tc.failOn,
 				err:    errors.New("simulated transient read failure"),
 			})
@@ -508,7 +509,7 @@ func TestRejectClaimSourceLoad_MissingRow_CancelsTask(t *testing.T) {
 	task := db.AgentTaskQueue{ID: parseUUID(taskID), AgentID: parseUUID(agentID), Status: "dispatched"}
 
 	failure := testHandler.rejectClaimSourceLoad(
-		context.Background(), &task, pgx.ErrNoRows, "issue", uuidToString(task.IssueID))
+		context.Background(), &task, sql.ErrNoRows, "issue", uuidToString(task.IssueID.String))
 	if failure == nil {
 		t.Fatal("expected a failure for a missing source row")
 	}

@@ -2,12 +2,11 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -21,7 +20,7 @@ import (
 // tests pin the three behaviors at the query layer, where the dedup decision
 // actually lives.
 
-func newHeadShaDedupPool(t *testing.T) *pgxpool.Pool {
+func newHeadShaDedupPool(t *testing.T) *sql.DB {
 	t.Helper()
 	return sharedTestPool(t)
 }
@@ -31,12 +30,12 @@ func newHeadShaDedupPool(t *testing.T) *pgxpool.Pool {
 // prHeadSha is non-empty a github_pull_request row is created and linked to the
 // issue so ResolveIssueReviewSHA has a head to find.
 type headShaDedupFixture struct {
-	agentID   pgtype.UUID
-	runtimeID pgtype.UUID
-	issueID   pgtype.UUID
+	agentID   string
+	runtimeID string
+	issueID   string
 }
 
-func createHeadShaDedupFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool, prHeadSha, prState string) headShaDedupFixture {
+func createHeadShaDedupFixture(t *testing.T, ctx context.Context, pool *sql.DB, prHeadSha, prState string) headShaDedupFixture {
 	t.Helper()
 
 	suffix := time.Now().UnixNano()
@@ -44,27 +43,27 @@ func createHeadShaDedupFixture(t *testing.T, ctx context.Context, pool *pgxpool.
 	slug := fmt.Sprintf("head-sha-dedup-%d", suffix)
 
 	var userID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id
 	`, "Head SHA Dedup Test", email).Scan(&userID); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
 
 	var workspaceID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO workspace (name, slug, description, issue_prefix)
 		VALUES ($1, $2, $3, $4) RETURNING id
 	`, "Head SHA Dedup Test", slug, "temporary TEN-356 dedup test workspace", "HSD").Scan(&workspaceID); err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'owner')
 	`, workspaceID, userID); err != nil {
 		t.Fatalf("create member: %v", err)
 	}
 
 	var runtimeID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO agent_runtime (
 			workspace_id, daemon_id, name, runtime_mode, provider,
 			status, device_info, metadata, last_seen_at, visibility, owner_id
@@ -76,7 +75,7 @@ func createHeadShaDedupFixture(t *testing.T, ctx context.Context, pool *pgxpool.
 	}
 
 	var agentID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, description, runtime_mode, runtime_config,
 			runtime_id, visibility, max_concurrent_tasks, owner_id
@@ -88,7 +87,7 @@ func createHeadShaDedupFixture(t *testing.T, ctx context.Context, pool *pgxpool.
 	}
 
 	var issueID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO issue (workspace_id, title, status, priority, creator_id, creator_type, number, position)
 		VALUES ($1, $2, 'in_review', 'none', $3, 'member', $4, 0)
 		RETURNING id
@@ -102,7 +101,7 @@ func createHeadShaDedupFixture(t *testing.T, ctx context.Context, pool *pgxpool.
 			state = "open"
 		}
 		var prID string
-		if err := pool.QueryRow(ctx, `
+		if err := pool.QueryRowContext(ctx, `
 			INSERT INTO github_pull_request (
 				workspace_id, installation_id, repo_owner, repo_name, pr_number,
 				title, state, html_url, pr_created_at, pr_updated_at, head_sha
@@ -113,7 +112,7 @@ func createHeadShaDedupFixture(t *testing.T, ctx context.Context, pool *pgxpool.
 		`, workspaceID, 4000+int(suffix%1000), state, prHeadSha).Scan(&prID); err != nil {
 			t.Fatalf("create pull request: %v", err)
 		}
-		if _, err := pool.Exec(ctx, `
+		if _, err := pool.ExecContext(ctx, `
 			INSERT INTO issue_pull_request (issue_id, pull_request_id) VALUES ($1, $2)
 		`, issueID, prID); err != nil {
 			t.Fatalf("link pull request: %v", err)
@@ -122,15 +121,15 @@ func createHeadShaDedupFixture(t *testing.T, ctx context.Context, pool *pgxpool.
 
 	t.Cleanup(func() {
 		c := context.Background()
-		pool.Exec(c, `DELETE FROM agent_task_queue WHERE agent_id = $1`, agentID)
-		pool.Exec(c, `DELETE FROM issue_pull_request WHERE issue_id = $1`, issueID)
-		pool.Exec(c, `DELETE FROM github_pull_request WHERE workspace_id = $1`, workspaceID)
-		pool.Exec(c, `DELETE FROM issue WHERE id = $1`, issueID)
-		pool.Exec(c, `DELETE FROM agent WHERE id = $1`, agentID)
-		pool.Exec(c, `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
-		pool.Exec(c, `DELETE FROM member WHERE workspace_id = $1`, workspaceID)
-		pool.Exec(c, `DELETE FROM workspace WHERE id = $1`, workspaceID)
-		pool.Exec(c, `DELETE FROM "user" WHERE id = $1`, userID)
+		pool.ExecContext(c, `DELETE FROM agent_task_queue WHERE agent_id = $1`, agentID)
+		pool.ExecContext(c, `DELETE FROM issue_pull_request WHERE issue_id = $1`, issueID)
+		pool.ExecContext(c, `DELETE FROM github_pull_request WHERE workspace_id = $1`, workspaceID)
+		pool.ExecContext(c, `DELETE FROM issue WHERE id = $1`, issueID)
+		pool.ExecContext(c, `DELETE FROM agent WHERE id = $1`, agentID)
+		pool.ExecContext(c, `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+		pool.ExecContext(c, `DELETE FROM member WHERE workspace_id = $1`, workspaceID)
+		pool.ExecContext(c, `DELETE FROM workspace WHERE id = $1`, workspaceID)
+		pool.ExecContext(c, `DELETE FROM "user" WHERE id = $1`, userID)
 	})
 
 	return headShaDedupFixture{
@@ -146,10 +145,10 @@ func enqueueReviewTask(t *testing.T, ctx context.Context, q *db.Queries, fx head
 	t.Helper()
 	if _, err := q.CreateAgentTask(ctx, db.CreateAgentTaskParams{
 		AgentID:   fx.agentID,
-		RuntimeID: fx.runtimeID,
-		IssueID:   fx.issueID,
+		RuntimeID: nullString(fx.runtimeID),
+		IssueID:   nullString(fx.issueID),
 		Priority:  0,
-		HeadSha:   pgtype.Text{String: headSha, Valid: headSha != ""},
+		HeadSha:   sql.NullString{String: headSha, Valid: headSha != ""},
 	}); err != nil {
 		t.Fatalf("create review task (head_sha=%q): %v", headSha, err)
 	}
@@ -158,9 +157,9 @@ func enqueueReviewTask(t *testing.T, ctx context.Context, q *db.Queries, fx head
 func hasPending(t *testing.T, ctx context.Context, q *db.Queries, fx headShaDedupFixture, headSha string) bool {
 	t.Helper()
 	got, err := q.HasPendingTaskForIssueAndAgent(ctx, db.HasPendingTaskForIssueAndAgentParams{
-		IssueID: fx.issueID,
+		IssueID: nullString(fx.issueID),
 		AgentID: fx.agentID,
-		HeadSha: pgtype.Text{String: headSha, Valid: headSha != ""},
+		HeadSha: sql.NullString{String: headSha, Valid: headSha != ""},
 	})
 	if err != nil {
 		t.Fatalf("HasPendingTaskForIssueAndAgent(head_sha=%q): %v", headSha, err)
@@ -198,7 +197,7 @@ func TestHeadShaDedup_RepushInvalidatesDedup(t *testing.T) {
 	}
 
 	// Simulate a mid-review force-push: PR head advances to B.
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		UPDATE github_pull_request SET head_sha = $1, pr_updated_at = now()
 		WHERE workspace_id = (SELECT workspace_id FROM issue WHERE id = $2)
 	`, shaB, util.UUIDToString(fx.issueID)); err != nil {

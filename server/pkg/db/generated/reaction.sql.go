@@ -7,56 +7,41 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const addReaction = `-- name: AddReaction :one
-WITH inserted AS (
-    INSERT INTO comment_reaction (comment_id, workspace_id, actor_type, actor_id, emoji)
-    VALUES ($1, $2, $3, $4, $5)
-    ON CONFLICT (comment_id, actor_type, actor_id, emoji) DO NOTHING
-    RETURNING id, comment_id, workspace_id, actor_type, actor_id, emoji, created_at
-), bumped AS (
-    UPDATE comment
-    SET revision = revision + 1
-    WHERE id IN (SELECT comment_id FROM inserted)
-    RETURNING revision
-)
-SELECT reaction.id, reaction.comment_id, reaction.workspace_id, reaction.actor_type, reaction.actor_id, reaction.emoji, reaction.created_at, COALESCE((SELECT revision FROM bumped), 0)::bigint AS comment_revision
-FROM inserted reaction
-UNION ALL
-SELECT reaction.id, reaction.comment_id, reaction.workspace_id, reaction.actor_type, reaction.actor_id, reaction.emoji, reaction.created_at, 0::bigint AS comment_revision
-FROM comment_reaction reaction
-WHERE reaction.comment_id = $1
-  AND reaction.actor_type = $3
-  AND reaction.actor_id = $4
-  AND reaction.emoji = $5
-  AND NOT EXISTS (SELECT 1 FROM inserted)
-LIMIT 1
+INSERT INTO comment_reaction (comment_id, workspace_id, actor_type, actor_id, emoji)
+VALUES (?1, ?2, ?3, ?4, ?5)
+ON CONFLICT (comment_id, actor_type, actor_id, emoji) DO UPDATE
+SET emoji = excluded.emoji
+RETURNING id, comment_id, workspace_id, actor_type, actor_id, emoji, created_at, 0 AS comment_revision
 `
 
 type AddReactionParams struct {
-	CommentID   pgtype.UUID `json:"comment_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	ActorType   string      `json:"actor_type"`
-	ActorID     pgtype.UUID `json:"actor_id"`
-	Emoji       string      `json:"emoji"`
+	CommentID   string `json:"comment_id"`
+	WorkspaceID string `json:"workspace_id"`
+	ActorType   string `json:"actor_type"`
+	ActorID     string `json:"actor_id"`
+	Emoji       string `json:"emoji"`
 }
 
 type AddReactionRow struct {
-	ID              pgtype.UUID        `json:"id"`
-	CommentID       pgtype.UUID        `json:"comment_id"`
-	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
-	ActorType       string             `json:"actor_type"`
-	ActorID         pgtype.UUID        `json:"actor_id"`
-	Emoji           string             `json:"emoji"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	CommentRevision int64              `json:"comment_revision"`
+	Column1     int64  `json:"column_1"`
+	ID          string `json:"id"`
+	CommentID   string `json:"comment_id"`
+	WorkspaceID string `json:"workspace_id"`
+	ActorType   string `json:"actor_type"`
+	ActorID     string `json:"actor_id"`
+	Emoji       string `json:"emoji"`
+	CreatedAt   string `json:"created_at"`
 }
 
+// Order: AddReaction, then AddReaction_Step2 when the reaction row was newly
+// inserted. SQLite cannot both insert and bump in one statement. This upsert
+// always returns the reaction row; comment_revision is 0 because the bump is
+// Step2 (skip Step2 when the row already existed).
 func (q *Queries) AddReaction(ctx context.Context, arg AddReactionParams) (AddReactionRow, error) {
-	row := q.db.QueryRow(ctx, addReaction,
+	row := q.db.QueryRowContext(ctx, addReaction,
 		arg.CommentID,
 		arg.WorkspaceID,
 		arg.ActorType,
@@ -65,6 +50,7 @@ func (q *Queries) AddReaction(ctx context.Context, arg AddReactionParams) (AddRe
 	)
 	var i AddReactionRow
 	err := row.Scan(
+		&i.Column1,
 		&i.ID,
 		&i.CommentID,
 		&i.WorkspaceID,
@@ -72,35 +58,45 @@ func (q *Queries) AddReaction(ctx context.Context, arg AddReactionParams) (AddRe
 		&i.ActorID,
 		&i.Emoji,
 		&i.CreatedAt,
-		&i.CommentRevision,
 	)
 	return i, err
 }
 
+const addReaction_Step2 = `-- name: AddReaction_Step2 :exec
+UPDATE comment
+SET revision = revision + 1
+WHERE id = ?1
+`
+
+func (q *Queries) AddReaction_Step2(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, addReaction_Step2, id)
+	return err
+}
+
 const deleteCommentReactions = `-- name: DeleteCommentReactions :exec
 DELETE FROM comment_reaction
-WHERE comment_id = $1 AND workspace_id = $2
+WHERE comment_id = ?1 AND workspace_id = ?2
 `
 
 type DeleteCommentReactionsParams struct {
-	CommentID   pgtype.UUID `json:"comment_id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	CommentID   string `json:"comment_id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // Part of the comment delete transaction: reactions go with the comment.
 func (q *Queries) DeleteCommentReactions(ctx context.Context, arg DeleteCommentReactionsParams) error {
-	_, err := q.db.Exec(ctx, deleteCommentReactions, arg.CommentID, arg.WorkspaceID)
+	_, err := q.db.ExecContext(ctx, deleteCommentReactions, arg.CommentID, arg.WorkspaceID)
 	return err
 }
 
 const listReactionsByCommentIDs = `-- name: ListReactionsByCommentIDs :many
 SELECT id, comment_id, workspace_id, actor_type, actor_id, emoji, created_at FROM comment_reaction
-WHERE comment_id = ANY($1::uuid[])
+WHERE comment_id IN (SELECT value FROM json_each(?1))
 ORDER BY created_at ASC
 `
 
-func (q *Queries) ListReactionsByCommentIDs(ctx context.Context, dollar_1 []pgtype.UUID) ([]CommentReaction, error) {
-	rows, err := q.db.Query(ctx, listReactionsByCommentIDs, dollar_1)
+func (q *Queries) ListReactionsByCommentIDs(ctx context.Context, jsonEach interface{}) ([]CommentReaction, error) {
+	rows, err := q.db.QueryContext(ctx, listReactionsByCommentIDs, jsonEach)
 	if err != nil {
 		return nil, err
 	}
@@ -121,6 +117,9 @@ func (q *Queries) ListReactionsByCommentIDs(ctx context.Context, dollar_1 []pgty
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -128,40 +127,62 @@ func (q *Queries) ListReactionsByCommentIDs(ctx context.Context, dollar_1 []pgty
 }
 
 const removeReaction = `-- name: RemoveReaction :one
-WITH deleted AS (
-    DELETE FROM comment_reaction
-    WHERE comment_id = $1 AND actor_type = $2 AND actor_id = $3 AND emoji = $4
-    RETURNING comment_id
-), bumped AS (
-    UPDATE comment
-    SET revision = revision + 1
-    WHERE id IN (SELECT comment_id FROM deleted)
-    RETURNING revision
-)
-SELECT EXISTS(SELECT 1 FROM deleted) AS changed,
-       COALESCE((SELECT revision FROM bumped), 0)::bigint AS comment_revision
+DELETE FROM comment_reaction
+WHERE comment_id = ?1 AND actor_type = ?2 AND actor_id = ?3 AND emoji = ?4
+RETURNING
+  1 AS changed,
+  COALESCE((SELECT comment.revision FROM comment WHERE comment.id = comment_reaction.comment_id), 0) AS comment_revision
 `
 
 type RemoveReactionParams struct {
-	CommentID pgtype.UUID `json:"comment_id"`
-	ActorType string      `json:"actor_type"`
-	ActorID   pgtype.UUID `json:"actor_id"`
-	Emoji     string      `json:"emoji"`
+	CommentID string `json:"comment_id"`
+	ActorType string `json:"actor_type"`
+	ActorID   string `json:"actor_id"`
+	Emoji     string `json:"emoji"`
 }
 
 type RemoveReactionRow struct {
-	Changed         bool  `json:"changed"`
-	CommentRevision int64 `json:"comment_revision"`
+	Column1  int64       `json:"column_1"`
+	Coalesce interface{} `json:"coalesce"`
 }
 
+// Order: RemoveReaction_Step2, then RemoveReaction. Step2 bumps the comment
+// while the reaction row still exists. changed is 1 when that row was removed.
 func (q *Queries) RemoveReaction(ctx context.Context, arg RemoveReactionParams) (RemoveReactionRow, error) {
-	row := q.db.QueryRow(ctx, removeReaction,
+	row := q.db.QueryRowContext(ctx, removeReaction,
 		arg.CommentID,
 		arg.ActorType,
 		arg.ActorID,
 		arg.Emoji,
 	)
 	var i RemoveReactionRow
-	err := row.Scan(&i.Changed, &i.CommentRevision)
+	err := row.Scan(&i.Column1, &i.Coalesce)
 	return i, err
+}
+
+const removeReaction_Step2 = `-- name: RemoveReaction_Step2 :exec
+UPDATE comment
+SET revision = revision + 1
+WHERE comment.id = ?1
+  AND EXISTS (
+    SELECT 1 FROM comment_reaction
+    WHERE comment_id = ?1 AND actor_type = ?2 AND actor_id = ?3 AND emoji = ?4
+  )
+`
+
+type RemoveReaction_Step2Params struct {
+	ID        string `json:"id"`
+	ActorType string `json:"actor_type"`
+	ActorID   string `json:"actor_id"`
+	Emoji     string `json:"emoji"`
+}
+
+func (q *Queries) RemoveReaction_Step2(ctx context.Context, arg RemoveReaction_Step2Params) error {
+	_, err := q.db.ExecContext(ctx, removeReaction_Step2,
+		arg.ID,
+		arg.ActorType,
+		arg.ActorID,
+		arg.Emoji,
+	)
+	return err
 }

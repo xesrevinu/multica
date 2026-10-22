@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,8 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -343,7 +342,7 @@ func TestTaskSupplementConcurrentClaimsKeepUniqueReceipts(t *testing.T) {
 	if len(seen) != additions {
 		t.Fatalf("claimed %d unique comments, want %d", len(seen), additions)
 	}
-	if _, err := testHandler.Queries.ClaimNextTaskSupplement(context.Background(), parseUUID(fixture.taskID)); !errors.Is(err, pgx.ErrNoRows) {
+	if _, err := testHandler.Queries.ClaimNextTaskSupplement(context.Background(), parseUUID(fixture.taskID)); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("extra claim = %v, want no rows", err)
 	}
 	if delivered := dbfx.Count(t, `SELECT count(*) FROM task_supplement WHERE task_id = $1 AND status = 'delivered'`, fixture.taskID); delivered != additions {
@@ -395,7 +394,7 @@ func TestTaskSupplementConcurrentDuplicateSubmissionsAndRetries(t *testing.T) {
 	}
 	if _, err := testHandler.Queries.AckTaskSupplementFailed(context.Background(), db.AckTaskSupplementFailedParams{
 		TaskID: parseUUID(fixture.taskID), CommentID: claim.CommentID,
-		FailureReason: pgtype.Text{String: protocol.TaskSupplementFailureProviderRejected, Valid: true},
+		FailureReason: sql.NullString{String: protocol.TaskSupplementFailureProviderRejected, Valid: true},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -418,7 +417,7 @@ func TestTaskSupplementConcurrentDuplicateSubmissionsAndRetries(t *testing.T) {
 	if err != nil || retried.CommentID != claim.CommentID || retried.AttemptCount != 2 {
 		t.Fatalf("retry claim = %#v: %v", retried, err)
 	}
-	if _, err := testHandler.Queries.ClaimNextTaskSupplement(context.Background(), parseUUID(fixture.taskID)); !errors.Is(err, pgx.ErrNoRows) {
+	if _, err := testHandler.Queries.ClaimNextTaskSupplement(context.Background(), parseUUID(fixture.taskID)); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("duplicate retry left another claim: %v", err)
 	}
 	ack := db.AckTaskSupplementDeliveredParams{TaskID: parseUUID(fixture.taskID), CommentID: claim.CommentID}
@@ -454,7 +453,7 @@ func TestTaskSupplementTimestampOrderAndCommentIDTieBreak(t *testing.T) {
 			dbfx.Exec(t, `UPDATE task_supplement SET created_at = $2 WHERE comment_id = $1`, first.ID, firstTime)
 			dbfx.Exec(t, `UPDATE task_supplement SET created_at = $2 WHERE comment_id = $1`, second.ID, secondTime)
 			rows, err := testHandler.Queries.ListTaskSupplementMetadata(context.Background(), db.ListTaskSupplementMetadataParams{
-				WorkspaceID: parseUUID(testWorkspaceID), TaskIds: []pgtype.UUID{parseUUID(fixture.taskID)},
+				WorkspaceID: parseUUID(testWorkspaceID), TaskIds: []string{parseUUID(fixture.taskID)},
 			})
 			if err != nil || len(rows) != 1 {
 				t.Fatalf("metadata rows=%v: %v", rows, err)
@@ -494,7 +493,7 @@ func assertTaskSupplementTerminalRaceCreatesNothing(t *testing.T, terminalStatus
 	result := make(chan error, 1)
 	go func() {
 		_, createErr := testHandler.Queries.CreateTaskSupplement(context.Background(), db.CreateTaskSupplementParams{
-			TaskID: parseUUID(fixture.taskID), IssueID: parseUUID(fixture.issueID), WorkspaceID: parseUUID(testWorkspaceID),
+			TaskID: parseUUID(fixture.taskID), IssueID: nullString(parseUUID(fixture.issueID)), WorkspaceID: parseUUID(testWorkspaceID),
 			AuthorID: parseUUID(testUserID), Content: "must not orphan",
 			ClientRequestID: parseUUID("0199a4e8-22ce-7b01-bba5-444444444444"),
 		})
@@ -508,7 +507,7 @@ func assertTaskSupplementTerminalRaceCreatesNothing(t *testing.T, terminalStatus
 	}
 	select {
 	case err := <-result:
-		if !errors.Is(err, pgx.ErrNoRows) {
+		if !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("race create error = %v, want no rows", err)
 		}
 	case <-time.After(5 * time.Second):

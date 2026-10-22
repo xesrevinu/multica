@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -384,14 +383,14 @@ func TestDashboardAgentRunTimeReportsMeteredTaskCoverage(t *testing.T) {
 	readCoverage := func() (int32, int32) {
 		rows, err := testHandler.Queries.ListDashboardAgentRunTime(context.Background(), db.ListDashboardAgentRunTimeParams{
 			WorkspaceID: parseUUID(testWorkspaceID),
-			Since:       pgtype.Timestamptz{Time: time.Now().Add(-24 * time.Hour), Valid: true},
+			Since:       nullString(time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339Nano)),
 		})
 		if err != nil {
 			t.Fatalf("list dashboard agent runtime: %v", err)
 		}
 		for _, row := range rows {
 			if uuidToString(row.AgentID) == agentID {
-				return row.TaskCount, row.MeteredTaskCount
+				return int32(row.TaskCount), int32(row.MeteredTaskCount)
 			}
 		}
 		return 0, 0

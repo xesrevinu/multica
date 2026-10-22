@@ -2,12 +2,12 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -44,12 +44,12 @@ func inboxToResponse(i db.InboxItem) InboxItemResponse {
 		IssueID:       uuidToPtr(i.IssueID),
 		Title:         i.Title,
 		Body:          textToPtr(i.Body),
-		Read:          i.Read,
-		Archived:      i.Archived,
+		Read:          int64ToBool(i.Read),
+		Archived:      int64ToBool(i.Archived),
 		CreatedAt:     timestampToString(i.CreatedAt),
 		ActorType:     textToPtr(i.ActorType),
 		ActorID:       uuidToPtr(i.ActorID),
-		Details:       json.RawMessage(i.Details),
+		Details:       nullJSON(i.Details),
 	}
 }
 
@@ -86,9 +86,9 @@ const inboxListBodyPreviewLimit = 200
 // One pass that stops at the limit, rather than counting or converting the
 // whole string: the work per row stays bounded by the preview, not by however
 // long the comment happens to be.
-func inboxListBody(notifType string, issueID pgtype.UUID, body pgtype.Text) *string {
+func inboxListBody(notifType string, issueID string, body sql.NullString) *string {
 	full := textToPtr(body)
-	if full == nil || notifType != "new_comment" || !issueID.Valid {
+	if full == nil || notifType != "new_comment" || !(issueID != "") {
 		return full
 	}
 	// `range` yields the byte offset where each character starts. `cut` ends
@@ -119,15 +119,15 @@ func inboxRowToResponse(r db.ListInboxItemsRow) InboxItemResponse {
 		Severity:      r.Severity,
 		IssueID:       uuidToPtr(r.IssueID),
 		Title:         r.Title,
-		Body:          inboxListBody(r.Type, r.IssueID, r.Body),
-		Read:          r.Read,
-		Archived:      r.Archived,
+		Body:          inboxListBody(r.Type, r.IssueID.String, r.Body),
+		Read:          int64ToBool(r.Read),
+		Archived:      int64ToBool(r.Archived),
 		CreatedAt:     timestampToString(r.CreatedAt),
 		IssueStatus:   textToPtr(r.IssueStatus),
 		IssuePriority: textToPtr(r.IssuePriority),
 		ActorType:     textToPtr(r.ActorType),
 		ActorID:       uuidToPtr(r.ActorID),
-		Details:       json.RawMessage(r.Details),
+		Details:       nullJSON(r.Details),
 	}
 }
 
@@ -139,8 +139,8 @@ func archivedInboxRowToResponse(r db.ListArchivedInboxItemsRow) InboxItemRespons
 	return inboxRowToResponse(db.ListInboxItemsRow(r))
 }
 
-func (h *Handler) enrichInboxResponse(ctx context.Context, resp InboxItemResponse, issueID pgtype.UUID) InboxItemResponse {
-	if !issueID.Valid {
+func (h *Handler) enrichInboxResponse(ctx context.Context, resp InboxItemResponse, issueID string) InboxItemResponse {
+	if !(issueID != "") {
 		return resp
 	}
 	issue, err := h.Queries.GetIssue(ctx, issueID)
@@ -239,7 +239,7 @@ func (h *Handler) MarkInboxRead(w http.ResponseWriter, r *http.Request) {
 		"recipient_id": uuidToString(item.RecipientID),
 	})
 
-	resp := h.enrichInboxResponse(r.Context(), inboxToResponse(item), item.IssueID)
+	resp := h.enrichInboxResponse(r.Context(), inboxToResponse(item), item.IssueID.String)
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -268,7 +268,7 @@ func (h *Handler) MarkInboxUnread(w http.ResponseWriter, r *http.Request) {
 		"recipient_id": uuidToString(item.RecipientID),
 	})
 
-	resp := h.enrichInboxResponse(r.Context(), inboxToResponse(item), item.IssueID)
+	resp := h.enrichInboxResponse(r.Context(), inboxToResponse(item), item.IssueID.String)
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -302,7 +302,7 @@ func (h *Handler) ArchiveInboxItem(w http.ResponseWriter, r *http.Request) {
 		"recipient_id": uuidToString(item.RecipientID),
 	})
 
-	resp := h.enrichInboxResponse(r.Context(), inboxToResponse(item), item.IssueID)
+	resp := h.enrichInboxResponse(r.Context(), inboxToResponse(item), item.IssueID.String)
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -344,7 +344,7 @@ func (h *Handler) UnarchiveInboxItem(w http.ResponseWriter, r *http.Request) {
 		"recipient_id": uuidToString(item.RecipientID),
 	})
 
-	resp := h.enrichInboxResponse(r.Context(), inboxToResponse(item), item.IssueID)
+	resp := h.enrichInboxResponse(r.Context(), inboxToResponse(item), item.IssueID.String)
 	writeJSON(w, http.StatusOK, resp)
 }
 

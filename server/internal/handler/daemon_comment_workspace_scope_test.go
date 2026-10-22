@@ -2,13 +2,13 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -38,8 +38,8 @@ func enqueueIssueTaskWithTrigger(t *testing.T, ctx context.Context, agentID, iss
 	task, err := testHandler.TaskService.EnqueueTaskForIssue(ctx, db.Issue{
 		ID:           parseUUID(issueID),
 		WorkspaceID:  parseUUID(testWorkspaceID),
-		AssigneeType: pgtype.Text{String: "agent", Valid: true},
-		AssigneeID:   parseUUID(agentID),
+		AssigneeType: sql.NullString{String: "agent", Valid: true},
+		AssigneeID:   nullString(parseUUID(agentID)),
 		CreatorType:  "member",
 		CreatorID:    parseUUID(testUserID),
 		Priority:     "none",
@@ -144,8 +144,8 @@ func TestClaimDoesNotLeakForeignWorkspaceTriggerCommentOrSummary(t *testing.T) {
 
 	// Stored row: neither the summary nor the originator may come from the
 	// foreign comment.
-	var storedSummary pgtype.Text
-	var storedOriginator pgtype.UUID
+	var storedSummary sql.NullString
+	var storedOriginator string
 	if err := testPool.QueryRow(ctx,
 		`SELECT trigger_summary, originator_user_id FROM agent_task_queue WHERE id = $1`, taskID,
 	).Scan(&storedSummary, &storedOriginator); err != nil {
@@ -154,7 +154,7 @@ func TestClaimDoesNotLeakForeignWorkspaceTriggerCommentOrSummary(t *testing.T) {
 	if storedSummary.Valid {
 		t.Fatalf("stored trigger_summary must be NULL for a foreign-workspace comment, got %q", storedSummary.String)
 	}
-	if storedOriginator.Valid {
+	if storedOriginator != "" {
 		t.Fatalf("stored originator_user_id must be NULL for a foreign-workspace comment, got %s", uuidToString(storedOriginator))
 	}
 

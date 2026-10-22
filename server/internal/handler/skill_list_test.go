@@ -200,7 +200,7 @@ func TestSetAgentRuntimeSkillEnabledPersistsScopedOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load agent: %v", err)
 	}
-	disabled := decodeDisabledRuntimeSkills(row.DisabledRuntimeSkills)
+	disabled := decodeDisabledRuntimeSkills([]byte(row.DisabledRuntimeSkills))
 	if len(disabled) != 1 || disabled[0].RuntimeID != runtimeID ||
 		disabled[0].Provider != "claude" || disabled[0].Root != "provider" || disabled[0].Key != "review" ||
 		disabled[0].Name != "Review Helper" {
@@ -210,7 +210,7 @@ func TestSetAgentRuntimeSkillEnabledPersistsScopedOverride(t *testing.T) {
 		t.Fatalf("repeat disable inherited skill: expected 204, got %d: %s", w.Code, w.Body.String())
 	}
 	row, err = testHandler.Queries.GetAgent(context.Background(), parseUUID(agentID))
-	if err != nil || len(decodeDisabledRuntimeSkills(row.DisabledRuntimeSkills)) != 1 {
+	if err != nil || len(decodeDisabledRuntimeSkills([]byte(row.DisabledRuntimeSkills))) != 1 {
 		t.Fatalf("repeat disable was not idempotent: row=%+v err=%v", row, err)
 	}
 
@@ -221,7 +221,7 @@ func TestSetAgentRuntimeSkillEnabledPersistsScopedOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload agent: %v", err)
 	}
-	if disabled = decodeDisabledRuntimeSkills(row.DisabledRuntimeSkills); len(disabled) != 0 {
+	if disabled = decodeDisabledRuntimeSkills([]byte(row.DisabledRuntimeSkills)); len(disabled) != 0 {
 		t.Fatalf("re-enabled skill still disabled: %+v", disabled)
 	}
 }

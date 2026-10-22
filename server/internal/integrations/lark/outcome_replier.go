@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -33,14 +32,14 @@ type OutcomeReplier interface {
 // OutcomeReplierQueries is the narrow subset of *db.Queries the
 // replier needs. Pinned via an interface so tests substitute a fake.
 type OutcomeReplierQueries interface {
-	GetAgent(ctx context.Context, id pgtype.UUID) (db.Agent, error)
+	GetAgent(ctx context.Context, id string) (db.Agent, error)
 }
 
 // BindingTokenMinter is the narrow dependency the outcome replier needs from
 // BindingTokenService. Keeping this as an interface lets tests pin the Lark
 // binding URL without constructing a database-backed token service.
 type BindingTokenMinter interface {
-	Mint(ctx context.Context, workspaceID, installationID pgtype.UUID, openID OpenID) (BindingToken, error)
+	Mint(ctx context.Context, workspaceID, installationID string, openID OpenID) (BindingToken, error)
 }
 
 // noopReplier is the safe default when Lark is wired without an
@@ -209,7 +208,7 @@ func (r *LarkOutcomeReplier) Reply(ctx context.Context, inst Installation, msg I
 		// command gets an immediate product result: either the newly created
 		// issue or the active duplicate that blocked it. Gate on IssueID.Valid
 		// so a plain chat message stays silent here.
-		if res.IssueID.Valid {
+		if res.IssueID != "" {
 			if err := r.sendIssueOutcome(ctx, inst, msg, res); err != nil {
 				r.log.Warn("lark outcome replier: issue outcome reply failed",
 					"installation_id", uuidString(inst.ID),

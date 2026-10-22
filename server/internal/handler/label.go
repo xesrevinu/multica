@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -11,8 +12,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -174,7 +173,7 @@ func (h *Handler) GetLabel(w http.ResponseWriter, r *http.Request) {
 		ID: idUUID, WorkspaceID: wsUUID,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "label not found")
 			return
 		}
@@ -265,10 +264,10 @@ func (h *Handler) UpdateLabel(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		params.Name = pgtype.Text{String: name, Valid: true}
+		params.Name = sql.NullString{String: name, Valid: true}
 	}
 	if req.Description != nil {
-		params.Description = pgtype.Text{String: sanitizeNullBytes(strings.TrimSpace(*req.Description)), Valid: true}
+		params.Description = sql.NullString{String: sanitizeNullBytes(strings.TrimSpace(*req.Description)), Valid: true}
 	}
 	if req.Color != nil {
 		color, err := normalizeColor(*req.Color)
@@ -276,16 +275,16 @@ func (h *Handler) UpdateLabel(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		params.Color = pgtype.Text{String: color, Valid: true}
+		params.Color = sql.NullString{String: color, Valid: true}
 	}
 
-	// Branch on pgx.ErrNoRows directly from the UPDATE — the WHERE clause
+	// Branch on sql.ErrNoRows directly from the UPDATE — the WHERE clause
 	// already enforces (id, workspace_id), so a missing row means either the
 	// label doesn't exist or it's not in this workspace. Dropping the prior
 	// GetLabel precheck removes a TOCTOU window and saves a round-trip.
 	label, err := h.Queries.UpdateLabel(r.Context(), params)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "label not found")
 			return
 		}
@@ -323,7 +322,7 @@ func (h *Handler) DeleteLabel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to start transaction")
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback()
 	qtx := h.Queries.WithTx(tx)
 
 	// Keep every relationship cleanup and the catalog deletion atomic. The
@@ -345,7 +344,7 @@ func (h *Handler) DeleteLabel(w http.ResponseWriter, r *http.Request) {
 	if _, err := qtx.DeleteLabel(r.Context(), db.DeleteLabelParams{
 		ID: idUUID, WorkspaceID: wsUUID,
 	}); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "label not found")
 			return
 		}
@@ -353,7 +352,7 @@ func (h *Handler) DeleteLabel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete label")
 		return
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit label deletion")
 		return
 	}
@@ -373,7 +372,7 @@ type AttachLabelRequest struct {
 // nil → clients refetch via query invalidation, and we skip broadcasting an
 // empty list that would incorrectly overwrite every subscriber's optimistic
 // state.
-func (h *Handler) listLabelsForIssueSafe(r *http.Request, issueID, workspaceID pgtype.UUID) ([]db.IssueLabel, bool) {
+func (h *Handler) listLabelsForIssueSafe(r *http.Request, issueID, workspaceID string) ([]db.IssueLabel, bool) {
 	labels, err := h.Queries.ListLabelsByIssue(r.Context(), db.ListLabelsByIssueParams{
 		IssueID:     issueID,
 		WorkspaceID: workspaceID,
@@ -441,7 +440,7 @@ func (h *Handler) AttachLabel(w http.ResponseWriter, r *http.Request) {
 		ID: labelID, WorkspaceID: issue.WorkspaceID,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "label not found")
 			return
 		}
@@ -480,7 +479,7 @@ func (h *Handler) AttachLabel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := labelsToResponse(labels)
-	if attached.Changed {
+	if attached.Changed != 0 {
 		h.publish(protocol.EventIssueLabelsChanged, uuidToString(issue.WorkspaceID), "member", userID, map[string]any{
 			"issue_id":       uuidToString(issue.ID),
 			"labels":         resp,
@@ -488,8 +487,8 @@ func (h *Handler) AttachLabel(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	payload := map[string]any{"labels": resp}
-	if attached.IssueRevision > 0 {
-		payload["issue_revision"] = attached.IssueRevision
+	if rev := ifaceInt64(attached.IssueRevision); rev > 0 {
+		payload["issue_revision"] = rev
 	}
 	writeJSON(w, http.StatusOK, payload)
 }
@@ -520,7 +519,7 @@ func (h *Handler) DetachLabel(w http.ResponseWriter, r *http.Request) {
 		ID: labelUUID, WorkspaceID: issue.WorkspaceID,
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "label not found")
 			return
 		}
@@ -555,7 +554,7 @@ func (h *Handler) DetachLabel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := labelsToResponse(labels)
-	if detached.Changed {
+	if detached.Changed != 0 {
 		h.publish(protocol.EventIssueLabelsChanged, uuidToString(issue.WorkspaceID), "member", userID, map[string]any{
 			"issue_id":       uuidToString(issue.ID),
 			"labels":         resp,

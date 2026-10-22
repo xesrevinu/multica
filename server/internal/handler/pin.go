@@ -158,7 +158,7 @@ func (h *Handler) CreatePin(w http.ResponseWriter, r *http.Request) {
 		UserID:      parseUUID(userID),
 		ItemType:    req.ItemType,
 		ItemID:      itemUUID,
-		Position:    maxPos + 1,
+		Position:    ifaceFloat64(maxPos) + 1,
 	})
 	if err != nil {
 		if isUniqueViolation(err) {

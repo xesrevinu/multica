@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -281,7 +280,7 @@ func TestCreateComment_AutopilotLeaderMentionEnqueuesPrivateWorker(t *testing.T)
 	// authorization travels down the chain exactly as it does under a manual "run
 	// now". Under the previous design the parent had no originator to copy, so this
 	// row came out unattributed and the chain had to re-borrow at every hop.
-	var workerOriginator pgtype.UUID
+	var workerOriginator string
 	if err := testPool.QueryRow(context.Background(), `
 		SELECT originator_user_id FROM agent_task_queue
 		WHERE issue_id = $1 AND agent_id = $2 AND status = 'queued'
@@ -400,7 +399,7 @@ func TestReconcileCommentsOnCompletion_AutopilotDelegationRestoresAuthority(t *t
 		if queued != 1 {
 			t.Fatalf("expected exactly 1 reconcile follow-up for the freed worker, got %d", queued)
 		}
-		var originator pgtype.UUID
+		var originator string
 		if err := testPool.QueryRow(ctx, `
 			SELECT originator_user_id FROM agent_task_queue
 			WHERE issue_id = $1 AND agent_id = $2 AND status = 'queued'
@@ -486,7 +485,7 @@ func TestUpdateComment_AutopilotAuthorityReStampedToEditingTask(t *testing.T) {
 		// run wrote this" means, and it is how a human originator survives a
 		// cross-issue hop). The old authoring task must NOT survive the edit —
 		// that is the value the autopilot authority would have accepted.
-		var sourceTaskID pgtype.UUID
+		var sourceTaskID string
 		if err := testPool.QueryRow(ctx, `SELECT source_task_id FROM comment WHERE id = $1`, commentID).Scan(&sourceTaskID); err != nil {
 			t.Fatalf("read comment source_task_id: %v", err)
 		}

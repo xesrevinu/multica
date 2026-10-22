@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/dbreader"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -76,7 +75,7 @@ func (h *Handler) ListDaemonWorkspaces(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func daemonWorkspaceToResponse(id pgtype.UUID, name string) DaemonWorkspaceResponse {
+func daemonWorkspaceToResponse(id string, name string) DaemonWorkspaceResponse {
 	return DaemonWorkspaceResponse{ID: uuidToString(id), Name: name}
 }
 

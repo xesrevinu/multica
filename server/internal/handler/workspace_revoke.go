@@ -5,7 +5,6 @@ import (
 	"log/slog"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -41,14 +40,14 @@ import (
 // archivedBy is the actor who triggered the revocation. For DeleteMember it's
 // the requester (the admin doing the kick); for LeaveWorkspace it's the leaver
 // themselves.
-func (h *Handler) revokeAndRemoveMember(ctx context.Context, workspaceID, userID, memberID, archivedBy pgtype.UUID) (revocationResult, error) {
+func (h *Handler) revokeAndRemoveMember(ctx context.Context, workspaceID, userID, memberID, archivedBy string) (revocationResult, error) {
 	var empty revocationResult
 
-	tx, err := h.TxStarter.Begin(ctx)
+	tx, err := h.TxStarter.BeginTx(ctx, nil)
 	if err != nil {
 		return empty, err
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 
 	qtx := h.Queries.WithTx(tx)
 
@@ -58,16 +57,13 @@ func (h *Handler) revokeAndRemoveMember(ctx context.Context, workspaceID, userID
 	// between this tx's membership delete and its subscription cleanup below.
 	// First also means every holder acquires it in the same order, so these
 	// paths cannot deadlock against each other (MUL-5483 review round 7).
-	if err := qtx.LockSubscriberWrites(ctx, db.LockSubscriberWritesParams{
-		WorkspaceID: workspaceID,
-		UserID:      userID,
-	}); err != nil {
+	if err := qtx.LockSubscriberWrites(ctx); err != nil {
 		return empty, err
 	}
 
 	runtimes, err := qtx.ListAgentRuntimesByOwner(ctx, db.ListAgentRuntimesByOwnerParams{
 		WorkspaceID: workspaceID,
-		OwnerID:     userID,
+		OwnerID:     nullString(userID),
 	})
 	if err != nil {
 		return empty, err
@@ -76,7 +72,7 @@ func (h *Handler) revokeAndRemoveMember(ctx context.Context, workspaceID, userID
 	result := revocationResult{Runtimes: runtimes}
 
 	if len(runtimes) > 0 {
-		runtimeIDs := make([]pgtype.UUID, len(runtimes))
+		runtimeIDs := make([]string, len(runtimes))
 		daemonIDs := make([]string, 0, len(runtimes))
 		for i, rt := range runtimes {
 			runtimeIDs[i] = rt.ID
@@ -86,7 +82,7 @@ func (h *Handler) revokeAndRemoveMember(ctx context.Context, workspaceID, userID
 		}
 
 		result.ArchivedAgents, err = qtx.ArchiveAgentsByRuntime(ctx, db.ArchiveAgentsByRuntimeParams{
-			ArchivedBy: archivedBy,
+			ArchivedBy: nullString(archivedBy),
 			RuntimeIds: runtimeIDs,
 		})
 		if err != nil {
@@ -99,7 +95,7 @@ func (h *Handler) revokeAndRemoveMember(ctx context.Context, workspaceID, userID
 		// have queued/running tasks pinned to a different runtime — and
 		// ClaimAgentTask does not gate on agent.archived_at, so those tasks
 		// would otherwise stay claimable after the agent is gone.
-		archivedAgentIDs := make([]pgtype.UUID, len(result.ArchivedAgents))
+		archivedAgentIDs := make([]string, len(result.ArchivedAgents))
 		for i, a := range result.ArchivedAgents {
 			archivedAgentIDs[i] = a.ID
 		}
@@ -216,7 +212,7 @@ func (h *Handler) revokeAndRemoveMember(ctx context.Context, workspaceID, userID
 	// still a member with a dead runtime), and a failed revoke never leaves
 	// the user out of the workspace with a still-online runtime.
 	if h.seatCapacityEnabled() {
-		if err := enqueueMemberCapacityRelease(ctx, qtx, uuid.UUID(workspaceID.Bytes), uuid.UUID(memberID.Bytes)); err != nil {
+		if err := enqueueMemberCapacityRelease(ctx, qtx, uuid.MustParse(workspaceID), uuid.MustParse(memberID)); err != nil {
 			return empty, err
 		}
 	}
@@ -224,7 +220,7 @@ func (h *Handler) revokeAndRemoveMember(ctx context.Context, workspaceID, userID
 		return empty, err
 	}
 
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return empty, err
 	}
 

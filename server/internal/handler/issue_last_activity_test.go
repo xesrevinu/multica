@@ -71,7 +71,7 @@ func TestIssueActivityTimestampIsMonotonic(t *testing.T) {
 		t.Fatalf("seed future last_activity_at: %v", err)
 	}
 	_, err := testHandler.Queries.SetIssueMetadataKey(context.Background(), db.SetIssueMetadataKeyParams{
-		Key:         "activity_test",
+		Key:         nullString("activity_test"),
 		Value:       []byte(`"changed"`),
 		ID:          parseUUID(created.ID),
 		WorkspaceID: parseUUID(testWorkspaceID),
@@ -132,7 +132,7 @@ func TestIssueDecorationActivityOnlyAdvancesOnChange(t *testing.T) {
 
 	reset()
 	if _, err := testHandler.Queries.SetIssuePropertyValue(ctx, db.SetIssuePropertyValueParams{
-		Key:         "00000000-0000-0000-0000-000000000001",
+		Key:         nullString("00000000-0000-0000-0000-000000000001"),
 		Value:       []byte(`"selected"`),
 		ID:          issueID,
 		WorkspaceID: workspaceID,
@@ -144,7 +144,7 @@ func TestIssueDecorationActivityOnlyAdvancesOnChange(t *testing.T) {
 	}
 	reset()
 	if _, err := testHandler.Queries.SetIssuePropertyValue(ctx, db.SetIssuePropertyValueParams{
-		Key:         "00000000-0000-0000-0000-000000000001",
+		Key:         nullString("00000000-0000-0000-0000-000000000001"),
 		Value:       []byte(`"selected"`),
 		ID:          issueID,
 		WorkspaceID: workspaceID,

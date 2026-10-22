@@ -561,7 +561,7 @@ func TestConsecutiveCommentsDifferentOriginatorsFullEnqueuePath(t *testing.T) {
 	// B's comment (different originator) before start → must fold in, NOT drop.
 	cB := insertMemberComment(userB, "second, from B — different user")
 	dbfx.Exec(t, `UPDATE comment SET parent_id=$2 WHERE id=$1`, cB.ID, cA.ID)
-	cB.ParentID = cA.ID
+	cB.ParentID = nullString(cA.ID)
 	testHandler.triggerTasksForComment(ctx, issue, cB, nil, "member", userB, userB, nil, nil)
 
 	// Still exactly one task (bounded concurrency, no unique-index collision).

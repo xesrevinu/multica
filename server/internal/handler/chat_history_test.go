@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,7 +13,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/slack"
@@ -24,14 +24,14 @@ type fakeChatHistoryReader struct {
 	err           error
 	overviewCalls int
 	threadCalls   int
-	gotSession    pgtype.UUID
+	gotSession    string
 	gotThreadID   string
 	gotOpts       channel.HistoryOptions
 }
 
 func TestChatHistoryScopePassesImmutableContextGeneration(t *testing.T) {
 	scope := chatHistoryScope{
-		contextRevision: pgtype.Int8{Int64: 3, Valid: true},
+		contextRevision: sql.NullInt64{Int64: 3, Valid: true},
 		historyStart:    "100.000000",
 		historyEnd:      "200.000000",
 		boundaryPending: true,
@@ -45,14 +45,14 @@ func TestChatHistoryScopePassesImmutableContextGeneration(t *testing.T) {
 	}
 }
 
-func (f *fakeChatHistoryReader) ChannelOverview(_ context.Context, sid pgtype.UUID, opts channel.HistoryOptions) (channel.HistoryPage, error) {
+func (f *fakeChatHistoryReader) ChannelOverview(_ context.Context, sid string, opts channel.HistoryOptions) (channel.HistoryPage, error) {
 	f.overviewCalls++
 	f.gotSession = sid
 	f.gotOpts = opts
 	return f.page, f.err
 }
 
-func (f *fakeChatHistoryReader) Thread(_ context.Context, sid pgtype.UUID, threadID string, opts channel.HistoryOptions) (channel.HistoryPage, error) {
+func (f *fakeChatHistoryReader) Thread(_ context.Context, sid string, threadID string, opts channel.HistoryOptions) (channel.HistoryPage, error) {
 	f.threadCalls++
 	f.gotSession = sid
 	f.gotThreadID = threadID

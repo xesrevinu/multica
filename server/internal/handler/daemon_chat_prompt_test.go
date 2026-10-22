@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -16,7 +15,7 @@ func mediaPendingMsg(content string, until time.Time) db.ChatMessage {
 	return db.ChatMessage{
 		Role:                     "user",
 		Content:                  content,
-		ChannelMediaPendingUntil: pgtype.Timestamptz{Time: until, Valid: true},
+		ChannelMediaPendingUntil: nullString(until.UTC().Format(time.RFC3339Nano)),
 	}
 }
 

@@ -153,7 +153,7 @@ func TestStatusCompatibilityCatalogWritesAndTenantIsolation(t *testing.T) {
 	ids := []string{}
 	for _, entry := range catalog {
 		if entry.Category == "started" && !entry.IsSystem {
-			ids = append(ids, uuid.UUID(entry.ID.Bytes).String())
+			ids = append(ids, uuid.MustParse(entry.ID).String())
 		}
 	}
 	testutil.Call(t, testHandler.ReorderIssueStatuses, newRequest(http.MethodPost, "/api/issue-statuses/reorder", ReorderIssueStatusesRequest{Category: "in_review", IDs: ids})).Want(http.StatusOK)

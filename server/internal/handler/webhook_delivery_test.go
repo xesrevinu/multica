@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -13,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -192,7 +192,7 @@ func TestWebhookHandler_DedupeViaIdempotencyKey(t *testing.T) {
 		t.Fatalf("duplicate run_id mismatch: %v != %v", r2["run_id"], firstRunID)
 	}
 	firstDelivery := processQueuedWebhookDelivery(t, firstDeliveryID)
-	if got := uuidToString(firstDelivery.AutopilotRunID); got != firstRunID {
+	if got := uuidToString(firstDelivery.AutopilotRunID.String); got != firstRunID {
 		t.Fatalf("processed delivery run_id mismatch: %v != %v", got, firstRunID)
 	}
 
@@ -390,7 +390,7 @@ func TestReplay_QueuesIdempotentDeliveryForDurableWorker(t *testing.T) {
 	})
 	originalID := requireAcceptedWebhookResponse(t, w)
 	originalDelivery := processQueuedWebhookDelivery(t, originalID)
-	originalRunID := uuidToString(originalDelivery.AutopilotRunID)
+	originalRunID := uuidToString(originalDelivery.AutopilotRunID.String)
 
 	// Replay the original.
 	wr := httptest.NewRecorder()
@@ -417,7 +417,7 @@ func TestReplay_QueuesIdempotentDeliveryForDurableWorker(t *testing.T) {
 	if !replayedDelivery.AutopilotRunID.Valid {
 		t.Fatal("worker should link the replay run")
 	}
-	if uuidToString(replayedDelivery.AutopilotRunID) == originalRunID {
+	if uuidToString(replayedDelivery.AutopilotRunID.String) == originalRunID {
 		t.Fatal("replay should produce a NEW run, not reuse the original")
 	}
 
@@ -611,7 +611,7 @@ func TestWebhookHandler_RunOnlyDedupeOnGitHubDelivery(t *testing.T) {
 	}
 	runCount := 0
 	for _, r := range rows {
-		if r.TriggerID.Valid && uuidToString(r.TriggerID) == trig.ID {
+		if r.TriggerID.Valid && uuidToString(r.TriggerID.String) == trig.ID {
 			runCount++
 		}
 	}
@@ -675,7 +675,7 @@ func TestWebhookDeliveryWorker_PerTriggerLimitDefersWithoutDropping(t *testing.T
 	if deferred.Status != deliveryStatusQueued || deferred.DispatchAttempts != 0 {
 		t.Fatalf("pacing must preserve queued work without counting an attempt: status=%s attempts=%d", deferred.Status, deferred.DispatchAttempts)
 	}
-	if deferred.LeaseToken.Valid || deferred.LeaseExpiresAt.Valid || !deferred.AvailableAt.Valid || !deferred.AvailableAt.Time.After(time.Now()) {
+	if deferred.LeaseToken.Valid || deferred.LeaseExpiresAt.Valid || !(deferred.AvailableAt != "") || !parseDBTime(deferred.AvailableAt).After(time.Now()) {
 		t.Fatalf("paced delivery was not released with a future availability: %#v", deferred)
 	}
 
@@ -707,7 +707,7 @@ func TestWebhookDeliveryWorker_DispatchesRunAdmittedBeforePause(t *testing.T) {
 	if delivery.Status != deliveryStatusDispatched || !delivery.AutopilotRunID.Valid {
 		t.Fatalf("accepted delivery was stranded after pause: status=%s run=%v", delivery.Status, delivery.AutopilotRunID.Valid)
 	}
-	run, err := testHandler.Queries.GetAutopilotRun(context.Background(), delivery.AutopilotRunID)
+	run, err := testHandler.Queries.GetAutopilotRun(context.Background(), delivery.AutopilotRunID.String)
 	if err != nil {
 		t.Fatalf("load admitted run: %v", err)
 	}
@@ -737,7 +737,7 @@ func TestWebhookDeliveryWorker_RecoversExpiredLeaseAndReusesRun(t *testing.T) {
 	if first.Status != deliveryStatusDispatched || !first.AutopilotRunID.Valid {
 		t.Fatalf("expired lease was not recovered: status=%s run=%v", first.Status, first.AutopilotRunID.Valid)
 	}
-	firstRunID := uuidToString(first.AutopilotRunID)
+	firstRunID := uuidToString(first.AutopilotRunID.String)
 
 	// Simulate a crash after the run/task side effect committed but before a
 	// delivery terminal update was durable. Requeueing must reuse the run's
@@ -751,7 +751,7 @@ func TestWebhookDeliveryWorker_RecoversExpiredLeaseAndReusesRun(t *testing.T) {
 		t.Fatalf("requeue delivery: %v", err)
 	}
 	second := processQueuedWebhookDelivery(t, deliveryID)
-	if got := uuidToString(second.AutopilotRunID); got != firstRunID {
+	if got := uuidToString(second.AutopilotRunID.String); got != firstRunID {
 		t.Fatalf("worker did not reuse idempotent run: got %s want %s", got, firstRunID)
 	}
 
@@ -798,7 +798,7 @@ func TestWebhookDeliveryWorker_LeaseOwnershipChangeIsBenign(t *testing.T) {
 	}
 
 	worker := NewWebhookDeliveryWorker(testHandler)
-	if err := worker.complete(context.Background(), staleClaim, deliveryStatusDispatched, pgtype.UUID{}, ""); err != nil {
+	if err := worker.complete(context.Background(), staleClaim, deliveryStatusDispatched, "", ""); err != nil {
 		t.Fatalf("stale complete should be benign: %v", err)
 	}
 	if err := worker.retryOrFail(context.Background(), staleClaim, fmt.Errorf("forced transient failure")); err != nil {
@@ -833,11 +833,11 @@ func TestWebhookDeliveryWorker_RepairsCreateIssueTaskCrashWindow(t *testing.T) {
 	})
 	deliveryID := requireAcceptedWebhookResponse(t, post)
 	first := processQueuedWebhookDelivery(t, deliveryID)
-	run, err := testHandler.Queries.GetAutopilotRun(context.Background(), first.AutopilotRunID)
+	run, err := testHandler.Queries.GetAutopilotRun(context.Background(), first.AutopilotRunID.String)
 	if err != nil || !run.IssueID.Valid {
 		t.Fatalf("load create_issue run: run=%#v err=%v", run, err)
 	}
-	issueID := uuidToString(run.IssueID)
+	issueID := uuidToString(run.IssueID.String)
 	t.Cleanup(func() {
 		testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE issue_id = $1`, issueID)
 		testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
@@ -857,8 +857,8 @@ func TestWebhookDeliveryWorker_RepairsCreateIssueTaskCrashWindow(t *testing.T) {
 		t.Fatalf("requeue delivery: %v", err)
 	}
 	second := processQueuedWebhookDelivery(t, deliveryID)
-	if got := uuidToString(second.AutopilotRunID); got != uuidToString(first.AutopilotRunID) {
-		t.Fatalf("repair should reuse run: got %s want %s", got, uuidToString(first.AutopilotRunID))
+	if got := uuidToString(second.AutopilotRunID.String); got != uuidToString(first.AutopilotRunID.String) {
+		t.Fatalf("repair should reuse run: got %s want %s", got, uuidToString(first.AutopilotRunID.String))
 	}
 	var taskCount int
 	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, issueID).Scan(&taskCount); err != nil {
@@ -943,9 +943,9 @@ func TestWebhookDelivery_FailedRowDoesNotBlockDedupe(t *testing.T) {
 		Event:           "github.pull_request",
 		SignatureStatus: "not_required",
 		Status:          "failed",
-		SelectedHeaders: []byte("{}"),
-		DedupeKey:       pgtype.Text{String: "retry-key", Valid: true},
-		DedupeSource:    pgtype.Text{String: "x-github-delivery", Valid: true},
+		SelectedHeaders: string([]byte("{}")),
+		DedupeKey:       sql.NullString{String: "retry-key", Valid: true},
+		DedupeSource:    sql.NullString{String: "x-github-delivery", Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("insert failed row: %v", err)
@@ -962,9 +962,9 @@ func TestWebhookDelivery_FailedRowDoesNotBlockDedupe(t *testing.T) {
 		Event:           "github.pull_request",
 		SignatureStatus: "not_required",
 		Status:          "dispatched",
-		SelectedHeaders: []byte("{}"),
-		DedupeKey:       pgtype.Text{String: "retry-key", Valid: true},
-		DedupeSource:    pgtype.Text{String: "x-github-delivery", Valid: true},
+		SelectedHeaders: string([]byte("{}")),
+		DedupeKey:       sql.NullString{String: "retry-key", Valid: true},
+		DedupeSource:    sql.NullString{String: "x-github-delivery", Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("retry insert blocked by stale failed row: %v", err)
@@ -979,7 +979,7 @@ func TestWebhookDelivery_FailedRowDoesNotBlockDedupe(t *testing.T) {
 	got, err := testHandler.Queries.GetWebhookDeliveryByTriggerAndDedupe(ctx,
 		db.GetWebhookDeliveryByTriggerAndDedupeParams{
 			TriggerID: parseUUID(trig.ID),
-			DedupeKey: pgtype.Text{String: "retry-key", Valid: true},
+			DedupeKey: sql.NullString{String: "retry-key", Valid: true},
 		})
 	if err != nil {
 		t.Fatalf("lookup: %v", err)
@@ -1000,7 +1000,7 @@ func TestSetSigningSecretParams_NullableWrite(t *testing.T) {
 	if _, err := testHandler.Queries.SetAutopilotTriggerSigningSecret(context.Background(),
 		db.SetAutopilotTriggerSigningSecretParams{
 			ID:            parseUUID(trig.ID),
-			SigningSecret: pgtype.Text{}, // explicit NULL
+			SigningSecret: sql.NullString{}, // explicit NULL
 		}); err != nil {
 		t.Fatalf("sqlc NULL write: %v", err)
 	}

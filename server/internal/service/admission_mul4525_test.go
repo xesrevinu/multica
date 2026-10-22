@@ -2,13 +2,13 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/dispatch"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -27,12 +27,12 @@ func TestRerunIssueBlockedBeforeMutationWhenInvokeDenied(t *testing.T) {
 
 	issueStruct := db.Issue{
 		ID:           util.MustParseUUID(issueID),
-		AssigneeID:   util.MustParseUUID(agentID),
+		AssigneeID:   nullString(util.MustParseUUID(agentID)),
 		Priority:     "medium",
 		CreatorType:  "member",
 		CreatorID:    util.MustParseUUID(creatorID),
 		WorkspaceID:  util.MustParseUUID(workspaceID),
-		AssigneeType: pgtype.Text{String: "agent", Valid: true},
+		AssigneeType: sql.NullString{String: "agent", Valid: true},
 	}
 	svc := &TaskService{Queries: q, TxStarter: pool, Bus: events.New()}
 	orig, err := svc.EnqueueTaskForIssue(ctx, issueStruct)
@@ -42,14 +42,14 @@ func TestRerunIssueBlockedBeforeMutationWhenInvokeDenied(t *testing.T) {
 
 	countTasks := func() int {
 		var n int
-		if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, issueID).Scan(&n); err != nil {
+		if err := pool.QueryRowContext(ctx, `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, issueID).Scan(&n); err != nil {
 			t.Fatalf("count tasks: %v", err)
 		}
 		return n
 	}
 	origStatus := func() string {
 		var s string
-		if err := pool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, orig.ID).Scan(&s); err != nil {
+		if err := pool.QueryRowContext(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, orig.ID).Scan(&s); err != nil {
 			t.Fatalf("read orig status: %v", err)
 		}
 		return s
@@ -66,7 +66,7 @@ func TestRerunIssueBlockedBeforeMutationWhenInvokeDenied(t *testing.T) {
 		return false
 	}
 
-	_, err = svc.RerunIssue(ctx, util.MustParseUUID(issueID), orig.ID, pgtype.UUID{}, util.MustParseUUID(creatorID), deny)
+	_, err = svc.RerunIssue(ctx, util.MustParseUUID(issueID), orig.ID, "", util.MustParseUUID(creatorID), deny)
 	if !errors.Is(err, ErrRerunInvokeNotAllowed) {
 		t.Fatalf("RerunIssue with denying gate: err = %v, want ErrRerunInvokeNotAllowed", err)
 	}
@@ -83,7 +83,7 @@ func TestRerunIssueBlockedBeforeMutationWhenInvokeDenied(t *testing.T) {
 
 	// A permitting gate reruns normally (cancels the original, enqueues fresh).
 	allow := func(db.Agent) bool { return true }
-	rerun, err := svc.RerunIssue(ctx, util.MustParseUUID(issueID), orig.ID, pgtype.UUID{}, util.MustParseUUID(creatorID), allow)
+	rerun, err := svc.RerunIssue(ctx, util.MustParseUUID(issueID), orig.ID, "", util.MustParseUUID(creatorID), allow)
 	if err != nil {
 		t.Fatalf("RerunIssue with permitting gate: %v", err)
 	}
@@ -106,12 +106,12 @@ func TestAutopilotDispatchAdmitsClickerNotCreator(t *testing.T) {
 	// A different member owns the autopilot; they neither own the private agent
 	// nor sit on its allow-list, so the creator gate denies them.
 	var apCreatorID string
-	if err := pool.QueryRow(ctx, `INSERT INTO "user" (name, email) VALUES ('AP Creator', $1) RETURNING id`,
+	if err := pool.QueryRowContext(ctx, `INSERT INTO "user" (name, email) VALUES ('AP Creator', $1) RETURNING id`,
 		fmt.Sprintf("apc-%d@multica.test", time.Now().UnixNano())).Scan(&apCreatorID); err != nil {
 		t.Fatalf("seed ap creator: %v", err)
 	}
-	t.Cleanup(func() { pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, apCreatorID) })
-	if _, err := pool.Exec(ctx, `INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'admin')`,
+	t.Cleanup(func() { pool.ExecContext(context.Background(), `DELETE FROM "user" WHERE id = $1`, apCreatorID) })
+	if _, err := pool.ExecContext(ctx, `INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'admin')`,
 		workspaceID, apCreatorID); err != nil {
 		t.Fatalf("seed ap creator member: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestAutopilotDispatchAdmitsClickerNotCreator(t *testing.T) {
 	// ORDERED the run — the clicking member, or the originator an agent acts for;
 	// the handler resolves and authorizes it (requireAutopilotTriggerInvoker) before
 	// this gate ever sees it.
-	if reason, _, skip := svc.shouldSkipDispatch(ctx, ap, util.MustParseUUID(ownerID), pgtype.UUID{}); skip {
+	if reason, _, skip := svc.shouldSkipDispatch(ctx, ap, util.MustParseUUID(ownerID), ""); skip {
 		t.Fatalf("manual dispatch by the agent owner should be admitted, got skip: %q", reason)
 	}
 
@@ -144,7 +144,7 @@ func TestAutopilotDispatchAdmitsClickerNotCreator(t *testing.T) {
 	// trigger row), every agent-initiated trigger reported a broken trigger owner
 	// for a trigger that never existed — which is what made the regression cost a
 	// day to diagnose. Assert the phrasing, not just the skip.
-	reason, code, skip := svc.shouldSkipDispatch(ctx, ap, pgtype.UUID{}, pgtype.UUID{})
+	reason, code, skip := svc.shouldSkipDispatch(ctx, ap, "", "")
 	if !skip {
 		t.Fatalf("dispatch with no resolvable principal should be blocked")
 	}

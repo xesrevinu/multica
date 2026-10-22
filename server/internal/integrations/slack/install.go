@@ -2,14 +2,12 @@ package slack
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
+	"strings"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
 	"github.com/multica-ai/multica/server/internal/util/secretbox"
@@ -48,9 +46,9 @@ var (
 // returns the same interface bound to a transaction so persistInstall runs its
 // upsert atomically (and so tests can inject a fake without a real DB).
 type installQueries interface {
-	WithTx(tx pgx.Tx) installQueries
+	WithTx(tx *sql.Tx) installQueries
 	UpsertChannelInstallation(ctx context.Context, arg db.UpsertChannelInstallationParams) (db.ChannelInstallation, error)
-	ReclaimDeadChannelInstallationByAppID(ctx context.Context, arg db.ReclaimDeadChannelInstallationByAppIDParams) (pgtype.UUID, error)
+	ReclaimDeadChannelInstallationByAppID(ctx context.Context, arg db.ReclaimDeadChannelInstallationByAppIDParams) (string, error)
 	GetChannelInstallationOwnerByAppID(ctx context.Context, arg db.GetChannelInstallationOwnerByAppIDParams) (db.GetChannelInstallationOwnerByAppIDRow, error)
 	ListChannelInstallationsByWorkspace(ctx context.Context, arg db.ListChannelInstallationsByWorkspaceParams) ([]db.ChannelInstallation, error)
 	GetChannelInstallationInWorkspace(ctx context.Context, arg db.GetChannelInstallationInWorkspaceParams) (db.ChannelInstallation, error)
@@ -62,7 +60,7 @@ type installQueries interface {
 // pattern engine.ChatSession uses).
 type dbInstallQueries struct{ *db.Queries }
 
-func (q dbInstallQueries) WithTx(tx pgx.Tx) installQueries {
+func (q dbInstallQueries) WithTx(tx *sql.Tx) installQueries {
 	return dbInstallQueries{q.Queries.WithTx(tx)}
 }
 
@@ -123,20 +121,17 @@ func newInstallService(q installQueries, tx engine.TxStarter, box *secretbox.Box
 // carries no authed_user, so the installer binds via the normal token flow on
 // first message).
 type installPersist struct {
-	wsID        pgtype.UUID
-	agentID     pgtype.UUID
-	installerID pgtype.UUID
+	wsID        string
+	agentID     string
+	installerID string
 	// appIDKey is the Slack app id stored at config->>'app_id'; it MUST equal the
 	// app_id inside configJSON. It keys the dead-owner reclaim and the live-owner
 	// lookup that drives the accurate conflict message.
 	appIDKey string
 	// configJSON holds the Slack app id (config->>'app_id') used for inbound
 	// routing; the ROW itself is keyed by (workspace, agent) — one bot per agent.
-	configJSON []byte
+	configJSON string
 }
-
-// pgUniqueViolation is the Postgres SQLSTATE for a unique-constraint violation.
-const pgUniqueViolation = "23505"
 
 // persistInstall upserts the installation keyed by (workspace_id, agent_id,
 // channel_type): ONE Slack bot per agent. Re-connecting an agent — including
@@ -154,7 +149,7 @@ func (s *InstallService) persistInstall(ctx context.Context, p installPersist) (
 	if err != nil {
 		return db.ChannelInstallation{}, fmt.Errorf("begin install tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { _ = tx.Rollback() }()
 	qtx := s.q.WithTx(tx)
 
 	// Free the (slack, app_id) routing slot from any DEAD prior owner — a revoked
@@ -167,8 +162,8 @@ func (s *InstallService) persistInstall(ctx context.Context, p installPersist) (
 		AppID:       p.appIDKey,
 		WorkspaceID: p.wsID,
 		AgentID:     p.agentID,
-	}); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		// pgx.ErrNoRows just means nothing was dead — a no-op, not a failure.
+	}); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		// sql.ErrNoRows just means nothing was dead — a no-op, not a failure.
 		return db.ChannelInstallation{}, fmt.Errorf("reclaim dead slack installation: %w", err)
 	}
 
@@ -180,13 +175,12 @@ func (s *InstallService) persistInstall(ctx context.Context, p installPersist) (
 		InstallerUserID: p.installerID,
 	})
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			return db.ChannelInstallation{}, s.liveOwnerConflictErr(ctx, p.wsID, p.appIDKey)
 		}
 		return db.ChannelInstallation{}, fmt.Errorf("upsert slack installation: %w", err)
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return db.ChannelInstallation{}, fmt.Errorf("commit slack install: %w", err)
 	}
 	return inst, nil
@@ -199,7 +193,7 @@ func (s *InstallService) persistInstall(ctx context.Context, p installPersist) (
 // the failed upsert has aborted the tx. A now-free slot (concurrent disconnect)
 // or lookup error falls back to the generic cross-workspace sentinel — a retry
 // then succeeds.
-func (s *InstallService) liveOwnerConflictErr(ctx context.Context, requestingWorkspaceID pgtype.UUID, appID string) error {
+func (s *InstallService) liveOwnerConflictErr(ctx context.Context, requestingWorkspaceID string, appID string) error {
 	owner, err := s.q.GetChannelInstallationOwnerByAppID(ctx, db.GetChannelInstallationOwnerByAppIDParams{
 		ChannelType: string(TypeSlack),
 		AppID:       appID,
@@ -219,7 +213,7 @@ func (s *InstallService) liveOwnerConflictErr(ctx context.Context, requestingWor
 
 // ListByWorkspace returns every Slack installation in the workspace (active and
 // revoked), for the management surface.
-func (s *InstallService) ListByWorkspace(ctx context.Context, wsID pgtype.UUID) ([]db.ChannelInstallation, error) {
+func (s *InstallService) ListByWorkspace(ctx context.Context, wsID string) ([]db.ChannelInstallation, error) {
 	return s.q.ListChannelInstallationsByWorkspace(ctx, db.ListChannelInstallationsByWorkspaceParams{
 		WorkspaceID: wsID,
 		ChannelType: string(TypeSlack),
@@ -228,14 +222,14 @@ func (s *InstallService) ListByWorkspace(ctx context.Context, wsID pgtype.UUID) 
 
 // GetInWorkspace is the workspace-scoped lookup so a forged installation id from
 // another workspace returns NotFound instead of leaking existence.
-func (s *InstallService) GetInWorkspace(ctx context.Context, id, wsID pgtype.UUID) (db.ChannelInstallation, error) {
+func (s *InstallService) GetInWorkspace(ctx context.Context, id, wsID string) (db.ChannelInstallation, error) {
 	inst, err := s.q.GetChannelInstallationInWorkspace(ctx, db.GetChannelInstallationInWorkspaceParams{
 		ID:          id,
 		WorkspaceID: wsID,
 		ChannelType: string(TypeSlack),
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return db.ChannelInstallation{}, ErrInstallationNotFound
 		}
 		return db.ChannelInstallation{}, err
@@ -247,7 +241,7 @@ func (s *InstallService) GetInWorkspace(ctx context.Context, id, wsID pgtype.UUI
 // flips it back to 'active'. The Supervisor stops supervising the installation
 // (ListActiveInstallations filters to active), so its Socket Mode connection
 // winds down, and outbound drops too.
-func (s *InstallService) Revoke(ctx context.Context, id pgtype.UUID) error {
+func (s *InstallService) Revoke(ctx context.Context, id string) error {
 	return s.q.SetChannelInstallationStatus(ctx, db.SetChannelInstallationStatusParams{
 		ID:     id,
 		Status: "revoked",

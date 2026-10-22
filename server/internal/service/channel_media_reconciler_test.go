@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,8 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/multica-ai/multica/server/internal/metrics"
@@ -71,52 +70,52 @@ func (f *fakeObjectDeleter) deletedOwn() []string {
 }
 
 type reconcilerFixture struct {
-	pool        *pgxpool.Pool
+	pool        *sql.DB
 	workspaceID string
 	sessionID   string
 	messageID   string
 }
 
-func seedReconcilerFixture(t *testing.T, pool *pgxpool.Pool) reconcilerFixture {
+func seedReconcilerFixture(t *testing.T, pool *sql.DB) reconcilerFixture {
 	t.Helper()
 	ctx := context.Background()
 	suffix := time.Now().UnixNano()
 	f := reconcilerFixture{pool: pool}
 
 	var userID, runtimeID, agentID string
-	if err := pool.QueryRow(ctx, `INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id`,
+	if err := pool.QueryRowContext(ctx, `INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id`,
 		"Reconciler test", fmt.Sprintf("media-reconciler-%d@multica.test", suffix)).Scan(&userID); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	if err := pool.QueryRow(ctx, `INSERT INTO workspace (name, slug, description) VALUES ($1, $2, '') RETURNING id`,
+	if err := pool.QueryRowContext(ctx, `INSERT INTO workspace (name, slug, description) VALUES ($1, $2, '') RETURNING id`,
 		"Reconciler test", fmt.Sprintf("media-reconciler-%d", suffix)).Scan(&f.workspaceID); err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
 	t.Cleanup(func() {
 		cleanupCtx := context.Background()
-		_, _ = pool.Exec(cleanupCtx, `DELETE FROM channel_media_pending_object WHERE workspace_id = $1`, f.workspaceID)
-		_, _ = pool.Exec(cleanupCtx, `DELETE FROM workspace WHERE id = $1`, f.workspaceID)
-		_, _ = pool.Exec(cleanupCtx, `DELETE FROM "user" WHERE id = $1`, userID)
+		_, _ = pool.ExecContext(cleanupCtx, `DELETE FROM channel_media_pending_object WHERE workspace_id = $1`, f.workspaceID)
+		_, _ = pool.ExecContext(cleanupCtx, `DELETE FROM workspace WHERE id = $1`, f.workspaceID)
+		_, _ = pool.ExecContext(cleanupCtx, `DELETE FROM "user" WHERE id = $1`, userID)
 	})
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO agent_runtime (workspace_id, name, runtime_mode, provider, owner_id)
 		VALUES ($1, $2, 'local', 'multica_daemon', $3) RETURNING id`,
 		f.workspaceID, fmt.Sprintf("media-reconciler-rt-%d", suffix), userID).Scan(&runtimeID); err != nil {
 		t.Fatalf("create runtime: %v", err)
 	}
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO agent (workspace_id, name, runtime_mode, runtime_id, owner_id)
 		VALUES ($1, $2, 'local', $3, $4) RETURNING id`,
 		f.workspaceID, fmt.Sprintf("media-reconciler-agent-%d", suffix), runtimeID, userID).Scan(&agentID); err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO chat_session (workspace_id, agent_id, creator_id, title)
 		VALUES ($1, $2, $3, 'reconciler test') RETURNING id`,
 		f.workspaceID, agentID, userID).Scan(&f.sessionID); err != nil {
 		t.Fatalf("create chat session: %v", err)
 	}
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO chat_message (chat_session_id, role, content, channel_ingested)
 		VALUES ($1, 'user', '[Image]', TRUE) RETURNING id`, f.sessionID).Scan(&f.messageID); err != nil {
 		t.Fatalf("create chat message: %v", err)
@@ -127,7 +126,7 @@ func seedReconcilerFixture(t *testing.T, pool *pgxpool.Pool) reconcilerFixture {
 // seedLedgerRow inserts a ledger row with a controllable age and state.
 func (f reconcilerFixture) seedLedgerRow(t *testing.T, key, url, state string, age time.Duration) {
 	t.Helper()
-	if _, err := f.pool.Exec(context.Background(), `
+	if _, err := f.pool.ExecContext(context.Background(), `
 		INSERT INTO channel_media_pending_object (storage_key, workspace_id, chat_message_id, storage_url, state, created_at, next_attempt_at)
 		VALUES ($1, $2, $3, $4, $5, now() - $6::interval, now() - $6::interval)
 	`, key, f.workspaceID, f.messageID, url, state, age.String()); err != nil {
@@ -137,7 +136,7 @@ func (f reconcilerFixture) seedLedgerRow(t *testing.T, key, url, state string, a
 
 func (f reconcilerFixture) rowState(t *testing.T, key string) (state string, attempt int, exists bool) {
 	t.Helper()
-	err := f.pool.QueryRow(context.Background(), `
+	err := f.pool.QueryRowContext(context.Background(), `
 		SELECT state, attempt FROM channel_media_pending_object WHERE storage_key = $1
 	`, key).Scan(&state, &attempt)
 	if err != nil {
@@ -149,7 +148,7 @@ func (f reconcilerFixture) rowState(t *testing.T, key string) (state string, att
 func (f reconcilerFixture) tombstonePass(t *testing.T, key string) int {
 	t.Helper()
 	var pass int
-	if err := f.pool.QueryRow(context.Background(), `
+	if err := f.pool.QueryRowContext(context.Background(), `
 		SELECT tombstone_pass FROM channel_media_pending_object WHERE storage_key = $1
 	`, key).Scan(&pass); err != nil {
 		t.Fatalf("read tombstone_pass: %v", err)
@@ -161,7 +160,7 @@ func (f reconcilerFixture) tombstonePass(t *testing.T, key string) int {
 // it, without waiting out the real schedule.
 func (f reconcilerFixture) makeDue(t *testing.T, key string) {
 	t.Helper()
-	if _, err := f.pool.Exec(context.Background(), `
+	if _, err := f.pool.ExecContext(context.Background(), `
 		UPDATE channel_media_pending_object SET next_attempt_at = now() - interval '1 second' WHERE storage_key = $1
 	`, key); err != nil {
 		t.Fatalf("make row due: %v", err)
@@ -172,18 +171,18 @@ func (f reconcilerFixture) makeDue(t *testing.T, key string) {
 // own now(), so a test can assert which clock produced them.
 func (f reconcilerFixture) deadlines(t *testing.T, key string) (lease, next, dbNow time.Time) {
 	t.Helper()
-	var l, n pgtype.Timestamptz
-	if err := f.pool.QueryRow(context.Background(), `
+	var l, n sql.NullString
+	if err := f.pool.QueryRowContext(context.Background(), `
 		SELECT lease_expires_at, next_attempt_at, now() FROM channel_media_pending_object WHERE storage_key = $1
 	`, key).Scan(&l, &n, &dbNow); err != nil {
 		t.Fatalf("read deadlines: %v", err)
 	}
-	return l.Time, n.Time, dbNow
+	return asTime(l), asTime(n), dbNow
 }
 
 func (f reconcilerFixture) bindAttachment(t *testing.T, url string) {
 	t.Helper()
-	if _, err := f.pool.Exec(context.Background(), `
+	if _, err := f.pool.ExecContext(context.Background(), `
 		INSERT INTO attachment (workspace_id, chat_session_id, chat_message_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
 		SELECT $1, $2, $3, 'member', creator_id, 'img.png', $4, 'image/png', 1
 		FROM chat_session WHERE id = $2
@@ -234,7 +233,7 @@ func TestChannelMediaReconciler_ReclaimsExpiredLease(t *testing.T) {
 	rec := &ChannelMediaReconciler{Queries: db.New(pool), Storage: deleter}
 
 	f.seedLedgerRow(t, "ws/lark/crashed", "https://cdn.test/crashed", "pending", ChannelMediaReconcileSettleDelay+time.Minute)
-	if _, err := pool.Exec(context.Background(), `
+	if _, err := pool.ExecContext(context.Background(), `
 		UPDATE channel_media_pending_object
 		SET state = 'deleting', lease_token = $2, lease_expires_at = now() - interval '1 minute'
 		WHERE storage_key = $1
@@ -269,7 +268,7 @@ func TestChannelMediaReconciler_DeleteFailureBacksOffThenRetries(t *testing.T) {
 		t.Fatalf("row after failed delete = (%q, attempt=%d, %v), want ('deleting', 1, true)", state, attempt, exists)
 	}
 	var due bool
-	if err := pool.QueryRow(context.Background(), `
+	if err := pool.QueryRowContext(context.Background(), `
 		SELECT next_attempt_at > now() FROM channel_media_pending_object WHERE storage_key = $1
 	`, "ws/lark/flaky").Scan(&due); err != nil || !due {
 		t.Fatalf("failed delete must back off next_attempt_at (future=%v, err=%v)", due, err)
@@ -282,7 +281,7 @@ func TestChannelMediaReconciler_DeleteFailureBacksOffThenRetries(t *testing.T) {
 	}
 
 	// Force the backoff to expire; the retry (with a healthy store) settles.
-	if _, err := pool.Exec(context.Background(), `
+	if _, err := pool.ExecContext(context.Background(), `
 		UPDATE channel_media_pending_object SET next_attempt_at = now() WHERE storage_key = $1
 	`, "ws/lark/flaky"); err != nil {
 		t.Fatalf("expire backoff: %v", err)
@@ -314,11 +313,11 @@ func TestChannelMediaReconciler_LeavesFreshPendingToBind(t *testing.T) {
 		t.Fatalf("in-flight row = (%q, %v), want untouched so the bind can claim it", state, exists)
 	}
 	// The bind claims it exactly like BindMediaRefs does (state-guarded).
-	tag, err := pool.Exec(context.Background(), `
+	tag, err := pool.ExecContext(context.Background(), `
 		DELETE FROM channel_media_pending_object WHERE storage_key = $1 AND state = 'pending'
 	`, "ws/lark/inflight")
-	if err != nil || tag.RowsAffected() != 1 {
-		t.Fatalf("bind-side claim failed: rows=%d err=%v", tag.RowsAffected(), err)
+	if err != nil || rowsAffected(tag) != 1 {
+		t.Fatalf("bind-side claim failed: rows=%d err=%v", rowsAffected(tag), err)
 	}
 	if own := deleter.deletedOwn(); len(own) != 0 {
 		t.Fatalf("nothing of this test's should have been deleted: %v", own)
@@ -354,7 +353,7 @@ func TestChannelMediaReconciler_WrongWorkspaceCannotReleaseOrDelete(t *testing.T
 	key := "ws/lark/tenancy"
 	f.seedLedgerRow(t, key, "https://cdn.test/tenancy", "pending", ChannelMediaReconcileSettleDelay+time.Minute)
 	lease := util.MustParseUUID("88888888-8888-4888-8888-888888888888")
-	if _, err := pool.Exec(context.Background(), `
+	if _, err := pool.ExecContext(context.Background(), `
 		UPDATE channel_media_pending_object SET state = 'deleting', lease_token = $2 WHERE storage_key = $1
 	`, key, lease); err != nil {
 		t.Fatalf("claim row: %v", err)
@@ -364,16 +363,16 @@ func TestChannelMediaReconciler_WrongWorkspaceCannotReleaseOrDelete(t *testing.T
 	if err := q.ReleaseChannelMediaPendingObject(context.Background(), db.ReleaseChannelMediaPendingObjectParams{
 		StorageKey:  key,
 		WorkspaceID: otherWorkspace,
-		LeaseToken:  lease,
+		LeaseToken:  nullString(lease),
 		Backoff:     pgInterval(time.Hour),
-		LastError:   pgtype.Text{String: "cross-tenant", Valid: true},
+		LastError:   sql.NullString{String: "cross-tenant", Valid: true},
 	}); err != nil {
 		t.Fatalf("release: %v", err)
 	}
 	n, err := q.DeleteChannelMediaPendingObject(context.Background(), db.DeleteChannelMediaPendingObjectParams{
 		StorageKey:  key,
 		WorkspaceID: otherWorkspace,
-		LeaseToken:  lease,
+		LeaseToken:  nullString(lease),
 	})
 	if err != nil {
 		t.Fatalf("delete: %v", err)
@@ -384,7 +383,7 @@ func TestChannelMediaReconciler_WrongWorkspaceCannotReleaseOrDelete(t *testing.T
 
 	var state string
 	var leaseStillHeld bool
-	if err := pool.QueryRow(context.Background(), `
+	if err := pool.QueryRowContext(context.Background(), `
 		SELECT state, lease_token IS NOT NULL FROM channel_media_pending_object WHERE storage_key = $1
 	`, key).Scan(&state, &leaseStillHeld); err != nil {
 		t.Fatalf("load row: %v", err)
@@ -587,7 +586,7 @@ func TestChannelMediaReconciler_LatePutAfterDeleteIsReclaimedByTombstone(t *test
 
 	// Walk the whole re-delete schedule; each pass must re-delete.
 	for pass := 2; pass <= len(channelMediaTombstoneRedelete); pass++ {
-		if _, err := pool.Exec(context.Background(), `
+		if _, err := pool.ExecContext(context.Background(), `
 			UPDATE channel_media_pending_object SET next_attempt_at = now() - interval '1 second' WHERE storage_key = $1
 		`, key); err != nil {
 			t.Fatalf("make tombstone due: %v", err)
@@ -602,7 +601,7 @@ func TestChannelMediaReconciler_LatePutAfterDeleteIsReclaimedByTombstone(t *test
 	if present, _ := deleter.state(t); present {
 		t.Fatal("late-materialized object survived the tombstone schedule")
 	}
-	if _, err := pool.Exec(context.Background(), `
+	if _, err := pool.ExecContext(context.Background(), `
 		UPDATE channel_media_pending_object SET next_attempt_at = now() - interval '1 second' WHERE storage_key = $1
 	`, key); err != nil {
 		t.Fatalf("make tombstone due: %v", err)
@@ -630,7 +629,7 @@ func TestChannelMediaReconciler_TombstoneSchedulesThenClears(t *testing.T) {
 		if !exists || state != "tombstoned" {
 			t.Fatalf("pass %d: row = (%q, %v), want 'tombstoned'", pass, state, exists)
 		}
-		if _, err := pool.Exec(context.Background(), `
+		if _, err := pool.ExecContext(context.Background(), `
 			UPDATE channel_media_pending_object SET next_attempt_at = now() - interval '1 second' WHERE storage_key = $1
 		`, key); err != nil {
 			t.Fatalf("make tombstone due: %v", err)

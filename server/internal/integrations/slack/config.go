@@ -61,12 +61,12 @@ type Decrypter func(ciphertext []byte) (plaintext []byte, err error)
 
 // decodeCredentials parses the per-installation config blob and decrypts the
 // stored tokens. It is the single place the Slack config JSON is interpreted.
-func decodeCredentials(raw json.RawMessage, decrypt Decrypter) (credentials, error) {
-	if len(raw) == 0 {
+func decodeCredentials(raw string, decrypt Decrypter) (credentials, error) {
+	if raw == "" {
 		return credentials{}, errors.New("slack: empty installation config")
 	}
 	var cfg installConfig
-	if err := json.Unmarshal(raw, &cfg); err != nil {
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 		return credentials{}, fmt.Errorf("decode slack installation config: %w", err)
 	}
 	botToken, err := decryptToken(cfg.BotTokenEncrypted, decrypt)
@@ -95,9 +95,9 @@ type PublicConfig struct {
 // DecodePublicConfig extracts the display-safe fields from a stored config blob.
 // A decode miss yields a zero-value PublicConfig rather than an error: the
 // management list should still render the row's identity columns.
-func DecodePublicConfig(raw json.RawMessage) PublicConfig {
+func DecodePublicConfig(raw string) PublicConfig {
 	var cfg installConfig
-	_ = json.Unmarshal(raw, &cfg)
+	_ = json.Unmarshal([]byte(raw), &cfg)
 	teamID := cfg.TeamID
 	if teamID == "" {
 		teamID = cfg.AppID

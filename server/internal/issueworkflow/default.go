@@ -2,10 +2,9 @@ package issueworkflow
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -13,8 +12,8 @@ import (
 // DefaultStore is what storing the Default workflow needs.
 type DefaultStore interface {
 	issuestatus.Querier
-	GetDefaultIssueWorkflow(ctx context.Context, workspaceID pgtype.UUID) (db.IssueWorkflow, error)
-	ListNamedIssueWorkflowSteps(ctx context.Context, workspaceID pgtype.UUID) ([][]byte, error)
+	GetDefaultIssueWorkflow(ctx context.Context, workspaceID string) (db.IssueWorkflow, error)
+	ListNamedIssueWorkflowSteps(ctx context.Context, workspaceID string) ([]string, error)
 	CreateDefaultIssueWorkflow(ctx context.Context, arg db.CreateDefaultIssueWorkflowParams) ([]db.IssueWorkflow, error)
 }
 
@@ -22,12 +21,12 @@ type DefaultStore interface {
 // first when needed. The new row lists every active status no other workflow
 // lists, so a workspace that already uses custom statuses keeps its columns,
 // while statuses added for one workflow stay out of Default.
-func EnsureDefault(ctx context.Context, q DefaultStore, workspaceID pgtype.UUID) (db.IssueWorkflow, error) {
+func EnsureDefault(ctx context.Context, q DefaultStore, workspaceID string) (db.IssueWorkflow, error) {
 	row, err := q.GetDefaultIssueWorkflow(ctx, workspaceID)
 	if err == nil {
 		return row, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sql.ErrNoRows) {
 		return db.IssueWorkflow{}, err
 	}
 	keys, err := DefaultSnapshotKeys(ctx, q, workspaceID)
@@ -38,7 +37,7 @@ func EnsureDefault(ctx context.Context, q DefaultStore, workspaceID pgtype.UUID)
 	if err != nil {
 		return db.IssueWorkflow{}, err
 	}
-	created, err := q.CreateDefaultIssueWorkflow(ctx, db.CreateDefaultIssueWorkflowParams{WorkspaceID: workspaceID, Steps: raw})
+	created, err := q.CreateDefaultIssueWorkflow(ctx, db.CreateDefaultIssueWorkflowParams{WorkspaceID: workspaceID, Steps: string(raw)})
 	if err != nil {
 		return db.IssueWorkflow{}, err
 	}
@@ -52,7 +51,7 @@ func EnsureDefault(ctx context.Context, q DefaultStore, workspaceID pgtype.UUID)
 // DefaultSnapshotKeys lists what a new Default row holds: the built-in
 // statuses, backlog and blocked included, plus every active custom status no
 // other workflow lists, in catalog order.
-func DefaultSnapshotKeys(ctx context.Context, q DefaultStore, workspaceID pgtype.UUID) ([]string, error) {
+func DefaultSnapshotKeys(ctx context.Context, q DefaultStore, workspaceID string) ([]string, error) {
 	active, err := issuestatus.ActiveKeys(ctx, q, workspaceID)
 	if err != nil {
 		return nil, err
@@ -63,7 +62,7 @@ func DefaultSnapshotKeys(ctx context.Context, q DefaultStore, workspaceID pgtype
 	}
 	claimed := map[string]bool{}
 	for _, raw := range named {
-		keys, err := DecodeKeys(raw)
+		keys, err := DecodeKeys([]byte(raw))
 		if err != nil {
 			continue
 		}

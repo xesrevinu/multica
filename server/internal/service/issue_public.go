@@ -2,10 +2,9 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -38,17 +37,17 @@ func (s *IssueService) UpdateContent(ctx context.Context, issue db.Issue, patch 
 		Stage:         issue.Stage,
 	}
 	if patch.ExpectedRevision != nil {
-		params.ExpectedRevision = pgtype.Int8{Int64: *patch.ExpectedRevision, Valid: true}
+		params.ExpectedRevision = sql.NullInt64{Int64: *patch.ExpectedRevision, Valid: true}
 	}
 	if patch.Title != nil {
-		params.Title = pgtype.Text{String: *patch.Title, Valid: true}
+		params.Title = sql.NullString{String: *patch.Title, Valid: true}
 	}
 	if patch.Description != nil {
-		params.Description = pgtype.Text{String: *patch.Description, Valid: true}
+		params.Description = sql.NullString{String: *patch.Description, Valid: true}
 	}
 
 	updated, err := s.Queries.UpdateIssue(ctx, params)
-	if patch.ExpectedRevision != nil && errors.Is(err, pgx.ErrNoRows) {
+	if patch.ExpectedRevision != nil && errors.Is(err, sql.ErrNoRows) {
 		return db.Issue{}, ErrIssueRevisionConflict
 	}
 	return updated, err

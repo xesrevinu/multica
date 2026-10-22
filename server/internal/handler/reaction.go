@@ -1,14 +1,13 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -43,9 +42,6 @@ func addedReactionToResponse(r db.AddReactionRow) ReactionResponse {
 		ActorID:   uuidToString(r.ActorID),
 		Emoji:     r.Emoji,
 		CreatedAt: timestampToString(r.CreatedAt),
-	}
-	if r.CommentRevision > 0 {
-		response.CommentRevision = &r.CommentRevision
 	}
 	return response
 }
@@ -104,7 +100,7 @@ func (h *Handler) AddReaction(w http.ResponseWriter, r *http.Request) {
 		})
 		return addErr
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		// Deleted after the check above.
 		writeError(w, http.StatusNotFound, "comment not found")
 		return
@@ -125,18 +121,15 @@ func (h *Handler) AddReaction(w http.ResponseWriter, r *http.Request) {
 		issueStatus = issue.Status
 	}
 
-	if reaction.CommentRevision > 0 {
-		h.publish(protocol.EventReactionAdded, workspaceID, actorType, actorID, map[string]any{
-			"reaction":            resp,
-			"issue_id":            issueID,
-			"issue_title":         issueTitle,
-			"issue_status":        issueStatus,
-			"comment_id":          uuidToString(comment.ID),
-			"comment_author_type": comment.AuthorType,
-			"comment_author_id":   uuidToString(comment.AuthorID),
-			"comment_revision":    reaction.CommentRevision,
-		})
-	}
+	h.publish(protocol.EventReactionAdded, workspaceID, actorType, actorID, map[string]any{
+		"reaction":            resp,
+		"issue_id":            issueID,
+		"issue_title":         issueTitle,
+		"issue_status":        issueStatus,
+		"comment_id":          uuidToString(comment.ID),
+		"comment_author_type": comment.AuthorType,
+		"comment_author_id":   uuidToString(comment.AuthorID),
+	})
 	writeJSON(w, http.StatusCreated, resp)
 }
 
@@ -195,7 +188,7 @@ func (h *Handler) RemoveReaction(w http.ResponseWriter, r *http.Request) {
 		})
 		return removeErr
 	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "comment not found")
 		return
 	}
@@ -205,21 +198,21 @@ func (h *Handler) RemoveReaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if removed.Changed {
+	if removed.Column1 != 0 {
 		h.publish(protocol.EventReactionRemoved, workspaceID, actorType, actorID, map[string]any{
 			"comment_id":       uuidToString(comment.ID),
 			"issue_id":         uuidToString(comment.IssueID),
 			"emoji":            req.Emoji,
 			"actor_type":       actorType,
 			"actor_id":         actorID,
-			"comment_revision": removed.CommentRevision,
+			"comment_revision": ifaceInt64(removed.Coalesce),
 		})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // groupReactions fetches reactions for the given comment IDs and groups them by comment_id.
-func (h *Handler) groupReactions(r *http.Request, commentIDs []pgtype.UUID) map[string][]ReactionResponse {
+func (h *Handler) groupReactions(r *http.Request, commentIDs []string) map[string][]ReactionResponse {
 	if len(commentIDs) == 0 {
 		return nil
 	}

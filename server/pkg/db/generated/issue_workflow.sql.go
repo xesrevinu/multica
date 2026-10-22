@@ -7,22 +7,21 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 const countProjectIssuesByStatus = `-- name: CountProjectIssuesByStatus :many
-SELECT status, COUNT(*)::bigint AS issue_count
+SELECT status, COUNT(*) AS issue_count
 FROM issue
-WHERE workspace_id = $1::uuid
-  AND project_id = ANY($2::uuid[])
+WHERE workspace_id = ?1
+  AND project_id IN (SELECT value FROM json_each(?2))
 GROUP BY status
 ORDER BY status
 `
 
 type CountProjectIssuesByStatusParams struct {
-	WorkspaceID pgtype.UUID   `json:"workspace_id"`
-	ProjectIds  []pgtype.UUID `json:"project_ids"`
+	WorkspaceID string      `json:"workspace_id"`
+	ProjectIds  interface{} `json:"project_ids"`
 }
 
 type CountProjectIssuesByStatusRow struct {
@@ -33,7 +32,7 @@ type CountProjectIssuesByStatusRow struct {
 // Status census for a workflow switch or step removal, including terminal
 // issues: every issue of the project must end on a status its workflow lists.
 func (q *Queries) CountProjectIssuesByStatus(ctx context.Context, arg CountProjectIssuesByStatusParams) ([]CountProjectIssuesByStatusRow, error) {
-	rows, err := q.db.Query(ctx, countProjectIssuesByStatus, arg.WorkspaceID, arg.ProjectIds)
+	rows, err := q.db.QueryContext(ctx, countProjectIssuesByStatus, arg.WorkspaceID, arg.ProjectIds)
 	if err != nil {
 		return nil, err
 	}
@@ -46,6 +45,9 @@ func (q *Queries) CountProjectIssuesByStatus(ctx context.Context, arg CountProje
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -55,11 +57,11 @@ func (q *Queries) CountProjectIssuesByStatus(ctx context.Context, arg CountProje
 const createDefaultIssueWorkflow = `-- name: CreateDefaultIssueWorkflow :many
 INSERT INTO issue_workflow (workspace_id, name, description, initial_status_key, steps, is_default)
 VALUES (
-    $1::uuid,
+    ?1,
     'Default',
     '',
     'todo',
-    $2::jsonb,
+    ?2,
     true
 )
 ON CONFLICT (workspace_id) WHERE is_default DO NOTHING
@@ -67,13 +69,13 @@ RETURNING id, workspace_id, name, description, initial_status_key, steps, create
 `
 
 type CreateDefaultIssueWorkflowParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	Steps       []byte      `json:"steps"`
+	WorkspaceID string `json:"workspace_id"`
+	Steps       string `json:"steps"`
 }
 
 // Returns no row when another request created the Default first.
 func (q *Queries) CreateDefaultIssueWorkflow(ctx context.Context, arg CreateDefaultIssueWorkflowParams) ([]IssueWorkflow, error) {
-	rows, err := q.db.Query(ctx, createDefaultIssueWorkflow, arg.WorkspaceID, arg.Steps)
+	rows, err := q.db.QueryContext(ctx, createDefaultIssueWorkflow, arg.WorkspaceID, arg.Steps)
 	if err != nil {
 		return nil, err
 	}
@@ -96,6 +98,9 @@ func (q *Queries) CreateDefaultIssueWorkflow(ctx context.Context, arg CreateDefa
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -105,25 +110,25 @@ func (q *Queries) CreateDefaultIssueWorkflow(ctx context.Context, arg CreateDefa
 const createIssueWorkflow = `-- name: CreateIssueWorkflow :one
 INSERT INTO issue_workflow (workspace_id, name, description, initial_status_key, steps)
 VALUES (
-    $1::uuid,
-    $2::text,
-    $3::text,
-    $4::text,
-    $5::jsonb
+    ?1,
+    ?2,
+    ?3,
+    ?4,
+    ?5
 )
 RETURNING id, workspace_id, name, description, initial_status_key, steps, created_at, updated_at, is_default
 `
 
 type CreateIssueWorkflowParams struct {
-	WorkspaceID      pgtype.UUID `json:"workspace_id"`
-	Name             string      `json:"name"`
-	Description      string      `json:"description"`
-	InitialStatusKey string      `json:"initial_status_key"`
-	Steps            []byte      `json:"steps"`
+	WorkspaceID      string `json:"workspace_id"`
+	Name             string `json:"name"`
+	Description      string `json:"description"`
+	InitialStatusKey string `json:"initial_status_key"`
+	Steps            string `json:"steps"`
 }
 
 func (q *Queries) CreateIssueWorkflow(ctx context.Context, arg CreateIssueWorkflowParams) (IssueWorkflow, error) {
-	row := q.db.QueryRow(ctx, createIssueWorkflow,
+	row := q.db.QueryRowContext(ctx, createIssueWorkflow,
 		arg.WorkspaceID,
 		arg.Name,
 		arg.Description,
@@ -147,42 +152,42 @@ func (q *Queries) CreateIssueWorkflow(ctx context.Context, arg CreateIssueWorkfl
 
 const deleteIssueWorkflow = `-- name: DeleteIssueWorkflow :execrows
 DELETE FROM issue_workflow
-WHERE id = $1::uuid
-  AND workspace_id = $2::uuid
+WHERE id = ?1
+  AND workspace_id = ?2
   AND NOT is_default
 `
 
 type DeleteIssueWorkflowParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 func (q *Queries) DeleteIssueWorkflow(ctx context.Context, arg DeleteIssueWorkflowParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteIssueWorkflow, arg.ID, arg.WorkspaceID)
+	result, err := q.db.ExecContext(ctx, deleteIssueWorkflow, arg.ID, arg.WorkspaceID)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected(), nil
+	return result.RowsAffected()
 }
 
 const deleteIssueWorkflowsForWorkspace = `-- name: DeleteIssueWorkflowsForWorkspace :exec
-DELETE FROM issue_workflow WHERE workspace_id = $1::uuid
+DELETE FROM issue_workflow WHERE workspace_id = ?1
 `
 
 // No foreign keys by project rule, so workspace teardown cleans up here.
-func (q *Queries) DeleteIssueWorkflowsForWorkspace(ctx context.Context, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteIssueWorkflowsForWorkspace, workspaceID)
+func (q *Queries) DeleteIssueWorkflowsForWorkspace(ctx context.Context, workspaceID string) error {
+	_, err := q.db.ExecContext(ctx, deleteIssueWorkflowsForWorkspace, workspaceID)
 	return err
 }
 
 const getDefaultIssueWorkflow = `-- name: GetDefaultIssueWorkflow :one
 SELECT id, workspace_id, name, description, initial_status_key, steps, created_at, updated_at, is_default FROM issue_workflow
-WHERE workspace_id = $1::uuid
+WHERE workspace_id = ?1
   AND is_default
 `
 
-func (q *Queries) GetDefaultIssueWorkflow(ctx context.Context, workspaceID pgtype.UUID) (IssueWorkflow, error) {
-	row := q.db.QueryRow(ctx, getDefaultIssueWorkflow, workspaceID)
+func (q *Queries) GetDefaultIssueWorkflow(ctx context.Context, workspaceID string) (IssueWorkflow, error) {
+	row := q.db.QueryRowContext(ctx, getDefaultIssueWorkflow, workspaceID)
 	var i IssueWorkflow
 	err := row.Scan(
 		&i.ID,
@@ -200,17 +205,17 @@ func (q *Queries) GetDefaultIssueWorkflow(ctx context.Context, workspaceID pgtyp
 
 const getIssueWorkflow = `-- name: GetIssueWorkflow :one
 SELECT id, workspace_id, name, description, initial_status_key, steps, created_at, updated_at, is_default FROM issue_workflow
-WHERE id = $1::uuid
-  AND workspace_id = $2::uuid
+WHERE id = ?1
+  AND workspace_id = ?2
 `
 
 type GetIssueWorkflowParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 func (q *Queries) GetIssueWorkflow(ctx context.Context, arg GetIssueWorkflowParams) (IssueWorkflow, error) {
-	row := q.db.QueryRow(ctx, getIssueWorkflow, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, getIssueWorkflow, arg.ID, arg.WorkspaceID)
 	var i IssueWorkflow
 	err := row.Scan(
 		&i.ID,
@@ -228,21 +233,22 @@ func (q *Queries) GetIssueWorkflow(ctx context.Context, arg GetIssueWorkflowPara
 
 const listIssueWorkflowNamesUsingStatusKey = `-- name: ListIssueWorkflowNamesUsingStatusKey :many
 SELECT name FROM issue_workflow
-WHERE workspace_id = $1::uuid
+WHERE workspace_id = ?1
   AND NOT is_default
-  AND steps @> jsonb_build_array(jsonb_build_object('status_key', $2::text))
+  AND EXISTS (
+      SELECT 1 FROM json_each(issue_workflow.steps) AS st
+      WHERE json_extract(issue_workflow.steps, '$[' || st.key || '].status_key') = ?2
+  )
 ORDER BY lower(name)
 `
 
 type ListIssueWorkflowNamesUsingStatusKeyParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	StatusKey   string      `json:"status_key"`
+	WorkspaceID string `json:"workspace_id"`
+	StatusKey   string `json:"status_key"`
 }
 
-// Archive guard for the status catalog: a status a workflow still lists cannot
-// be retired, or that workflow's projects would lose a column.
 func (q *Queries) ListIssueWorkflowNamesUsingStatusKey(ctx context.Context, arg ListIssueWorkflowNamesUsingStatusKeyParams) ([]string, error) {
-	rows, err := q.db.Query(ctx, listIssueWorkflowNamesUsingStatusKey, arg.WorkspaceID, arg.StatusKey)
+	rows, err := q.db.QueryContext(ctx, listIssueWorkflowNamesUsingStatusKey, arg.WorkspaceID, arg.StatusKey)
 	if err != nil {
 		return nil, err
 	}
@@ -255,6 +261,9 @@ func (q *Queries) ListIssueWorkflowNamesUsingStatusKey(ctx context.Context, arg 
 		}
 		items = append(items, name)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -264,7 +273,7 @@ func (q *Queries) ListIssueWorkflowNamesUsingStatusKey(ctx context.Context, arg 
 const listIssueWorkflows = `-- name: ListIssueWorkflows :many
 
 SELECT id, workspace_id, name, description, initial_status_key, steps, created_at, updated_at, is_default FROM issue_workflow
-WHERE workspace_id = $1::uuid
+WHERE workspace_id = ?1
 ORDER BY is_default DESC, lower(name), created_at, id
 `
 
@@ -272,8 +281,8 @@ ORDER BY is_default DESC, lower(name), created_at, id
 // the workspace's issue_status catalog. Projects opt in through
 // project.workflow_id; a project without one uses the workspace's Default
 // workflow row. Each step also stores who an issue entering it is handed to.
-func (q *Queries) ListIssueWorkflows(ctx context.Context, workspaceID pgtype.UUID) ([]IssueWorkflow, error) {
-	rows, err := q.db.Query(ctx, listIssueWorkflows, workspaceID)
+func (q *Queries) ListIssueWorkflows(ctx context.Context, workspaceID string) ([]IssueWorkflow, error) {
+	rows, err := q.db.QueryContext(ctx, listIssueWorkflows, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -296,6 +305,9 @@ func (q *Queries) ListIssueWorkflows(ctx context.Context, workspaceID pgtype.UUI
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -304,24 +316,27 @@ func (q *Queries) ListIssueWorkflows(ctx context.Context, workspaceID pgtype.UUI
 
 const listNamedIssueWorkflowSteps = `-- name: ListNamedIssueWorkflowSteps :many
 SELECT steps FROM issue_workflow
-WHERE workspace_id = $1::uuid
+WHERE workspace_id = ?1
   AND NOT is_default
 `
 
 // The steps of every workflow except Default, for the Default snapshot.
-func (q *Queries) ListNamedIssueWorkflowSteps(ctx context.Context, workspaceID pgtype.UUID) ([][]byte, error) {
-	rows, err := q.db.Query(ctx, listNamedIssueWorkflowSteps, workspaceID)
+func (q *Queries) ListNamedIssueWorkflowSteps(ctx context.Context, workspaceID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listNamedIssueWorkflowSteps, workspaceID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := [][]byte{}
+	items := []string{}
 	for rows.Next() {
-		var steps []byte
+		var steps string
 		if err := rows.Scan(&steps); err != nil {
 			return nil, err
 		}
 		items = append(items, steps)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -331,13 +346,13 @@ func (q *Queries) ListNamedIssueWorkflowSteps(ctx context.Context, workspaceID p
 
 const listProjectsUsingDefaultIssueWorkflow = `-- name: ListProjectsUsingDefaultIssueWorkflow :many
 SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, start_date, due_date, workflow_id FROM project
-WHERE workspace_id = $1::uuid
+WHERE workspace_id = ?1
   AND workflow_id IS NULL
 ORDER BY created_at, id
 `
 
-func (q *Queries) ListProjectsUsingDefaultIssueWorkflow(ctx context.Context, workspaceID pgtype.UUID) ([]Project, error) {
-	rows, err := q.db.Query(ctx, listProjectsUsingDefaultIssueWorkflow, workspaceID)
+func (q *Queries) ListProjectsUsingDefaultIssueWorkflow(ctx context.Context, workspaceID string) ([]Project, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectsUsingDefaultIssueWorkflow, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -364,6 +379,9 @@ func (q *Queries) ListProjectsUsingDefaultIssueWorkflow(ctx context.Context, wor
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -373,18 +391,18 @@ func (q *Queries) ListProjectsUsingDefaultIssueWorkflow(ctx context.Context, wor
 
 const listProjectsUsingIssueWorkflow = `-- name: ListProjectsUsingIssueWorkflow :many
 SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, start_date, due_date, workflow_id FROM project
-WHERE workspace_id = $1::uuid
-  AND workflow_id = $2::uuid
+WHERE workspace_id = ?1
+  AND workflow_id = ?2
 ORDER BY created_at, id
 `
 
 type ListProjectsUsingIssueWorkflowParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	WorkflowID  pgtype.UUID `json:"workflow_id"`
+	WorkspaceID string         `json:"workspace_id"`
+	WorkflowID  sql.NullString `json:"workflow_id"`
 }
 
 func (q *Queries) ListProjectsUsingIssueWorkflow(ctx context.Context, arg ListProjectsUsingIssueWorkflowParams) ([]Project, error) {
-	rows, err := q.db.Query(ctx, listProjectsUsingIssueWorkflow, arg.WorkspaceID, arg.WorkflowID)
+	rows, err := q.db.QueryContext(ctx, listProjectsUsingIssueWorkflow, arg.WorkspaceID, arg.WorkflowID)
 	if err != nil {
 		return nil, err
 	}
@@ -412,6 +430,9 @@ func (q *Queries) ListProjectsUsingIssueWorkflow(ctx context.Context, arg ListPr
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -420,19 +441,18 @@ func (q *Queries) ListProjectsUsingIssueWorkflow(ctx context.Context, arg ListPr
 
 const lockProjectForWorkflowChange = `-- name: LockProjectForWorkflowChange :one
 SELECT id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, start_date, due_date, workflow_id FROM project
-WHERE id = $1::uuid
-  AND workspace_id = $2::uuid
-FOR UPDATE
+WHERE id = ?1
+  AND workspace_id = ?2
 `
 
 type LockProjectForWorkflowChangeParams struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
 // Serializes concurrent workflow switches of one project.
 func (q *Queries) LockProjectForWorkflowChange(ctx context.Context, arg LockProjectForWorkflowChangeParams) (Project, error) {
-	row := q.db.QueryRow(ctx, lockProjectForWorkflowChange, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, lockProjectForWorkflowChange, arg.ID, arg.WorkspaceID)
 	var i Project
 	err := row.Scan(
 		&i.ID,
@@ -454,30 +474,30 @@ func (q *Queries) LockProjectForWorkflowChange(ctx context.Context, arg LockProj
 }
 
 const remapProjectIssueStatus = `-- name: RemapProjectIssueStatus :many
-UPDATE issue AS i SET
-    status = $1::text,
+UPDATE issue SET
+    status = ?1,
     duplicate_of_issue_id = NULL,
     position = (
         SELECT COALESCE(MIN(target.position), 0) - 1
         FROM issue AS target
-        WHERE target.workspace_id = i.workspace_id
-          AND target.status = $1::text
+        WHERE target.workspace_id = issue.workspace_id
+          AND target.status = ?1
     ),
-    revision = i.revision + 1,
-    last_activity_at = GREATEST(COALESCE(i.last_activity_at, i.updated_at), now()),
+    revision = issue.revision + 1,
+    last_activity_at = GREATEST(COALESCE(issue.last_activity_at, issue.updated_at), now()),
     updated_at = now()
-WHERE i.workspace_id = $2::uuid
-  AND i.project_id = ANY($3::uuid[])
-  AND i.status = $4::text
-  AND i.status <> $1::text
-RETURNING i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id
+WHERE issue.workspace_id = ?2
+  AND issue.project_id IN (SELECT value FROM json_each(?3))
+  AND issue.status = ?4
+  AND issue.status <> ?1
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id
 `
 
 type RemapProjectIssueStatusParams struct {
-	ToStatus    string        `json:"to_status"`
-	WorkspaceID pgtype.UUID   `json:"workspace_id"`
-	ProjectIds  []pgtype.UUID `json:"project_ids"`
-	FromStatus  string        `json:"from_status"`
+	ToStatus    string      `json:"to_status"`
+	WorkspaceID string      `json:"workspace_id"`
+	ProjectIds  interface{} `json:"project_ids"`
+	FromStatus  string      `json:"from_status"`
 }
 
 // Moves every issue of the given projects from one status to another as part
@@ -487,7 +507,7 @@ type RemapProjectIssueStatusParams struct {
 // because from and to differ). It deliberately touches nothing else, so it
 // never hands an issue off or starts a run.
 func (q *Queries) RemapProjectIssueStatus(ctx context.Context, arg RemapProjectIssueStatusParams) ([]Issue, error) {
-	rows, err := q.db.Query(ctx, remapProjectIssueStatus,
+	rows, err := q.db.QueryContext(ctx, remapProjectIssueStatus,
 		arg.ToStatus,
 		arg.WorkspaceID,
 		arg.ProjectIds,
@@ -536,6 +556,9 @@ func (q *Queries) RemapProjectIssueStatus(ctx context.Context, arg RemapProjectI
 		}
 		items = append(items, i)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
@@ -545,44 +568,50 @@ func (q *Queries) RemapProjectIssueStatus(ctx context.Context, arg RemapProjectI
 const removeStatusFromDefaultIssueWorkflow = `-- name: RemoveStatusFromDefaultIssueWorkflow :exec
 UPDATE issue_workflow SET
     steps = COALESCE((
-        SELECT jsonb_agg(step ORDER BY ord)
-        FROM jsonb_array_elements(steps) WITH ORDINALITY AS s(step, ord)
-        WHERE step->>'status_key' <> $1::text
-    ), '[]'::jsonb),
+        SELECT json_group_array(json(step_value))
+        FROM (
+            SELECT json_extract(issue_workflow.steps, '$[' || step.key || ']') AS step_value
+            FROM json_each(issue_workflow.steps) AS step
+            WHERE json_extract(issue_workflow.steps, '$[' || step.key || '].status_key') <> ?1
+            ORDER BY step.key
+        )
+    ), '[]'),
     updated_at = now()
-WHERE workspace_id = $2::uuid
+WHERE workspace_id = ?2
   AND is_default
-  AND steps @> jsonb_build_array(jsonb_build_object('status_key', $1::text))
+  AND EXISTS (
+      SELECT 1 FROM json_each(issue_workflow.steps) AS st
+      WHERE json_extract(issue_workflow.steps, '$[' || st.key || '].status_key') = ?1
+  )
 `
 
 type RemoveStatusFromDefaultIssueWorkflowParams struct {
-	StatusKey   string      `json:"status_key"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	StatusKey   string `json:"status_key"`
+	WorkspaceID string `json:"workspace_id"`
 }
 
-// An archived status leaves Default with it; Default never blocks an archive.
 func (q *Queries) RemoveStatusFromDefaultIssueWorkflow(ctx context.Context, arg RemoveStatusFromDefaultIssueWorkflowParams) error {
-	_, err := q.db.Exec(ctx, removeStatusFromDefaultIssueWorkflow, arg.StatusKey, arg.WorkspaceID)
+	_, err := q.db.ExecContext(ctx, removeStatusFromDefaultIssueWorkflow, arg.StatusKey, arg.WorkspaceID)
 	return err
 }
 
 const setProjectWorkflow = `-- name: SetProjectWorkflow :one
 UPDATE project SET
-    workflow_id = $1::uuid,
+    workflow_id = ?1,
     updated_at = now()
-WHERE id = $2::uuid
-  AND workspace_id = $3::uuid
+WHERE id = ?2
+  AND workspace_id = ?3
 RETURNING id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, start_date, due_date, workflow_id
 `
 
 type SetProjectWorkflowParams struct {
-	WorkflowID  pgtype.UUID `json:"workflow_id"`
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	WorkflowID  sql.NullString `json:"workflow_id"`
+	ID          string         `json:"id"`
+	WorkspaceID string         `json:"workspace_id"`
 }
 
 func (q *Queries) SetProjectWorkflow(ctx context.Context, arg SetProjectWorkflowParams) (Project, error) {
-	row := q.db.QueryRow(ctx, setProjectWorkflow, arg.WorkflowID, arg.ID, arg.WorkspaceID)
+	row := q.db.QueryRowContext(ctx, setProjectWorkflow, arg.WorkflowID, arg.ID, arg.WorkspaceID)
 	var i Project
 	err := row.Scan(
 		&i.ID,
@@ -605,27 +634,27 @@ func (q *Queries) SetProjectWorkflow(ctx context.Context, arg SetProjectWorkflow
 
 const updateIssueWorkflow = `-- name: UpdateIssueWorkflow :one
 UPDATE issue_workflow SET
-    name = $1::text,
-    description = $2::text,
-    initial_status_key = $3::text,
-    steps = $4::jsonb,
+    name = ?1,
+    description = ?2,
+    initial_status_key = ?3,
+    steps = ?4,
     updated_at = now()
-WHERE id = $5::uuid
-  AND workspace_id = $6::uuid
+WHERE id = ?5
+  AND workspace_id = ?6
 RETURNING id, workspace_id, name, description, initial_status_key, steps, created_at, updated_at, is_default
 `
 
 type UpdateIssueWorkflowParams struct {
-	Name             string      `json:"name"`
-	Description      string      `json:"description"`
-	InitialStatusKey string      `json:"initial_status_key"`
-	Steps            []byte      `json:"steps"`
-	ID               pgtype.UUID `json:"id"`
-	WorkspaceID      pgtype.UUID `json:"workspace_id"`
+	Name             string `json:"name"`
+	Description      string `json:"description"`
+	InitialStatusKey string `json:"initial_status_key"`
+	Steps            string `json:"steps"`
+	ID               string `json:"id"`
+	WorkspaceID      string `json:"workspace_id"`
 }
 
 func (q *Queries) UpdateIssueWorkflow(ctx context.Context, arg UpdateIssueWorkflowParams) (IssueWorkflow, error) {
-	row := q.db.QueryRow(ctx, updateIssueWorkflow,
+	row := q.db.QueryRowContext(ctx, updateIssueWorkflow,
 		arg.Name,
 		arg.Description,
 		arg.InitialStatusKey,

@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -13,7 +12,7 @@ func commentAt(created time.Time) db.Comment {
 		AuthorType: "system",
 		Content:    "task failed",
 		Type:       "system",
-		CreatedAt:  pgtype.Timestamptz{Time: created, Valid: true},
+		CreatedAt:  nullTime(created, true).String,
 	}
 }
 

@@ -1,9 +1,9 @@
 package handler
 
 import (
+	"database/sql"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -15,7 +15,7 @@ import (
 func TestRunToResponseDoesNotReverseEngineerReasonCode(t *testing.T) {
 	run := db.AutopilotRun{
 		Status: "skipped",
-		FailureReason: pgtype.Text{
+		FailureReason: sql.NullString{
 			String: "assignee agent lacks access to private assignee agent",
 			Valid:  true,
 		},

@@ -41,9 +41,9 @@ func slackInstallationToResponse(row db.ChannelInstallation) SlackInstallationRe
 		BotUserID:       info.BotUserID,
 		InstallerUserID: uuidToString(row.InstallerUserID),
 		Status:          row.Status,
-		InstalledAt:     row.InstalledAt.Time.UTC().Format(time.RFC3339),
-		CreatedAt:       row.CreatedAt.Time.UTC().Format(time.RFC3339),
-		UpdatedAt:       row.UpdatedAt.Time.UTC().Format(time.RFC3339),
+		InstalledAt:     parseDBTime(row.InstalledAt).UTC().Format(time.RFC3339),
+		CreatedAt:       parseDBTime(row.CreatedAt).UTC().Format(time.RFC3339),
+		UpdatedAt:       parseDBTime(row.UpdatedAt).UTC().Format(time.RFC3339),
 	}
 }
 

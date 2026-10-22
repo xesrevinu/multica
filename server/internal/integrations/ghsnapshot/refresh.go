@@ -2,21 +2,19 @@ package ghsnapshot
 
 import (
 	"context"
+	"database/sql"
 	"log/slog"
 	"math/rand"
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/dbreader"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-// TxBeginner is the subset of a pgx pool the manager needs to open the
-// snapshot-write transaction. *pgxpool.Pool satisfies it.
+// TxBeginner opens the snapshot-write transaction. *sql.DB satisfies it.
 type TxBeginner interface {
-	Begin(ctx context.Context) (pgx.Tx, error)
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
 }
 
 // address is the refresh unit and the dedup / single-in-flight key
@@ -54,7 +52,7 @@ type Manager struct {
 	queries      *db.Queries
 	readSelector *dbreader.Selector
 	pool         TxBeginner
-	onApplied    func(ctx context.Context, prID pgtype.UUID)
+	onApplied    func(ctx context.Context, prID string)
 
 	concurrency   int
 	viewTTL       time.Duration
@@ -75,10 +73,6 @@ type Manager struct {
 	inFlight map[address]bool
 	trailing map[address]bool // one event that arrived while active; replay once after the current fetch
 	attempts map[address]int  // chase attempts for the current undecided window
-	// Last address returned by the bounded TTL sweep. The query starts after
-	// this cursor and wraps, preventing a fixed first page from starving later
-	// installations when early addresses repeatedly fail.
-	sweepAfter address
 	// Secondary rate limits are scoped to the installation whose token incurred
 	// them. One customer must never pause every other installation.
 	rateUntil map[int64]time.Time
@@ -90,7 +84,7 @@ type Manager struct {
 // NewManager wires the pipeline. onApplied is called once per PR row whose
 // snapshot was actually written (guard passed), so the handler can broadcast a
 // realtime PR update. Passing a nil client yields a disabled (no-op) manager.
-func NewManager(client *Client, queries *db.Queries, pool TxBeginner, onApplied func(ctx context.Context, prID pgtype.UUID)) *Manager {
+func NewManager(client *Client, queries *db.Queries, pool TxBeginner, onApplied func(ctx context.Context, prID string)) *Manager {
 	return &Manager{
 		client:        client,
 		queries:       queries,
@@ -250,7 +244,7 @@ func (m *Manager) process(ctx context.Context, addr address) {
 		InstallationID: addr.InstallationID,
 		RepoOwner:      addr.Owner,
 		RepoName:       addr.Repo,
-		PrNumber:       addr.Number,
+		PrNumber:       int64(addr.Number),
 	})
 	if err != nil {
 		slog.Warn("ghsnapshot: list rows failed", "err", err.Error())
@@ -394,15 +388,15 @@ func (m *Manager) finish(addr address) {
 // the per-check rows — all in one transaction. Returns applied=false (and
 // writes nothing) when the row's head has advanced past the snapshot's head
 // (acceptance criterion 1).
-func (m *Manager) applySnapshot(ctx context.Context, prID pgtype.UUID, snap *PRSnapshot) (bool, error) {
-	tx, err := m.pool.Begin(ctx)
+func (m *Manager) applySnapshot(ctx context.Context, prID string, snap *PRSnapshot) (bool, error) {
+	tx, err := m.pool.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	q := m.queries.WithTx(tx)
 
-	rollup := pgtype.Text{}
+	rollup := sql.NullString{}
 	if snap.HasChecks {
 		rollup = textOrNull(snap.RollupState)
 	}
@@ -429,17 +423,17 @@ func (m *Manager) applySnapshot(ctx context.Context, prID pgtype.UUID, snap *PRS
 		if err := q.InsertGitHubPRCheckRun(ctx, db.InsertGitHubPRCheckRunParams{
 			PrID:            prID,
 			HeadSha:         snap.HeadSHA,
-			Ordinal:         int32(i),
+			Ordinal:         int64(i),
 			Name:            c.Name,
 			Status:          c.Status,
 			Conclusion:      textOrNull(c.Conclusion),
 			DetailsUrl:      textOrNull(c.DetailsURL),
-			IsStatusContext: c.IsStatusContext,
+			IsStatusContext: boolToInt(c.IsStatusContext),
 		}); err != nil {
 			return false, err
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -496,35 +490,16 @@ func (m *Manager) sweepLoop(ctx context.Context) {
 // undecided PR whose base branch changes without a pull_request webhook, and
 // for any webhook that was dropped during a deploy.
 func (m *Manager) sweepOnce(ctx context.Context) {
-	m.mu.Lock()
-	after := m.sweepAfter
-	m.mu.Unlock()
-
 	rows, err := m.queries.ListStaleUndecidedGitHubPRs(ctx, db.ListStaleUndecidedGitHubPRsParams{
-		OlderThan:           tsFromTime(m.now().Add(-m.sweepTTL)),
-		AfterInstallationID: after.InstallationID,
-		AfterRepoOwner:      after.Owner,
-		AfterRepoName:       after.Repo,
-		AfterPrNumber:       after.Number,
-		MaxRows:             m.sweepMaxRows,
+		OlderThan: tsFromTime(m.now().Add(-m.sweepTTL)),
+		MaxRows:   int64(m.sweepMaxRows),
 	})
 	if err != nil {
 		slog.Warn("ghsnapshot: sweep query failed", "err", err.Error())
 		return
 	}
-	if len(rows) > 0 {
-		last := rows[len(rows)-1]
-		m.mu.Lock()
-		m.sweepAfter = address{
-			InstallationID: last.InstallationID,
-			Owner:          last.RepoOwner,
-			Repo:           last.RepoName,
-			Number:         last.PrNumber,
-		}
-		m.mu.Unlock()
-	}
 	for _, r := range rows {
-		m.Enqueue(r.InstallationID, r.RepoOwner, r.RepoName, r.PrNumber)
+		m.Enqueue(r.InstallationID, r.RepoOwner, r.RepoName, int32(r.PrNumber))
 	}
 }
 
@@ -538,15 +513,22 @@ func asRateLimit(err error, target **RateLimitError) bool {
 	return false
 }
 
-func textOrNull(s string) pgtype.Text {
+func textOrNull(s string) sql.NullString {
 	if s == "" {
-		return pgtype.Text{}
+		return sql.NullString{}
 	}
-	return pgtype.Text{String: s, Valid: true}
+	return sql.NullString{String: s, Valid: true}
 }
 
-func tsFromTime(t time.Time) pgtype.Timestamptz {
-	return pgtype.Timestamptz{Time: t, Valid: true}
+func tsFromTime(t time.Time) sql.NullString {
+	return sql.NullString{String: t.UTC().Format(time.RFC3339Nano), Valid: true}
+}
+
+func boolToInt(v bool) int64 {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 // sleepCtx sleeps for d or until ctx is cancelled; returns false if cancelled.

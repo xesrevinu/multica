@@ -18,8 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
 
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/inbox"
@@ -38,7 +37,7 @@ const ServiceUserEmail = "orchestrator@system.multica.local"
 const InboxType = "orchestrator_alert"
 
 type Options struct {
-	Pool      *pgxpool.Pool
+	Pool      *sql.DB
 	Bus       *events.Bus
 	Queries   *db.Queries
 	WorkDir   string
@@ -535,7 +534,7 @@ func (s *Service) activity(ctx context.Context, row *issueRow, d *Decision, sour
 	if s.svcUserID != "" {
 		actor = s.svcUserID
 	}
-	if _, err := s.opt.Pool.Exec(ctx, `INSERT INTO activity_log (workspace_id, issue_id, actor_type, actor_id, action, details) VALUES ($1, $2, 'member', $3, 'orchestrator_transition', $4)`, row.Workspace, row.ID, actor, det); err != nil {
+	if _, err := s.opt.Pool.ExecContext(ctx, `INSERT INTO activity_log (workspace_id, issue_id, actor_type, actor_id, action, details) VALUES ($1, $2, 'member', $3, 'orchestrator_transition', $4)`, row.Workspace, row.ID, actor, det); err != nil {
 		slog.Warn("orchestrator: activity log", "issue", row.Key, "err", err)
 	}
 }
@@ -543,7 +542,7 @@ func (s *Service) activity(ctx context.Context, row *issueRow, d *Decision, sour
 func (s *Service) publishMeta(ctx context.Context, row *issueRow) {
 	var raw []byte
 	var rev int64
-	if err := s.opt.Pool.QueryRow(ctx, `SELECT metadata, revision FROM issue WHERE id=$1`, row.ID).Scan(&raw, &rev); err != nil {
+	if err := s.opt.Pool.QueryRowContext(ctx, `SELECT metadata, revision FROM issue WHERE id=$1`, row.ID).Scan(&raw, &rev); err != nil {
 		return
 	}
 	m := map[string]any{}
@@ -584,10 +583,10 @@ func (s *Service) notify(ctx context.Context, t *Team, row *issueRow, d *Decisio
 	}
 	details, _ := json.Marshal(map[string]any{"tid": d.Tid, "why": d.Why, "issue_key": row.Key})
 	item, ok, err := inbox.CreateIfEligible(ctx, s.opt.Queries, db.CreateInboxItemParams{
-		ID: dbid.NewV7(), WorkspaceID: util.MustParseUUID(t.WorkspaceID), RecipientType: "member", RecipientID: util.MustParseUUID(t.HumanUserID),
-		Type: InboxType, Severity: sev, IssueID: util.MustParseUUID(row.ID), Title: row.Key + ": " + row.Title,
-		Body:      pgtype.Text{String: d.Notify, Valid: true},
-		ActorType: pgtype.Text{String: "system", Valid: true}, Details: details,
+		ID: sql.NullString{String: dbid.NewV7(), Valid: true}, WorkspaceID: t.WorkspaceID, RecipientType: "member", RecipientID: t.HumanUserID,
+		Type: InboxType, Severity: sev, IssueID: sql.NullString{String: row.ID, Valid: row.ID != ""}, Title: row.Key + ": " + row.Title,
+		Body:      sql.NullString{String: d.Notify, Valid: d.Notify != ""},
+		ActorType: sql.NullString{String: "system", Valid: true}, Details: sql.NullString{String: string(details), Valid: len(details) > 0},
 	})
 	if err != nil || !ok {
 		if err != nil {
@@ -600,7 +599,7 @@ func (s *Service) notify(ctx context.Context, t *Team, row *issueRow, d *Decisio
 			"id": util.UUIDToString(item.ID), "workspace_id": t.WorkspaceID, "recipient_type": item.RecipientType,
 			"recipient_id": util.UUIDToString(item.RecipientID), "type": item.Type, "severity": item.Severity,
 			"issue_id": row.ID, "title": item.Title, "body": d.Notify, "read": false, "archived": false,
-			"created_at": util.TimestampToString(item.CreatedAt), "actor_type": "system", "details": json.RawMessage(details),
+			"created_at": item.CreatedAt, "actor_type": "system", "details": json.RawMessage(details),
 		}}})
 }
 
@@ -624,7 +623,7 @@ func (s *Service) remindBlocked(ctx context.Context, t *Team, rows []issueRow) {
 
 func (s *Service) ensureServiceUser(ctx context.Context) error {
 	var id string
-	err := s.opt.Pool.QueryRow(ctx, `INSERT INTO "user" (name, email) VALUES ('Orchestrator', $1)
+	err := s.opt.Pool.QueryRowContext(ctx, `INSERT INTO "user" (name, email) VALUES ('Orchestrator', $1)
 		ON CONFLICT (email) DO UPDATE SET name=EXCLUDED.name RETURNING id::text`, ServiceUserEmail).Scan(&id)
 	if err != nil {
 		return err
@@ -634,8 +633,8 @@ func (s *Service) ensureServiceUser(ctx context.Context) error {
 	tok := "mul_" + hex.EncodeToString(raw)
 	sum := sha256.Sum256([]byte(tok))
 	// One live token: revoke older ones, mint a fresh in-memory one per boot.
-	_, _ = s.opt.Pool.Exec(ctx, `DELETE FROM personal_access_token WHERE user_id=$1 AND name='orchestrator (in-process)'`, id)
-	if _, err := s.opt.Pool.Exec(ctx, `INSERT INTO personal_access_token (user_id, name, token_hash, token_prefix, expires_at)
+	_, _ = s.opt.Pool.ExecContext(ctx, `DELETE FROM personal_access_token WHERE user_id=$1 AND name='orchestrator (in-process)'`, id)
+	if _, err := s.opt.Pool.ExecContext(ctx, `INSERT INTO personal_access_token (user_id, name, token_hash, token_prefix, expires_at)
 		VALUES ($1, 'orchestrator (in-process)', $2, $3, now() + interval '3650 days')`, id, hex.EncodeToString(sum[:]), tok[:8]); err != nil {
 		return err
 	}
@@ -646,7 +645,7 @@ func (s *Service) ensureServiceUser(ctx context.Context) error {
 }
 
 func (s *Service) ensureMember(ctx context.Context, workspaceID string) error {
-	_, err := s.opt.Pool.Exec(ctx, `INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'admin') ON CONFLICT (workspace_id, user_id) DO NOTHING`, workspaceID, s.svcUserID)
+	_, err := s.opt.Pool.ExecContext(ctx, `INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'admin') ON CONFLICT (workspace_id, user_id) DO NOTHING`, workspaceID, s.svcUserID)
 	return err
 }
 

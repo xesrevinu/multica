@@ -6,8 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
-
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -25,35 +23,35 @@ func TestAdoptOrphanOnboardingKickoff(t *testing.T) {
 	workspaceID, userID, agentID, _ := seedAttributionFixture(t, pool)
 
 	var chatSessionID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO chat_session (workspace_id, agent_id, creator_id)
 		VALUES ($1, $2, $3) RETURNING id`, workspaceID, agentID, userID).Scan(&chatSessionID); err != nil {
 		t.Fatalf("seed chat session: %v", err)
 	}
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM chat_message WHERE chat_session_id = $1`, chatSessionID)
-		pool.Exec(context.Background(), `DELETE FROM chat_session WHERE id = $1`, chatSessionID)
+		pool.ExecContext(context.Background(), `DELETE FROM chat_message WHERE chat_session_id = $1`, chatSessionID)
+		pool.ExecContext(context.Background(), `DELETE FROM chat_session WHERE id = $1`, chatSessionID)
 	})
 
 	// The kickoff as OpenMikaOnboardingChat writes it: a user row with no task.
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO chat_message (chat_session_id, role, content, message_kind)
 		VALUES ($1, 'user', 'kickoff context', 'onboarding_kickoff')`, chatSessionID); err != nil {
 		t.Fatalf("seed orphan kickoff: %v", err)
 	}
 
 	var firstTaskID string
-	if err := pool.QueryRow(ctx, `SELECT gen_random_uuid()::text`).Scan(&firstTaskID); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT gen_random_uuid()::text`).Scan(&firstTaskID); err != nil {
 		t.Fatalf("new task id: %v", err)
 	}
 	if err := q.AdoptOrphanOnboardingKickoff(ctx, db.AdoptOrphanOnboardingKickoffParams{
 		ChatSessionID: util.MustParseUUID(chatSessionID),
-		TaskID:        util.MustParseUUID(firstTaskID),
+		TaskID:        nullString(util.MustParseUUID(firstTaskID)),
 	}); err != nil {
 		t.Fatalf("AdoptOrphanOnboardingKickoff: %v", err)
 	}
 
-	input, err := q.ListChatInputMessages(ctx, util.MustParseUUID(firstTaskID))
+	input, err := q.ListChatInputMessages(ctx, nullString(util.MustParseUUID(firstTaskID)))
 	if err != nil {
 		t.Fatalf("ListChatInputMessages: %v", err)
 	}
@@ -65,23 +63,23 @@ func TestAdoptOrphanOnboardingKickoff(t *testing.T) {
 	// and re-delivering the "you already greeted them" context on every turn
 	// would have Mika re-reading the opening for the rest of the conversation.
 	var secondTaskID string
-	if err := pool.QueryRow(ctx, `SELECT gen_random_uuid()::text`).Scan(&secondTaskID); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT gen_random_uuid()::text`).Scan(&secondTaskID); err != nil {
 		t.Fatalf("new task id: %v", err)
 	}
 	if err := q.AdoptOrphanOnboardingKickoff(ctx, db.AdoptOrphanOnboardingKickoffParams{
 		ChatSessionID: util.MustParseUUID(chatSessionID),
-		TaskID:        util.MustParseUUID(secondTaskID),
+		TaskID:        nullString(util.MustParseUUID(secondTaskID)),
 	}); err != nil {
 		t.Fatalf("AdoptOrphanOnboardingKickoff (second send): %v", err)
 	}
-	second, err := q.ListChatInputMessages(ctx, util.MustParseUUID(secondTaskID))
+	second, err := q.ListChatInputMessages(ctx, nullString(util.MustParseUUID(secondTaskID)))
 	if err != nil {
 		t.Fatalf("ListChatInputMessages (second send): %v", err)
 	}
 	if len(second) != 0 {
 		t.Fatalf("second send adopted %d row(s), want none", len(second))
 	}
-	still, err := q.ListChatInputMessages(ctx, util.MustParseUUID(firstTaskID))
+	still, err := q.ListChatInputMessages(ctx, nullString(util.MustParseUUID(firstTaskID)))
 	if err != nil {
 		t.Fatalf("ListChatInputMessages (first send, after): %v", err)
 	}
@@ -103,27 +101,27 @@ func TestWriteChatCompletionOutcomeNeverStampsOnboardingOpening(t *testing.T) {
 	workspaceID, userID, agentID, _ := seedAttributionFixture(t, pool)
 
 	var chatSessionID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO chat_session (workspace_id, agent_id, creator_id)
 		VALUES ($1, $2, $3) RETURNING id`, workspaceID, agentID, userID).Scan(&chatSessionID); err != nil {
 		t.Fatalf("seed chat session: %v", err)
 	}
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM chat_message WHERE chat_session_id = $1`, chatSessionID)
-		pool.Exec(context.Background(), `DELETE FROM chat_session WHERE id = $1`, chatSessionID)
+		pool.ExecContext(context.Background(), `DELETE FROM chat_message WHERE chat_session_id = $1`, chatSessionID)
+		pool.ExecContext(context.Background(), `DELETE FROM chat_session WHERE id = $1`, chatSessionID)
 	})
 
 	// The member's first real turn, shaped exactly as the send path leaves it:
 	// the adopted kickoff and their own message share one input batch.
 	var taskID string
-	if err := pool.QueryRow(ctx, `SELECT gen_random_uuid()::text`).Scan(&taskID); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT gen_random_uuid()::text`).Scan(&taskID); err != nil {
 		t.Fatalf("new task id: %v", err)
 	}
 	for _, row := range []struct{ kind, content string }{
 		{"onboarding_kickoff", "kickoff context"},
 		{"message", "Turn our current goals into a project board"},
 	} {
-		if _, err := pool.Exec(ctx, `
+		if _, err := pool.ExecContext(ctx, `
 			INSERT INTO chat_message (chat_session_id, role, content, message_kind, task_id)
 			VALUES ($1, 'user', $2, $3, $4)`, chatSessionID, row.content, row.kind, taskID); err != nil {
 			t.Fatalf("seed %s input: %v", row.kind, err)
@@ -134,7 +132,7 @@ func TestWriteChatCompletionOutcomeNeverStampsOnboardingOpening(t *testing.T) {
 	result, _ := json.Marshal(protocol.TaskCompletedPayload{Output: "Here's the board I'd create."})
 	row, err := svc.writeChatCompletionOutcome(ctx, q, db.AgentTaskQueue{
 		ID:            util.MustParseUUID(taskID),
-		ChatSessionID: util.MustParseUUID(chatSessionID),
+		ChatSessionID: nullString(util.MustParseUUID(chatSessionID)),
 		AgentID:       util.MustParseUUID(agentID),
 	}, result)
 	if err != nil {
@@ -164,21 +162,21 @@ func TestWriteChatCompletionOutcomeStampsAPreDeployKickoffTurn(t *testing.T) {
 	workspaceID, userID, agentID, _ := seedAttributionFixture(t, pool)
 
 	var chatSessionID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO chat_session (workspace_id, agent_id, creator_id)
 		VALUES ($1, $2, $3) RETURNING id`, workspaceID, agentID, userID).Scan(&chatSessionID); err != nil {
 		t.Fatalf("seed chat session: %v", err)
 	}
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM chat_message WHERE chat_session_id = $1`, chatSessionID)
-		pool.Exec(context.Background(), `DELETE FROM chat_session WHERE id = $1`, chatSessionID)
+		pool.ExecContext(context.Background(), `DELETE FROM chat_message WHERE chat_session_id = $1`, chatSessionID)
+		pool.ExecContext(context.Background(), `DELETE FROM chat_session WHERE id = $1`, chatSessionID)
 	})
 
 	var taskID string
-	if err := pool.QueryRow(ctx, `SELECT gen_random_uuid()::text`).Scan(&taskID); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT gen_random_uuid()::text`).Scan(&taskID); err != nil {
 		t.Fatalf("new task id: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO chat_message (chat_session_id, role, content, message_kind, task_id)
 		VALUES ($1, 'user', 'kickoff context', 'onboarding_kickoff', $2)`, chatSessionID, taskID); err != nil {
 		t.Fatalf("seed pre-deploy kickoff turn: %v", err)
@@ -188,7 +186,7 @@ func TestWriteChatCompletionOutcomeStampsAPreDeployKickoffTurn(t *testing.T) {
 	result, _ := json.Marshal(protocol.TaskCompletedPayload{Output: "Hi, I'm Mika."})
 	row, err := svc.writeChatCompletionOutcome(ctx, q, db.AgentTaskQueue{
 		ID:            util.MustParseUUID(taskID),
-		ChatSessionID: util.MustParseUUID(chatSessionID),
+		ChatSessionID: nullString(util.MustParseUUID(chatSessionID)),
 		AgentID:       util.MustParseUUID(agentID),
 	}, result)
 	if err != nil {
@@ -215,24 +213,24 @@ func TestOnboardingKickoffSurvivesCancelAndReanchor(t *testing.T) {
 	workspaceID, userID, agentID, _ := seedAttributionFixture(t, pool)
 
 	var chatSessionID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO chat_session (workspace_id, agent_id, creator_id)
 		VALUES ($1, $2, $3) RETURNING id`, workspaceID, agentID, userID).Scan(&chatSessionID); err != nil {
 		t.Fatalf("seed chat session: %v", err)
 	}
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM chat_message WHERE chat_session_id = $1`, chatSessionID)
-		pool.Exec(context.Background(), `DELETE FROM chat_session WHERE id = $1`, chatSessionID)
+		pool.ExecContext(context.Background(), `DELETE FROM chat_message WHERE chat_session_id = $1`, chatSessionID)
+		pool.ExecContext(context.Background(), `DELETE FROM chat_session WHERE id = $1`, chatSessionID)
 	})
 
 	var taskID string
-	if err := pool.QueryRow(ctx, `SELECT gen_random_uuid()::text`).Scan(&taskID); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT gen_random_uuid()::text`).Scan(&taskID); err != nil {
 		t.Fatalf("new task id: %v", err)
 	}
 	// The first real turn: an adopted kickoff written earlier, then the member's
 	// own message. Timestamps are explicit so the order under test is the one
 	// the send path actually produces.
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO chat_message (chat_session_id, role, content, message_kind, task_id, created_at)
 		VALUES ($1, 'user', 'kickoff context', 'onboarding_kickoff', $2, now() - interval '5 minutes'),
 		       ($1, 'user', 'my first message', 'message', $2, now())`, chatSessionID, taskID); err != nil {
@@ -243,12 +241,12 @@ func TestOnboardingKickoffSurvivesCancelAndReanchor(t *testing.T) {
 	// so an unguarded query reanchors it to dispatch time — after the member's
 	// message, inverting the batch the runtime reads.
 	if err := q.ReanchorClaimedDirectChatInput(ctx, db.ReanchorClaimedDirectChatInputParams{
-		DispatchedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
-		TaskID:       util.MustParseUUID(taskID),
+		DispatchedAt: nullTime(time.Now(), true),
+		TaskID:       nullString(util.MustParseUUID(taskID)),
 	}); err != nil {
 		t.Fatalf("ReanchorClaimedDirectChatInput: %v", err)
 	}
-	batch, err := q.ListChatInputMessages(ctx, util.MustParseUUID(taskID))
+	batch, err := q.ListChatInputMessages(ctx, nullString(util.MustParseUUID(taskID)))
 	if err != nil {
 		t.Fatalf("ListChatInputMessages: %v", err)
 	}
@@ -271,7 +269,7 @@ func TestOnboardingKickoffSurvivesCancelAndReanchor(t *testing.T) {
 	}
 
 	var orphanKind string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		SELECT message_kind FROM chat_message
 		 WHERE chat_session_id = $1 AND task_id IS NULL AND role = 'user'`, chatSessionID).Scan(&orphanKind); err != nil {
 		t.Fatalf("the kickoff did not survive the cancel as an unowned row: %v", err)
@@ -293,21 +291,21 @@ func TestFailedFirstTurnReleasesTheOnboardingKickoff(t *testing.T) {
 	workspaceID, userID, agentID, _ := seedAttributionFixture(t, pool)
 
 	var chatSessionID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO chat_session (workspace_id, agent_id, creator_id)
 		VALUES ($1, $2, $3) RETURNING id`, workspaceID, agentID, userID).Scan(&chatSessionID); err != nil {
 		t.Fatalf("seed chat session: %v", err)
 	}
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM chat_message WHERE chat_session_id = $1`, chatSessionID)
-		pool.Exec(context.Background(), `DELETE FROM chat_session WHERE id = $1`, chatSessionID)
+		pool.ExecContext(context.Background(), `DELETE FROM chat_message WHERE chat_session_id = $1`, chatSessionID)
+		pool.ExecContext(context.Background(), `DELETE FROM chat_session WHERE id = $1`, chatSessionID)
 	})
 
 	var taskID string
-	if err := pool.QueryRow(ctx, `SELECT gen_random_uuid()::text`).Scan(&taskID); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT gen_random_uuid()::text`).Scan(&taskID); err != nil {
 		t.Fatalf("new task id: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO chat_message (chat_session_id, role, content, message_kind, task_id)
 		VALUES ($1, 'user', 'kickoff context', 'onboarding_kickoff', $2)`, chatSessionID, taskID); err != nil {
 		t.Fatalf("seed adopted kickoff: %v", err)
@@ -319,7 +317,7 @@ func TestFailedFirstTurnReleasesTheOnboardingKickoff(t *testing.T) {
 
 	// Unowned again, so the member's next send re-adopts it.
 	var orphans int
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		SELECT count(*) FROM chat_message
 		 WHERE chat_session_id = $1 AND message_kind = 'onboarding_kickoff' AND task_id IS NULL`,
 		chatSessionID).Scan(&orphans); err != nil {
@@ -330,16 +328,16 @@ func TestFailedFirstTurnReleasesTheOnboardingKickoff(t *testing.T) {
 	}
 
 	var nextTaskID string
-	if err := pool.QueryRow(ctx, `SELECT gen_random_uuid()::text`).Scan(&nextTaskID); err != nil {
+	if err := pool.QueryRowContext(ctx, `SELECT gen_random_uuid()::text`).Scan(&nextTaskID); err != nil {
 		t.Fatalf("new task id: %v", err)
 	}
 	if err := q.AdoptOrphanOnboardingKickoff(ctx, db.AdoptOrphanOnboardingKickoffParams{
 		ChatSessionID: util.MustParseUUID(chatSessionID),
-		TaskID:        util.MustParseUUID(nextTaskID),
+		TaskID:        nullString(util.MustParseUUID(nextTaskID)),
 	}); err != nil {
 		t.Fatalf("AdoptOrphanOnboardingKickoff: %v", err)
 	}
-	batch, err := q.ListChatInputMessages(ctx, util.MustParseUUID(nextTaskID))
+	batch, err := q.ListChatInputMessages(ctx, nullString(util.MustParseUUID(nextTaskID)))
 	if err != nil {
 		t.Fatalf("ListChatInputMessages: %v", err)
 	}
@@ -362,27 +360,27 @@ func TestFailedFirstTurnHandsTheKickoffToAQueuedSuccessor(t *testing.T) {
 	workspaceID, userID, agentID, _ := seedAttributionFixture(t, pool)
 
 	var chatSessionID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO chat_session (workspace_id, agent_id, creator_id)
 		VALUES ($1, $2, $3) RETURNING id`, workspaceID, agentID, userID).Scan(&chatSessionID); err != nil {
 		t.Fatalf("seed chat session: %v", err)
 	}
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM chat_message WHERE chat_session_id = $1`, chatSessionID)
-		pool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE chat_session_id = $1`, chatSessionID)
-		pool.Exec(context.Background(), `DELETE FROM chat_session WHERE id = $1`, chatSessionID)
+		pool.ExecContext(context.Background(), `DELETE FROM chat_message WHERE chat_session_id = $1`, chatSessionID)
+		pool.ExecContext(context.Background(), `DELETE FROM agent_task_queue WHERE chat_session_id = $1`, chatSessionID)
+		pool.ExecContext(context.Background(), `DELETE FROM chat_session WHERE id = $1`, chatSessionID)
 	})
 
 	// Both turns own their own input batch, as a direct send always does.
 	seedTask := func(status string) string {
 		var id string
-		if err := pool.QueryRow(ctx, `
+		if err := pool.QueryRowContext(ctx, `
 			INSERT INTO agent_task_queue (agent_id, runtime_id, chat_session_id, status, priority, chat_input_task_id)
 			VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), $2, $3, 2, gen_random_uuid())
 			RETURNING id::text`, agentID, chatSessionID, status).Scan(&id); err != nil {
 			t.Fatalf("seed %s task: %v", status, err)
 		}
-		if _, err := pool.Exec(ctx, `UPDATE agent_task_queue SET chat_input_task_id = id WHERE id = $1`, id); err != nil {
+		if _, err := pool.ExecContext(ctx, `UPDATE agent_task_queue SET chat_input_task_id = id WHERE id = $1`, id); err != nil {
 			t.Fatalf("stamp input owner: %v", err)
 		}
 		return id
@@ -390,7 +388,7 @@ func TestFailedFirstTurnHandsTheKickoffToAQueuedSuccessor(t *testing.T) {
 
 	// A: the member's first real message, running, having adopted the kickoff.
 	taskA := seedTask("running")
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO chat_message (chat_session_id, role, content, message_kind, task_id, created_at)
 		VALUES ($1, 'user', 'kickoff context', 'onboarding_kickoff', $2, now() - interval '5 minutes'),
 		       ($1, 'user', 'first message', 'message', $2, now() - interval '2 minutes')`,
@@ -401,7 +399,7 @@ func TestFailedFirstTurnHandsTheKickoffToAQueuedSuccessor(t *testing.T) {
 	// B: queued behind A. Its send found the kickoff already owned, so adoption
 	// was a no-op — this is the turn that must inherit it.
 	taskB := seedTask("queued")
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO chat_message (chat_session_id, role, content, message_kind, task_id, created_at)
 		VALUES ($1, 'user', 'second message', 'message', $2, now() - interval '1 minute')`,
 		chatSessionID, taskB); err != nil {
@@ -413,7 +411,7 @@ func TestFailedFirstTurnHandsTheKickoffToAQueuedSuccessor(t *testing.T) {
 		t.Fatalf("ReleaseOnboardingKickoffFromTask: %v", err)
 	}
 
-	batch, err := q.ListChatInputMessages(ctx, util.MustParseUUID(taskB))
+	batch, err := q.ListChatInputMessages(ctx, nullString(util.MustParseUUID(taskB)))
 	if err != nil {
 		t.Fatalf("ListChatInputMessages(B): %v", err)
 	}
@@ -429,7 +427,7 @@ func TestFailedFirstTurnHandsTheKickoffToAQueuedSuccessor(t *testing.T) {
 
 	// Nothing is left unowned, so a later message cannot steal the kickoff.
 	var orphans int
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		SELECT count(*) FROM chat_message
 		 WHERE chat_session_id = $1 AND message_kind = 'onboarding_kickoff' AND task_id IS NULL`,
 		chatSessionID).Scan(&orphans); err != nil {
@@ -450,33 +448,33 @@ func TestReleaseSkipsAnAlreadyStartedSuccessor(t *testing.T) {
 	workspaceID, userID, agentID, _ := seedAttributionFixture(t, pool)
 
 	var chatSessionID string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		INSERT INTO chat_session (workspace_id, agent_id, creator_id)
 		VALUES ($1, $2, $3) RETURNING id`, workspaceID, agentID, userID).Scan(&chatSessionID); err != nil {
 		t.Fatalf("seed chat session: %v", err)
 	}
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM chat_message WHERE chat_session_id = $1`, chatSessionID)
-		pool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE chat_session_id = $1`, chatSessionID)
-		pool.Exec(context.Background(), `DELETE FROM chat_session WHERE id = $1`, chatSessionID)
+		pool.ExecContext(context.Background(), `DELETE FROM chat_message WHERE chat_session_id = $1`, chatSessionID)
+		pool.ExecContext(context.Background(), `DELETE FROM agent_task_queue WHERE chat_session_id = $1`, chatSessionID)
+		pool.ExecContext(context.Background(), `DELETE FROM chat_session WHERE id = $1`, chatSessionID)
 	})
 
 	seedTask := func(status string) string {
 		var id string
-		if err := pool.QueryRow(ctx, `
+		if err := pool.QueryRowContext(ctx, `
 			INSERT INTO agent_task_queue (agent_id, runtime_id, chat_session_id, status, priority, chat_input_task_id)
 			VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), $2, $3, 2, gen_random_uuid())
 			RETURNING id::text`, agentID, chatSessionID, status).Scan(&id); err != nil {
 			t.Fatalf("seed %s task: %v", status, err)
 		}
-		if _, err := pool.Exec(ctx, `UPDATE agent_task_queue SET chat_input_task_id = id WHERE id = $1`, id); err != nil {
+		if _, err := pool.ExecContext(ctx, `UPDATE agent_task_queue SET chat_input_task_id = id WHERE id = $1`, id); err != nil {
 			t.Fatalf("stamp input owner: %v", err)
 		}
 		return id
 	}
 
 	taskA := seedTask("running")
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		INSERT INTO chat_message (chat_session_id, role, content, message_kind, task_id)
 		VALUES ($1, 'user', 'kickoff context', 'onboarding_kickoff', $2)`, chatSessionID, taskA); err != nil {
 		t.Fatalf("seed kickoff: %v", err)
@@ -488,7 +486,7 @@ func TestReleaseSkipsAnAlreadyStartedSuccessor(t *testing.T) {
 	}
 
 	var orphans int
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		SELECT count(*) FROM chat_message
 		 WHERE chat_session_id = $1 AND message_kind = 'onboarding_kickoff' AND task_id IS NULL`,
 		chatSessionID).Scan(&orphans); err != nil {

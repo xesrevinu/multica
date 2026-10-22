@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/plugincontract"
 )
@@ -149,14 +149,14 @@ func TestParseInstallationManifestReadsTheConsentedSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse manifest: %v", err)
 	}
-	manifest, err := ParseInstallationManifest(db.PluginInstallation{Manifest: canonical})
+	manifest, err := ParseInstallationManifest(db.PluginInstallation{Manifest: string(canonical)})
 	if err != nil {
 		t.Fatalf("ParseInstallationManifest: %v", err)
 	}
 	if manifest.Key != "com.example.hello" || manifest.Config.Len() != 5 {
 		t.Fatalf("unexpected manifest: %+v", manifest)
 	}
-	if _, err := ParseInstallationManifest(db.PluginInstallation{Manifest: []byte("not json")}); err == nil {
+	if _, err := ParseInstallationManifest(db.PluginInstallation{Manifest: string([]byte("not json"))}); err == nil {
 		t.Fatal("ParseInstallationManifest accepted a corrupt snapshot")
 	}
 }
@@ -227,14 +227,14 @@ func TestManifestForVersionReadsTheStoredSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse manifest: %v", err)
 	}
-	manifest, raw, err := ManifestForVersion(db.PluginPackageVersion{Manifest: canonical})
+	manifest, raw, err := ManifestForVersion(db.PluginPackageVersion{Manifest: string(canonical)})
 	if err != nil {
 		t.Fatalf("ManifestForVersion: %v", err)
 	}
 	if manifest.Key != "com.example.hello" || len(raw) == 0 {
 		t.Fatalf("unexpected manifest: %+v", manifest)
 	}
-	if _, _, err := ManifestForVersion(db.PluginPackageVersion{Manifest: []byte("not json")}); err == nil {
+	if _, _, err := ManifestForVersion(db.PluginPackageVersion{Manifest: string([]byte("not json"))}); err == nil {
 		t.Fatal("ManifestForVersion accepted a corrupt snapshot")
 	}
 }
@@ -265,8 +265,8 @@ func TestResolvePublishVersion(t *testing.T) {
 }
 
 func TestResolveStorageScope(t *testing.T) {
-	workspaceID := pgtype.UUID{Bytes: [16]byte{1}, Valid: true}
-	userID := pgtype.UUID{Bytes: [16]byte{2}, Valid: true}
+	workspaceID := uuid.UUID([16]byte{1}).String()
+	userID := uuid.UUID([16]byte{2}).String()
 
 	if got, err := ResolveStorageScope(PluginStorageWorkspace, workspaceID, userID); err != nil || got != workspaceID {
 		t.Fatalf("workspace scope = (%v, %v)", got, err)

@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
-
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -52,7 +50,7 @@ func makeSearchIndexChangePruneHandler(queries *db.Queries) Handler {
 		var total int64
 		for batch := 0; batch < searchIndexPruneMaxBatches; batch++ {
 			deleted, err := queries.PruneSearchIndexChanges(ctx, db.PruneSearchIndexChangesParams{
-				Cutoff:    pgtype.Timestamptz{Time: cutoff, Valid: true},
+				Cutoff:    cutoff.UTC().Format(time.RFC3339Nano),
 				BatchSize: searchIndexPruneBatchSize,
 			})
 			if err != nil {

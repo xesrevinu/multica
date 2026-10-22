@@ -2,13 +2,12 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -25,15 +24,15 @@ func TestIsDuplicatePendingTaskErr(t *testing.T) {
 		"idx_one_pending_task_per_issue_agent",
 		"idx_one_pending_task_per_issue_agent_v2",
 	} {
-		dup := &pgconn.PgError{Code: "23505", ConstraintName: indexName}
+		dup := fmt.Errorf("UNIQUE constraint failed: %s", indexName)
 		if !isDuplicatePendingTaskErr(dup) {
 			t.Errorf("expected pending-task index %q to be recognized", indexName)
 		}
 	}
-	if isDuplicatePendingTaskErr(&pgconn.PgError{Code: "23505", ConstraintName: "agent_workspace_name_unique"}) {
+	if isDuplicatePendingTaskErr(fmt.Errorf("UNIQUE constraint failed: %s", "agent_workspace_name_unique")) {
 		t.Fatal("a different unique constraint must not be treated as a duplicate pending task")
 	}
-	if isDuplicatePendingTaskErr(&pgconn.PgError{Code: "40001", ConstraintName: "idx_one_pending_task_per_issue_agent_v2"}) {
+	if isDuplicatePendingTaskErr(fmt.Errorf("SQLSTATE 40001 %s", "idx_one_pending_task_per_issue_agent_v2")) {
 		t.Fatal("a non-unique-violation SQLSTATE must not be treated as a duplicate pending task")
 	}
 	if isDuplicatePendingTaskErr(errors.New("boom")) {
@@ -57,27 +56,27 @@ func TestEnqueueTaskForMentionCoalescesDuplicatePendingTask(t *testing.T) {
 	q := db.New(pool)
 	workspaceID, userID, agentID, issueID := seedAttributionFixture(t, pool)
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE issue_id = $1`, issueID)
+		pool.ExecContext(context.Background(), `DELETE FROM agent_task_queue WHERE issue_id = $1`, issueID)
 	})
 
 	issueStruct := db.Issue{
 		ID:           util.MustParseUUID(issueID),
-		AssigneeID:   util.MustParseUUID(agentID),
+		AssigneeID:   nullString(util.MustParseUUID(agentID)),
 		Priority:     "medium",
 		CreatorType:  "member",
 		CreatorID:    util.MustParseUUID(userID),
 		WorkspaceID:  util.MustParseUUID(workspaceID),
-		AssigneeType: pgtype.Text{String: "agent", Valid: true},
+		AssigneeType: sql.NullString{String: "agent", Valid: true},
 	}
 	svc := &TaskService{Queries: q, TxStarter: pool, Bus: events.New()}
 
 	// First mention creates the pending task.
-	if _, err := svc.EnqueueTaskForMention(ctx, issueStruct, util.MustParseUUID(agentID), pgtype.UUID{}, OriginNamed); err != nil {
+	if _, err := svc.EnqueueTaskForMention(ctx, issueStruct, util.MustParseUUID(agentID), "", OriginNamed); err != nil {
 		t.Fatalf("first EnqueueTaskForMention: %v", err)
 	}
 
 	// Second mention for the same (issue, agent) collides on the unique index.
-	_, err := svc.EnqueueTaskForMention(ctx, issueStruct, util.MustParseUUID(agentID), pgtype.UUID{}, OriginNamed)
+	_, err := svc.EnqueueTaskForMention(ctx, issueStruct, util.MustParseUUID(agentID), "", OriginNamed)
 	if !errors.Is(err, ErrDuplicatePendingTask) {
 		t.Fatalf("second EnqueueTaskForMention: err = %v, want ErrDuplicatePendingTask", err)
 	}
@@ -90,7 +89,7 @@ func TestEnqueueTaskForMentionCoalescesDuplicatePendingTask(t *testing.T) {
 	}
 
 	var n int
-	if err := pool.QueryRow(ctx,
+	if err := pool.QueryRowContext(ctx,
 		`SELECT count(*) FROM agent_task_queue WHERE issue_id = $1 AND agent_id = $2 AND status IN ('queued','dispatched')`,
 		issueID, agentID).Scan(&n); err != nil {
 		t.Fatalf("count pending tasks: %v", err)
@@ -114,17 +113,17 @@ func TestEnqueueTaskForIssueCoalescesDuplicatePendingTask(t *testing.T) {
 	q := db.New(pool)
 	workspaceID, userID, agentID, issueID := seedAttributionFixture(t, pool)
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE issue_id = $1`, issueID)
+		pool.ExecContext(context.Background(), `DELETE FROM agent_task_queue WHERE issue_id = $1`, issueID)
 	})
 
 	issueStruct := db.Issue{
 		ID:           util.MustParseUUID(issueID),
-		AssigneeID:   util.MustParseUUID(agentID),
+		AssigneeID:   nullString(util.MustParseUUID(agentID)),
 		Priority:     "medium",
 		CreatorType:  "member",
 		CreatorID:    util.MustParseUUID(userID),
 		WorkspaceID:  util.MustParseUUID(workspaceID),
-		AssigneeType: pgtype.Text{String: "agent", Valid: true},
+		AssigneeType: sql.NullString{String: "agent", Valid: true},
 	}
 	svc := &TaskService{Queries: q, TxStarter: pool, Bus: events.New()}
 
@@ -147,7 +146,7 @@ func TestEnqueueTaskForIssueCoalescesDuplicatePendingTask(t *testing.T) {
 	}
 
 	var n int
-	if err := pool.QueryRow(ctx,
+	if err := pool.QueryRowContext(ctx,
 		`SELECT count(*) FROM agent_task_queue WHERE issue_id = $1 AND agent_id = $2 AND status IN ('queued','dispatched')`,
 		issueID, agentID).Scan(&n); err != nil {
 		t.Fatalf("count pending tasks: %v", err)

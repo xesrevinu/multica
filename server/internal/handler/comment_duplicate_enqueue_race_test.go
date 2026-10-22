@@ -3,13 +3,12 @@ package handler
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -91,14 +90,14 @@ func TestCommentEnqueueRaceQueuedWinnerFoldsLoser(t *testing.T) {
 		agentName     string
 		issueNumber   int
 		source        commentAgentTriggerSource
-		enqueueWinner func(ctx context.Context, issue db.Issue, agentID, commentID pgtype.UUID) error
+		enqueueWinner func(ctx context.Context, issue db.Issue, agentID, commentID string) error
 	}{
 		{
 			name:        "mention",
 			agentName:   "dup-race-queued",
 			issueNumber: 999311,
 			source:      commentTriggerSourceMentionAgent,
-			enqueueWinner: func(ctx context.Context, issue db.Issue, agentID, commentID pgtype.UUID) error {
+			enqueueWinner: func(ctx context.Context, issue db.Issue, agentID, commentID string) error {
 				_, err := testHandler.TaskService.EnqueueTaskForMention(ctx, issue, agentID, commentID, service.OriginNamed)
 				return err
 			},
@@ -108,7 +107,7 @@ func TestCommentEnqueueRaceQueuedWinnerFoldsLoser(t *testing.T) {
 			agentName:   "dup-race-assignee",
 			issueNumber: 999316,
 			source:      commentTriggerSourceIssueAssignee,
-			enqueueWinner: func(ctx context.Context, issue db.Issue, _, commentID pgtype.UUID) error {
+			enqueueWinner: func(ctx context.Context, issue db.Issue, _, commentID string) error {
 				_, err := testHandler.TaskService.EnqueueTaskForIssue(ctx, issue, commentID)
 				return err
 			},
@@ -374,13 +373,13 @@ func TestRegisterPlannedCommentForActiveTaskExcludesQueued(t *testing.T) {
 
 	params := db.RegisterPlannedCommentForActiveTaskParams{
 		CommentID: util.MustParseUUID(commentID),
-		IssueID:   util.MustParseUUID(issueID),
+		IssueID:   nullString(util.MustParseUUID(issueID)),
 		AgentID:   util.MustParseUUID(agentID),
 	}
 
 	// QUEUED target must MISS.
-	if _, err := testHandler.Queries.RegisterPlannedCommentForActiveTask(ctx, params); !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("register against a QUEUED task: err = %v, want pgx.ErrNoRows (queued excluded)", err)
+	if _, err := testHandler.Queries.RegisterPlannedCommentForActiveTask(ctx, params); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("register against a QUEUED task: err = %v, want sql.ErrNoRows (queued excluded)", err)
 	}
 
 	// Flip to dispatched: now the claim receipt exists and the append is valid.
