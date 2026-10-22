@@ -3,7 +3,7 @@ import { api } from "../api";
 import { issueKeys } from "../issues/queries";
 import { orchKeys } from "./queries";
 
-export type OrchFlowAction = "accept" | "reject" | "unblock" | "cancel" | "pause" | "resume";
+export type OrchFlowAction = "accept" | "reject" | "unblock" | "cancel" | "pause" | "resume" | "resolve-conflict";
 export type OrchPROp = "update-branch" | "rerun-checks" | "merge" | "sync-labels" | "delete-branch";
 
 function useInvalidateOrch(wsId: string) {

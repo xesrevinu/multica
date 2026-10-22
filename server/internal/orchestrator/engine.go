@@ -94,12 +94,13 @@ func (d *Decision) StartsRun() bool {
 // phaseStatus: phases only the engine writes → statuses they allow. A status
 // outside this set means a crash mid-transition or an out-of-band edit (T9).
 var phaseStatus = map[string][]string{
-	PhImplementing:     {StTodo, StInProgress},
-	PhChangesRequested: {StTodo, StInProgress},
-	PhReviewing:        {StInReview},
-	PhAwaitAcceptance:  {StInReview},
-	PhMerged:           {StDone},
-	PhCancelled:        {StCancelled},
+	PhImplementing:      {StTodo, StInProgress},
+	PhChangesRequested:  {StTodo, StInProgress},
+	PhReviewing:         {StInReview},
+	PhAwaitAcceptance:   {StInReview},
+	PhResolvingConflict: {StInReview},
+	PhMerged:            {StDone},
+	PhCancelled:         {StCancelled},
 }
 
 func num(s string) int  { n, _ := strconv.Atoi(strings.TrimSpace(s)); return n }
@@ -418,6 +419,14 @@ func (sp *Spec) Decide(s *Snapshot, probe Prober) *Decision {
 		}
 		return sp.block(s, why, nil)
 	}
+	// "Resolve conflicts" (member, POST /flow/{key}/resolve-conflict).
+	if m["conflict_requested"] == "true" {
+		if d := sp.resolveConflict(s, s.Head, "a member asked to resolve conflicts with "+sp.mainName()); d != nil {
+			d.Meta["conflict_requested"] = ""
+			return d
+		}
+		return &Decision{Tid: "T9_reconcile", Meta: map[string]string{"conflict_requested": ""}, Why: "conflict resolution is off for this team or the issue has no branch"}
+	}
 	head := s.Head
 	if st == StTodo || st == StInProgress {
 		if m["phase"] == PhReviewRequested {
@@ -439,6 +448,11 @@ func (sp *Spec) Decide(s *Snapshot, probe Prober) *Decision {
 				}
 				if !pc.OK && pc.Kind != "push_failed" && !pc.Pending {
 					why := "precheck " + pc.Kind + ": " + short(pc.Detail, 200)
+					if pc.Kind == "conflict" {
+						if d := sp.resolveConflict(s, head, why); d != nil {
+							return d
+						}
+					}
 					return sp.rework(s, why, map[string]string{"head_sha": head})
 				}
 				if pc.PR != "" {
@@ -484,6 +498,9 @@ func (sp *Spec) Decide(s *Snapshot, probe Prober) *Decision {
 			Meta: map[string]string{"attempt_impl": itoa(impl), "attempt_infra": itoa(infra)}}
 	}
 	// in_review
+	if m["phase"] == PhResolvingConflict {
+		return sp.decideResolving(s, probe)
+	}
 	if m["phase"] == PhAwaitAcceptance {
 		switch a := m["acceptance"]; {
 		case a == "ok":
@@ -556,6 +573,11 @@ func (sp *Spec) Decide(s *Snapshot, probe Prober) *Decision {
 				return &Decision{Wait: pc.Detail}
 			}
 			if !pc.OK && pc.Kind != "push_failed" {
+				if pc.Kind == "conflict" {
+					if d := sp.resolveConflict(s, head, pc.Kind+": "+short(pc.Detail, 200)); d != nil {
+						return d
+					}
+				}
 				return sp.rework(s, pc.Kind+": "+short(pc.Detail, 200), nil)
 			}
 		}
@@ -615,6 +637,11 @@ func (sp *Spec) merge(s *Snapshot, probe Prober) *Decision {
 		return &Decision{Wait: r.Kind + ": " + r.Detail}
 	case r.OK:
 		return &Decision{Tid: "T4_done", Status: StDone, Meta: map[string]string{"phase": PhMerged, "merged_sha": r.SHA}}
+	}
+	if r.Kind == "conflict" {
+		if d := sp.resolveConflict(s, s.Head, r.Kind+": "+short(r.Detail, 200)); d != nil {
+			return d
+		}
 	}
 	return sp.rework(s, r.Kind+": "+short(r.Detail, 200), nil)
 }

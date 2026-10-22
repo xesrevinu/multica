@@ -62,6 +62,7 @@ var EngineOwnedMetaKeys = map[string]bool{
 	"owner": true, "expert_done": true, "attempt_impl": true, "attempt_review": true, "attempt_infra": true, "attempt_quota": true,
 	"merged_sha": true, "pr_number": true, "pr": true, "acceptance": true, "acceptance_required": true, "review_started_sha": true,
 	"paused": true, "cancel_requested": true, "verdict_carried_from": true, "last_reviewed_sha": true,
+	"attempt_conflict": true, "conflict_from_phase": true, "conflict_head": true, "conflict_handback": true, "conflict_requested": true,
 	// member confirmations and engine bookkeeping for blocked issues (T7/T7b/T8a/T8)
 	"cancel_confirmed": true, "unblock_confirmed": true, "unblock_count": true, "unblock_escalated": true, "cancel_notified": true,
 }
@@ -142,6 +143,13 @@ func (s *Service) CheckAgentMetaWrite(w MetaWrite) string {
 		// in_progress) must not approve its own change.
 		if w.Status != "" && w.Status != StInReview {
 			return fmt.Sprintf("%s is the reviewer's hand-over and may only be written while the issue is in_review (it is %s)", key, w.Status)
+		}
+	case "conflict_result":
+		if v != "resolved" && v != "cannot_resolve" {
+			return fmt.Sprintf("conflict_result must be resolved or cannot_resolve, not %s", w.Value)
+		}
+		if w.Status != "" && w.Status != StInReview {
+			return fmt.Sprintf("conflict_result is the resolver's hand-over and may only be written while the issue is in_review (it is %s)", w.Status)
 		}
 	case "risk":
 		if !RiskValues[strings.ToLower(v)] {

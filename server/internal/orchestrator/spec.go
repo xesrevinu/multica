@@ -41,6 +41,9 @@ const (
 	PhPlanned          = "planned"         // lead-written on an epic it split; the engine never starts it
 	PhMerged           = "merged"
 	PhCancelled        = "cancelled"
+	// PhResolvingConflict: the reviewer agent is merging main into the
+	// issue branch with the resolve-conflict skill (T11).
+	PhResolvingConflict = "resolving_conflict"
 )
 
 // Spec is the declarative team definition of one project (stored as JSONB in
@@ -132,9 +135,13 @@ type RepoSpec struct {
 }
 
 type Limits struct {
-	Impl     int `json:"impl" yaml:"impl"`
-	Review   int `json:"review" yaml:"review"`
-	Infra    int `json:"infra" yaml:"infra"`
+	Impl   int `json:"impl" yaml:"impl"`
+	Review int `json:"review" yaml:"review"`
+	Infra  int `json:"infra" yaml:"infra"`
+	// Conflict: resolve-conflict runs per conflict episode before the
+	// owner gets it back (T11b). 0 = preset default 2; negative disables
+	// conflict resolution (conflicts go straight back to the owner).
+	Conflict int `json:"conflict,omitempty" yaml:"conflict,omitempty"`
 	StuckMin int `json:"stuck_min" yaml:"stuck_min"`
 	// IdleMin, MinFreeGB, QueuedMin and Unblocks are pointers so an unset
 	// value (nil → preset default) differs from an explicit 0 or negative.
@@ -214,6 +221,9 @@ func PresetTransitions() []Transition {
 		{ID: "T8a_cancel_proposed", Actor: "engine", From: []string{StBlocked}, To: []string{StBlocked}, Label: "lead phase=cancel_proposed → human confirms"},
 		{ID: "T8_cancel", Actor: "engine", From: []string{StBlocked}, To: []string{StCancelled}, Label: "cancel confirmed by a member (flow cancel)"},
 		{ID: "T9_reconcile", Actor: "engine", From: all, To: []string{StTodo, StInReview, StDone, StCancelled, StBlocked}, Label: "status inconsistent with engine phase (crash / out-of-band) → converge"},
+		{ID: "T11_resolve_conflict", Actor: "engine", From: []string{StTodo, StInProgress, StInReview}, To: []string{StInReview}, Label: "branch conflicts with main → reviewer merges main in (resolve-conflict)"},
+		{ID: "T11a_conflict_resolved", Actor: "engine", From: []string{StInReview}, To: []string{StInReview}, Label: "conflict merged & clean → approval carried (same patch) or re-review"},
+		{ID: "T11b_conflict_handback", Actor: "engine", From: []string{StInReview}, To: []string{StTodo}, Label: "resolver could not merge → owner reworks with conflict context"},
 		{ID: "T10_await_acceptance", Actor: "engine", From: []string{StInReview}, To: []string{StInReview}, Label: "gated issue approved & green → human acceptance"},
 	}
 }
@@ -469,7 +479,7 @@ func (s *Spec) Mermaid(current string) string {
 	for _, t := range s.Transitions {
 		for _, f := range t.From {
 			for _, to := range t.To {
-				if f == to && t.ID != "T1_start" && t.ID != "T3b_rereview" && t.ID != "T10_await_acceptance" && t.ID != "T7b_unblock_escalate" && t.ID != "T8a_cancel_proposed" {
+				if f == to && t.ID != "T1_start" && t.ID != "T3b_rereview" && t.ID != "T10_await_acceptance" && t.ID != "T11_resolve_conflict" && t.ID != "T11a_conflict_resolved" && t.ID != "T7b_unblock_escalate" && t.ID != "T8a_cancel_proposed" {
 					continue
 				}
 				suffix := ""
@@ -507,4 +517,12 @@ func (sp *Spec) autoStartMode() string {
 		return sp.AutoStart
 	}
 	return AutoStartOff
+}
+
+// conflictLimit: resolve-conflict attempts per episode (default 2; <0 = off).
+func (l Limits) conflictLimit() int {
+	if l.Conflict == 0 {
+		return 2
+	}
+	return l.Conflict
 }

@@ -28,9 +28,9 @@ const TONE: Record<string, string> = {
 
 // Engine transition ids → tone. The label itself comes from orch.flow_tid.
 function tidTone(tid: string): keyof typeof TONE {
-  if (/^T4_|^T_epic_done/.test(tid)) return "ok";
-  if (/^T6_|^T8|cancel/.test(tid)) return "bad";
-  if (/^T10_|^T_epic_acceptance|^T5q_|^T3_/.test(tid)) return "warn";
+  if (/^T4_|^T_epic_done|^T11a/.test(tid)) return "ok";
+  if (/^T6_|^T8|^T11b|cancel/.test(tid)) return "bad";
+  if (/^T10_|^T_epic_acceptance|^T5q_|^T3_|^T11_/.test(tid)) return "warn";
   if (/^T1_|^T2_|^T0_|^T3b|^T7/.test(tid)) return "info";
   return "muted";
 }
@@ -50,7 +50,7 @@ const FLOW_TID_KEYS = {
   T0_dispatch: 1, T1_start: 1, T2_review: 1, T3_rework: 1, T3b_rereview: 1, T3c_carry_verdict: 1, T4_done: 1,
   T5_rerun: 1, T5_rerun_nobranch: 1, T5_rerun_norun: 1, T5b_cancel_stuck: 1, T5q_provider_limit: 1, T6_block: 1,
   T7_unblock: 1, T7b_unblock_escalate: 1, T8_cancel: 1, T8a_cancel_proposed: 1, T8b_member_cancel: 1, T9_reconcile: 1,
-  T10_await_acceptance: 1, T_epic_progress: 1, T_epic_acceptance: 1, T_epic_done: 1, T_expert_consulted: 1,
+  T10_await_acceptance: 1, T11_resolve_conflict: 1, T11a_conflict_resolved: 1, T11b_conflict_handback: 1, T_epic_progress: 1, T_epic_acceptance: 1, T_epic_done: 1, T_expert_consulted: 1,
 } as const;
 
 function Reason({ text }: { text: string }) {

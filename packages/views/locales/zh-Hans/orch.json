@@ -199,7 +199,10 @@
     "retry": "重试",
     "sync_labels_tip": "把这个任务的标签复制到 GitHub PR 上，不改动代码和分支。",
     "update_branch_tip": "让 GitHub 把 {{base}} 合并进这个 PR 的分支（在 GitHub 上生成合并提交）。只在没有冲突时有效；有冲突会失败，需要在本地处理。",
-    "update_branch_conflict_tip": "有冲突，GitHub 无法把 {{base}} 合并进这个分支，需要在任务的工作区里解决。"
+    "update_branch_conflict_tip": "有冲突，GitHub 无法把 {{base}} 合并进这个分支，需要在任务的工作区里解决。",
+    "resolve_conflicts": "解决冲突",
+    "resolve_conflicts_tip": "由评审智能体在任务的工作区里把 {{base}} 合并进分支（合并，不变基），跑校验后推送；解决不了会附上说明交还给负责人。",
+    "resolve_conflicts_started": "已请求解决冲突"
   },
   "drawer": {
     "title": "详情",
@@ -312,7 +315,10 @@
     "T_epic_progress": "史诗进行中",
     "T_epic_acceptance": "史诗等待验收",
     "T_epic_done": "史诗完成",
-    "T_expert_consulted": "已咨询专家"
+    "T_expert_consulted": "已咨询专家",
+    "T11_resolve_conflict": "正在解决与 main 的冲突",
+    "T11a_conflict_resolved": "冲突已解决",
+    "T11b_conflict_handback": "冲突交还负责人"
   },
   "feed": {
     "earlier_other": "更早 {{count}} 条事件"

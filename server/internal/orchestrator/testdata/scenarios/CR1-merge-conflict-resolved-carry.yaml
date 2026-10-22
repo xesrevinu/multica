@@ -1,0 +1,11 @@
+name: CR1 approved PR turns CONFLICTING; the reviewer merges main in; same patch carries the approval to merge
+issue: {key: ATT-60}
+steps:
+  - expect: {tid: T1_start}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
+    expect: {tid: T2_review}
+  - do: {run: completed, meta: {verdict: approve, reviewed_sha: h1}, merge: {ok: false, kind: conflict, detail: "GitHub mergeable=CONFLICTING"}}
+    expect: {tid: T11_resolve_conflict, assignee: rev, meta: {phase: resolving_conflict, attempt_conflict: "1", conflict_head: h1, conflict_from_phase: reviewing}, handoff: {kind: resolve_conflict, role: reviewer}}
+  - do: {run: completed, head: h2, meta: {conflict_result: resolved, conflict_notes: "src/ops.js: kept both"}, same_patch: [[h1, h2]], merge: {ok: true, kind: merged, sha: m2}}
+    expect: {tid: T11a_conflict_resolved, meta: {phase: reviewing, reviewed_sha: h2, verdict_carried_from: h1, attempt_conflict: "0"}}
+  - expect: {tid: T4_done, meta: {merged_sha: m2}}

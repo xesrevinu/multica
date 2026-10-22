@@ -1,4 +1,8 @@
 name: ATT-67 infra block, unblock, pre-check conflict, owner merges main, merged
+spec:
+  roles: {lead: lead, reviewer: rev, owners: [a, b]}
+  repo: {mode: github, slug: x/y, required_checks: [test]}
+  limits: {conflict: -1}   # legacy: conflict resolution off, conflicts go back to the owner
 recorded: ATT-67
 issue: {key: ATT-67}
 steps:

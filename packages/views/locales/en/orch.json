@@ -200,7 +200,10 @@
     "retry": "Retry",
     "sync_labels_tip": "Copy this issue's labels onto the GitHub pull request. It does not change code or the branch.",
     "update_branch_tip": "Ask GitHub to merge {{base}} into this PR's branch (a merge commit on GitHub). Only works when there are no conflicts; with conflicts it fails and the branch must be fixed locally.",
-    "update_branch_conflict_tip": "GitHub cannot merge {{base}} into this branch: there are conflicts. Resolve them in the issue's worktree."
+    "update_branch_conflict_tip": "GitHub cannot merge {{base}} into this branch: there are conflicts. Resolve them in the issue's worktree.",
+    "resolve_conflicts": "Resolve conflicts",
+    "resolve_conflicts_tip": "The reviewer agent merges {{base}} into the branch in the issue's worktree (merge, never rebase), runs the gates and pushes. If it can't, the owner gets it back with notes.",
+    "resolve_conflicts_started": "Conflict resolution requested"
   },
   "drawer": {
     "title": "Details",
@@ -313,7 +316,10 @@
     "T_epic_progress": "Epic in progress",
     "T_epic_acceptance": "Epic waiting for acceptance",
     "T_epic_done": "Epic done",
-    "T_expert_consulted": "Expert consulted"
+    "T_expert_consulted": "Expert consulted",
+    "T11_resolve_conflict": "Resolving conflicts with main",
+    "T11a_conflict_resolved": "Conflicts resolved",
+    "T11b_conflict_handback": "Conflict handed back to owner"
   },
   "feed": {
     "earlier_one": "{{count}} earlier event",

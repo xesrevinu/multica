@@ -1,0 +1,14 @@
+name: CR4 resolver runs that end without a result spend attempt_conflict (limit 2), then hand back; a quota error spends nothing
+issue: {key: ATT-63}
+steps:
+  - expect: {tid: T1_start}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}, precheck: {ok: false, kind: conflict, detail: "Merge conflict"}}
+    expect: {tid: T11_resolve_conflict, meta: {attempt_conflict: "1"}}
+  - do: {run: failed, reason: agent_error.provider_quota_limit}
+    expect: {tid: wait, wait: "no attempt counted"}
+  - do: {advance: 2m}
+    expect: {tid: T5q_provider_limit}
+  - do: {run: completed}
+    expect: {tid: T11_resolve_conflict, meta: {attempt_conflict: "2"}}
+  - do: {run: completed}
+    expect: {tid: T11b_conflict_handback, assignee: a}

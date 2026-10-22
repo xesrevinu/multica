@@ -1,0 +1,10 @@
+name: CR3 the resolver cannot resolve; the owner gets it back with the notes (T11b), then the next conflict is plain rework
+issue: {key: ATT-62}
+steps:
+  - expect: {tid: T1_start}
+  - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}, precheck: {ok: false, kind: conflict, detail: "Merge conflict in src/api.ts"}}
+    expect: {tid: T11_resolve_conflict}
+  - do: {run: completed, meta: {conflict_result: cannot_resolve, conflict_notes: "src/api.ts: main renamed the endpoint the PR extends; needs a decision"}}
+    expect: {tid: T11b_conflict_handback, assignee: a, status: todo, meta: {conflict_handback: "true", attempt_impl: "2"}, handoff: {kind: conflict, role: owner}}
+  - do: {run: completed, head: h2, meta: {phase: review_requested, head_sha: h2}}
+    expect: {tid: T3_rework}
