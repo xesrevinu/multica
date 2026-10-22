@@ -154,6 +154,13 @@ func runPreparationProcess(ctx context.Context, command []string, request prepar
 	// The context cause is the daemon's stable failure contract. Prefer it over
 	// the platform-specific process exit text ("signal: killed", exit 1, ...).
 	if ctx.Err() != nil {
+		// The deadline fired as the helper finished: it may have built a
+		// complete worktree and recorded an active hold for this daemon. Nobody
+		// will run in it, and the hold (held by a live pid) makes every later
+		// task on the branch fail branch_occupied (OX-173). Tear it down.
+		if err == nil {
+			discardAbandonedPreparation(stdout.Bytes(), logger)
+		}
 		return nil, context.Cause(ctx)
 	}
 	if err != nil {
@@ -245,4 +252,20 @@ func RunPreparationHelper(in io.Reader, out io.Writer, logger *slog.Logger) erro
 		return fmt.Errorf("encode preparation response: %w", err)
 	}
 	return nil
+}
+
+// discardAbandonedPreparation releases the worktree a helper prepared after
+// the caller stopped waiting for it: clear the hold, remove the checkout (wt
+// when configured), and drop the branch only if this prepare created it.
+func discardAbandonedPreparation(stdout []byte, logger *slog.Logger) {
+	var response preparationResponse
+	if json.Unmarshal(stdout, &response) != nil || response.Environment == nil {
+		return
+	}
+	if w := response.Environment.LocalWorktree; w != nil {
+		if logger != nil {
+			logger.Warn("execenv: discarding a worktree prepared after the prepare deadline", "branch", w.Branch, "path", w.Path)
+		}
+		w.Discard(logger)
+	}
 }
