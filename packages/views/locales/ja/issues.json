@@ -736,7 +736,8 @@
     "more_runs_other": "他 {{count}} 件",
     "strip_aria": "実行ごとの費用 — 実行タイムラインを開く",
     "strip_no_usage": "使用量の記録なし",
-    "sparkline_now": "現在"
+    "sparkline_now": "現在",
+    "retry_dismiss": "閉じる"
   },
   "runs_timeline": {
     "title": "実行履歴",

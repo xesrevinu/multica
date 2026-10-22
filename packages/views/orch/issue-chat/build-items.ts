@@ -8,7 +8,12 @@ export type ChatItem =
   | { kind: "run"; id: string; run: CommentRun; reply?: TimelineEntry }
   | { kind: "transition"; id: string; entry: TimelineEntry }
   | { kind: "activities"; id: string; entries: TimelineEntry[] }
-  | { kind: "review"; id: string; review: GitHubReviewItem };
+  | { kind: "review"; id: string; review: GitHubReviewItem }
+  // Consecutive failed runs ending with the same error, folded into one card;
+  // `between` keeps the status/assignee churn that happened between them.
+  | { kind: "failures"; id: string; runs: CommentRun[]; replies: (TimelineEntry | undefined)[]; between: TimelineEntry[] }
+  // A burst of orchestrator transitions + activities as one compact feed.
+  | { kind: "events"; id: string; entries: TimelineEntry[] };
 
 // A GitHub PR review or review comment surfaced in the conversation.
 export type GitHubReviewItem = {
@@ -84,9 +89,11 @@ function itemTime(i: ChatItem): number {
       ? i.review.at
       : i.kind === "run"
         ? (i.reply?.created_at ?? i.run.task.created_at)
-        : i.kind === "activities"
-          ? i.entries[0]?.created_at
-          : i.entry.created_at;
+        : i.kind === "failures"
+          ? i.runs[0]?.task.created_at
+          : i.kind === "activities" || i.kind === "events"
+            ? i.entries[0]?.created_at
+            : i.entry.created_at;
   const t = iso ? new Date(iso).getTime() : NaN;
   return Number.isFinite(t) ? t : 0;
 }
@@ -121,4 +128,92 @@ export function mergeReviewItems(
     .map((it, idx) => ({ it, idx, t: itemTime(it) }))
     .sort((a, b) => a.t - b.t || a.idx - b.idx)
     .map((x) => x.it);
+}
+
+// failureSignature: what makes two failed runs "the same failure" — the
+// classified reason plus the first error line with ids, hashes and numbers
+// blanked, so `[branch_occupied] agent/ox-180 …` from the reviewer, the lead
+// and the engineer all match.
+export function failureSignature(task: CommentRun["task"]): string {
+  const first = (task.error ?? "").split("\n")[0] ?? "";
+  const norm = first
+    .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "#")
+    .replace(/\b[0-9a-f]{7,40}\b/gi, "#")
+    .replace(/\d+/g, "#")
+    .slice(0, 160);
+  return `${task.failure_reason ?? ""}|${norm}`;
+}
+
+const isNoise = (i: ChatItem) => i.kind === "transition" || i.kind === "activities";
+const isFailedRun = (i: ChatItem): i is Extract<ChatItem, { kind: "run" }> => i.kind === "run" && i.run.task.status === "failed";
+const noiseEntries = (i: ChatItem): TimelineEntry[] => (i.kind === "transition" ? [i.entry] : i.kind === "activities" ? i.entries : []);
+
+// groupChatItems is the display pass over buildChatItems' output:
+//  1. two or more failed runs with the same failure signature, with only
+//     status/assignee churn between them, become one "failures" card;
+//  2. every remaining run of transitions + activities becomes one "events"
+//     feed instead of a divider per transition and a fold per activity.
+export function groupChatItems(items: readonly ChatItem[]): ChatItem[] {
+  const out: ChatItem[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i]!;
+    if (isFailedRun(it)) {
+      const sig = failureSignature(it.run.task);
+      const runs = [it];
+      const between: TimelineEntry[] = [];
+      let pending: ChatItem[] = [];
+      let j = i + 1;
+      for (; j < items.length; j++) {
+        const nx = items[j]!;
+        if (isNoise(nx)) {
+          pending.push(nx);
+          continue;
+        }
+        if (isFailedRun(nx) && failureSignature(nx.run.task) === sig) {
+          for (const p of pending) between.push(...noiseEntries(p));
+          pending = [];
+          runs.push(nx);
+          continue;
+        }
+        break;
+      }
+      if (runs.length >= 2) {
+        out.push({ kind: "failures", id: `failures-${it.run.task.id}`, runs: runs.map((r) => r.run), replies: runs.map((r) => r.reply), between });
+        out.push(...pending);
+        i = j - 1;
+        continue;
+      }
+    }
+    out.push(it);
+  }
+  // Pass 2: fold noise bursts into one events feed.
+  const merged: ChatItem[] = [];
+  for (const it of out) {
+    if (!isNoise(it)) {
+      merged.push(it);
+      continue;
+    }
+    const last = merged[merged.length - 1];
+    if (last?.kind === "events") last.entries.push(...noiseEntries(it));
+    else merged.push({ kind: "events", id: `events-${it.id}`, entries: [...noiseEntries(it)] });
+  }
+  return merged;
+}
+
+// dedupeEvents drops the status_changed / assignee_changed activities the
+// engine writes alongside its own transition (same burst, within 15s): the
+// transition line already says "→ in review · assigned reviewer".
+export function dedupeEvents(entries: readonly TimelineEntry[]): TimelineEntry[] {
+  const transitions = entries.filter((e) => e.action === "orchestrator_transition");
+  if (transitions.length === 0) return [...entries];
+  const near = (e: TimelineEntry, key: "status" | "assignee") =>
+    transitions.some((tr) => {
+      const d = (tr.details ?? {}) as Record<string, string | undefined>;
+      return !!d[key] && Math.abs(new Date(tr.created_at).getTime() - new Date(e.created_at).getTime()) < 15_000;
+    });
+  return entries.filter((e) => {
+    if (e.action === "status_changed") return !near(e, "status");
+    if (e.action === "assignee_changed") return !near(e, "assignee");
+    return true;
+  });
 }

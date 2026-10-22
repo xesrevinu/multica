@@ -5,7 +5,7 @@ vi.mock("@multica/core/api", () => ({
   api: { rerunIssue: vi.fn().mockRejectedValue(new Error("this issue is an epic: retry the sub-issue")) },
   dispatchReasonCode: () => undefined,
 }));
-vi.mock("../../i18n", () => ({ useT: () => ({ t: () => "retry" }) }));
+vi.mock("../../i18n", () => ({ useT: () => ({ t: (f: (x: unknown) => unknown) => (String(f(new Proxy({}, { get: (_t, k) => new Proxy({}, { get: (_u, kk) => `${String(k)}.${String(kk)}` }) }))).includes("dismiss") ? "Dismiss" : "retry") }) }));
 vi.mock("@multica/ui/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   TooltipContent: () => null,

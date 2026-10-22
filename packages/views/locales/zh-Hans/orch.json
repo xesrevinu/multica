@@ -160,7 +160,7 @@
     "clean": "可以合并",
     "blocked": "合并受阻",
     "unknown": "可合并状态未知",
-    "update_branch": "把 {{base}} 合入分支",
+    "update_branch": "从 {{base}} 更新",
     "rerun": "重跑失败的检查",
     "merge": "Squash 合并",
     "merged": "已合并",
@@ -185,7 +185,7 @@
       "COMMENTED": "已评论",
       "DISMISSED": "已驳回"
     },
-    "sync_labels": "同步标签",
+    "sync_labels": "把标签复制到 PR",
     "delete_branch": "删除分支",
     "delete_branch_confirm": "删除 GitHub 上的分支 {{branch}}？",
     "branch_deleted": "分支已删除",
@@ -196,7 +196,10 @@
     "base_tip": "{{base}} 最新",
     "loading": "正在加载 PR…",
     "error": "无法加载此拉取请求",
-    "retry": "重试"
+    "retry": "重试",
+    "sync_labels_tip": "把这个任务的标签复制到 GitHub PR 上，不改动代码和分支。",
+    "update_branch_tip": "让 GitHub 把 {{base}} 合并进这个 PR 的分支（在 GitHub 上生成合并提交）。只在没有冲突时有效；有冲突会失败，需要在本地处理。",
+    "update_branch_conflict_tip": "有冲突，GitHub 无法把 {{base}} 合并进这个分支，需要在任务的工作区里解决。"
   },
   "drawer": {
     "title": "详情",
@@ -284,5 +287,39 @@
   },
   "shortcuts": {
     "title": "快捷键：D 详情 · F 文件 · Alt+↑/↓ 上/下一个任务 · ⌘K 操作"
+  },
+  "flow_tid": {
+    "T0_dispatch": "已派发",
+    "T1_start": "开始实现",
+    "T2_review": "提交评审",
+    "T3_rework": "退回修改",
+    "T3b_rereview": "重新评审",
+    "T3c_carry_verdict": "沿用评审结论（改动相同）",
+    "T4_done": "已合并",
+    "T5_rerun": "重新运行",
+    "T5_rerun_nobranch": "重新运行（尚无分支）",
+    "T5_rerun_norun": "重新运行（未找到运行）",
+    "T5b_cancel_stuck": "取消卡住的运行",
+    "T5q_provider_limit": "模型额度受限，稍后重试",
+    "T6_block": "已阻塞",
+    "T7_unblock": "已解除阻塞",
+    "T7b_unblock_escalate": "上报给负责人",
+    "T8_cancel": "已取消",
+    "T8a_cancel_proposed": "建议取消",
+    "T8b_member_cancel": "成员取消",
+    "T9_reconcile": "状态校准",
+    "T10_await_acceptance": "等待你验收",
+    "T_epic_progress": "史诗进行中",
+    "T_epic_acceptance": "史诗等待验收",
+    "T_epic_done": "史诗完成",
+    "T_expert_consulted": "已咨询专家"
+  },
+  "feed": {
+    "earlier_other": "更早 {{count}} 条事件"
+  },
+  "failures": {
+    "title_other": "{{count}} 次运行因同一错误失败",
+    "show_runs_other": "查看 {{count}} 次运行",
+    "failed": "失败"
   }
 }

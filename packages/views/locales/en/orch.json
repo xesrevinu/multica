@@ -160,7 +160,7 @@
     "clean": "Ready to merge",
     "blocked": "Merge blocked",
     "unknown": "Mergeability unknown",
-    "update_branch": "Merge {{base}} into branch",
+    "update_branch": "Update from {{base}}",
     "rerun": "Rerun failed checks",
     "merge": "Squash and merge",
     "merged": "Merged",
@@ -186,7 +186,7 @@
       "COMMENTED": "commented",
       "DISMISSED": "dismissed"
     },
-    "sync_labels": "Sync labels",
+    "sync_labels": "Copy labels to PR",
     "delete_branch": "Delete branch",
     "delete_branch_confirm": "Delete branch {{branch}} on GitHub?",
     "branch_deleted": "Branch deleted",
@@ -197,7 +197,10 @@
     "base_tip": "{{base}} tip",
     "loading": "Loading pull request…",
     "error": "Could not load this pull request",
-    "retry": "Retry"
+    "retry": "Retry",
+    "sync_labels_tip": "Copy this issue's labels onto the GitHub pull request. It does not change code or the branch.",
+    "update_branch_tip": "Ask GitHub to merge {{base}} into this PR's branch (a merge commit on GitHub). Only works when there are no conflicts; with conflicts it fails and the branch must be fixed locally.",
+    "update_branch_conflict_tip": "GitHub cannot merge {{base}} into this branch: there are conflicts. Resolve them in the issue's worktree."
   },
   "drawer": {
     "title": "Details",
@@ -285,5 +288,42 @@
   },
   "shortcuts": {
     "title": "Shortcuts: D details · F files · Alt+↑/↓ previous/next issue · ⌘K actions"
+  },
+  "flow_tid": {
+    "T0_dispatch": "Dispatched",
+    "T1_start": "Work started",
+    "T2_review": "Sent to review",
+    "T3_rework": "Sent back for changes",
+    "T3b_rereview": "Review restarted",
+    "T3c_carry_verdict": "Approval carried over (same change)",
+    "T4_done": "Merged",
+    "T5_rerun": "Run restarted",
+    "T5_rerun_nobranch": "Run restarted (no branch yet)",
+    "T5_rerun_norun": "Run restarted (no run found)",
+    "T5b_cancel_stuck": "Stuck run cancelled",
+    "T5q_provider_limit": "Provider limit — retrying later",
+    "T6_block": "Blocked",
+    "T7_unblock": "Unblocked",
+    "T7b_unblock_escalate": "Escalated to lead",
+    "T8_cancel": "Cancelled",
+    "T8a_cancel_proposed": "Cancellation proposed",
+    "T8b_member_cancel": "Cancelled by member",
+    "T9_reconcile": "Reconciled",
+    "T10_await_acceptance": "Waiting for your acceptance",
+    "T_epic_progress": "Epic in progress",
+    "T_epic_acceptance": "Epic waiting for acceptance",
+    "T_epic_done": "Epic done",
+    "T_expert_consulted": "Expert consulted"
+  },
+  "feed": {
+    "earlier_one": "{{count}} earlier event",
+    "earlier_other": "{{count}} earlier events"
+  },
+  "failures": {
+    "title_one": "{{count}} run failed",
+    "title_other": "{{count}} runs failed with the same error",
+    "show_runs_one": "Show run",
+    "show_runs_other": "Show {{count}} runs",
+    "failed": "failed"
   }
 }

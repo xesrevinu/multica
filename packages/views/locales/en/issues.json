@@ -766,7 +766,8 @@
     "more_runs_other": "{{count}} more",
     "strip_aria": "Cost per run — open the run timeline",
     "strip_no_usage": "No usage recorded",
-    "sparkline_now": "Now"
+    "sparkline_now": "Now",
+    "retry_dismiss": "Dismiss"
   },
   "runs_timeline": {
     "title": "Runs",

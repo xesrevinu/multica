@@ -240,8 +240,8 @@ function PRCardBody({ wsId, issueKey, data, number }: { wsId: string; issueKey: 
       {data.live && (open || canDeleteBranch || data.can.labels) && (
         <div className="flex flex-wrap items-center justify-end gap-1.5 border-t border-border bg-muted/30 px-3 py-2" data-testid="orch-pr-actions">
           {data.orchestrated && open && <span className="mr-auto text-micro text-muted-foreground">{t(($) => $.pr.engine_merges)}</span>}
-          {data.can.labels && (
-            <Button size="sm" variant="ghost" disabled={op.isPending} onClick={() => run("sync-labels")} data-testid="orch-pr-sync-labels">
+          {data.can.labels && !data.orchestrated && (
+            <Button size="sm" variant="ghost" disabled={op.isPending} onClick={() => run("sync-labels")} data-testid="orch-pr-sync-labels" title={t(($) => $.pr.sync_labels_tip)}>
               {pendingOp === "sync-labels" ? <Loader2 className="size-3.5 animate-spin" /> : <Tags className="size-3.5" />}
               {t(($) => $.pr.sync_labels)}
             </Button>
@@ -267,7 +267,14 @@ function PRCardBody({ wsId, issueKey, data, number }: { wsId: string; issueKey: 
             </Button>
           )}
           {open && data.can.update_branch && (behind > 0 || conflict) && (
-            <Button size="sm" variant="outline" disabled={op.isPending} onClick={() => run("update-branch")} data-testid="orch-pr-update-branch">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={op.isPending || conflict}
+              onClick={() => run("update-branch")}
+              data-testid="orch-pr-update-branch"
+              title={conflict ? t(($) => $.pr.update_branch_conflict_tip, { base }) : t(($) => $.pr.update_branch_tip, { base })}
+            >
               {pendingOp === "update-branch" ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
               {t(($) => $.pr.update_branch, { base })}
             </Button>
