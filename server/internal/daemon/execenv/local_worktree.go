@@ -1339,6 +1339,20 @@ func (p taskBranchPlan) altName(taskID string) string {
 // task-scoped branch that continues nothing.
 func resolveTaskBranch(gitRoot string, params LocalWorktreeParams, headSHA string, logger *slog.Logger) taskBranchPlan {
 	plan := resolveTaskBranchPlan(gitRoot, params, headSHA, logger)
+	if ex := params.ExclusiveBranch; ex != "" && plan.name != ex && (strings.HasPrefix(plan.name, ex+"-") || plan.name == "agent/"+taskKey(params.TaskID)) {
+		// The orchestrator only ever reads its own branch. If that name exists
+		// but carries no ownership record this conversation can prove (for
+		// example it was recreated by hand from origin), the conversation
+		// fallbacks above would silently fork onto agent/<key>-<fingerprint>
+		// or a task-scoped branch, stranding the owner's work where nobody
+		// looks. Plan the exclusive branch itself instead: creating it fails
+		// because it exists, and addLocalWorktree reports branch_occupied.
+		if logger != nil {
+			logger.Warn("execenv: orchestrator branch exists without this conversation's record; refusing to fork",
+				"git_root", gitRoot, "branch", ex, "would_have_used", plan.name)
+		}
+		return taskBranchPlan{name: ex, base: headSHA, exclusive: true}
+	}
 	plan.exclusive = params.ExclusiveBranch != "" && plan.name == params.ExclusiveBranch
 	return plan
 }

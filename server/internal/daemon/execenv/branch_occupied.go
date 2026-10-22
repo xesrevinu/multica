@@ -42,6 +42,8 @@ func branchOccupied(gitRoot, branch, detail string) error {
 		// what to clear instead of "(unknown)".
 		if stray := strayDirectoryFrom(detail); stray != "" {
 			path = stray + " (stray directory, not a git worktree)"
+		} else if strings.Contains(detail, "already exists") {
+			path = "(none: the branch exists without the daemon's ownership record; delete or re-record it, then unblock)"
 		}
 	}
 	return &BranchOccupiedError{Branch: branch, Path: path, Detail: detail}
