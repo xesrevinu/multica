@@ -44,7 +44,7 @@ export const BUILT_IN_STATUS_CATEGORY: Record<BuiltInIssueStatus, IssueStatusCat
 
 export const BUILT_IN_STATUS_LABEL: Record<BuiltInIssueStatus, string> = {
   backlog: "Backlog",
-  todo: "Todo",
+  todo: "Pending",
   in_progress: "In Progress",
   in_review: "In Review",
   blocked: "Blocked",

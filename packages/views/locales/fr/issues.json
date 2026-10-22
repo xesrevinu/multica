@@ -123,7 +123,7 @@
   },
   "status": {
     "backlog": "À planifier",
-    "todo": "À faire",
+    "todo": "En attente",
     "in_progress": "En cours",
     "in_review": "En relecture",
     "done": "Terminé",

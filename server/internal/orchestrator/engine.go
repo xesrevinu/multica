@@ -357,6 +357,10 @@ func (sp *Spec) Decide(s *Snapshot, probe Prober) *Decision {
 	if m["paused"] == "true" {
 		return &Decision{Wait: "paused by a member (resume to continue)"}
 	}
+	// Epics never get an agent: their status follows their sub-issues.
+	if d, epic := sp.decideEpic(s); epic {
+		return d
+	}
 	// Blocked takes precedence over T9: a blocked issue leaves only through
 	// the lead's phase=unblocked / cancel_proposed (T7/T8) or a member's flow
 	// action, never because some agent rewrote phase (e.g. implementing).
@@ -399,7 +403,13 @@ func (sp *Spec) Decide(s *Snapshot, probe Prober) *Decision {
 	}
 	// todo / in_progress / in_review
 	if s.ActiveRun != nil {
-		return sp.stuck(s)
+		if d := sp.stuck(s); d != nil {
+			return d
+		}
+		if s.ActiveRun.Status == "waiting_local_directory" {
+			return &Decision{Wait: "queued for worktree: another task holds the checkout"}
+		}
+		return nil
 	}
 	if m["phase"] == PhBlocked {
 		why := m["blocked_reason"]
@@ -804,15 +814,8 @@ func (sp *Spec) decideStart(s *Snapshot) *Decision {
 	if m["phase"] == PhPlanned {
 		return &Decision{Wait: "planned epic: its sub-issues carry the work"}
 	}
-	doneish := func(st string) bool { return st == StDone || st == StCancelled }
-	by := map[string]Issue{}
-	for _, x := range s.Siblings {
-		by[x.Key] = x
-	}
-	for _, d := range strings.Split(m["deps"], ",") {
-		if d = strings.TrimSpace(d); d != "" && !doneish(by[d].Status) {
-			return &Decision{Wait: "waiting: dependency " + d + " not done"}
-		}
+	if w := depsWait(s); w != "" {
+		return &Decision{Wait: w}
 	}
 	if w := stageWait(s); w != "" {
 		return &Decision{Wait: w}

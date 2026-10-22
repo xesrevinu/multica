@@ -123,7 +123,7 @@
   },
   "status": {
     "backlog": "Backlog",
-    "todo": "Todo",
+    "todo": "Pending",
     "in_progress": "In Progress",
     "in_review": "In Review",
     "done": "Done",

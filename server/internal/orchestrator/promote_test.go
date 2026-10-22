@@ -67,8 +67,8 @@ func TestAutoPromoteWaits(t *testing.T) {
 		t.Fatalf("unparseable: want a wait, got %+v", d)
 	}
 	// epic
-	if d := sp.Decide(backlog("依赖: 无", Issue{ID: "3", Key: "ATT-3", ParentID: "1", Status: StTodo}), nil); d != nil && d.Tid != "" {
-		t.Fatalf("epic: %+v", d)
+	if d := sp.Decide(backlog("依赖: 无", Issue{ID: "3", Key: "ATT-3", ParentID: "1", Status: StTodo}), nil); d == nil || d.Tid != "" {
+		t.Fatalf("backlog epic is never moved: %+v", d)
 	}
 	// stage barrier
 	s := backlog("依赖: 无", Issue{ID: "4", Key: "ATT-4", ParentID: "p", Stage: 1, Status: StInProgress})
@@ -96,6 +96,58 @@ func TestAutoStartDryRunOnlyReports(t *testing.T) {
 	}
 	d = sp.Decide(backlog("依赖: ATT-2", Issue{ID: "2", Key: "ATT-2", Status: StTodo}), nil)
 	if d == nil || d.Tid != "" || !strings.Contains(d.Wait, "would not start (waiting: dependency ATT-2") {
+		t.Fatalf("%+v", d)
+	}
+}
+
+func TestEpicAggregatesChildren(t *testing.T) {
+	sp := spec(t)
+	kids := func(st ...string) []Issue {
+		var out []Issue
+		for n, x := range st {
+			out = append(out, Issue{ID: "c" + itoa(n), Key: "ATT-" + itoa(10+n), ParentID: "1", Status: x})
+		}
+		return out
+	}
+	s := snap(StInProgress, map[string]string{})
+	s.Issue.AssigneeType, s.Issue.Assignee = "", ""
+	s.Siblings = kids(StDone, StInProgress, StBacklog)
+	if d := sp.Decide(s, nil); d == nil || d.Tid != "" || d.Wait != "epic: 1/3 sub-issues done" {
+		t.Fatalf("%+v", d)
+	}
+	s.Siblings = kids(StDone, StCancelled, StDone)
+	want(t, sp.Decide(s, nil), "T_epic_done", StDone, "")
+	s.Issue.Labels = []string{"needs-acceptance"}
+	sp.Acceptance.Labels = []string{"needs-acceptance"}
+	want(t, sp.Decide(s, nil), "T_epic_acceptance", StInReview, "@human")
+	s.Issue.Status, s.Issue.Meta = StInReview, map[string]string{"phase": PhAwaitAcceptance, "acceptance": "ok"}
+	want(t, sp.Decide(s, nil), "T_epic_done", StDone, "")
+	// backlog epic with nothing started stays put
+	s = snap(StBacklog, map[string]string{})
+	s.Siblings = kids(StBacklog, StBacklog)
+	if d := sp.Decide(s, nil); d == nil || d.Tid != "" {
+		t.Fatalf("%+v", d)
+	}
+}
+
+func TestTodoReadsDescriptionDeps(t *testing.T) {
+	sp := spec(t)
+	s := fresh()
+	s.Issue.Description = "依赖: ATT-2（M0）"
+	s.Siblings = []Issue{s.Issue, {ID: "2", Key: "ATT-2", Status: StInProgress}}
+	if d := sp.Decide(s, nil); d == nil || d.Wait != "waiting: dependency ATT-2 not done" {
+		t.Fatalf("%+v", d)
+	}
+	s.Siblings[1].Status = StDone
+	want(t, sp.Decide(s, nil), "T1_start", StInProgress, "a")
+}
+
+func TestQueuedForWorktreeIsVisible(t *testing.T) {
+	sp := spec(t)
+	s := snap(StInProgress, map[string]string{"phase": PhImplementing, "owner": "a", "attempt_impl": "1"})
+	c := now
+	s.ActiveRun = &Run{ID: "r", Status: "waiting_local_directory", CreatedAt: &c}
+	if d := sp.Decide(s, nil); d == nil || d.Wait != "queued for worktree: another task holds the checkout" {
 		t.Fatalf("%+v", d)
 	}
 }

@@ -121,7 +121,7 @@
   },
   "status": {
     "backlog": "待规划",
-    "todo": "待办",
+    "todo": "等待中",
     "in_progress": "进行中",
     "in_review": "审核中",
     "done": "已完成",

@@ -121,7 +121,7 @@
   },
   "status": {
     "backlog": "백로그",
-    "todo": "할 일",
+    "todo": "대기 중",
     "in_progress": "진행 중",
     "in_review": "리뷰 중",
     "done": "완료",

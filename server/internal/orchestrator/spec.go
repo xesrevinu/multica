@@ -194,7 +194,10 @@ var builtinStatuses = map[string]bool{StBacklog: true, StTodo: true, StInProgres
 func PresetTransitions() []Transition {
 	all := []string{StBacklog, StTodo, StInProgress, StInReview, StBlocked}
 	return []Transition{
-		{ID: "T0_dispatch", Actor: "engine", From: []string{StBacklog}, To: []string{StInProgress}, Label: "auto_promote: backlog, deps done, stage open, not an epic, owner free → owner"},
+		{ID: "T0_dispatch", Actor: "engine", From: []string{StBacklog}, To: []string{StInProgress}, Label: "auto_start=on only: backlog, deps done, stage open, not an epic, owner free → owner"},
+		{ID: "T_epic_progress", Actor: "engine", From: all, To: []string{StInProgress}, Label: "epic: a sub-issue started → in_progress (no agent)"},
+		{ID: "T_epic_acceptance", Actor: "engine", From: all, To: []string{StInReview}, Label: "epic: every sub-issue done, acceptance needed → @human"},
+		{ID: "T_epic_done", Actor: "engine", From: append(all, StInReview), To: []string{StDone}, Label: "epic: every sub-issue done (and accepted when needed) → done"},
 		{ID: "T1_start", Actor: "engine", From: []string{StTodo}, To: []string{StInProgress}, Label: "todo (never backlog), deps done, stage open, disk ok, owner free → owner"},
 		{ID: "A1_in_progress", Actor: "agent", From: []string{StTodo}, To: []string{StInProgress}, Label: "owner starts"},
 		{ID: "T2_review", Actor: "engine", From: []string{StTodo, StInProgress}, To: []string{StInReview}, Label: "phase=review_requested, branch pushed, no active run → reviewer"},
