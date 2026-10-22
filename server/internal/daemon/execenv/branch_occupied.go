@@ -35,7 +35,30 @@ func (e *BranchOccupiedError) Error() string {
 
 func branchOccupied(gitRoot, branch, detail string) error {
 	path, _ := occupantOf(gitRoot, branch)
+	if path == "" {
+		// No worktree holds it: wt refused because a plain directory (often a
+		// leftover after the worktree was removed, e.g. an index cache written
+		// back into it) sits where the worktree goes. Name it so the block says
+		// what to clear instead of "(unknown)".
+		if stray := strayDirectoryFrom(detail); stray != "" {
+			path = stray + " (stray directory, not a git worktree)"
+		}
+	}
 	return &BranchOccupiedError{Branch: branch, Path: path, Detail: detail}
+}
+
+// strayDirectoryFrom pulls the path out of wt's "Directory already exists: <path>".
+func strayDirectoryFrom(detail string) string {
+	const marker = "Directory already exists: "
+	i := strings.Index(detail, marker)
+	if i < 0 {
+		return ""
+	}
+	rest := detail[i+len(marker):]
+	if j := strings.IndexAny(rest, "\n\r"); j >= 0 {
+		rest = rest[:j]
+	}
+	return strings.TrimSpace(rest)
 }
 
 // occupantOf finds the worktree that blocks branch, from
