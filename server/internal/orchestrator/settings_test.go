@@ -28,9 +28,9 @@ func TestRoutesPickOwnerByLabel(t *testing.T) {
 	}
 	s := fresh()
 	s.Issue.Labels = []string{"Area:Hard"}
-	want(t, sp.Decide(s, ok(false)), "T1_start", StTodo, "gbot")
+	want(t, sp.Decide(s, ok(false)), "T1_start", StInProgress, "gbot")
 	s = fresh()
-	want(t, sp.Decide(s, ok(false)), "T1_start", StTodo, "heavy")
+	want(t, sp.Decide(s, ok(false)), "T1_start", StInProgress, "heavy")
 	s = fresh()
 	s.Issue.Labels = []string{"area:hard"}
 	s.Busy["gbot"] = true
@@ -53,14 +53,14 @@ func TestCargoSlots(t *testing.T) {
 		t.Fatalf("want slot wait, got %+v", d)
 	}
 	s.Siblings[1].Status = StInReview
-	want(t, sp.Decide(s, ok(false)), "T1_start", StTodo, "heavy")
+	want(t, sp.Decide(s, ok(false)), "T1_start", StInProgress, "heavy")
 	// a todo sibling the engine has not started yet holds no slot
 	s.Siblings[1].Status = StInProgress
 	s.Siblings[0].Meta = nil
-	want(t, sp.Decide(s, ok(false)), "T1_start", StTodo, "heavy")
+	want(t, sp.Decide(s, ok(false)), "T1_start", StInProgress, "heavy")
 	s = fresh()
 	s.Siblings = []Issue{busy("A", StTodo, "needs:cargo"), busy("B", StTodo, "needs:cargo")}
-	want(t, sp.Decide(s, ok(false)), "T1_start", StTodo, "heavy") // unlabelled ignores slots
+	want(t, sp.Decide(s, ok(false)), "T1_start", StInProgress, "heavy") // unlabelled ignores slots
 }
 
 func TestDefaultAcceptanceLabels(t *testing.T) {

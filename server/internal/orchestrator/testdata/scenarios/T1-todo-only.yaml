@@ -5,7 +5,7 @@ steps:
     expect: {tid: none}
   - note: a member moves it to todo (planned) - T1 picks it up
     do: {status: todo}
-    expect: {tid: T1_start, status: todo, assignee: a, meta: {phase: implementing, owner: a}}
+    expect: {tid: T1_start, status: in_progress, assignee: a, meta: {phase: implementing, owner: a}}
   - do: {run: running}
     expect: {tid: none}
   - note: a member parks it back in backlog mid-run - the engine leaves it alone (no T9)

@@ -30,7 +30,7 @@ func TestStartRespectsHolderAndBacklog(t *testing.T) {
 	o := fresh()
 	o.Issue.AssigneeType, o.Issue.Assignee = "agent", "b"
 	d := sp.Decide(o, nil)
-	want(t, d, "T1_start", StTodo, "b")
+	want(t, d, "T1_start", StInProgress, "b")
 	if !d.Rerun {
 		t.Fatal("T1 onto the current assignee must re-run")
 	}

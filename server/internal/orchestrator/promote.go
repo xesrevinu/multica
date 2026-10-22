@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -31,23 +32,55 @@ func (sp *Spec) startCandidate(status string, meta map[string]string) bool {
 	if StartsHere(status, meta) {
 		return true
 	}
-	return sp != nil && sp.AutoPromote.Enabled && status == StBacklog && meta["phase"] == ""
+	return sp.autoStartMode() != AutoStartOff && status == StBacklog && meta["phase"] == ""
 }
 
-// decidePromote is T0: an eligible backlog issue is started directly.
+// stageWait names the first unfinished lower-stage sibling under the same
+// parent, "" when the stage barrier is clear.
+func stageWait(s *Snapshot) string {
+	i := &s.Issue
+	if i.ParentID == "" || i.Stage <= 0 {
+		return ""
+	}
+	for _, x := range s.Siblings {
+		if x.ParentID == i.ParentID && x.Stage > 0 && x.Stage < i.Stage && x.Status != StDone && x.Status != StCancelled {
+			return fmt.Sprintf("waiting: stage %d sibling %s not done", x.Stage, x.Key)
+		}
+	}
+	return ""
+}
+
+// decidePromote is T0: an eligible backlog issue is started directly
+// (auto_start: on) or its verdict recorded (dry_run). Every not-yet reason is
+// a visible wait.
 func (sp *Spec) decidePromote(s *Snapshot) *Decision {
+	d := sp.promoteVerdict(s)
+	if sp.autoStartMode() == AutoStartDryRun {
+		if d != nil && d.Tid != "" {
+			return &Decision{Wait: "auto-start dry run: would start → " + d.Assignee}
+		}
+		why := "no 依赖: line"
+		if d != nil {
+			why = d.Wait
+		}
+		return &Decision{Wait: "auto-start dry run: would not start (" + why + ")"}
+	}
+	return d
+}
+
+func (sp *Spec) promoteVerdict(s *Snapshot) *Decision {
 	i := &s.Issue
 	doneish := func(st string) bool { return st == StDone || st == StCancelled }
 	by := map[string]Issue{}
 	for _, x := range s.Siblings {
 		by[strings.ToUpper(x.Key)] = x
 		if x.ParentID == i.ID {
-			return nil // an epic: its sub-issues carry the work
+			return &Decision{Wait: "epic: its sub-issues carry the work"}
 		}
 	}
 	deps, found, ok := parseDeps(i.Description)
 	if !ok {
-		return &Decision{Wait: "auto-promote: dependency line names no issue; start it by hand"}
+		return &Decision{Wait: "dependency line names no issue; start it by hand"}
 	}
 	for _, d := range strings.Split(i.Meta["deps"], ",") {
 		if d = strings.TrimSpace(d); d != "" {
@@ -60,24 +93,20 @@ func (sp *Spec) decidePromote(s *Snapshot) *Decision {
 	for _, d := range deps {
 		x, known := by[strings.ToUpper(d)]
 		if !known {
-			return &Decision{Wait: "auto-promote: dependency " + d + " is not in this project; start it by hand"}
+			return &Decision{Wait: "dependency " + d + " is not in this project; start it by hand"}
 		}
 		if !doneish(x.Status) {
-			return nil
+			return &Decision{Wait: "waiting: dependency " + d + " not done"}
 		}
 	}
-	if i.ParentID != "" && i.Stage > 0 {
-		for _, x := range s.Siblings {
-			if x.ParentID == i.ParentID && x.Stage > 0 && x.Stage < i.Stage && !doneish(x.Status) {
-				return nil
-			}
-		}
+	if w := stageWait(s); w != "" {
+		return &Decision{Wait: w}
 	}
 	d := sp.decideStart(s)
 	if d == nil || d.Tid != "T1_start" {
 		return d
 	}
 	d.Tid, d.Status = "T0_dispatch", StInProgress
-	d.Why = "auto-promote: dependencies done, stage open → " + d.Assignee
+	d.Why = "auto-start: dependencies done, stage open → " + d.Assignee
 	return d
 }

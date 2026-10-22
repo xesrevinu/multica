@@ -94,31 +94,31 @@ func TestMatchExpertPrecedence(t *testing.T) {
 		return sp.Decide(s, nil)
 	}
 	d := start([]string{"area:hard"}, nil)
-	want(t, d, "T1_start", StTodo, "gbot")
+	want(t, d, "T1_start", StInProgress, "gbot")
 	if d.Meta["expert"] != "deep-work" {
 		t.Fatalf("expert meta: %+v", d)
 	}
 	d = start([]string{"area:host"}, nil)
-	want(t, d, "T1_start", StTodo, "heavy")
+	want(t, d, "T1_start", StInProgress, "heavy")
 	if _, ok := d.Meta["expert"]; ok {
 		t.Fatalf("route must not set expert: %+v", d)
 	}
 	d = start(nil, nil)
-	want(t, d, "T1_start", StTodo, "heavy")
+	want(t, d, "T1_start", StInProgress, "heavy")
 	if _, ok := d.Meta["expert"]; ok {
 		t.Fatalf("unlabelled issue reached an expert: %+v", d)
 	}
 	d = start([]string{"area:hard", "needs-GUI-Master"}, nil)
-	want(t, d, "T1_start", StTodo, "heavy")
+	want(t, d, "T1_start", StInProgress, "heavy")
 	d = start([]string{"area:research"}, nil)
-	want(t, d, "T1_start", StTodo, "gbot")
+	want(t, d, "T1_start", StInProgress, "gbot")
 	if d.Meta["expert"] != "research" {
 		t.Fatalf("consult expert: %+v", d)
 	}
 	d = start([]string{"area:research"}, map[string]string{"expert_done": "research"})
-	want(t, d, "T1_start", StTodo, "heavy")
+	want(t, d, "T1_start", StInProgress, "heavy")
 	d = start(nil, map[string]string{"ask": "deep"})
-	want(t, d, "T1_start", StTodo, "gbot")
+	want(t, d, "T1_start", StInProgress, "gbot")
 	if d.Meta["expert"] != "pinned" {
 		t.Fatalf("metadata opt-in: %+v", d)
 	}
@@ -135,7 +135,7 @@ func TestMatchExpertPrecedence(t *testing.T) {
 		t.Fatalf("cap: %+v", d)
 	}
 	s.Siblings[0].Status = StInReview
-	want(t, sp.Decide(s, nil), "T1_start", StTodo, "gbot")
+	want(t, sp.Decide(s, nil), "T1_start", StInProgress, "gbot")
 }
 
 func TestConsultRoundTrip(t *testing.T) {
@@ -146,7 +146,7 @@ func TestConsultRoundTrip(t *testing.T) {
 	s := fresh()
 	s.Issue.Labels = []string{"area:research"}
 	d := sp.Decide(s, nil)
-	want(t, d, "T1_start", StTodo, "gbot")
+	want(t, d, "T1_start", StInProgress, "gbot")
 	s.Issue.Status = StInProgress
 	s.Issue.AssigneeType, s.Issue.Assignee = "agent", "gbot"
 	s.Issue.Meta = cloneMeta(d.Meta)

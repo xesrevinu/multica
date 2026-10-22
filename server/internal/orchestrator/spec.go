@@ -58,8 +58,8 @@ type Spec struct {
 	Acceptance  Acceptance   `json:"acceptance" yaml:"acceptance"`
 	Merge       MergeSpec    `json:"merge" yaml:"merge"`
 	Transitions []Transition `json:"transitions,omitempty" yaml:"transitions,omitempty"`
-	// AutoPromote dispatches an eligible backlog issue directly (opt-in).
-	AutoPromote AutoPromote `json:"auto_promote,omitempty" yaml:"auto_promote,omitempty"`
+	// AutoStart: off (default) | dry_run | on. See decidePromote.
+	AutoStart string `json:"auto_start,omitempty" yaml:"auto_start,omitempty"`
 	// authoredOwners is roles.owners before route owners are merged. Expert
 	// agents are never merged. Not serialized; Defaults fills it.
 	authoredOwners []string
@@ -195,7 +195,7 @@ func PresetTransitions() []Transition {
 	all := []string{StBacklog, StTodo, StInProgress, StInReview, StBlocked}
 	return []Transition{
 		{ID: "T0_dispatch", Actor: "engine", From: []string{StBacklog}, To: []string{StInProgress}, Label: "auto_promote: backlog, deps done, stage open, not an epic, owner free → owner"},
-		{ID: "T1_start", Actor: "engine", From: []string{StTodo}, To: []string{StTodo}, Label: "todo (never backlog), deps done, stage open, disk ok, owner free → owner"},
+		{ID: "T1_start", Actor: "engine", From: []string{StTodo}, To: []string{StInProgress}, Label: "todo (never backlog), deps done, stage open, disk ok, owner free → owner"},
 		{ID: "A1_in_progress", Actor: "agent", From: []string{StTodo}, To: []string{StInProgress}, Label: "owner starts"},
 		{ID: "T2_review", Actor: "engine", From: []string{StTodo, StInProgress}, To: []string{StInReview}, Label: "phase=review_requested, branch pushed, no active run → reviewer"},
 		{ID: "T3_rework", Actor: "engine", From: []string{StInReview, StTodo, StInProgress}, To: []string{StTodo}, Label: "changes | checks red | conflict | acceptance rejected → owner"},
@@ -484,10 +484,24 @@ func (s *Spec) Mermaid(current string) string {
 	return b.String()
 }
 
-// AutoPromote: backlog = planned, waiting on its dependencies. When every
+// Auto-start modes. Backlog = planned, waiting on its dependencies: when every
 // 依赖: dependency is done, the stage barrier is clear and it is not an epic,
-// the engine starts it straight into in_progress (T0_dispatch). todo stays
-// the manual "start now" lane.
-type AutoPromote struct {
-	Enabled bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+// "on" starts it straight into in_progress (T0_dispatch) as owners free up;
+// "dry_run" only records the would-start verdict as the issue's wait reason.
+// todo stays the manual "start now" lane; backlog never moves to todo.
+const (
+	AutoStartOff    = "off"
+	AutoStartDryRun = "dry_run"
+	AutoStartOn     = "on"
+)
+
+func (sp *Spec) autoStartMode() string {
+	if sp == nil {
+		return AutoStartOff
+	}
+	switch sp.AutoStart {
+	case AutoStartDryRun, AutoStartOn:
+		return sp.AutoStart
+	}
+	return AutoStartOff
 }

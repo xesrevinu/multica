@@ -3,9 +3,9 @@ recorded: ATT-57
 issue: {key: ATT-57, parentid: P, stage: 2, meta: {deps: ATT-54}}
 steps:
   - do: {siblings: [{key: ATT-54, status: done}, {key: ATT-55, status: in_review, parentid: P, stage: 1}, {key: ATT-56, status: done, parentid: P, stage: 1}]}
-    expect: {tid: none}
+    expect: {wait: 'stage 1 sibling ATT-55 not done'}
   - do: {siblings: [{key: ATT-54, status: in_progress}, {key: ATT-55, status: done, parentid: P, stage: 1}, {key: ATT-56, status: done, parentid: P, stage: 1}]}
-    expect: {tid: none}
+    expect: {wait: 'dependency ATT-54 not done'}
   - do: {siblings: [{key: ATT-54, status: done}, {key: ATT-55, status: done, parentid: P, stage: 1}, {key: ATT-56, status: cancelled, parentid: P, stage: 1}]}
     expect: {tid: T1_start}
   - do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}

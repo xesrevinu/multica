@@ -370,7 +370,7 @@ func (sp *Spec) Decide(s *Snapshot, probe Prober) *Decision {
 		if m["phase"] == PhPlanned {
 			return &Decision{Wait: "planned epic: its sub-issues carry the work"}
 		}
-		if sp.AutoPromote.Enabled {
+		if sp.autoStartMode() != AutoStartOff {
 			return sp.decidePromote(s)
 		}
 		return nil
@@ -811,15 +811,11 @@ func (sp *Spec) decideStart(s *Snapshot) *Decision {
 	}
 	for _, d := range strings.Split(m["deps"], ",") {
 		if d = strings.TrimSpace(d); d != "" && !doneish(by[d].Status) {
-			return nil
+			return &Decision{Wait: "waiting: dependency " + d + " not done"}
 		}
 	}
-	if i.ParentID != "" && i.Stage > 0 {
-		for _, x := range s.Siblings {
-			if x.ParentID == i.ParentID && x.Stage > 0 && x.Stage < i.Stage && !doneish(x.Status) {
-				return nil
-			}
-		}
+	if w := stageWait(s); w != "" {
+		return &Decision{Wait: w}
 	}
 	if g := sp.Limits.FreeGB(); g > 0 && s.FreeGB >= 0 && s.FreeGB < g {
 		return &Decision{Wait: fmt.Sprintf("disk guard: %dGB free < %dGB", s.FreeGB, g)}
@@ -880,7 +876,7 @@ func (sp *Spec) decideStart(s *Snapshot) *Decision {
 	if expertName != "" {
 		meta["expert"] = expertName
 	}
-	return &Decision{Tid: "T1_start", Status: StTodo, AssigneeKind: "agent", Assignee: owner,
+	return &Decision{Tid: "T1_start", Status: StInProgress, AssigneeKind: "agent", Assignee: owner,
 		// the same assignee does not dispatch a run by itself
 		Rerun: i.AssigneeType == "agent" && i.Assignee == owner,
 		Meta:  meta}

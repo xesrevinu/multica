@@ -1,10 +1,13 @@
 package orchestrator
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func promoteSpec(t *testing.T) *Spec {
 	sp := spec(t)
-	sp.AutoPromote.Enabled = true
+	sp.AutoStart = AutoStartOn
 	return sp
 }
 
@@ -54,7 +57,7 @@ func TestAutoPromoteOff(t *testing.T) {
 
 func TestAutoPromoteWaits(t *testing.T) {
 	sp := promoteSpec(t)
-	if d := sp.Decide(backlog("依赖: ATT-2", Issue{ID: "2", Key: "ATT-2", Status: StInProgress}), nil); d != nil && d.Tid != "" {
+	if d := sp.Decide(backlog("依赖: ATT-2", Issue{ID: "2", Key: "ATT-2", Status: StInProgress}), nil); d == nil || d.Tid != "" || !strings.Contains(d.Wait, "ATT-2") {
 		t.Fatalf("dep not done: %+v", d)
 	}
 	if d := sp.Decide(backlog("依赖: ATT-9"), nil); d == nil || d.Tid != "" || d.Wait == "" {
@@ -70,7 +73,7 @@ func TestAutoPromoteWaits(t *testing.T) {
 	// stage barrier
 	s := backlog("依赖: 无", Issue{ID: "4", Key: "ATT-4", ParentID: "p", Stage: 1, Status: StInProgress})
 	s.Issue.ParentID, s.Issue.Stage = "p", 2
-	if d := sp.Decide(s, nil); d != nil && d.Tid != "" {
+	if d := sp.Decide(s, nil); d == nil || d.Tid != "" || d.Wait != "waiting: stage 1 sibling ATT-4 not done" {
 		t.Fatalf("stage: %+v", d)
 	}
 	// honored assignee busy
@@ -82,4 +85,17 @@ func TestAutoPromoteWaits(t *testing.T) {
 	}
 	delete(s.Busy, "b")
 	want(t, sp.Decide(s, nil), "T0_dispatch", StInProgress, "b")
+}
+
+func TestAutoStartDryRunOnlyReports(t *testing.T) {
+	sp := spec(t)
+	sp.AutoStart = AutoStartDryRun
+	d := sp.Decide(backlog("依赖: ATT-2", Issue{ID: "2", Key: "ATT-2", Status: StDone}), nil)
+	if d == nil || d.Tid != "" || d.Wait != "auto-start dry run: would start → a" {
+		t.Fatalf("%+v", d)
+	}
+	d = sp.Decide(backlog("依赖: ATT-2", Issue{ID: "2", Key: "ATT-2", Status: StTodo}), nil)
+	if d == nil || d.Tid != "" || !strings.Contains(d.Wait, "would not start (waiting: dependency ATT-2") {
+		t.Fatalf("%+v", d)
+	}
 }

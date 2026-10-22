@@ -52,7 +52,7 @@ func TestHappyPath(t *testing.T) {
 	s := snap(StTodo, map[string]string{})
 	s.Issue.AssigneeType, s.Issue.Assignee = "", ""
 	d := sp.Decide(s, nil)
-	want(t, d, "T1_start", StTodo, "a")
+	want(t, d, "T1_start", StInProgress, "a")
 	if !d.StartsRun() || d.Meta["phase"] != PhImplementing {
 		t.Fatal(d)
 	}
@@ -164,19 +164,19 @@ func TestBacklogGuards(t *testing.T) {
 		t.Fatal(d)
 	}
 	s.Busy = map[string]bool{"a": true}
-	want(t, sp.Decide(s, nil), "T1_start", StTodo, "b")
+	want(t, sp.Decide(s, nil), "T1_start", StInProgress, "b")
 	// stage barrier
 	s.Issue.ParentID, s.Issue.Stage = "p", 2
 	s.Siblings = []Issue{{Key: "ATT-2", ParentID: "p", Stage: 1, Status: StInReview}}
-	if d := sp.Decide(s, nil); d != nil {
+	if d := sp.Decide(s, nil); d == nil || d.Tid != "" || d.Wait == "" {
 		t.Fatal(d)
 	}
 	s.Siblings[0].Status = StDone
-	want(t, sp.Decide(s, nil), "T1_start", StTodo, "b")
+	want(t, sp.Decide(s, nil), "T1_start", StInProgress, "b")
 	// deps
 	s.Issue.Meta["deps"] = "ATT-9"
 	s.Siblings = append(s.Siblings, Issue{Key: "ATT-9", Status: StTodo})
-	if d := sp.Decide(s, nil); d != nil {
+	if d := sp.Decide(s, nil); d == nil || d.Tid != "" || d.Wait == "" {
 		t.Fatal(d)
 	}
 }

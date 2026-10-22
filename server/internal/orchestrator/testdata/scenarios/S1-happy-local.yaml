@@ -3,7 +3,7 @@ recorded: ATT-37
 issue: {key: ATT-37}
 steps:
   - note: backlog, owner free
-    expect: {tid: T1_start, status: todo, assignee: a, meta: {phase: implementing, owner: a}}
+    expect: {tid: T1_start, status: in_progress, assignee: a, meta: {phase: implementing, owner: a}}
   - note: owner pushes and hands over
     do: {run: completed, head: h1, meta: {phase: review_requested, head_sha: h1}}
     expect: {tid: T2_review, status: in_review, assignee: rev, meta: {review_started_sha: h1}}
