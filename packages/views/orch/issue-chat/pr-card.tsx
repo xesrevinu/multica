@@ -32,16 +32,18 @@ import { checksTone, prStateTone, PR_STATE_CHIP, shortSha, TONE_DOT } from "../f
 import { DiffStat, PRStateIcon } from "../parts/chips";
 import { CommitGraph, LaneChip, type GraphRow } from "../parts/commit-graph";
 import { PersonAvatar } from "../parts/person-avatar";
+import { Badge } from "@multica/ui/components/ui/badge";
+import { Card } from "@multica/ui/components/ui/card";
 
 type Detail = NonNullable<OrchPRCard["pr"]>;
 
 function PRCardSkeleton() {
   return (
-    <div className="overflow-hidden rounded-2xl border border-border bg-card p-4" data-testid="orch-pr-card-loading" aria-busy="true">
+    <Card className="gap-0 p-4" data-testid="orch-pr-card-loading" aria-busy="true">
       <Skeleton className="h-4 w-2/3" />
       <Skeleton className="mt-2 h-3 w-1/2" />
       <Skeleton className="mt-3 h-16 w-full" />
-    </div>
+    </Card>
   );
 }
 
@@ -57,12 +59,12 @@ export function PRCard({ wsId, issueKey, hasPR }: { wsId: string; issueKey: stri
   if (isLoading && hasPR) return <PRCardSkeleton />;
   if (isError && hasPR) {
     return (
-      <div className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-card px-4 py-3" data-testid="orch-pr-card-error">
+      <Card className="flex-row items-center justify-between gap-3 px-4 py-3" data-testid="orch-pr-card-error">
         <p className="text-caption text-muted-foreground">{t(($) => $.pr.error)}</p>
         <Button size="sm" variant="outline" disabled={isFetching} onClick={() => void refetch()}>
           {t(($) => $.pr.retry)}
         </Button>
-      </div>
+      </Card>
     );
   }
   if (!data || data.mode === "local") return null;
@@ -134,7 +136,7 @@ function PRCardBody({ wsId, issueKey, data, number }: { wsId: string; issueKey: 
   const canDeleteBranch = data.can.delete_branch && !open && pr && !pr.head_deleted && head && head !== base;
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-border bg-card" data-testid="orch-pr-card">
+    <Card className="gap-0 py-0" data-testid="orch-pr-card">
       <div className="flex items-start gap-2 px-4 pt-3">
         <PRStateIcon state={state} draft={pr?.draft} className="mt-0.5 size-4" />
         <div className="min-w-0 flex-1">
@@ -151,7 +153,7 @@ function PRCardBody({ wsId, issueKey, data, number }: { wsId: string; issueKey: 
             <DiffStat additions={pr?.additions ?? sum?.additions ?? 0} deletions={pr?.deletions ?? sum?.deletions ?? 0} className="ml-1 text-caption" />
             {(pr?.changed_files ?? sum?.changed_files ?? 0) > 0 && <span>· {t(($) => $.pr.files, { count: pr?.changed_files ?? sum?.changed_files ?? 0 })}</span>}
             {(pr?.labels ?? []).map((l) => (
-              <span key={l} className="rounded-full bg-muted px-1.5 text-micro">{l}</span>
+              <Badge key={l} variant="secondary">{l}</Badge>
             ))}
           </div>
         </div>
@@ -307,7 +309,7 @@ function PRCardBody({ wsId, issueKey, data, number }: { wsId: string; issueKey: 
           )}
         </div>
       )}
-    </div>
+    </Card>
   );
 }
 
