@@ -3,6 +3,7 @@ package issuestatus
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strconv"
@@ -104,10 +105,17 @@ func (f *fakeQuerier) ListIssueStatusKeysByCategories(_ context.Context, arg db.
 		return nil, f.err
 	}
 	wanted := map[string]bool{}
-	if cats, ok := arg.Categories.([]string); ok {
-		for _, c := range cats {
-			wanted[c] = true
-		}
+	var cats []string
+	switch v := arg.Categories.(type) {
+	case []string:
+		cats = v
+	case string:
+		_ = json.Unmarshal([]byte(v), &cats)
+	case []byte:
+		_ = json.Unmarshal(v, &cats)
+	}
+	for _, c := range cats {
+		wanted[c] = true
 	}
 	var out []string
 	for _, e := range f.entries {

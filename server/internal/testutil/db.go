@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"database/sql"
+
+	"github.com/google/uuid"
 )
 
 // Cols is one fixture row: column name to value. Values are bound as query
@@ -48,6 +50,12 @@ func New(pool *sql.DB, workspaceID, userID string) *Fixture {
 func (f *Fixture) Insert(t TB, table string, cols Cols) string {
 	t.Helper()
 
+	if cols == nil {
+		cols = Cols{}
+	}
+	if _, ok := cols["id"]; !ok {
+		cols["id"] = uuid.NewString()
+	}
 	names, placeholders, args := compile(cols)
 	sql := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s) RETURNING id",
 		quoteIdent(table), strings.Join(names, ", "), strings.Join(placeholders, ", "))
@@ -215,8 +223,8 @@ func (f *Fixture) Runtime(t TB, name string, over ...Cols) string {
 		"provider":     "handler_test_runtime",
 		"status":       "online",
 		"device_info":  "",
-		"metadata":     Raw("'{}'::jsonb"),
-		"last_seen_at": Raw("now()"),
+		"metadata":     "{}",
+		"last_seen_at": Raw("(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"),
 		"visibility":   "private",
 		"owner_id":     f.UserID,
 	}, over))
@@ -231,7 +239,7 @@ func (f *Fixture) Agent(t TB, name, runtimeID string, over ...Cols) string {
 		"name":                 name,
 		"description":          "",
 		"runtime_mode":         "cloud",
-		"runtime_config":       Raw("'{}'::jsonb"),
+		"runtime_config":       "{}",
 		"visibility":           "private",
 		"permission_mode":      "private",
 		"max_concurrent_tasks": 1,

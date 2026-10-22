@@ -4,13 +4,18 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
+
+	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/sqliteutil"
 )
 
 var (
-	testPool        *pgxpool.Pool
+	testPool        *sql.DB
 	testWorkspaceID string
 	testUserID      string
 )
@@ -20,59 +25,54 @@ const (
 	fixtureSlug  = "testutil-fixtures"
 )
 
-// TestMain builds the workspace the fixture builders hang off, in the same
-// shape internal/handler's TestMain builds it. Without a database the suite
-// exits green rather than red: the same contract every other DB-backed package
-// here follows, so a laptop without Postgres still runs the rest of the tree.
 func TestMain(m *testing.M) {
 	ctx := context.Background()
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		dbURL = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
-	}
+	_, thisFile, _, _ := runtime.Caller(0)
+	schemaPath := filepath.Join(filepath.Dir(thisFile), "..", "..", "schema", "sqlite.sql")
 
-	pool, err := pgxpool.New(ctx, dbURL)
+	db, err := sqliteutil.Open(ctx, "file:testutil-fixtures?mode=memory&cache=shared")
 	if err != nil {
-		fmt.Printf("Skipping DB fixture tests: could not connect: %v\n", err)
+		fmt.Printf("Skipping DB fixture tests: could not open sqlite: %v\n", err)
 		os.Exit(m.Run())
 	}
-	if err := pool.Ping(ctx); err != nil {
-		fmt.Printf("Skipping DB fixture tests: database not reachable: %v\n", err)
-		pool.Close()
+	if err := sqliteutil.ApplySchema(ctx, db, schemaPath); err != nil {
+		fmt.Printf("Skipping DB fixture tests: apply schema: %v\n", err)
+		_ = db.Close()
 		os.Exit(m.Run())
 	}
-
-	if err := seedFixtureWorkspace(ctx, pool); err != nil {
+	if err := seedFixtureWorkspace(ctx, db); err != nil {
 		fmt.Printf("Skipping DB fixture tests: seed failed: %v\n", err)
-		pool.Close()
+		_ = db.Close()
 		os.Exit(m.Run())
 	}
-	testPool = pool
+	testPool = db
 
 	code := m.Run()
-	_, _ = pool.Exec(ctx, `DELETE FROM workspace WHERE slug = $1`, fixtureSlug)
-	_, _ = pool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, fixtureEmail)
-	pool.Close()
+	_, _ = db.ExecContext(ctx, `DELETE FROM workspace WHERE slug = ?`, fixtureSlug)
+	_, _ = db.ExecContext(ctx, `DELETE FROM "user" WHERE email = ?`, fixtureEmail)
+	_ = db.Close()
 	os.Exit(code)
 }
 
-func seedFixtureWorkspace(ctx context.Context, pool *pgxpool.Pool) error {
-	if _, err := pool.Exec(ctx, `DELETE FROM workspace WHERE slug = $1`, fixtureSlug); err != nil {
+func seedFixtureWorkspace(ctx context.Context, pool *sql.DB) error {
+	if _, err := pool.ExecContext(ctx, `DELETE FROM workspace WHERE slug = ?`, fixtureSlug); err != nil {
 		return err
 	}
-	if _, err := pool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, fixtureEmail); err != nil {
+	if _, err := pool.ExecContext(ctx, `DELETE FROM "user" WHERE email = ?`, fixtureEmail); err != nil {
 		return err
 	}
-	if err := pool.QueryRow(ctx, `INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id`,
-		"Testutil Fixture User", fixtureEmail).Scan(&testUserID); err != nil {
+	testUserID = uuid.NewString()
+	if _, err := pool.ExecContext(ctx, `INSERT INTO "user" (id, name, email) VALUES (?, ?, ?)`,
+		testUserID, "Testutil Fixture User", fixtureEmail); err != nil {
 		return err
 	}
-	if err := pool.QueryRow(ctx, `INSERT INTO workspace (name, slug, issue_prefix) VALUES ($1, $2, $3) RETURNING id`,
-		"Testutil Fixtures", fixtureSlug, "TUF").Scan(&testWorkspaceID); err != nil {
+	testWorkspaceID = uuid.NewString()
+	if _, err := pool.ExecContext(ctx, `INSERT INTO workspace (id, name, slug, issue_prefix) VALUES (?, ?, ?, ?)`,
+		testWorkspaceID, "Testutil Fixtures", fixtureSlug, "TUF"); err != nil {
 		return err
 	}
-	_, err := pool.Exec(ctx, `INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'owner')`,
-		testWorkspaceID, testUserID)
+	_, err := pool.ExecContext(ctx, `INSERT INTO member (id, workspace_id, user_id, role) VALUES (?, ?, ?, 'owner')`,
+		uuid.NewString(), testWorkspaceID, testUserID)
 	return err
 }
 
@@ -167,11 +167,11 @@ func TestRawValuesAreInlinedAsSQL(t *testing.T) {
 	taskID := f.Task(t, agentID, Cols{
 		"runtime_id":    runtimeID,
 		"status":        "dispatched",
-		"dispatched_at": Raw("now() - interval '2 hours'"),
+		"dispatched_at": Raw("(strftime('%Y-%m-%dT%H:%M:%fZ','now','-2 hours'))"),
 	})
 
 	var ageSeconds float64
-	f.QueryRow(t, `SELECT EXTRACT(EPOCH FROM (now() - dispatched_at)) FROM agent_task_queue WHERE id = $1`, taskID).
+	f.QueryRow(t, `SELECT (julianday('now') - julianday(dispatched_at)) * 86400 FROM agent_task_queue WHERE id = $1`, taskID).
 		Scan(&ageSeconds)
 	if ageSeconds < 7100 {
 		t.Fatalf("dispatched_at is %.0fs old, want ~7200s — the Raw expression was bound as a value", ageSeconds)

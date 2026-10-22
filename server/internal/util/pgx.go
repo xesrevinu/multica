@@ -17,10 +17,11 @@ import (
 // For trusted, already-validated UUID strings (sqlc round-trips, fixtures),
 // use MustParseUUID instead.
 func ParseUUID(s string) (string, error) {
-	if _, err := uuid.Parse(s); err != nil {
+	parsed, err := uuid.Parse(s)
+	if err != nil {
 		return "", fmt.Errorf("invalid UUID %q: %w", s, err)
 	}
-	return s, nil
+	return parsed.String(), nil
 }
 
 // MustParseUUID parses s into a pgtype.UUID and panics on invalid input.
