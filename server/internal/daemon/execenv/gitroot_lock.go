@@ -68,6 +68,14 @@ var errGitRootLockBusy = errors.New("execenv: git repository lock is held by ano
 // A var only so tests can shrink it; nothing at runtime writes it.
 var gitRootLockWait = 3 * time.Minute
 
+// gitRootFinalizeWait bounds the wait of a FINISHED run for the repo lock.
+// A sibling's prepare holds the lock across `wt switch`, whose start hooks
+// (deps install, index build) take minutes; a reviewer finishing in that
+// window failed after gitRootLockWait with its work merely preserved, and the
+// orchestrator spent an attempt on it (OX-179/OX-180). The run is done and
+// holds no slot worth freeing, so it queues for as long as a prepare can take.
+var gitRootFinalizeWait = 30 * time.Minute
+
 // gitRootLocks serialises git admin operations per repository within one
 // process. Concurrent `git worktree add` / `remove` / `prune` on one repo race
 // on the same lockfiles (worktrees/, packed-refs.lock, config.lock), and
@@ -148,7 +156,7 @@ func gitRootLockPath(gitRoot string) (string, error) {
 
 // acquireGitRootFileLock takes the cross-process lock for gitRoot, waiting up
 // to gitRootLockWait for a current holder to finish.
-func acquireGitRootFileLock(gitRoot string, logger *slog.Logger) (*os.File, error) {
+func acquireGitRootFileLock(gitRoot string, wait time.Duration, logger *slog.Logger) (*os.File, error) {
 	path, err := gitRootLockPath(gitRoot)
 	if err != nil {
 		return nil, err
@@ -158,7 +166,7 @@ func acquireGitRootFileLock(gitRoot string, logger *slog.Logger) (*os.File, erro
 		return nil, fmt.Errorf("execenv: open git repository lock %s: %w", path, err)
 	}
 
-	deadline := time.Now().Add(gitRootLockWait)
+	deadline := time.Now().Add(wait)
 	announced := false
 	for {
 		ok, lockErr := lockFileExclusiveNonBlocking(f)
@@ -189,7 +197,7 @@ func acquireGitRootFileLock(gitRoot string, logger *slog.Logger) (*os.File, erro
 				"wait for that task to finish or stop it, then retry; the lock is released "+
 				"automatically when the holding process exits, so the file itself is never stale "+
 				"and deleting it would let two tasks into this section at once",
-				errGitRootLockBusy, gitRoot, gitRootLockWait, path)
+				errGitRootLockBusy, gitRoot, wait, path)
 		}
 		time.Sleep(gitRootLockPoll)
 	}
@@ -205,6 +213,11 @@ func acquireGitRootFileLock(gitRoot string, logger *slog.Logger) (*os.File, erro
 // retry out of. A BUSY lock is different: the exclusion worked, we waited, and
 // proceeding anyway would defeat it, so that one is returned to the caller.
 func lockGitRoot(gitRoot string, logger *slog.Logger) (func(), error) {
+	return lockGitRootWait(gitRoot, gitRootLockWait, logger)
+}
+
+// lockGitRootWait is lockGitRoot with an explicit bound on the wait.
+func lockGitRootWait(gitRoot string, wait time.Duration, logger *slog.Logger) (func(), error) {
 	// The file lock comes FIRST, before the mutex. Waiting on it while holding
 	// the mutex would serialise the waits themselves: three queued goroutines
 	// would each start their own gitRootLockWait only after the one ahead gave
@@ -215,7 +228,7 @@ func lockGitRoot(gitRoot string, logger *slog.Logger) (func(), error) {
 	// Both platforms' primitives already exclude within a process — flock
 	// treats separate open file descriptions independently, and so does
 	// LockFileEx with separate handles — so this ordering loses nothing.
-	f, err := acquireGitRootFileLock(gitRoot, logger)
+	f, err := acquireGitRootFileLock(gitRoot, wait, logger)
 	if err != nil {
 		if errors.Is(err, errGitRootLockBusy) {
 			return nil, err

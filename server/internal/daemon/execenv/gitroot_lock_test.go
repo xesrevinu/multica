@@ -332,3 +332,34 @@ func TestConcurrentIsolatedPreparesOnOneRepo(t *testing.T) {
 		}
 	}
 }
+
+// OX-179/OX-180: a finished run's finalize outlasts the prepare bound. A
+// sibling holding the lock longer than gitRootLockWait (a `wt switch` with
+// slow start hooks) makes finalize wait, not fail.
+func TestFinalizeLockOutwaitsAPrepareSizedHold(t *testing.T) {
+	repo := newTestRepo(t)
+	origWait, origFin := gitRootLockWait, gitRootFinalizeWait
+	gitRootLockWait, gitRootFinalizeWait = 50*time.Millisecond, 5*time.Second
+	t.Cleanup(func() { gitRootLockWait, gitRootFinalizeWait = origWait, origFin })
+	path, err := gitRootLockPath(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holder, err := openLockFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := lockFileExclusiveNonBlocking(holder); !ok || err != nil {
+		t.Fatalf("hold: %v %v", ok, err)
+	}
+	go func() {
+		time.Sleep(300 * time.Millisecond) // > gitRootLockWait
+		_ = unlockFile(holder)
+		holder.Close()
+	}()
+	unlock, err := lockGitRootWait(repo, gitRootFinalizeWait, worktreeTestLogger())
+	if err != nil {
+		t.Fatalf("finalize-sized wait failed: %v", err)
+	}
+	unlock()
+}

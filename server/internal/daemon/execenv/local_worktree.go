@@ -620,7 +620,7 @@ func (w *LocalWorktree) Finalize(logger *slog.Logger) (LocalWorktreeOutcome, err
 	}
 	outcome := LocalWorktreeOutcome{Branch: w.Branch}
 
-	unlock, err := lockGitRoot(w.GitRoot, logger)
+	unlock, err := lockGitRootWait(w.GitRoot, gitRootFinalizeWait, logger)
 	if err != nil {
 		// Nothing has been committed or removed yet, so the agent's work is
 		// still sitting in the worktree. Report it as preserved rather than
@@ -830,7 +830,7 @@ func (w *LocalWorktree) Discard(logger *slog.Logger) {
 	if w == nil {
 		return
 	}
-	unlock, err := lockGitRoot(w.GitRoot, logger)
+	unlock, err := lockGitRootWait(w.GitRoot, gitRootFinalizeWait, logger)
 	if err != nil {
 		// Best-effort by contract: every step below only logs on failure. The
 		// registration this leaves behind is pruned by the next prepare on
