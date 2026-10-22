@@ -182,6 +182,7 @@ func ReapIdleLocalWorktrees(ttl time.Duration, cap int, now time.Time, logger *s
 			continue
 		}
 		n, reapErr := reapIdleWorktreesInRepo(root, now, ttl, cap, logger)
+		n += reapDeliveredBranches(root, logger)
 		unlock()
 		removed += n
 		if reapErr != nil {
@@ -207,6 +208,20 @@ func reapIdleWorktreesInRepo(gitRoot string, now time.Time, ttl time.Duration, c
 	for _, hold := range holds {
 		if hold.State != worktreeHoldIdle {
 			continue
+		}
+		// Delivered (squash-merged and gone from the remote, or an ancestor
+		// of main): the parked checkout and its branch are done. A dirty tree
+		// is kept: it is the only copy of whatever is in it.
+		if branchDelivered(gitRoot, hold.Branch) {
+			if dirty, dErr := worktreeIsDirty(hold.Path); dErr == nil && !dirty {
+				if err := removeHeldWorktree(hold, logger); err != nil {
+					errs = append(errs, err)
+					continue
+				}
+				dropBranch(gitRoot, hold.Branch, logger)
+				removed++
+				continue
+			}
 		}
 		if ttl > 0 && now.Sub(hold.At) > ttl {
 			if err := removeHeldWorktree(hold, logger); err != nil {
