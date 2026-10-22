@@ -1190,8 +1190,18 @@ cmd_destroy() {
       warn "Nothing answered on the database host; $DB_NAME was left in place."
       failures=$((failures + 1))
     fi
+  elif docker compose exec -T postgres pg_isready -U "${POSTGRES_USER:-multica}" -d postgres >/dev/null 2>&1; then
+    # No host psql: the database lives in the shared compose container that
+    # ensure-postgres.sh created it in, so drop it there.
+    if docker compose exec -T postgres psql -U "${POSTGRES_USER:-multica}" -d postgres -v ON_ERROR_STOP=1 \
+      -c "DROP DATABASE IF EXISTS \"$DB_NAME\" WITH (FORCE)" >/dev/null; then
+      ok "dropped database $DB_NAME"
+    else
+      warn "failed to drop database $DB_NAME; keeping its manifest"
+      failures=$((failures + 1))
+    fi
   else
-    warn "psql not found; $DB_NAME was left in place."
+    warn "psql not found and no compose postgres container; $DB_NAME was left in place."
     failures=$((failures + 1))
   fi
 
