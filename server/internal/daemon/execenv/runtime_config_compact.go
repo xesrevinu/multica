@@ -38,7 +38,7 @@ func buildCompactIssueBrief(ctx TaskContextForEnv) string {
 
 	b.WriteString("## Checkout Boundary\n\n")
 	fmt.Fprintf(&b, "Work only in the current working directory: this task's git worktree on branch `%s` (push only that branch).", ctx.OrchestratedBranch)
-	b.WriteString(" Do not touch the primary checkout or other worktrees, and never search recursively outside this directory (`rg <pattern> .` / `git grep`). Do not commit daemon sidecars (`.agents/`, `.agent_context/`, provider skill dirs) — stage paths explicitly, never `git add -A` blindly.\n\n")
+	b.WriteString(" Every shell command already starts there: use relative paths and never prefix commands with `cd <absolute worktree path>`. Do not touch the primary checkout or other worktrees, and never search recursively outside this directory (`rg <pattern> .` / `git grep`). Do not commit daemon sidecars (`.agents/`, `.agent_context/`, provider skill dirs) — stage paths explicitly, never `git add -A` blindly.\n\n")
 
 	b.WriteString("## Artifacts and Reports\n\n")
 	b.WriteString("Scratch files, logs, screenshots and reports go under `~/.cursor/artifacts/<repo>/` (`reports/`, `tmp/`), where `<repo>` is the repository name (the primary checkout's directory, e.g. `holt`), not the worktree directory. Never inside the worktree, never committed.\n\n")
