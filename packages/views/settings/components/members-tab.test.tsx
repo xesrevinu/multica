@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { configStore } from "@multica/core/config";
-import { BILLING_WORKSPACE_SUBSCRIPTIONS_FLAG } from "@multica/core/feature-flags";
 import { renderWithI18n } from "../../test/i18n";
 
 const mockCreateMember = vi.hoisted(() => vi.fn());
@@ -42,13 +41,6 @@ vi.mock("@tanstack/react-query", () => ({
   useQueryClient: () => ({
     invalidateQueries: vi.fn(),
     fetchQuery: vi.fn(),
-  }),
-}));
-vi.mock("@multica/core/billing", () => ({
-  usePreviewWorkspaceSeatPurchase: () => ({ mutateAsync: vi.fn() }),
-  usePurchaseWorkspaceSeats: () => ({ mutateAsync: vi.fn() }),
-  workspaceSubscriptionSummaryOptions: (wsId: string) => ({
-    queryKey: ["billing", wsId, "summary"],
   }),
 }));
 vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
@@ -227,20 +219,6 @@ describe("MembersTab", () => {
 
     await waitFor(() => expect(mockCreateMember).toHaveBeenCalled());
     expect(screen.getByRole("dialog", { name: "Invite member" })).toBeInTheDocument();
-  });
-
-  it("links seat usage to billing when subscriptions are on", () => {
-    configStore
-      .getState()
-      .setFeatureFlags({ [BILLING_WORKSPACE_SUBSCRIPTIONS_FLAG]: true });
-    data.summary = { seatCapacity: { used: 3, reserved: 1, purchased: 5 } };
-    renderWithI18n(<MembersTab />);
-
-    expect(screen.getByText(/4 of 5 seats used/)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Manage seats" })).toHaveAttribute(
-      "href",
-      "/acme/settings?tab=billing",
-    );
   });
 
   it("gives members a read-only view without invite or share-link controls", () => {

@@ -19,7 +19,14 @@ import {
   Sun,
   type LucideIcon,
 } from "lucide-react";
-import { Command as CommandPrimitive } from "cmdk";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@multica/ui/components/ui/command";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type {
@@ -208,12 +215,12 @@ function ProjectResultRow({
   const status = project.status as ProjectStatus;
 
   return (
-    <CommandPrimitive.Item
+    <CommandItem
       key={`project:${project.id}`}
       value={`project:${project.id}`}
       disabled={disabled}
       onSelect={onSelect}
-      className="flex cursor-default select-none flex-col gap-1 rounded-lg px-3 py-2.5 text-body outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-accent"
+      className="flex cursor-default select-none flex-col gap-1 rounded-lg px-3 py-2.5 text-body outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-highlighted:bg-accent"
     >
       <div className="flex items-center gap-2.5">
         <ProjectIcon project={project} size="md" />
@@ -233,7 +240,7 @@ function ProjectResultRow({
           </span>
         </div>
       )}
-    </CommandPrimitive.Item>
+    </CommandItem>
   );
 }
 
@@ -250,12 +257,12 @@ function IssueResultRow({
 }) {
   const { colorOf, iconOf } = useIssueStatuses(useWorkspaceId());
   return (
-    <CommandPrimitive.Item
+    <CommandItem
       key={issue.id}
       value={issue.id}
       disabled={disabled}
       onSelect={onSelect}
-      className="flex cursor-default select-none flex-col gap-1 rounded-lg px-3 py-2.5 text-body outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-accent"
+      className="flex cursor-default select-none flex-col gap-1 rounded-lg px-3 py-2.5 text-body outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-highlighted:bg-accent"
     >
       <div className="flex items-center gap-2.5">
         <StatusIcon
@@ -295,7 +302,7 @@ function IssueResultRow({
           </span>
         </div>
       )}
-    </CommandPrimitive.Item>
+    </CommandItem>
   );
 }
 
@@ -322,12 +329,10 @@ interface SearchResults {
 
 const NO_RESULTS: SearchResults = { query: "", issues: [], projects: [] };
 
-// One heading treatment for every group. Headings go through cmdk's `heading`
-// prop rather than a hand-rolled div: cmdk renders it into a
-// [cmdk-group-heading] node and points the group's aria-labelledby at it, so a
-// screen reader announces which group a row belongs to.
+// One heading treatment for every group. Headings go through the group label
+// so the list can name which group a row belongs to.
 const GROUP_CLASS =
-  "p-2 [&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-caption [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground";
+  "p-2 [&_[data-slot=command-group-heading]]:px-3 [&_[data-slot=command-group-heading]]:py-1.5 [&_[data-slot=command-group-heading]]:text-caption [&_[data-slot=command-group-heading]]:font-medium [&_[data-slot=command-group-heading]]:text-muted-foreground";
 
 export function SearchCommand() {
   const { t } = useT("search");
@@ -778,8 +783,10 @@ export function SearchCommand() {
             {t(($) => $.description)}
           </DialogDescription>
         </DialogHeader>
-        <CommandPrimitive
+        <Command
           shouldFilter={false}
+          inputValue={query}
+          onInputValueChange={handleValueChange}
           onPointerDownCapture={recordIntent}
           onClickCapture={recordIntent}
           onKeyDownCapture={(e) => {
@@ -792,18 +799,15 @@ export function SearchCommand() {
               });
             }
           }}
-          className="flex size-full flex-col overflow-hidden rounded-xl bg-popover text-popover-foreground"
+          className="flex size-full flex-col overflow-hidden rounded-xl bg-popover p-0 text-popover-foreground"
         >
           {/* Search input */}
           <div className="flex items-center gap-3 border-b px-4 py-3">
             <SearchIcon className="size-5 shrink-0 text-muted-foreground" />
-            <CommandPrimitive.Input
+            <CommandInput
+              plain
               placeholder={t(($) => $.placeholder)}
-              value={query}
-              onValueChange={handleValueChange}
               onKeyDown={(e) => {
-                // cmdk's root handler intercepts Home/End for list navigation;
-                // stop propagation so the browser moves the text caret instead.
                 if (e.key === "Home" || e.key === "End") {
                   e.stopPropagation();
                 }
@@ -817,66 +821,66 @@ export function SearchCommand() {
           </div>
 
           {/* Results list */}
-          <CommandPrimitive.List className="max-h-[min(400px,50vh)] overflow-y-auto overflow-x-hidden">
+          <CommandList className="max-h-[min(400px,50vh)] overflow-y-auto overflow-x-hidden">
             {/* Pages section — only shown when query matches */}
             {filteredPages.length > 0 && (
-              <CommandPrimitive.Group
+              <CommandGroup
                 heading={t(($) => $.groups.pages)}
                 className={GROUP_CLASS}
               >
                 {filteredPages.map((page) => {
                   const PageIcon = routeIconForPath(p[page.key]());
                   return (
-                  <CommandPrimitive.Item
+                  <CommandItem
                     key={page.key}
                     value={`page:${page.key}`}
                     onSelect={() => handlePageSelect(page.key)}
-                    className="flex cursor-default select-none items-center gap-2.5 rounded-lg px-3 py-2.5 text-body outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-accent"
+                    className="flex cursor-default select-none items-center gap-2.5 rounded-lg px-3 py-2.5 text-body outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-highlighted:bg-accent"
                   >
                     <PageIcon className="size-4 shrink-0 text-muted-foreground" />
                     <span className="truncate">
                       <HighlightText text={page.label} query={query} />
                     </span>
-                  </CommandPrimitive.Item>
+                  </CommandItem>
                   );
                 })}
-              </CommandPrimitive.Group>
+              </CommandGroup>
             )}
 
             {/* Commands section — New Issue / New Project / Copy link / Theme, only shown when query matches */}
             {filteredCommands.length > 0 && (
-              <CommandPrimitive.Group
+              <CommandGroup
                 heading={t(($) => $.groups.commands)}
                 className={GROUP_CLASS}
               >
                 {filteredCommands.map((cmd) => (
-                  <CommandPrimitive.Item
+                  <CommandItem
                     key={cmd.key}
                     value={`command:${cmd.key}`}
                     onSelect={cmd.onSelect}
-                    className="flex cursor-default select-none items-center gap-2.5 rounded-lg px-3 py-2.5 text-body outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-accent"
+                    className="flex cursor-default select-none items-center gap-2.5 rounded-lg px-3 py-2.5 text-body outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-highlighted:bg-accent"
                   >
                     <cmd.icon className="size-4 shrink-0 text-muted-foreground" />
                     <span className="truncate">
                       <HighlightText text={cmd.label} query={query} />
                     </span>
                     {cmd.trailing}
-                  </CommandPrimitive.Item>
+                  </CommandItem>
                 ))}
-              </CommandPrimitive.Group>
+              </CommandGroup>
             )}
 
             {filteredMembers.length > 0 && (
-              <CommandPrimitive.Group
+              <CommandGroup
                 heading={t(($) => $.groups.members)}
                 className={GROUP_CLASS}
               >
                 {filteredMembers.map((member) => (
-                  <CommandPrimitive.Item
+                  <CommandItem
                     key={member.user_id}
                     value={`member:${member.user_id}`}
                     onSelect={() => handleMemberSelect(member.user_id)}
-                    className="flex cursor-default select-none items-center gap-2.5 rounded-lg px-3 py-2.5 text-body outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-accent"
+                    className="flex cursor-default select-none items-center gap-2.5 rounded-lg px-3 py-2.5 text-body outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-highlighted:bg-accent"
                   >
                     <ActorAvatarBase
                       name={member.name}
@@ -892,22 +896,22 @@ export function SearchCommand() {
                         <HighlightText text={member.email} query={query} />
                       </div>
                     </div>
-                  </CommandPrimitive.Item>
+                  </CommandItem>
                 ))}
-              </CommandPrimitive.Group>
+              </CommandGroup>
             )}
 
             {filteredWorkspaces.length > 0 && (
-              <CommandPrimitive.Group
+              <CommandGroup
                 heading={t(($) => $.groups.workspaces)}
                 className={GROUP_CLASS}
               >
                 {filteredWorkspaces.map((ws) => (
-                  <CommandPrimitive.Item
+                  <CommandItem
                     key={ws.id}
                     value={`workspace:${ws.id}`}
                     onSelect={() => handleWorkspaceSelect(ws.slug)}
-                    className="flex cursor-default select-none items-center gap-2.5 rounded-lg px-3 py-2.5 text-body outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-accent"
+                    className="flex cursor-default select-none items-center gap-2.5 rounded-lg px-3 py-2.5 text-body outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-highlighted:bg-accent"
                   >
                     <WorkspaceAvatar name={ws.name} avatarUrl={ws.avatar_url} size="sm" />
                     <span className="min-w-0 flex-1 truncate">
@@ -921,9 +925,9 @@ export function SearchCommand() {
                         className="size-2 shrink-0 rounded-full bg-brand"
                       />
                     )}
-                  </CommandPrimitive.Item>
+                  </CommandItem>
                 ))}
-              </CommandPrimitive.Group>
+              </CommandGroup>
             )}
 
             {/*
@@ -945,9 +949,9 @@ export function SearchCommand() {
               !hasResults &&
               filteredPages.length === 0 &&
               filteredCommands.length === 0 && (
-                <CommandPrimitive.Empty className="py-10 text-center text-body text-muted-foreground">
+                <CommandEmpty className="py-10 text-center text-body text-muted-foreground">
                   {t(($) => $.empty.no_results)}
-                </CommandPrimitive.Empty>
+                </CommandEmpty>
               )}
 
             {/*
@@ -963,7 +967,7 @@ export function SearchCommand() {
               their live section (see partitionAggregatedSearchResults).
             */}
             {partitionedResults.liveProjects.length > 0 && (
-              <CommandPrimitive.Group
+              <CommandGroup
                 heading={t(($) => $.groups.projects)}
                 className={GROUP_CLASS}
               >
@@ -976,11 +980,11 @@ export function SearchCommand() {
                     onSelect={handleSelect}
                   />
                 ))}
-              </CommandPrimitive.Group>
+              </CommandGroup>
             )}
 
             {partitionedResults.liveIssues.length > 0 && (
-              <CommandPrimitive.Group
+              <CommandGroup
                 heading={t(($) => $.groups.issues)}
                 className={GROUP_CLASS}
               >
@@ -993,11 +997,11 @@ export function SearchCommand() {
                     onSelect={handleSelect}
                   />
                 ))}
-              </CommandPrimitive.Group>
+              </CommandGroup>
             )}
 
             {partitionedResults.hasCancelled && (
-              <CommandPrimitive.Group
+              <CommandGroup
                 heading={t(($) => $.groups.cancelled)}
                 className={GROUP_CLASS}
               >
@@ -1019,25 +1023,25 @@ export function SearchCommand() {
                     onSelect={handleSelect}
                   />
                 ))}
-              </CommandPrimitive.Group>
+              </CommandGroup>
             )}
 
             {!query.trim() && recentIssues.length > 0 && (
-              <CommandPrimitive.Group
+              <CommandGroup
                 heading={
                   <>
                     <Clock className="size-3" />
                     <span>{t(($) => $.groups.recent)}</span>
                   </>
                 }
-                className={`${GROUP_CLASS} [&_[cmdk-group-heading]]:flex [&_[cmdk-group-heading]]:items-center [&_[cmdk-group-heading]]:gap-2`}
+                className={`${GROUP_CLASS} [&_[data-slot=command-group-heading]]:flex [&_[data-slot=command-group-heading]]:items-center [&_[data-slot=command-group-heading]]:gap-2`}
               >
                 {recentIssues.map((item) => (
-                  <CommandPrimitive.Item
+                  <CommandItem
                     key={item.id}
                     value={item.id}
                     onSelect={handleSelect}
-                    className="flex cursor-default select-none items-center gap-2.5 rounded-lg px-3 py-2.5 text-body outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-accent"
+                    className="flex cursor-default select-none items-center gap-2.5 rounded-lg px-3 py-2.5 text-body outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-highlighted:bg-accent"
                   >
                     <StatusIcon
                       status={item.status}
@@ -1054,9 +1058,9 @@ export function SearchCommand() {
                       assigneeType={item.assignee_type}
                       assigneeId={item.assignee_id}
                     />
-                  </CommandPrimitive.Item>
+                  </CommandItem>
                 ))}
-              </CommandPrimitive.Group>
+              </CommandGroup>
             )}
 
             {!isLoading && !query.trim() && recentIssues.length === 0 && (
@@ -1064,8 +1068,8 @@ export function SearchCommand() {
                 {t(($) => $.empty.type_to_search)}
               </div>
             )}
-          </CommandPrimitive.List>
-        </CommandPrimitive>
+          </CommandList>
+        </Command>
       </DialogContent>
     </Dialog>
   );

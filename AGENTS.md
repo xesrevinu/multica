@@ -4,7 +4,7 @@ Multica is a task management platform where people and agents collaborate on iss
 
 ## Scope and Reading Order
 
-- For naming, translations, or Chinese UI/docs copy, read [conventions.mdx](apps/docs/content/docs/developers/conventions.mdx) and [conventions.zh.mdx](apps/docs/content/docs/developers/conventions.zh.mdx).
+- For naming, translations, or Chinese UI copy, read [conventions.mdx](docs/developers/conventions.mdx) and [conventions.zh.mdx](docs/developers/conventions.zh.mdx).
 - Maintain shared rules here. `CLAUDE.md` files only import them. Update instructions in the same change that alters the referenced workflow or boundary; do not add incident timelines, dependency version lists, or duplicate rules.
 
 ## Sharing Rules and Package Boundaries
@@ -16,7 +16,6 @@ Multica is a task management platform where people and agents collaborate on iss
 | `packages/ui/` | UI primitives and shared styles. No business logic or `@multica/core` imports. |
 | `packages/views/` | Shared pages and business components. No store definitions, `next/*`, or `react-router-dom`; use `NavigationAdapter`, `useNavigation()`, and `<AppLink>`. |
 | `apps/web/` | Next.js routes/layouts and web-only UI. Framework APIs stay here; shared navigation adapters live in `apps/web/platform/`. The web app stays a responsive PWA. |
-| `apps/docs/` | Fumadocs documentation site |
 
 - Dependency direction is `views -> core + ui`; core and ui remain independent. Shared packages export raw TypeScript compiled by consuming apps.
 - Extract logic used by more than one surface into the appropriate shared package. Keep framework APIs in the app layer; inject platform-specific UI through props/slots.
@@ -36,7 +35,7 @@ Run these from the repository root:
 
 | Scope | Checks |
 | --- | --- |
-| Frontend | `pnpm typecheck`, `pnpm lint`, `pnpm test` |
+| Frontend | `pnpm typecheck`, `pnpm lint`, `pnpm test`. `pnpm fmt` is oxfmt and is not run; it would reformat the tree. |
 | Go backend | `make test` |
 | End-to-end | `pnpm exec playwright test` |
 | Combined web/backend verification | `make check` |

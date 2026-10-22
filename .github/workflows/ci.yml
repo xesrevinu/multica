@@ -141,6 +141,7 @@ jobs:
             turbo-build-${{ runner.os }}-${{ runner.arch }}-${{ steps.runtime.outputs.node }}-
 
       - name: Build, type check, and lint
+        # oxfmt is installed but not run; it would reformat the tree.
         run: pnpm exec turbo build typecheck lint --filter='!@multica/docs'
 
       - name: Check frontend quality

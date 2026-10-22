@@ -7,7 +7,6 @@
 package analytics
 
 import (
-	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -65,30 +64,7 @@ type Client interface {
 //   - ANALYTICS_DISABLED: set to "true"/"1" to force a no-op client even
 //     when POSTHOG_API_KEY is set (useful for CI and self-hosted opt-out).
 func NewFromEnv() Client {
-	if isDisabled() {
-		slog.Info("analytics disabled via ANALYTICS_DISABLED")
-		return NoopClient{}
-	}
-	key := os.Getenv("POSTHOG_API_KEY")
-	if key == "" {
-		slog.Info("analytics: POSTHOG_API_KEY not set, using noop client")
-		return NoopClient{}
-	}
-	host := os.Getenv("POSTHOG_HOST")
-	if host == "" {
-		host = "https://us.i.posthog.com"
-	}
-	slog.Info("analytics: posthog client enabled", "host", host)
-	return NewPostHogClient(PostHogConfig{
-		APIKey:      key,
-		Host:        host,
-		Environment: EnvironmentFromEnv(),
-	})
-}
-
-func isDisabled() bool {
-	v := os.Getenv("ANALYTICS_DISABLED")
-	return v == "true" || v == "1"
+	return NoopClient{}
 }
 
 func EnvironmentFromEnv() string {

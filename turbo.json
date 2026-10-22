@@ -52,11 +52,11 @@
       "cache": false,
       "persistent": true
     },
-    // Packages export raw `.ts`, so each `tsc --noEmit` already walks
+    // Packages export raw `.ts`, so each `tsrs --noEmit` already walks
     // workspace imports. `^typecheck` would serialise that work (views,
     // then web on top). `^cache-inputs` still puts dependency
     // sources in the hash — a core edit busts web's cache — without
-    // waiting for core's tsc to finish.
+    // waiting for core's tsrs to finish.
     "typecheck": {
       "dependsOn": ["^cache-inputs", "mdx"],
       "outputs": ["*.tsbuildinfo"]
@@ -75,15 +75,17 @@
     // `@multica/web#test` byte-identical in hash,
     // so a cached pass would be replayed over changed code. `^cache-inputs`
     // closes that without side effects: `^typecheck` would also work but drags
-    // real `tsc --noEmit` runs into the test job, and `^test` would serialise
+    // real `tsrs --noEmit` runs into the test job, and `^test` would serialise
     // the suites behind each other.
     "test": {
       "dependsOn": ["^cache-inputs"]
     },
-    // `lint` keeps no dependency edge: eslint here is not type-aware (no
-    // `projectService` / `parserOptions.project` anywhere in
-    // packages/eslint-config), so it only ever reads its own package's files
-    // and a dependency's source cannot change its result.
-    "lint": {}
+    // `lint` and `fmt` are oxlint / oxfmt. They are not type-aware and do not
+    // read dependency source. CI does not run them yet: oxfmt would reformat
+    // the tree, and the oxlint baseline has not been accepted.
+    "lint": {},
+    "fmt": {
+      "cache": false
+    }
   }
 }

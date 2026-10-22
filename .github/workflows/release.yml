@@ -258,6 +258,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Build the web app on the runner
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @multica/web build
+        env:
+          NEXT_PUBLIC_APP_VERSION: ${{ needs.verify.outputs.tag_name }}
+
       - name: Compute web image labels
         id: meta
         uses: docker/metadata-action@v5
@@ -288,9 +307,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=release-web-${{ env.PLATFORM_PAIR }}
           cache-to: type=gha,mode=max,scope=release-web-${{ env.PLATFORM_PAIR }}
-          build-args: |
-            REMOTE_API_URL=http://backend:8080
-            NEXT_PUBLIC_APP_VERSION=${{ needs.verify.outputs.tag_name }}
           outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/multica-web,push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest

@@ -6,7 +6,6 @@ import {
   Bell,
   Blocks,
   CircleDot,
-  CreditCard,
   FolderGit2,
   Keyboard,
   KeyRound,
@@ -31,7 +30,6 @@ import { useCurrentWorkspace } from "@multica/core/paths";
 import { useFeatureEnabled } from "@multica/core/config";
 import { useCurrentMember } from "@multica/core/permissions";
 import {
-  BILLING_WORKSPACE_SUBSCRIPTIONS_FLAG,
   PLUGINS_V1_FLAG,
   PROJECT_WORKFLOWS_V1_FLAG,
 } from "@multica/core/feature-flags";
@@ -58,7 +56,6 @@ import { QuickActionsTab } from "./quick-actions-tab";
 import { KeyboardShortcutsTab } from "./keyboard-shortcuts-tab";
 import { PluginsTab } from "./plugins-tab";
 import { McpTab } from "./mcp-tab";
-import { BillingTab } from "./billing-tab";
 import { SETTINGS_ANCHOR_ATTR } from "./settings-layout";
 import { searchSettings } from "./settings-search";
 import { HighlightText } from "../../search/highlight-text";
@@ -114,11 +111,6 @@ export function SettingsPage({ extraDeviceTabs = [] }: SettingsPageProps = {}) {
   const navigation = useNavigation();
   const pluginsEnabled = useFeatureEnabled(PLUGINS_V1_FLAG, false);
   const workflowsEnabled = useFeatureEnabled(PROJECT_WORKFLOWS_V1_FLAG, false);
-  const billingEnabled = useFeatureEnabled(
-    BILLING_WORKSPACE_SUBSCRIPTIONS_FLAG,
-    false,
-  );
-
   const entry = (
     value: string,
     label: string,
@@ -191,16 +183,6 @@ export function SettingsPage({ extraDeviceTabs = [] }: SettingsPageProps = {}) {
             entry("members", t(($) => $.page.tabs.members), Users, <MembersTab />, {
               adminOnly: true,
             }),
-            ...(billingEnabled
-              ? [
-                  entry(
-                    "billing",
-                    t(($) => $.page.tabs.billing),
-                    CreditCard,
-                    <BillingTab />,
-                  ),
-                ]
-              : []),
           ],
         },
         {
@@ -282,7 +264,7 @@ export function SettingsPage({ extraDeviceTabs = [] }: SettingsPageProps = {}) {
   );
   const location = resolveSettingsLocation(navigation.searchParams);
   const candidate =
-    location.tab === "billing" && !billingEnabled ? "workspace" : location.tab;
+    location.tab === "billing" ? "workspace" : location.tab;
   const active =
     allEntries.find((item) => item.value === candidate) ?? allEntries[0]!;
   const href = (value: string) =>

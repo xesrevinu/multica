@@ -22,9 +22,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
-	"github.com/multica-ai/multica/server/internal/cloudruntime"
 	"github.com/multica-ai/multica/server/internal/daemonws"
-	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/handler"
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
@@ -35,7 +33,6 @@ import (
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/realtime"
-	"github.com/multica-ai/multica/server/internal/seatcapacity"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/storage"
 	"github.com/multica-ai/multica/server/internal/tracing"
@@ -359,22 +356,6 @@ func strictPositiveDurationEnv(name string, fallback time.Duration) (time.Durati
 	return value, nil
 }
 
-func seatCapacityExecutor(cloudURL string) seatcapacity.Executor {
-	executor, err := seatcapacity.New(seatcapacity.Config{
-		BaseURL: cloudURL,
-	})
-	if err == nil {
-		return executor
-	}
-	// A Cloud-connected deployment with malformed connection settings must not
-	// silently restore unlimited membership. The fail-closed executor returns
-	// 503 until the operator repairs the Cloud URL; it is deliberately
-	// ineligible for recovery-worker startup so queued intents keep their retry
-	// budget while configuration is broken.
-	slog.Error("subscription seat capacity executor unavailable", "error", err)
-	return seatcapacity.NewUnavailable(err)
-}
-
 // NewRouterWithOptions builds the fully-configured Chi router and
 // returns the *handler.Handler it was constructed from. Callers that
 // need to drive background lifecycle on services attached to the
@@ -438,37 +419,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	h.TaskService.Metrics = opts.BusinessMetrics
 	h.IssueService.Metrics = opts.BusinessMetrics
 	h.Orchestrator = orchestrator.New(orchestrator.Options{Pool: pool, Bus: bus, Queries: queries, Reconcile: envDurationPositive("MULTICA_ORCHESTRATOR_RECONCILE", 60*time.Second)})
-	entitlementClient, entitlementErr := entitlement.New(entitlement.Config{
-		BaseURL:  signupConfig.CloudURL,
-		Observer: opts.BusinessMetrics,
-	})
-	if entitlementErr != nil {
-		slog.Error("entitlement policy client disabled by malformed Multica Cloud URL", "error", entitlementErr)
-		opts.BusinessMetrics.RecordEntitlementConfigError()
-	} else if entitlementClient.Enabled() {
-		h.Entitlements = entitlementClient
-		h.TaskService.Entitlements = entitlementClient
-		h.IssueService.Entitlements = entitlementClient
-		h.AutopilotService.Entitlements = entitlementClient
-		h.AutopilotService.QuotaMetrics = opts.BusinessMetrics
-	}
-	// Cloud Runtime and strict seat capacity are one managed deployment. Reuse
-	// the same base URL so Billing cannot be readable while invitation writes
-	// silently skip Cloud's authoritative seat policy.
-	h.SeatCapacity = seatCapacityExecutor(signupConfig.CloudURL)
-	capacityLocker := seatcapacity.NewWorkspaceLocker(pool)
-	h.SeatCapacityLocker = capacityLocker
-	if seatcapacity.CanRunWorker(h.SeatCapacity) {
-		h.SeatCapacityWorker = seatcapacity.NewWorker(queries, h.SeatCapacity, capacityLocker, seatcapacity.WorkerConfig{})
-	}
-	if opts.BusinessMetrics != nil {
-		// Wire the BusinessMetrics receiver into the cloud runtime client
-		// so every outbound Fleet/Gateway request feeds the
-		// multica_cloudruntime_request_* histograms.
-		if client, ok := h.CloudRuntime.(*cloudruntime.Client); ok {
-			client.SetRecorder(opts.BusinessMetrics)
-		}
-	}
 	if opts.DaemonWakeup != nil {
 		h.TaskService.Wakeup = opts.DaemonWakeup
 		if notifier, ok := opts.DaemonWakeup.(handler.RuntimeProfileRefreshNotifier); ok {
@@ -1123,7 +1073,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	trustedProxies := middleware.ParseTrustedProxies(os.Getenv("RATE_LIMIT_TRUSTED_PROXIES"))
 	authRL := middleware.RateLimit(rdb, envPositiveInt("RATE_LIMIT_AUTH", 5), time.Minute, trustedProxies)
 	authVerifyRL := middleware.RateLimit(rdb, envPositiveInt("RATE_LIMIT_AUTH_VERIFY", 20), time.Minute, trustedProxies)
-	contactSalesRL := middleware.RateLimit(rdb, envPositiveInt("RATE_LIMIT_CONTACT_SALES", 5), time.Hour, trustedProxies)
 	r.With(authRL).Post("/auth/send-code", h.SendCode)
 	r.With(authVerifyRL).Post("/auth/verify-code", h.VerifyCode)
 	r.With(authRL).Post("/auth/google", h.GoogleLogin)
@@ -1131,7 +1080,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 	// Public API
 	r.Get("/api/config", h.GetConfig)
-	r.With(contactSalesRL).Post("/api/contact-sales", h.CreateContactSales)
 	// Public share-link preview — no auth: shows the workspace name/slug and
 	// inviter so a not-yet-logged-in visitor can see what they're joining.
 	r.Get("/api/share-links/{code}", h.GetShareLinkInfo)
@@ -1153,12 +1101,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// the connection id in the path selects the workspace, provider, and
 	// decryption secret.
 	r.Post("/api/webhooks/vcs/{connectionId}", h.HandleVCSWebhook)
-	// Stripe webhook (no Multica auth — Stripe signs the raw body
-	// with a shared secret, the multica-cloud upstream verifies. We
-	// only forward the bytes + the Stripe-Signature header; see
-	// HandleCloudBillingStripeWebhook for the rationale).
-	r.Post("/api/webhooks/stripe", h.HandleCloudBillingStripeWebhook)
-
 	// Daemon API routes (require daemon token or valid user token)
 	r.Route("/api/daemon", func(r chi.Router) {
 		r.Use(middleware.DaemonAuth(queries, patCache, daemonTokenCache, cloudPATVerifier))
@@ -1493,67 +1435,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Post("/", h.CreatePersonalAccessToken)
 			r.Post("/current/renew", h.RenewCurrentPersonalAccessToken)
 			r.Delete("/{id}", h.RevokePersonalAccessToken)
-		})
-
-		// Cloud Billing proxy. Same upstream service / port as
-		// cloud-runtime — multica-cloud's Fleet and Billing share
-		// :8080 and the same chi router. All routes here forward
-		// to /api/v1/billing/* with X-User-ID stamped from the
-		// authenticated context.
-		//
-		// User-scoped (account-level), NOT workspace-scoped — sits
-		// outside the RequireWorkspaceMember group so a user can
-		// inspect their balance, top up, and open the Billing Portal
-		// without an active workspace selected. The upstream owner
-		// model is single-user; X-Workspace-ID would be ignored even
-		// if we sent it. The Stripe webhook is the public outlier
-		// and lives outside the entire Auth group (see above).
-		//
-		// IMPORTANT — task-token actors are blocked here. The Auth
-		// middleware happily turns an mat_ task token into a normal
-		// X-User-ID stamp (so agents can comment, claim issues, etc.
-		// as their owner), but billing is account-level and a running
-		// agent reading its owner's balance / opening a checkout
-		// session is the kind of lateral-movement we're explicitly
-		// trying to prevent. handler.RequireHumanActor checks the
-		// authoritative server-set X-Actor-Source header and 403s
-		// any task-token request. See actor_guards.go for the full
-		// rationale.
-		r.Route("/api/cloud-billing", func(r chi.Router) {
-			r.Use(handler.RequireHumanActor)
-
-			r.Get("/balance", h.GetCloudBillingBalance)
-			r.Get("/transactions", h.ListCloudBillingTransactions)
-			r.Get("/batches", h.ListCloudBillingBatches)
-			r.Get("/topups", h.ListCloudBillingTopups)
-			r.Get("/price-tiers", h.ListCloudBillingPriceTiers)
-			r.Post("/checkout-sessions", h.CreateCloudBillingCheckoutSession)
-			r.Get("/checkout-sessions/{sessionId}", h.GetCloudBillingCheckoutSession)
-			r.Post("/portal-sessions", h.CreateCloudBillingPortalSession)
-		})
-
-		// Workspace subscriptions use the same cloud transport and Stripe
-		// webhook as the existing owner-credit billing surface, but every request
-		// is workspace-scoped. Summary and prices are member-readable. Local role
-		// checks cheaply reject unauthorized writes; Cloud remains the final
-		// authority and validates every mutation before external writes. Handlers
-		// also enforce billing_workspace_subscriptions so a route refactor cannot
-		// accidentally bypass the rollout flag.
-		r.Route("/api/cloud-subscriptions", func(r chi.Router) {
-			r.Use(handler.RequireHumanActor)
-			r.Group(func(r chi.Router) {
-				r.Use(middleware.RequireWorkspaceMember(queries))
-				r.Get("/summary", h.GetCloudWorkspaceSubscriptionSummary)
-				r.Get("/prices", h.GetCloudWorkspaceSubscriptionPrices)
-			})
-			r.Group(func(r chi.Router) {
-				r.Use(middleware.RequireWorkspaceRole(queries, "owner", "admin"))
-				r.Post("/checkout-sessions", h.CreateCloudWorkspaceSubscriptionCheckout)
-				r.Post("/seats/purchase-preview", h.PreviewCloudWorkspaceSubscriptionSeatPurchase)
-				r.Post("/seats/purchases", h.PurchaseCloudWorkspaceSubscriptionSeats)
-				r.Post("/seats/reconcile", h.ReconcileCloudWorkspaceSubscriptionSeats)
-				r.Post("/portal-sessions", h.CreateCloudWorkspaceSubscriptionPortal)
-			})
 		})
 
 		// --- Workspace-scoped routes (all require workspace membership) ---
@@ -1926,22 +1807,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					// behaviour, not just the route). Same handler.
 					r.Post("/archive-agents-and-delete", h.UnbindAgentsAndDeleteRuntime)
 				})
-			})
-
-			// Cloud Runtime fleet proxy. The remote service URL is configured
-			// on SaaS API nodes only; self-hosted deployments return 503.
-			r.Route("/api/cloud-runtime", func(r chi.Router) {
-				r.Get("/", h.GetCloudRuntimeService)
-				r.Get("/healthz", h.GetCloudRuntimeHealth)
-				r.Get("/readyz", h.GetCloudRuntimeReady)
-				r.Get("/nodes", h.ListCloudRuntimeNodes)
-				r.Post("/nodes", h.CreateCloudRuntimeNode)
-				r.Delete("/nodes", h.DeleteCloudRuntimeNode)
-				r.Post("/nodes/start", h.StartCloudRuntimeNode)
-				r.Post("/nodes/stop", h.StopCloudRuntimeNode)
-				r.Post("/nodes/reboot", h.RebootCloudRuntimeNode)
-				r.Post("/nodes/status", h.GetCloudRuntimeNodeStatus)
-				r.Post("/nodes/exec", h.ExecCloudRuntimeNode)
 			})
 
 			// Tasks (user-facing, with ownership check)

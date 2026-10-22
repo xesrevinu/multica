@@ -1,52 +1,14 @@
 // @vitest-environment node
-import "@multica/eslint-config/register-ts6";
 import { describe, expect, it } from "vitest";
-import { Linter } from "eslint";
-import tsParser from "@typescript-eslint/parser";
-import {
-  NO_UNTRANSLATED_ATTRIBUTES,
-  NO_UNTRANSLATED_TOAST,
-} from "./eslint-i18n-guard.mjs";
+import { messagesForSource } from "./i18n-guard.mjs";
 
 // These fixtures ARE the specification of the guard. The rule's first
-// iteration matched only a bare `Literal` child, so every "indirect" case
-// below reached production untranslated while `pnpm lint` stayed green — a
-// hand-run probe of the direct cases had reported success. Asserting the
-// indirect shapes here is what keeps that hole closed.
-
-const linter = new Linter();
+// iteration matched only a bare literal child, so every "indirect" case
+// below reached production untranslated while lint stayed green. The oxlint
+// plugin reports whatever this function returns.
 
 function lint(code: string): string[] {
-  const messages = linter.verify(
-    code,
-    [
-      {
-        files: ["**/*.tsx"],
-        languageOptions: {
-          parser: tsParser,
-          parserOptions: {
-            ecmaVersion: "latest",
-            sourceType: "module",
-            ecmaFeatures: { jsx: true },
-          },
-        },
-        rules: {
-          "no-restricted-syntax": [
-            "error",
-            NO_UNTRANSLATED_ATTRIBUTES,
-            NO_UNTRANSLATED_TOAST,
-          ],
-        },
-      },
-    ],
-    "fixture.tsx",
-  );
-  // A fixture that stops parsing would silently "pass" every allow-case.
-  const parseError = messages.find((m) => m.fatal);
-  if (parseError) {
-    throw new Error(`fixture failed to parse: ${parseError.message}`);
-  }
-  return messages.map((m) => m.message);
+  return messagesForSource(code);
 }
 
 function flags(code: string): boolean {

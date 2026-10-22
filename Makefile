@@ -133,7 +133,9 @@ selfhost-build: ## Build backend/web from the current checkout and start the sel
 		fi; \
 		echo "==> Generated random JWT_SECRET, POSTGRES_PASSWORD, and MULTICA_VCS_SECRET_KEY"; \
 	fi
-	@echo "==> Building Multica from the current checkout..."
+	@echo "==> Building the web app on the host (copied into the image)..."
+	pnpm --filter @multica/web build
+	@echo "==> Building images from the current checkout..."
 	$(COMPOSE) -f docker-compose.selfhost.yml -f docker-compose.selfhost.build.yml up -d --build
 	@bash scripts/selfhost-wait.sh build
 

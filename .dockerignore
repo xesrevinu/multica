@@ -47,6 +47,10 @@ apps/web/.next
 apps/web/.next/**
 apps/web/node_modules
 apps/web/*.tsbuildinfo
+# Host `pnpm --filter @multica/web build` output. `dist` above ignores every
+# dist directory; this exception is later, so it wins.
+!apps/web/dist/
+!apps/web/dist/**
 
 # Repository-only tooling
 /.github/

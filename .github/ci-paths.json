@@ -2,7 +2,6 @@
   "frontend": [
     ".github/actions/frontend-quality/**",
     "apps/web/**",
-    "apps/ui-lab/**",
     "packages/**",
     "package.json",
     ".npmrc",

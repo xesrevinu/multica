@@ -43,16 +43,19 @@
   bottom: calc(var(--chat-launcher-clearance) + var(--chat-launcher-inset));
 }
 
-/* Shiki dual themes: CSS-only light/dark switching via CSS variables */
-/* @see https://shiki.style/guide/dual-themes */
-.shiki,
-.shiki span {
-  color: var(--shiki-light);
+/* Highlights dual themes: CSS-only light/dark switching via CSS variables. */
+.highlights,
+.highlights span {
+  color: var(--hls-light);
+  font-style: var(--hls-light-font-style, normal);
+  font-weight: var(--hls-light-font-weight, normal);
 }
 
-.dark .shiki,
-.dark .shiki span {
-  color: var(--shiki-dark) !important;
+.dark .highlights,
+.dark .highlights span {
+  color: var(--hls-dark) !important;
+  font-style: var(--hls-dark-font-style, normal);
+  font-weight: var(--hls-dark-font-weight, normal);
 }
 
 /* Multica icon: entrance spin animation */

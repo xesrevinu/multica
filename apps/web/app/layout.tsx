@@ -15,7 +15,6 @@ import {
   resolveBrowserWsUrl,
 } from "@/config/runtime-urls";
 import { FIND_HIGHLIGHT_CSS } from "@multica/ui/styles/find-highlight";
-import { AgentationDev } from "@/components/agentation-dev";
 import "./globals.css";
 
 // Inter is the Latin UI face. next/font produces a hashed family (`__Inter_xxx`)
@@ -122,6 +121,13 @@ export const metadata: Metadata = {
   },
 };
 
+// Static import would keep the dev overlay in the production client graph.
+// The call site is also folded away when NODE_ENV is production.
+async function DevAgentation() {
+  const { AgentationDev } = await import("@/components/agentation-dev");
+  return <AgentationDev />;
+}
+
 export default async function RootLayout({
   children,
 }: {
@@ -169,7 +175,7 @@ export default async function RootLayout({
           <Toaster />
         </ThemeProvider>
         <StaticAssetSW />
-        {process.env.NODE_ENV === "development" ? <AgentationDev /> : null}
+        {process.env.NODE_ENV === "development" ? <DevAgentation /> : null}
       </body>
     </html>
   );

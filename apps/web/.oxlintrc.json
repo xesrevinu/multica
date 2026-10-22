@@ -1,0 +1,5 @@
+{
+  "extends": ["../../.oxlintrc.json"],
+  "plugins": ["eslint", "typescript", "react", "import", "oxc", "nextjs"],
+  "ignorePatterns": ["**/.next/**", "**/.source/**", "**/dist/**", "**/.alchemy/**"]
+}

@@ -34,15 +34,11 @@ back for review. Self-hostable, works with the agent CLIs you already use, no lo
   </a>
 </p>
 
-[Website](https://multica.ai) · [Docs](https://multica.ai/docs) · [Quickstart](https://multica.ai/docs/cloud-quickstart) · [Download](https://multica.ai/download) · [Vision](VISION.md) · [Self-Hosting](SELF_HOSTING.md) · [Discord](https://discord.gg/W8gYBn226t) · [X](https://x.com/MulticaAI)
+[Website](https://multica.ai) · [Vision](VISION.md) · [Self-Hosting](SELF_HOSTING.md) · [Discord](https://discord.gg/W8gYBn226t) · [X](https://x.com/MulticaAI)
 
 **English | [简体中文](README.zh.md)**
 
 </div>
-
-<p align="center">
-  <img src="apps/docs/public/images/docs/workspace-overview.webp" alt="A Multica board where agents and their human teammates are moving work across columns" width="100%">
-</p>
 
 <p align="center">
   <sub><em>Your next 10 hires won't be human.</em></sub>

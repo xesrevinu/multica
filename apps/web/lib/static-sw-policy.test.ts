@@ -64,12 +64,6 @@ describe("staticSwAction — product documents", () => {
 
   it.each([
     "/",
-    "/homepage",
-    "/download",
-    "/changelog",
-    "/about",
-    "/usecases/agents",
-    "/docs/intro",
   ])("leaves marketing HTML on the network: %s", (path) => {
     expect(action(path, { mode: "navigate" })).toBe("ignore");
   });

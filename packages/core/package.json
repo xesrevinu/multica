@@ -4,8 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "lint": "eslint .",
+    "typecheck": "tsrs --noEmit",
+    "lint": "oxlint .",
+    "fmt": "oxfmt --check .",
     "test": "vitest run"
   },
   "exports": {
@@ -171,7 +172,6 @@
     "@formatjs/intl-localematcher": "catalog:",
     "@tanstack/react-query": "catalog:",
     "i18next": "catalog:",
-    "posthog-js": "catalog:",
     "react-i18next": "catalog:",
     "yaml": "catalog:",
     "zod": "catalog:",
@@ -181,13 +181,15 @@
     "react": "catalog:"
   },
   "devDependencies": {
-    "@multica/eslint-config": "workspace:*",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
     "@multica/tsconfig": "workspace:*",
     "@testing-library/react": "catalog:",
     "@types/react": "catalog:",
     "jsdom": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
+    "tsrs": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

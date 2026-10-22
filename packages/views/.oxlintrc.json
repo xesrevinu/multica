@@ -1,0 +1,19 @@
+{
+  "extends": ["../../.oxlintrc.json"],
+  "jsPlugins": ["./oxlint-i18n-plugin.js"],
+  "rules": {
+    "multica-i18n/no-literal-jsx-text": "error",
+    "multica-i18n/no-untranslated-attribute": "error",
+    "multica-i18n/no-untranslated-toast": "error"
+  },
+  "overrides": [
+    {
+      "files": ["**/*.test.ts", "**/*.test.tsx", "**/test/**"],
+      "rules": {
+        "multica-i18n/no-literal-jsx-text": "off",
+        "multica-i18n/no-untranslated-attribute": "off",
+        "multica-i18n/no-untranslated-toast": "off"
+      }
+    }
+  ]
+}

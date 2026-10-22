@@ -1,5 +1,6 @@
 import * as React from 'react'
-import { codeToHtml, bundledLanguages, type BundledLanguage } from 'shiki'
+import { codeToHtml, isSupportedLanguage, type Lang } from '@pierre/highlights'
+import { githubDark, githubLight } from '@pierre/highlights/themes'
 import { Copy, Check } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { Button } from "@multica/ui/components/ui/button"
@@ -25,8 +26,8 @@ export interface CodeBlockProps {
   mode?: 'terminal' | 'minimal' | 'full'
 }
 
-// Map common aliases to Shiki language names
-const LANGUAGE_ALIASES: Record<string, BundledLanguage> = {
+// Map common aliases onto Highlights language names.
+const LANGUAGE_ALIASES: Record<string, string> = {
   js: 'javascript',
   ts: 'typescript',
   py: 'python',
@@ -48,19 +49,19 @@ function getCacheKey(code: string, lang: string): string {
   return `${lang}:${code}`
 }
 
-function isValidLanguage(lang: string): lang is BundledLanguage {
-  const normalized = LANGUAGE_ALIASES[lang] || lang
-  return normalized in bundledLanguages
+function resolveLang(language: string): Lang {
+  const lower = language.toLowerCase()
+  const mapped = LANGUAGE_ALIASES[lower] ?? lower
+  if (isSupportedLanguage(mapped)) return mapped
+  if (isSupportedLanguage(lower)) return lower
+  return 'text'
 }
 
 /**
- * CodeBlock - Syntax highlighted code block using Shiki
+ * CodeBlock - Syntax highlighted code block using Pierre Highlights.
  *
- * Uses Shiki dual themes with CSS variables for light/dark switching.
- * No JS-based dark mode detection needed — theme switching is handled
- * entirely via CSS (see globals.css for .shiki/.dark .shiki rules).
- *
- * @see https://shiki.style/guide/dual-themes
+ * Dual themes emit CSS variables. Light/dark switching stays in CSS via
+ * the `.dark` class (see base.css `.highlights` rules).
  */
 export function CodeBlock({
   code,
@@ -93,19 +94,19 @@ export function CodeBlock({
       }
 
       try {
-        // Use valid language or fallback to plaintext
-        const lang = isValidLanguage(resolvedLang) ? resolvedLang : 'text'
-
-        // Dual themes: Shiki outputs CSS variables for both themes in one pass.
-        // CSS handles switching via .dark selector (see globals.css).
-        const html = await codeToHtml(code, {
-          lang,
-          themes: {
-            light: 'github-light',
-            dark: 'github-dark',
-          },
-          defaultColor: false,
-        })
+        const lang = resolveLang(resolvedLang)
+        // Dual themes: Highlights writes both schemes as CSS variables.
+        // `.dark` selects the dark variables (see base.css).
+        const html = new TextDecoder().decode(
+          codeToHtml(code, {
+            lang,
+            themes: {
+              light: githubLight,
+              dark: githubDark,
+            },
+            defaultColor: false,
+          }).slice(),
+        )
 
         // Cache the result
         if (highlightCache.size >= CACHE_MAX_SIZE) {
@@ -120,7 +121,7 @@ export function CodeBlock({
         }
       } catch (error) {
         // Fallback to plain text on error
-        console.warn(`Shiki highlighting failed for language "${resolvedLang}":`, error)
+        console.warn(`Highlighting failed for language "${resolvedLang}":`, error)
         if (!cancelled) {
           setHighlighted(null)
           setIsLoading(false)

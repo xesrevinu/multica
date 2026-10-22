@@ -119,12 +119,18 @@ describe("proxy legacy workspace route redirects", () => {
     );
   });
 
-  it.each(["multica.ai", "www.multica.ai"])(
-    "does not redirect public marketing root on %s",
+  it.each(["multica.ai", "www.multica.ai", "app.multica.test"])(
+    "redirects root with a session to the last workspace on %s",
     (host) => {
-      expect(redirectLocation("/", sessionCookies, host)).toBeNull();
+      expect(redirectLocation("/", sessionCookies, host)).toBe(
+        `https://${host}/acme/chat`,
+      );
     },
   );
+
+  it("sends logged-out root to login", () => {
+    expect(redirectLocation("/")).toBe("https://app.multica.test/login");
+  });
 
   it("still redirects explicit legacy app routes on the public marketing host", () => {
     expect(redirectLocation("/issues/ABC-123", sessionCookies, "multica.ai")).toBe(
@@ -156,18 +162,6 @@ describe("proxy runtime upstream rewrites", () => {
 
       expect(res.status).toBe(200);
       expect(res.headers.get("x-middleware-rewrite")).toBeNull();
-    });
-  });
-
-  it("does not rewrite docs requests when no runtime docs origin is configured", () => {
-    withoutRuntimeUpstreams(() => {
-      const res = proxy(makeRequest("/docs/zh"));
-
-      expect(res.status).toBe(200);
-      expect(res.headers.get("x-middleware-rewrite")).toBeNull();
-      expect(
-        res.headers.get(`x-middleware-request-${MULTICA_LOCALE_HEADER}`),
-      ).toBe("en");
     });
   });
 
@@ -213,21 +207,6 @@ describe("proxy runtime upstream rewrites", () => {
       );
     } finally {
       restoreEnv("REMOTE_API_URL", previous);
-    }
-  });
-
-  it("rewrites docs requests to the runtime docs origin", () => {
-    const previous = process.env.DOCS_URL;
-    process.env.DOCS_URL = "http://docs:4000";
-    try {
-      const res = proxy(makeRequest("/docs/zh/agents"));
-
-      expect(res.status).toBe(200);
-      expect(res.headers.get("x-middleware-rewrite")).toBe(
-        "http://docs:4000/docs/zh/agents",
-      );
-    } finally {
-      restoreEnv("DOCS_URL", previous);
     }
   });
 

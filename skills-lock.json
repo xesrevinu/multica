@@ -6,6 +6,12 @@
       "sourceType": "github",
       "computedHash": "063a0e6448123cd359ad0044cc46b0e490cc7964d45ef4bb9fd842bd2ffbca67"
     },
+    "highlights": {
+      "source": "pierrecomputer/pierre",
+      "sourceType": "github",
+      "skillPath": "skills/highlights/SKILL.md",
+      "computedHash": "fb5032db3ccd3212682cce4855810735b0de407bf9a5f24af202115c813a9e1d"
+    },
     "shadcn": {
       "source": "shadcn/ui",
       "sourceType": "github",

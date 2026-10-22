@@ -2,10 +2,7 @@
 
 import {
   ArrowUpRight,
-  BookOpen,
   CircleHelp,
-
-  History,
   MessageCircle,
 } from "lucide-react";
 import {
@@ -22,13 +19,9 @@ import { useConfigStore } from "@multica/core/config";
 
 import { DISCORD_URL, DiscordIcon } from "./discord";
 import { useT } from "../i18n";
-import { docsLocalePrefix } from "../common/docs-locale";
-
-const DOCS_URL = "https://multica.ai/docs";
-const CHANGELOG_URL = "https://multica.ai/changelog";
 
 export function HelpLauncher() {
-  const { t, i18n } = useT("layout");
+  const { t } = useT("layout");
   const serverVersion = useConfigStore((state) => state.serverVersion);
   return (
     <DropdownMenu>
@@ -45,32 +38,6 @@ export function HelpLauncher() {
         sideOffset={8}
         className="min-w-40 max-w-56"
       >
-        <DropdownMenuItem
-          render={
-            <a
-              href={`${DOCS_URL}${docsLocalePrefix(i18n.language)}`}
-              target="_blank"
-              rel="noopener noreferrer"
-            />
-          }
-        >
-          <BookOpen className="h-3.5 w-3.5" />
-          {t(($) => $.help.docs)}
-          <ArrowUpRight className="size-3 translate-y-px text-faint-foreground" />
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          render={
-            <a
-              href={CHANGELOG_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-            />
-          }
-        >
-          <History className="h-3.5 w-3.5" />
-          {t(($) => $.help.changelog)}
-          <ArrowUpRight className="size-3 translate-y-px text-faint-foreground" />
-        </DropdownMenuItem>
         <DropdownMenuItem
           render={
             <a href={DISCORD_URL} target="_blank" rel="noopener noreferrer" />

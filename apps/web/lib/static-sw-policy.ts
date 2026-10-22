@@ -36,8 +36,8 @@ export const PRECACHE_PATHS = [
 export const HASHED_STATIC_PATH = /^\/_next\/static\//;
 export const REVALIDATE_PATH = /^\/(icons\/|favicon\.svg$)/;
 export const BYPASS_PATH = /^\/(v1|api|auth|ws|uploads)(\/|$)/;
-export const MARKETING_PATH =
-  /^\/(homepage|download|changelog|usecases|contact-sales|about|docs)(\/|$)/;
+/** No public marketing routes remain. Kept so the generated worker stays stable. */
+export const MARKETING_PATH = /^$/;
 export const PWA_START_PATH = /^\/(inbox|my-issues)$/;
 
 /** Combined matcher for tests that still talk about "static assets". */

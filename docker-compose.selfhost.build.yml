@@ -17,5 +17,3 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.web
-      args:
-        NEXT_PUBLIC_APP_VERSION: dev

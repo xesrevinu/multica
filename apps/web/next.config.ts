@@ -2,14 +2,10 @@ import type { NextConfig } from "next";
 import { config } from "dotenv";
 import { resolve } from "path";
 import {
-  resolveDevDocsUrl,
   resolveDevRemoteApiUrl,
-  resolveDocsUrl,
   resolveRemoteApiUrl,
 } from "./config/runtime-urls";
-import { createMDX } from "fumadocs-mdx/next";
-
-// Load root .env so local next.config.ts rewrites see REMOTE_API_URL / DOCS_URL.
+// Load root .env so local next.config.ts rewrites see REMOTE_API_URL.
 // Production requests use proxy.ts runtime rewrites, which read process.env
 // when the Next.js server runs instead of baking these URLs at build time.
 config({ path: resolve(__dirname, "../../.env") });
@@ -20,9 +16,6 @@ const isDev = process.env.NODE_ENV === "development";
 const remoteApiUrl = isDev
   ? resolveDevRemoteApiUrl(process.env)
   : resolveRemoteApiUrl(process.env);
-const docsUrl = isDev
-  ? resolveDevDocsUrl(process.env)
-  : resolveDocsUrl(process.env);
 
 // Parse hostnames from CORS_ALLOWED_ORIGINS so that Next.js dev server
 // allows cross-origin HMR / webpack requests (e.g. from Tailscale IPs).
@@ -41,6 +34,15 @@ const allowedDevOrigins = process.env.CORS_ALLOWED_ORIGINS
 const nextConfig: NextConfig = {
   ...(process.env.STANDALONE === "true" ? { output: "standalone" as const } : {}),
   transpilePackages: ["@multica/core", "@multica/ui", "@multica/views", "agentation"],
+  // Browser-only widgets. The client bundle still loads them on demand;
+  // the server must not inline mermaid, charts, or the emoji picker.
+  serverExternalPackages: [
+    "mermaid",
+    "cytoscape",
+    "recharts",
+    "emoji-mart",
+    "@emoji-mart/data",
+  ],
   experimental: {
     // lucide-react / date-fns are already on Next's default list. Base UI is
     // not, and the landing page used to pull it in via views barrels.
@@ -55,20 +57,6 @@ const nextConfig: NextConfig = {
   },
   async rewrites() {
     return {
-      // Run before file-system routes so /docs isn't shadowed by the
-      // [workspaceSlug] dynamic segment.
-      beforeFiles: docsUrl
-        ? [
-            {
-              source: "/docs",
-              destination: `${docsUrl}/docs`,
-            },
-            {
-              source: "/docs/:path*",
-              destination: `${docsUrl}/docs/:path*`,
-            },
-          ]
-        : [],
       afterFiles: [
         ...(isDev
           ? [
@@ -112,10 +100,4 @@ const nextConfig: NextConfig = {
   },
 };
 
-// fumadocs-mdx@12 registers both webpack and Turbopack loaders via createMDX().
-// Next 16 defaults to Turbopack; do not pass `--webpack` — first-compile of `/`
-// is ~90ms vs ~73s under webpack. Instant Navigations (cacheComponents /
-// partialPrefetching) is a separate route-by-route migration, not enabled here.
-const withMDX = createMDX() as (config: NextConfig) => NextConfig;
-
-export default withMDX(nextConfig);
+export default nextConfig;

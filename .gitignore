@@ -7,6 +7,7 @@ dist
 # build outputs
 .turbo
 .next
+.alchemy
 out
 build
 bin
@@ -85,3 +86,6 @@ perf-report/
 .direnv
 
 .zvec-grep/
+
+
+.vinext/

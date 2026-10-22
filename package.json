@@ -5,18 +5,17 @@
   "type": "module",
   "scripts": {
     "dev:web": "turbo dev --filter=@multica/web",
-    "dev:docs": "turbo dev --filter=@multica/docs",
     "build": "turbo build",
-    "typecheck": "node scripts/assert-tsc-7.mjs && turbo typecheck",
+    "typecheck": "node scripts/assert-tsrs.mjs && turbo typecheck",
     "test": "turbo test",
     "lint": "turbo lint",
+    "fmt": "turbo fmt",
     "knip": "knip",
     "check:ui-exports": "node scripts/check-ui-wildcard-exports.mjs",
     "check:ui-radii": "node scripts/check-ui-radius-tokens.mjs",
     "clean": "turbo clean && rm -rf node_modules",
     "ui:add": "cd packages/ui && npx shadcn@latest add",
-    "generate:reserved-slugs": "node scripts/generate-reserved-slugs.mjs",
-    "dev:ui-lab": "pnpm --filter @multica/ui-lab dev"
+    "generate:reserved-slugs": "node scripts/generate-reserved-slugs.mjs"
   },
   "engines": {
     "node": ">=22"
@@ -41,6 +40,7 @@
     "overrides": {
       "@types/react": "catalog:",
       "@types/react-dom": "catalog:",
+      "scheduler": "0.28.0",
       "@xmldom/xmldom": "^0.8.13",
       "postcss": "8.5.26",
       "uuid": "11.1.1",
@@ -58,8 +58,11 @@
     "@types/pg": "^8.20.0",
     "@typescript/typescript6": "catalog:",
     "knip": "^6.32.3",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
     "pg": "^8.20.0",
     "turbo": "^2.10.12",
+    "tsrs": "catalog:",
     "typescript": "catalog:"
   }
 }

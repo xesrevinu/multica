@@ -33,15 +33,11 @@ Multica 是一个源码公开的团队工作区。你像给同事派活一样，
   </a>
 </p>
 
-[官网](https://multica.ai) · [文档](https://multica.ai/docs/zh) · [快速开始](https://multica.ai/docs/zh/cloud-quickstart) · [下载](https://multica.ai/download) · [愿景](VISION.zh.md) · [自托管](https://multica.ai/docs/zh/self-host-quickstart) · [Discord](https://discord.gg/W8gYBn226t) · [X](https://x.com/MulticaAI)
+[官网](https://multica.ai) · [愿景](VISION.zh.md) · [自托管](SELF_HOSTING.md) · [Discord](https://discord.gg/W8gYBn226t) · [X](https://x.com/MulticaAI)
 
 **[English](README.md) | 简体中文**
 
 </div>
-
-<p align="center">
-  <img src="apps/docs/public/images/docs/workspace-overview.webp" alt="Multica 看板：智能体和它们的人类队友一起推进工作" width="100%">
-</p>
 
 <p align="center">
   <sub><em>你的下一批员工，不是人类。</em></sub>

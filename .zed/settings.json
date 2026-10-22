@@ -1,0 +1,231 @@
+{
+  "formatter": "auto",
+  "languages": {
+    "JSON": {
+      "language_servers": ["oxfmt", "cspell", "json-language-server"],
+      "formatter": [
+        {
+          "language_server": {
+            "name": "oxfmt"
+          }
+        }
+      ]
+    },
+    "JSONC": {
+      "language_servers": ["oxfmt", "cspell", "json-language-server"],
+      "formatter": [
+        {
+          "language_server": {
+            "name": "oxfmt"
+          }
+        }
+      ]
+    },
+    "JavaScript": {
+      "language_servers": ["typescript-ls", "oxlint", "oxfmt", "cspell"],
+      "formatter": [
+        {
+          "language_server": {
+            "name": "oxfmt"
+          }
+        },
+        {
+          "code_action": "source.fixAll.oxc"
+        }
+      ]
+    },
+    "TypeScript": {
+      "language_servers": ["typescript-ls", "oxlint", "oxfmt", "cspell"],
+      "formatter": [
+        {
+          "language_server": {
+            "name": "oxfmt"
+          }
+        },
+        {
+          "code_action": "source.fixAll.oxc"
+        }
+      ]
+    },
+    "TSX": {
+      "language_servers": ["typescript-ls", "oxlint", "oxfmt", "cspell"],
+      "formatter": [
+        {
+          "language_server": {
+            "name": "oxfmt"
+          }
+        },
+        {
+          "code_action": "source.fixAll.oxc"
+        }
+      ]
+    },
+    "Nix": {
+      "language_servers": ["nixd", "!nil"]
+    }
+  },
+  "lsp": {
+    "oxlint": {
+      "initialization_options": {
+        "settings": {
+          "run": "onType",
+          "fixKind": "safe_fix",
+          "unusedDisableDirectives": "warn",
+          "typeAware": false,
+          "disableNestedConfig": true
+        }
+      }
+    },
+    "oxfmt": {
+      "initialization_options": {
+        "settings": {
+          "fmt.disableNestedConfig": true,
+          "typeAware": true
+        }
+      }
+    },
+    "typescript-ls": {
+      "binary": {
+        "path": "./node_modules/.bin/tsrs",
+        "arguments": ["--lsp", "--stdio"]
+      },
+      "settings": {
+        "typescript": {
+          "implementationsCodeLens": {
+            "enabled": false
+          },
+          "inlayHints": {
+            "enabled": false
+          },
+          "referencesCodeLens": {
+            "enabled": false
+          },
+          "preferences": {
+            "quoteStyle": "double",
+            "preferTypeOnlyAutoImports": true,
+            "includePackageJsonAutoImports": "off",
+            "autoImportSpecifierExcludeRegexes": [
+              // Keep protocol specifiers out of auto-import suggestions.
+              "^node:.*$",
+              "^cloudflare:.*$",
+
+              // Generated from direct dependencies and package names in active workspace package.json files.
+              "^@base-ui/react(?:/.*)?$",
+              "^@cloudflare/workers-types(?:/.*)?$",
+              "^@dotenvx/dotenvx(?:/.*)?$",
+              "^@effect/atom-react(?:/.*)?$",
+              "^@effect/platform-bun(?:/.*)?$",
+              "^@effect/sql-sqlite-bun(?:/.*)?$",
+              "^@effect/sql-d1(?:/.*)?$",
+
+              "^@effect/vitest(?:/.*)?$",
+              "^@opentui/core(?:/.*)?$",
+              "^@opentui/core-darwin-arm64(?:/.*)?$",
+              "^@opentui/core-darwin-x64(?:/.*)?$",
+              "^@opentui/core-linux-arm64(?:/.*)?$",
+              "^@opentui/core-linux-x64(?:/.*)?$",
+              "^@opentui/core-win32-arm64(?:/.*)?$",
+              "^@opentui/core-win32-x64(?:/.*)?$",
+              "^@opentui/keymap(?:/.*)?$",
+              "^@opentui/react(?:/.*)?$",
+              "^@opentui/solid(?:/.*)?$",
+              "^@oxlint/plugins(?:/.*)?$",
+              "^@types/babel__core(?:/.*)?$",
+              "^@types/bun(?:/.*)?$",
+              "^@types/react(?:/.*)?$",
+              "^@types/react-dom(?:/.*)?$",
+              "^@types/scheduler(?:/.*)?$",
+              "^@vitejs/plugin-react(?:/.*)?$",
+              "^@vitejs/plugin-rsc(?:/.*)?$",
+              "^@vitest/browser(?:/.*)?$",
+              "^@vitest/browser-playwright(?:/.*)?$",
+              "^@vitest/coverage-v8(?:/.*)?$",
+              "^@vitest/ui(?:/.*)?$",
+              "^effect(?:/.*)?$",
+              "^effect-oxlint(?:/.*)?$",
+              "^lefthook(?:/.*)?$",
+              "^madge(?:/.*)?$",
+              "^miniflare(?:/.*)?$",
+              "^next(?:/.*)?$",
+              "^oxc-transform(?:/.*)?$",
+              "^oxfmt(?:/.*)?$",
+              "^oxlint(?:/.*)?$",
+              "^scheduler(?:/.*)?$",
+              "^string-width(?:/.*)?$",
+              "^tsdown(?:/.*)?$",
+              "^tstyche(?:/.*)?$",
+              "^tuistory(?:/.*)?$",
+              "^typescript(?:/.*)?$",
+              "^vite(?:/.*)?$",
+              "^vinext(?:/.*)?$",
+              "^vitest-browser-react(?:/.*)?$",
+              "^wrangler(?:/.*)?$"
+            ],
+            "autoImportFileExcludePatterns": [
+              "**/node_modules/**",
+              "**/vendor/**",
+              "**/dist/**",
+              "**/build/**",
+              "**/coverage/**",
+              "**/.next/**",
+              "**/.vinext/**",
+              "**/.expo/**",
+              "**/.react-router/**",
+              "**/artifacts/**"
+            ]
+          },
+          "suggest": {
+            "includeAutomaticOptionalChainCompletions": false,
+            "classMemberSnippets": {
+              "enabled": false
+            },
+            "objectLiteralMethodSnippets": {
+              "enabled": false
+            }
+          }
+        }
+      }
+    },
+    "tailwindcss-language-server": {
+      "settings": {
+        "tailwindCSS": {
+          "emmetCompletions": true
+        }
+      }
+    },
+    "nixd": {
+      "settings": {
+        "diagnostic": {
+          "suppress": ["sema-extra-with"]
+        }
+      },
+      "initialization_options": {
+        "formatting": {
+          "external": {
+            "command": "nix",
+            "arguments": ["fmt"]
+          }
+        }
+      }
+    }
+  },
+  "file_scan_exclusions": [
+    // Version control
+    // ".git",
+
+    // Environment and config files
+    ".direnv",
+
+    // Build output
+    ".alchemy",
+    "**/.vinext",
+    // Configuration files
+    "cspell.json",
+    // "**/.oxlintrc.json",
+    // "**/.oxfmtrc.json",
+    "flake.*",
+
+    // Special
+    ".DS_Store"
+  ]
+}

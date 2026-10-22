@@ -16,18 +16,19 @@
   "workspaces": {
     ".": {
       "entry": ["scripts/*.mjs"],
-      "project": ["scripts/*.mjs"]
+      "project": ["scripts/*.mjs"],
+      "ignoreDependencies": ["oxlint", "oxfmt"]
     },
 
     "apps/web": {
-      "entry": ["eslint.config.mjs"],
-      // Referenced only by the `@type {import('postcss-load-config').Config}`
-      // JSDoc annotation in postcss.config.mjs. Declaring it would add a
-      // runtime dependency to satisfy a type comment.
-      "ignoreDependencies": ["postcss-load-config"]
+      "entry": [
+        "vite.config.ts",
+        "alchemy.run.ts",
+        "scripts/write-runtime-package.mjs"
+      ],
+      // `@vitejs/plugin-rsc` is loaded by vinext, not imported from this app.
+      "ignoreDependencies": ["@vitejs/plugin-rsc", "oxlint", "oxfmt"]
     },
-
-    "apps/docs": {},
 
     // The three shared packages export raw .ts/.tsx compiled by their
     // consumers (CLAUDE.md "Project Shape"), so `entry` names only the config
@@ -48,19 +49,19 @@
     // export and knip picks that directory back up; the script reads the same
     // manifest, so the two stay in step without overlapping.
     "packages/ui": {
-      "entry": ["eslint.config.mjs"],
-      "project": ["**/*.{ts,tsx}"]
+      "project": ["**/*.{ts,tsx}"],
+      "ignoreDependencies": ["oxlint", "oxfmt"]
     },
     "packages/views": {
-      "entry": ["eslint.config.mjs"],
-      "project": ["**/*.{ts,tsx}"]
+      "entry": ["oxlint-i18n-plugin.js", "i18n-guard.mjs"],
+      "project": ["**/*.{ts,tsx}", "oxlint-i18n-plugin.js", "i18n-guard.mjs"],
+      "ignoreDependencies": ["oxlint", "oxfmt"]
     },
     "packages/core": {
-      "entry": ["eslint.config.mjs"],
-      "project": ["**/*.{ts,tsx}"]
+      "project": ["**/*.{ts,tsx}"],
+      "ignoreDependencies": ["oxlint", "oxfmt"]
     },
 
-    "packages/eslint-config": {},
     "packages/tsconfig": {}
   }
 }

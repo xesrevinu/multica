@@ -63,13 +63,9 @@ export function resolveRemoteApiUrl(env: RuntimeEnv): string | undefined {
   return undefined;
 }
 
-export function resolveDocsUrl(env: RuntimeEnv): string | undefined {
-  return cleanHttpUrl(env.DOCS_URL);
-}
-
 // Dev-only fallbacks: `next dev` runs on a developer machine, where the
-// conventional localhost backend/docs ports are safe to assume when nothing
-// is configured. Builds and the runtime proxy keep the strict resolvers so a
+// conventional localhost backend port is safe to assume when nothing is
+// configured. Builds and the runtime proxy keep the strict resolvers so a
 // prebuilt image never guesses an origin (#4787).
 export function resolveDevRemoteApiUrl(env: RuntimeEnv): string {
   const configured = resolveRemoteApiUrl(env);
@@ -84,10 +80,6 @@ export function resolveDevRemoteApiUrl(env: RuntimeEnv): string {
     env.SERVER_PORT?.trim() ||
     "8080";
   return `http://localhost:${backendPort}`;
-}
-
-export function resolveDevDocsUrl(env: RuntimeEnv): string {
-  return resolveDocsUrl(env) ?? "http://localhost:4000";
 }
 
 // Same strictness as the server-side resolver above. A relative or otherwise
@@ -111,14 +103,6 @@ export function runtimeRewriteDestination(
   pathname: string,
   env: RuntimeEnv,
 ): string | undefined {
-  const docsUrl = resolveDocsUrl(env);
-  if (pathname === "/docs") {
-    return docsUrl ? appendPath(docsUrl, "/docs") : undefined;
-  }
-  if (pathname.startsWith("/docs/")) {
-    return docsUrl ? appendPath(docsUrl, pathname) : undefined;
-  }
-
   const remoteApiUrl = resolveRemoteApiUrl(env);
   if (!remoteApiUrl) return undefined;
 
