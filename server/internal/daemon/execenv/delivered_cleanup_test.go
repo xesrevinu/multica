@@ -67,3 +67,66 @@ func TestBranchDeliveredSurvivesSquashMerge(t *testing.T) {
 		t.Fatal("record of the delivered branch kept")
 	}
 }
+
+func TestBranchDeliveredSurvivesBinaryAndContextShiftSquash(t *testing.T) {
+	repo := newTestRepo(t)
+	origin := filepath.Join(t.TempDir(), "origin.git")
+	gitRun(t, repo, "init", "--bare", "-q", origin)
+	gitRun(t, repo, "remote", "add", "origin", origin)
+	main := strings.TrimSpace(gitRun(t, repo, "rev-parse", "--abbrev-ref", "HEAD"))
+	writeFile(t, filepath.Join(repo, "shared.txt"), "line1\nline2\nline3\nline4\n")
+	gitRun(t, repo, "add", "shared.txt")
+	gitRun(t, repo, "commit", "-q", "-m", "seed shared")
+	gitRun(t, repo, "push", "-q", "origin", main+":main")
+
+	// 1. agent/ox-177: adds a binary file, squash-merged on main.
+	gitRun(t, repo, "checkout", "-q", "-b", "agent/ox-177")
+	writeFile(t, filepath.Join(repo, "asset.bin"), "PK\x00\x01\x02\xffbinary-fixture\x00")
+	gitRun(t, repo, "add", "asset.bin")
+	gitRun(t, repo, "commit", "-q", "-m", "add binary asset")
+	gitRun(t, repo, "push", "-q", "origin", "agent/ox-177")
+
+	// 2. agent/ox-129: modifies line4 of shared.txt while an intermediate commit on
+	// main modifies line1 (changing the 3-line unified diff context around line4).
+	gitRun(t, repo, "checkout", "-q", main)
+	gitRun(t, repo, "checkout", "-q", "-b", "agent/ox-129")
+	writeFile(t, filepath.Join(repo, "shared.txt"), "line1\nline2\nline3\nline4-ox129\n")
+	gitRun(t, repo, "commit", "-q", "-am", "ox-129 change")
+	gitRun(t, repo, "push", "-q", "origin", "agent/ox-129")
+
+	// Main advances on line1 first, then squash-merges both branches and deletes remotes.
+	gitRun(t, repo, "checkout", "-q", main)
+	writeFile(t, filepath.Join(repo, "shared.txt"), "line1-main\nline2\nline3\nline4\n")
+	gitRun(t, repo, "commit", "-q", "-am", "main context shift")
+
+	gitRun(t, repo, "merge", "-q", "--squash", "agent/ox-177")
+	gitRun(t, repo, "commit", "-q", "-m", "feat: binary asset (OX-177)")
+
+	gitRun(t, repo, "merge", "-q", "--squash", "agent/ox-129")
+	gitRun(t, repo, "commit", "-q", "-m", "feat: context shift (OX-129)")
+
+	gitRun(t, repo, "push", "-q", "origin", main+":main", ":agent/ox-177", ":agent/ox-129")
+	gitRun(t, repo, "fetch", "-q", "--prune", "origin")
+
+	if !branchDelivered(repo, "agent/ox-177") {
+		t.Fatal("binary squash-merged branch must count as delivered")
+	}
+	if !branchDelivered(repo, "agent/ox-129") {
+		t.Fatal("context-shifted squash-merged branch must count as delivered")
+	}
+
+	// Also verify orphaned local-state ref (agent/ox-121) is pruned during reapDeliveredBranches.
+	mainTip := strings.TrimSpace(gitRun(t, repo, "rev-parse", "HEAD"))
+	gitRun(t, repo, "update-ref", userStateRef("agent/ox-177"), "refs/heads/agent/ox-177")
+	gitRun(t, repo, "update-ref", userStateRef("agent/ox-129"), "refs/heads/agent/ox-129")
+	gitRun(t, repo, "update-ref", userStateRef("agent/ox-121"), mainTip)
+
+	if n := reapDeliveredBranches(repo, worktreeTestLogger()); n != 2 {
+		t.Fatalf("reaped %d branches, want 2", n)
+	}
+	for _, b := range []string{"agent/ox-177", "agent/ox-129", "agent/ox-121"} {
+		if out := gitRun(t, repo, "for-each-ref", userStateRef(b)); strings.TrimSpace(out) != "" {
+			t.Fatalf("state ref for %s still present: %s", b, out)
+		}
+	}
+}
