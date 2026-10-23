@@ -53,7 +53,11 @@ func addWorktrunkWorktree(gitRoot string, plan taskBranchPlan, taskID string, lo
 			return "", "", false, fmt.Errorf("execenv: reset branch %s onto %s: %s: %w", plan.name, plan.base, strings.TrimSpace(out), ferr)
 		}
 	}
-	if plan.continues || plan.reset {
+	branchExists := false
+	if tip, verifyErr := runGitTrimmed(gitRoot, "rev-parse", "--verify", "--quiet", "refs/heads/"+plan.name); verifyErr == nil && tip != "" {
+		branchExists = true
+	}
+	if (plan.continues || plan.reset) && branchExists {
 		path, err = switchWorktrunk(gitRoot, plan.name, "", false, logger)
 		if err != nil && branchUnavailable(err.Error()) && plan.exclusive {
 			return "", "", false, branchOccupied(gitRoot, plan.name, err.Error())

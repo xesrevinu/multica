@@ -411,7 +411,7 @@ func PrepareLocalWorktree(params LocalWorktreeParams, logger *slog.Logger) (*Loc
 	// no longer keeps before deciding whether this turn can take one, so a
 	// merged or over-cap checkout is not still holding its branch.
 	if worktrunkConfigPresent(gitRoot) && plan.tracksState {
-		if _, reapErr := reapIdleWorktreesInRepo(gitRoot, time.Now(), 0, IdleWorktreeCap, logger); reapErr != nil && logger != nil {
+		if _, reapErr := reapIdleWorktreesInRepo(gitRoot, time.Now(), 0, IdleWorktreeCap, plan.name, logger); reapErr != nil && logger != nil {
 			logger.Warn("execenv: could not reap parked worktrees", "git_root", gitRoot, "error", reapErr)
 		}
 		path, ok, reuseErr := claimIdleWorktree(gitRoot, plan, params.owner(), logger)

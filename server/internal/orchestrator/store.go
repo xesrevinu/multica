@@ -295,6 +295,23 @@ func (s *store) runs(ctx context.Context, issueID string) (active, last *Run, er
 	return active, last, rows.Err()
 }
 
+func (s *store) activeRunIDs(ctx context.Context, issueID string) ([]string, error) {
+	rows, err := s.pool.QueryContext(ctx, `SELECT id FROM agent_task_queue WHERE issue_id=$1 AND status NOT IN ('completed','failed','cancelled') ORDER BY created_at DESC`, issueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func (s *store) agentID(ctx context.Context, workspaceID, name string) (string, error) {
 	var id string
 	err := s.pool.QueryRowContext(ctx, `SELECT id FROM agent WHERE workspace_id=$1 AND name=$2 AND archived_at IS NULL LIMIT 1`, workspaceID, name).Scan(&id)

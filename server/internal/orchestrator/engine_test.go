@@ -352,3 +352,22 @@ func TestMemberResolveConflictRequest(t *testing.T) {
 		t.Fatal(d.Meta)
 	}
 }
+
+func TestBlockedTransitionsCancelActiveLeadRun(t *testing.T) {
+	sp := spec(t)
+	st := now.Add(-1 * time.Minute)
+	s := snap(StBlocked, map[string]string{"phase": PhUnblocked, "owner": "a", "unblock_confirmed": "true"})
+	s.ActiveRun = &Run{ID: "lead-run-1", Status: "running", StartedAt: &st}
+	d := sp.Decide(s, nil)
+	want(t, d, "T7_unblock", StTodo, "a")
+	if d.CancelRun != "lead-run-1" {
+		t.Fatalf("T7_unblock CancelRun = %q, want lead-run-1", d.CancelRun)
+	}
+
+	sCancel := snap(StBlocked, map[string]string{"phase": PhCancelProposed, "cancel_confirmed": "true"})
+	sCancel.ActiveRun = &Run{ID: "lead-run-2", Status: "running", StartedAt: &st}
+	dCancel := sp.Decide(sCancel, nil)
+	if dCancel == nil || dCancel.Tid != "T8_cancel" || dCancel.CancelRun != "lead-run-2" {
+		t.Fatalf("T8_cancel: %+v", dCancel)
+	}
+}

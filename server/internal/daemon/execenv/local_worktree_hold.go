@@ -155,7 +155,7 @@ func parkIdleWorktree(w *LocalWorktree, now time.Time, logger *slog.Logger) erro
 	}); err != nil {
 		return err
 	}
-	if _, err := reapIdleWorktreesInRepo(w.GitRoot, now, 0, IdleWorktreeCap, logger); err != nil {
+	if _, err := reapIdleWorktreesInRepo(w.GitRoot, now, 0, IdleWorktreeCap, w.Branch, logger); err != nil {
 		return err
 	}
 	if logger != nil {
@@ -181,7 +181,7 @@ func ReapIdleLocalWorktrees(ttl time.Duration, cap int, now time.Time, logger *s
 			errs = append(errs, lockErr)
 			continue
 		}
-		n, reapErr := reapIdleWorktreesInRepo(root, now, ttl, cap, logger)
+		n, reapErr := reapIdleWorktreesInRepo(root, now, ttl, cap, "", logger)
 		n += reapDeliveredBranches(root, logger)
 		unlock()
 		removed += n
@@ -193,8 +193,10 @@ func ReapIdleLocalWorktrees(ttl time.Duration, cap int, now time.Time, logger *s
 }
 
 // reapIdleWorktreesInRepo runs while the caller holds the git-root lock.
-// ttl <= 0 skips the age check and only enforces cap.
-func reapIdleWorktreesInRepo(gitRoot string, now time.Time, ttl time.Duration, cap int, logger *slog.Logger) (int, error) {
+// ttl <= 0 skips the age check and only enforces cap. protectBranch names a
+// branch currently being parked or claimed so the reap pass never deletes the
+// caller's own branch out from under it.
+func reapIdleWorktreesInRepo(gitRoot string, now time.Time, ttl time.Duration, cap int, protectBranch string, logger *slog.Logger) (int, error) {
 	holds, err := listWorktreeHolds(gitRoot)
 	if err != nil {
 		return 0, err
@@ -203,10 +205,15 @@ func reapIdleWorktreesInRepo(gitRoot string, now time.Time, ttl time.Duration, c
 		cap = IdleWorktreeCap
 	}
 	var idle []worktreeHold
+	protectedIdle := 0
 	removed := 0
 	var errs []error
 	for _, hold := range holds {
 		if hold.State != worktreeHoldIdle {
+			continue
+		}
+		if protectBranch != "" && hold.Branch == protectBranch {
+			protectedIdle++
 			continue
 		}
 		// Delivered (squash-merged and gone from the remote, or an ancestor
@@ -234,7 +241,7 @@ func reapIdleWorktreesInRepo(gitRoot string, now time.Time, ttl time.Duration, c
 		idle = append(idle, hold)
 	}
 	sort.Slice(idle, func(i, j int) bool { return idle[i].At.Before(idle[j].At) })
-	for len(idle) > cap {
+	for len(idle)+protectedIdle > cap && len(idle) > 0 {
 		if err := removeHeldWorktree(idle[0], logger); err != nil {
 			errs = append(errs, err)
 			break

@@ -482,8 +482,19 @@ func (s *Service) apply(ctx context.Context, t *Team, row *issueRow, d *Decision
 		// The daemon cuts the task worktree from the hub: make it current first.
 		s.repo.refreshHub(ctx, t.Spec, false)
 	}
+	cancelIDs := map[string]bool{}
 	if d.CancelRun != "" {
-		if err = s.call(ctx, t.WorkspaceID, "POST", fmt.Sprintf("/api/issues/%s/tasks/%s/cancel", row.ID, d.CancelRun), nil); err != nil {
+		cancelIDs[d.CancelRun] = true
+	}
+	if d.StartsRun() || d.Status == StCancelled || d.Status == StDone {
+		if ids, runErr := s.st.activeRunIDs(ctx, row.ID); runErr == nil {
+			for _, id := range ids {
+				cancelIDs[id] = true
+			}
+		}
+	}
+	for id := range cancelIDs {
+		if err = s.call(ctx, t.WorkspaceID, "POST", fmt.Sprintf("/api/issues/%s/tasks/%s/cancel", row.ID, id), nil); err != nil {
 			return err
 		}
 	}

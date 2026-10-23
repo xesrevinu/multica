@@ -304,7 +304,11 @@ func (sp *Spec) block(s *Snapshot, why string, extra map[string]string) *Decisio
 	for k, v := range extra {
 		m[k] = v
 	}
-	return &Decision{Tid: "T6_block", Status: StBlocked, AssigneeKind: "agent", Assignee: sp.Roles.Lead, Meta: m, Why: why,
+	cancelRun := ""
+	if s.ActiveRun != nil {
+		cancelRun = s.ActiveRun.ID
+	}
+	return &Decision{Tid: "T6_block", Status: StBlocked, AssigneeKind: "agent", Assignee: sp.Roles.Lead, CancelRun: cancelRun, Meta: m, Why: why,
 		Notify: fmt.Sprintf("%s blocked: %s", s.Issue.Key, why)}
 }
 
@@ -767,6 +771,10 @@ func (sp *Spec) decideBlocked(s *Snapshot) *Decision {
 		d.Notify = fmt.Sprintf("%s: the lead's run on this blocked issue was cancelled: %s", i.Key, d.Why)
 		return d
 	}
+	cancelRun := ""
+	if s.ActiveRun != nil {
+		cancelRun = s.ActiveRun.ID
+	}
 	switch m["phase"] {
 	case PhUnblocked:
 		member := m["unblock_confirmed"] == "true"
@@ -776,7 +784,7 @@ func (sp *Spec) decideBlocked(s *Snapshot) *Decision {
 				return &Decision{Wait: fmt.Sprintf("lead unblock limit %d reached: waiting for a member (multica flow unblock %s)", sp.Limits.MaxUnblocks(), i.Key)}
 			}
 			why := fmt.Sprintf("lead unblocked %d times (limit %d); a member decides now", n, sp.Limits.MaxUnblocks())
-			return &Decision{Tid: "T7b_unblock_escalate", AssigneeKind: "member", Assignee: "@human", Why: why,
+			return &Decision{Tid: "T7b_unblock_escalate", AssigneeKind: "member", Assignee: "@human", CancelRun: cancelRun, Why: why,
 				Meta:   map[string]string{"phase": PhBlocked, "unblock_escalated": "true", "blocked_reason": why + " (last reason: " + short(m["blocked_reason"], 200) + ")"},
 				Notify: fmt.Sprintf("%s: %s. `multica flow unblock %s` or `multica flow cancel %s`", i.Key, why, i.Key, i.Key)}
 		}
@@ -798,13 +806,13 @@ func (sp *Spec) decideBlocked(s *Snapshot) *Decision {
 		if expertName != "" {
 			meta["expert"] = expertName
 		}
-		return &Decision{Tid: "T7_unblock", Status: StTodo, AssigneeKind: "agent", Assignee: owner, Meta: meta}
+		return &Decision{Tid: "T7_unblock", Status: StTodo, AssigneeKind: "agent", Assignee: owner, CancelRun: cancelRun, Meta: meta}
 	case PhCancelProposed:
 		if m["cancel_confirmed"] == "true" {
-			return &Decision{Tid: "T8_cancel", Status: StCancelled, Meta: map[string]string{"phase": PhCancelled, "cancel_confirmed": ""}}
+			return &Decision{Tid: "T8_cancel", Status: StCancelled, CancelRun: cancelRun, Meta: map[string]string{"phase": PhCancelled, "cancel_confirmed": ""}}
 		}
 		if m["cancel_notified"] != "true" {
-			return &Decision{Tid: "T8a_cancel_proposed", AssigneeKind: "member", Assignee: "@human", Why: "lead proposed cancel; waiting for a member to confirm",
+			return &Decision{Tid: "T8a_cancel_proposed", AssigneeKind: "member", Assignee: "@human", CancelRun: cancelRun, Why: "lead proposed cancel; waiting for a member to confirm",
 				Meta:   map[string]string{"cancel_notified": "true"},
 				Notify: fmt.Sprintf("%s: the lead proposes to cancel it (%s). Confirm with `multica flow cancel %s` (确认取消) or `multica flow unblock %s`", i.Key, short(m["blocked_reason"], 200), i.Key, i.Key)}
 		}

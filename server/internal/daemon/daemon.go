@@ -6071,17 +6071,6 @@ func (d *Daemon) acquireLocalDirectoryLockIfNeeded(ctx context.Context, task Tas
 		return nil, true
 	}
 
-	// Worktree mode is the whole point of not serialising: each task gets its
-	// own checkout of the repo inside its env root, so there is no shared
-	// mutable state on the user's path to protect. Skipping the mutex here is
-	// what lets sibling tasks on one directory run concurrently. Path
-	// validation above still applies — git needs to write worktree
-	// registrations into the user's repo.
-	if assignment.UsesWorktree() {
-		taskLog.Info("local_directory: worktree mode, skipping path mutex")
-		return nil, false
-	}
-
 	// A conversation is not a second writer. Everything above still applied —
 	// the mode was checked, the path was validated, and the assignment stands,
 	// so this task keeps the user's directory as its working directory. Only
@@ -6092,6 +6081,28 @@ func (d *Daemon) acquireLocalDirectoryLockIfNeeded(ctx context.Context, task Tas
 	if localDirectoryLockExempt(task) {
 		taskLog.Info("local_directory: chat task, skipping path mutex")
 		return nil, false
+	}
+
+	// Worktree mode gives each issue its own checkout, so tasks on DIFFERENT
+	// issues run concurrently without taking the repo-wide path mutex. However,
+	// two tasks for the SAME issue share `agent/<key>` and its parked worktree;
+	// if a cancelled run is still tearing down (CleanupSidecars + Finalize) when
+	// the replacement run is dispatched, letting them overlap causes the new
+	// run's PrepareIsolated to fail with branch_occupied. Serialising on a
+	// per-(repo, issue) key waits for the prior run's Finalize to finish while
+	// keeping sibling issues 100% parallel.
+	lockKey := assignment.RealPath
+	if assignment.UsesWorktree() {
+		issueKey := strings.TrimSpace(task.ExclusiveBranch)
+		if issueKey == "" {
+			issueKey = strings.TrimSpace(task.IssueID)
+		}
+		if issueKey == "" {
+			taskLog.Info("local_directory: worktree mode, skipping path mutex")
+			return nil, false
+		}
+		lockKey = assignment.RealPath + "\x00worktree-issue:" + issueKey
+		taskLog.Info("local_directory: worktree mode, serializing per issue", "issue_key", issueKey)
 	}
 
 	// While the lock is contended the daemon would otherwise sit blocked on
@@ -6170,7 +6181,7 @@ func (d *Daemon) acquireLocalDirectoryLockIfNeeded(ctx context.Context, task Tas
 			}()
 		})
 	}
-	release, err = d.localPathLocks.Acquire(waitCtx, assignment.RealPath, task.ID, onWait)
+	release, err = d.localPathLocks.Acquire(waitCtx, lockKey, task.ID, onWait)
 	if err != nil {
 		// If the wait was cut short because the server finalized the task
 		// (terminal state) or deleted the row, the row is already in a
