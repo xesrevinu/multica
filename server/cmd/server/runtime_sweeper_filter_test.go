@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/handler"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -39,7 +38,7 @@ func (f *fakeLiveness) IsAliveBatch(_ context.Context, ids []string) (map[string
 }
 func (f *fakeLiveness) Forget(_ context.Context, _ string) {}
 
-func makeUUIDForFilter(t *testing.T, s string) pgtype.UUID {
+func makeUUIDForFilter(t *testing.T, s string) string {
 	t.Helper()
 	u, err := util.ParseUUID(s)
 	if err != nil {
@@ -52,7 +51,7 @@ func candidateRow(t *testing.T, id string) db.SelectStaleOnlineRuntimesRow {
 	return db.SelectStaleOnlineRuntimesRow{ID: makeUUIDForFilter(t, id)}
 }
 
-func sortedIDStrings(ids []pgtype.UUID) []string {
+func sortedIDStrings(ids []string) []string {
 	out := make([]string, len(ids))
 	for i, id := range ids {
 		out[i] = util.UUIDToString(id)

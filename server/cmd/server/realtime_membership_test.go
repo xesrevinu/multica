@@ -13,30 +13,26 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/events"
+	"github.com/multica-ai/multica/server/internal/handler"
 	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-type membershipFailCommitPool struct{ pool *pgxpool.Pool }
-type membershipFailCommitTx struct{ pgx.Tx }
+type membershipFailCommitPool struct{ pool *testutil.Pool }
 
-func (p membershipFailCommitPool) Begin(ctx context.Context) (pgx.Tx, error) {
-	tx, err := p.pool.Begin(ctx)
+func (p membershipFailCommitPool) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
+	tx, err := p.pool.BeginTx(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
-	return membershipFailCommitTx{tx}, nil
-}
-
-func (membershipFailCommitTx) Commit(context.Context) error {
-	return errors.New("injected membership commit failure")
+	_ = tx.Rollback()
+	return tx, nil
 }
 
 func realtimeMembershipConn(t *testing.T, server *httptest.Server, userID, workspaceID string) (*websocket.Conn, string) {
@@ -106,7 +102,7 @@ func TestRealtimeMemberRevocation(t *testing.T) {
 				go hub.Run()
 				bus := events.New()
 				registerListeners(bus, hub)
-				router, h := NewRouterWithOptions(testPool, hub, bus, analytics.NoopClient{}, RouterOptions{})
+				router, h := NewRouterWithOptions(testPool.DB, hub, bus, analytics.NoopClient{}, RouterOptions{})
 				server := httptest.NewServer(router)
 				t.Cleanup(server.Close)
 				old, token := realtimeMembershipConn(t, server, userID, wsID)
@@ -114,7 +110,7 @@ func TestRealtimeMemberRevocation(t *testing.T) {
 				other, _ := realtimeMembershipConn(t, server, userID, otherWS)
 				current, _ := realtimeMembershipConn(t, server, testUserID, wsID)
 				if failCommit {
-					h.TxStarter = membershipFailCommitPool{testPool}
+					h.TxStarter = handler.WrapTxStarter(membershipFailCommitPool{testPool})
 				}
 				request := httptest.NewRequest(http.MethodDelete, "/", nil)
 				actor := testUserID

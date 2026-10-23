@@ -6,8 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 	"github.com/multica-ai/multica/server/internal/events"
 	dbfx "github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -55,7 +54,7 @@ func qaRunTrueCheckThenTerminal(t *testing.T, actualTrigger bool, removal string
 	patcherQueries.installation = f.inst
 	patcherQueries.binding.ChatSessionID = f.sessionID
 	patcherQueries.binding.InstallationID = f.inst.ID
-	patcherQueries.binding.LastMessageID = pgtype.Text{String: "delivery-trigger", Valid: true}
+	patcherQueries.binding.LastMessageID = sql.NullString{String: "delivery-trigger", Valid: true}
 	api := &crossProcessReactionAPI{
 		fakeTypingAPIClient: &fakeTypingAPIClient{},
 		remote: map[string][]MessageReaction{
@@ -97,7 +96,7 @@ func qaRunTrueCheckThenTerminal(t *testing.T, actualTrigger bool, removal string
 		f.Exec(t, "DELETE FROM channel_chat_session_binding WHERE chat_session_id=$1", f.sessionID)
 		f.Exec(t, "DELETE FROM chat_message WHERE chat_session_id=$1", f.sessionID)
 		f.Exec(t, "DELETE FROM chat_session WHERE id=$1", f.sessionID)
-		patcherQueries.deliveryErr = pgx.ErrNoRows
+		patcherQueries.deliveryErr = sql.ErrNoRows
 		event.ChannelReactionTarget = &events.ChannelReactionTarget{ChannelType: channelTypeFeishu, InstallationID: uuidString(f.inst.ID), MessageID: "delivery-trigger"}
 	} else if removal == "archived" {
 		f.Exec(t, "UPDATE chat_session SET status='archived' WHERE id=$1", f.sessionID)

@@ -3094,6 +3094,12 @@ type PrioritizeQueuedChatTaskRow struct {
 
 // Call in order: PrioritizeQueuedChatTask_Step2, PrioritizeQueuedChatTask.
 func (q *Queries) PrioritizeQueuedChatTask(ctx context.Context, arg PrioritizeQueuedChatTaskParams) (PrioritizeQueuedChatTaskRow, error) {
+	if err := q.PrioritizeQueuedChatTask_Step2(ctx, PrioritizeQueuedChatTask_Step2Params{
+		ChatSessionID: arg.ChatSessionID,
+		ID:            arg.ID,
+	}); err != nil {
+		return PrioritizeQueuedChatTaskRow{}, err
+	}
 	row := q.db.QueryRowContext(ctx, prioritizeQueuedChatTask, arg.ID, arg.ChatSessionID)
 	var i PrioritizeQueuedChatTaskRow
 	err := row.Scan(&i.ID, &i.ID_2)

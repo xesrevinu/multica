@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/slack-go/slack"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
@@ -28,13 +27,13 @@ func (f *fakeReplySender) SendWithMetadata(_ context.Context, out channel.Outbou
 
 type fakeBindingMinter struct {
 	raw     string
-	gotWS   pgtype.UUID
-	gotInst pgtype.UUID
+	gotWS   string
+	gotInst string
 	gotUser string
 	calls   int
 }
 
-func (f *fakeBindingMinter) Mint(_ context.Context, ws, inst pgtype.UUID, user string) (BindingToken, error) {
+func (f *fakeBindingMinter) Mint(_ context.Context, ws, inst string, user string) (BindingToken, error) {
 	f.calls++
 	f.gotWS, f.gotInst, f.gotUser = ws, inst, user
 	return BindingToken{Raw: f.raw, ExpiresAt: time.Unix(0, 0)}, nil
@@ -60,7 +59,7 @@ func testResolvedInstallation(t *testing.T) engine.ResolvedInstallation {
 		WorkspaceID: mustUUID(t, "11111111-1111-1111-1111-111111111111"),
 		AgentID:     mustUUID(t, "22222222-2222-2222-2222-222222222222"),
 		Active:      true,
-		Platform:    db.ChannelInstallation{Config: []byte(replierConfigJSON)},
+		Platform:    db.ChannelInstallation{Config: replierConfigJSON},
 	}
 }
 

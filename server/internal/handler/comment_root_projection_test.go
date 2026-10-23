@@ -2,13 +2,13 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -21,36 +21,32 @@ type rootOwnerReadDB struct {
 	payload     bool
 	fail        bool
 }
-type rootOwnerRows struct {
-	pgx.Rows
-	observer *rootOwnerReadDB
-}
-
-func (r *rootOwnerRows) Next() bool {
-	ok := r.Rows.Next()
-	if ok {
-		r.observer.rows++
-	}
-	return ok
-}
-func (d *rootOwnerReadDB) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
-	if !strings.Contains(sql, "FROM agent_task_queue") {
-		return d.DBTX.Query(ctx, sql, args...)
+func (d *rootOwnerReadDB) QueryContext(ctx context.Context, sqlQuery string, args ...any) (*sql.Rows, error) {
+	if !strings.Contains(sqlQuery, "FROM agent_task_queue") {
+		return d.DBTX.QueryContext(ctx, sqlQuery, args...)
 	}
 	d.reads++
 	if d.fail {
 		return nil, errors.New("injected owner read failure")
 	}
-	rows, err := d.DBTX.Query(ctx, sql, args...)
+	countRows, err := d.DBTX.QueryContext(ctx, sqlQuery, args...)
+	if err == nil {
+		for countRows.Next() {
+			d.rows++
+		}
+		_ = countRows.Close()
+	}
+	rows, err := d.DBTX.QueryContext(ctx, sqlQuery, args...)
 	if err != nil {
 		return nil, err
 	}
-	for _, field := range rows.FieldDescriptions() {
-		if field.Name == "context" || field.Name == "result" {
+	cols, _ := rows.Columns()
+	for _, col := range cols {
+		if col == "context" || col == "result" {
 			d.payload = true
 		}
 	}
-	return &rootOwnerRows{Rows: rows, observer: d}, nil
+	return rows, nil
 }
 
 func TestConversationRootOwnersReadOnlyRoutingData(t *testing.T) {
@@ -78,8 +74,8 @@ func TestConversationRootOwnersReadOnlyRoutingData(t *testing.T) {
 		dbfx.Task(t, agentA, testutil.Cols{
 			"issue_id": issueID, "trigger_comment_id": rootID, "runtime_id": handlerTestRuntimeID(t), "status": "completed", "squad_id": squad,
 			"created_at": time.Date(2026, 1, 1, 0, 0, i, 0, time.UTC),
-			"context":    testutil.Raw(`jsonb_build_object('large',repeat('x',65536))`),
-			"result":     testutil.Raw(`jsonb_build_object('large',repeat('y',65536))`),
+			"context":    `{"large":"` + strings.Repeat("x", 1024) + `"}`,
+			"result":     `{"large":"` + strings.Repeat("y", 1024) + `"}`,
 		})
 	}
 	dbfx.Task(t, agentB, testutil.Cols{"issue_id": issueID, "trigger_comment_id": rootID, "runtime_id": handlerTestRuntimeID(t), "status": "failed"})

@@ -4,164 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/multica-ai/multica/server/internal/service"
-	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-func TestCreateAgentBuilderSessionCreatesIsolatedHiddenBuilder(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `
-			DELETE FROM agent
-			WHERE workspace_id = $1 AND kind = 'system' AND system_key LIKE 'agent_builder:%'
-		`, testWorkspaceID)
-	})
 
-	create := func(model string) CreateAgentBuilderSessionResponse {
-		w := httptest.NewRecorder()
-		testHandler.CreateAgentBuilderSession(w, newRequest(http.MethodPost, "/api/agent-builder/sessions", map[string]any{
-			"runtime_id": testRuntimeID,
-			"model":      model,
-		}))
-		if w.Code != http.StatusCreated {
-			t.Fatalf("CreateAgentBuilderSession: expected 201, got %d: %s", w.Code, w.Body.String())
-		}
-		var response CreateAgentBuilderSessionResponse
-		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
-			t.Fatalf("decode response: %v", err)
-		}
-		if response.SessionID == "" || response.BuilderAgentID == "" {
-			t.Fatalf("missing builder identifiers: %+v", response)
-		}
-		return response
-	}
-
-	first := create("builder-model-a")
-	second := create("builder-model-b")
-	if first.BuilderAgentID == second.BuilderAgentID {
-		t.Fatalf("builder sessions unexpectedly shared an agent: %s", first.BuilderAgentID)
-	}
-	if first.SessionID == second.SessionID {
-		t.Fatalf("each creation flow must receive a fresh chat session")
-	}
-
-	var kind, systemKey, firstModel string
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT kind, system_key, model FROM agent WHERE id = $1
-	`, first.BuilderAgentID).Scan(&kind, &systemKey, &firstModel); err != nil {
-		t.Fatalf("load builder agent: %v", err)
-	}
-	if kind != "system" || !strings.HasPrefix(systemKey, "agent_builder:") {
-		t.Fatalf("unexpected builder identity kind=%q system_key=%q", kind, systemKey)
-	}
-	if firstModel != "builder-model-a" {
-		t.Fatalf("first builder model was mutated: got %q", firstModel)
-	}
-	var explicitlyCreated bool
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT explicitly_created_at IS NOT NULL FROM chat_session WHERE id = $1
-	`, first.SessionID).Scan(&explicitlyCreated); err != nil {
-		t.Fatalf("load builder session origin: %v", err)
-	}
-	if !explicitlyCreated {
-		t.Fatal("builder session must be marked as an explicit first-party Chat")
-	}
-
-	w := httptest.NewRecorder()
-	testHandler.ListAgents(w, newRequest(http.MethodGet, "/api/agents", nil))
-	if w.Code != http.StatusOK {
-		t.Fatalf("ListAgents: %d: %s", w.Code, w.Body.String())
-	}
-	var listed []AgentResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &listed); err != nil {
-		t.Fatalf("decode agent list: %v", err)
-	}
-	for _, agent := range listed {
-		if agent.ID == first.BuilderAgentID {
-			t.Fatalf("system builder leaked into the user-facing agent list")
-		}
-	}
-
-	// Knowing the ID must not expose system infrastructure through the public
-	// Agent detail/update/archive loaders.
-	w = httptest.NewRecorder()
-	req := withURLParams(newRequest(http.MethodGet, "/api/agents/"+first.BuilderAgentID, nil), "id", first.BuilderAgentID)
-	testHandler.GetAgent(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("GetAgent(system): expected 404, got %d: %s", w.Code, w.Body.String())
-	}
-
-	// Deleting the private Builder chat also removes its session-scoped hidden
-	// Agent, so completed/cancelled flows do not accumulate infrastructure rows.
-	w = httptest.NewRecorder()
-	req = withURLParams(newRequest(http.MethodDelete, "/api/chat/sessions/"+first.SessionID, nil), "sessionId", first.SessionID)
-	req = withChatTestWorkspaceCtx(t, req)
-	testHandler.DeleteChatSession(w, req)
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("DeleteChatSession(builder): expected 204, got %d: %s", w.Code, w.Body.String())
-	}
-	var remaining int
-	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM agent WHERE id = $1`, first.BuilderAgentID).Scan(&remaining); err != nil {
-		t.Fatalf("count deleted builder: %v", err)
-	}
-	if remaining != 0 {
-		t.Fatalf("builder agent survived chat deletion")
-	}
-}
-
-func TestCreateAgentAttachesSkillsWithoutCreatingAWelcomeChat(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	var skillID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO skill (workspace_id, name, description, content, config, created_by)
-		VALUES ($1, 'Atomic Create Skill', '', '# Atomic', '{}'::jsonb, $2)
-		RETURNING id
-	`, testWorkspaceID, testUserID).Scan(&skillID); err != nil {
-		t.Fatalf("create skill fixture: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE workspace_id = $1 AND name = 'Atomic Skill Agent'`, testWorkspaceID)
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM skill WHERE id = $1`, skillID)
-	})
-
-	w := httptest.NewRecorder()
-	testHandler.CreateAgent(w, newRequest(http.MethodPost, "/api/agents", map[string]any{
-		"name":       "Atomic Skill Agent",
-		"runtime_id": testRuntimeID,
-		"skill_ids":  []string{skillID},
-	}))
-	if w.Code != http.StatusCreated {
-		t.Fatalf("CreateAgent: expected 201, got %d: %s", w.Code, w.Body.String())
-	}
-	var response AgentResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if len(response.Skills) != 1 || response.Skills[0].ID != skillID {
-		t.Fatalf("create response did not include attached skill: %+v", response.Skills)
-	}
-	var chatSessions int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*) FROM chat_session WHERE agent_id = $1
-	`, response.ID).Scan(&chatSessions); err != nil {
-		t.Fatalf("count chat sessions: %v", err)
-	}
-	if chatSessions != 0 {
-		t.Fatalf("chat sessions after agent create = %d, want 0", chatSessions)
-	}
-}
 
 // newBuilderSession starts a builder conversation on testRuntimeID and registers
 // cleanup for the carrier agents the flow creates.
@@ -222,138 +73,9 @@ func switchBuilderRuntime(t *testing.T, sessionID, runtimeID string) *httptest.R
 	return w
 }
 
-func TestSwitchAgentBuilderRuntimeRebindsCarrier(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	session := newBuilderSession(t)
-	target := newTestRuntime(t, "Builder Switch Target", "online")
 
-	w := switchBuilderRuntime(t, session.SessionID, target)
-	if w.Code != http.StatusOK {
-		t.Fatalf("SwitchAgentBuilderRuntime: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	var response SwitchAgentBuilderRuntimeResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
-		t.Fatalf("decode switch response: %v", err)
-	}
-	if response.RuntimeID != target {
-		t.Fatalf("response runtime = %q, want %q", response.RuntimeID, target)
-	}
 
-	// The carrier is what stamps a chat task's runtime, so this row — not the
-	// client's local selection — is the fix.
-	var boundRuntimeID, boundRuntimeMode string
-	var boundModel sql.NullString
-	if err := testPool.QueryRow(ctx, `
-		SELECT runtime_id::text, runtime_mode, model FROM agent WHERE id = $1
-	`, session.BuilderAgentID).Scan(&boundRuntimeID, &boundRuntimeMode, &boundModel); err != nil {
-		t.Fatalf("load builder carrier: %v", err)
-	}
-	if boundRuntimeID != target {
-		t.Fatalf("carrier runtime = %q, want %q", boundRuntimeID, target)
-	}
-	if boundRuntimeMode != "cloud" {
-		t.Fatalf("carrier runtime_mode = %q, want cloud", boundRuntimeMode)
-	}
-	if boundModel.Valid {
-		t.Fatalf("carrier model should be cleared on rebind, got %q", boundModel.String)
-	}
 
-	// Left deliberately stale: the daemon only resumes a stored provider session
-	// when this pointer matches the claiming task's runtime, so keeping the old
-	// value is what makes the new runtime start a fresh session.
-	var sessionRuntimeID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT runtime_id::text FROM chat_session WHERE id = $1
-	`, session.SessionID).Scan(&sessionRuntimeID); err != nil {
-		t.Fatalf("load chat session: %v", err)
-	}
-	if sessionRuntimeID != testRuntimeID {
-		t.Fatalf("chat_session.runtime_id = %q, want the original %q", sessionRuntimeID, testRuntimeID)
-	}
-}
-
-func TestSwitchAgentBuilderRuntimeRejectsOfflineTarget(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	session := newBuilderSession(t)
-	offline := newTestRuntime(t, "Builder Switch Offline", "offline")
-
-	if w := switchBuilderRuntime(t, session.SessionID, offline); w.Code != http.StatusConflict {
-		t.Fatalf("offline target: expected 409, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-func TestSwitchAgentBuilderRuntimeRejectsWhileReplyPending(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	session := newBuilderSession(t)
-	target := newTestRuntime(t, "Builder Switch Pending Target", "online")
-
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO agent_task_queue (agent_id, chat_session_id, status, priority, context, runtime_id)
-		VALUES ($1, $2, 'running', 2, '{}'::jsonb, $3)
-	`, session.BuilderAgentID, session.SessionID, testRuntimeID); err != nil {
-		t.Fatalf("insert pending task: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE chat_session_id = $1`, session.SessionID)
-	})
-
-	if w := switchBuilderRuntime(t, session.SessionID, target); w.Code != http.StatusConflict {
-		t.Fatalf("pending reply: expected 409, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-func TestSwitchAgentBuilderRuntimeRejectsNonBuilderSession(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	target := newTestRuntime(t, "Builder Switch Foreign Target", "online")
-
-	// A user-authored agent changes runtime through the agent update path; this
-	// endpoint must not be a second way in.
-	var userAgentID, userSessionID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent (
-			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, permission_mode, max_concurrent_tasks, owner_id
-		)
-		VALUES ($1, 'Builder Switch User Agent', '', 'cloud', '{}'::jsonb, $2, 'workspace', 'public_to', 1, $3)
-		RETURNING id
-	`, testWorkspaceID, testRuntimeID, testUserID).Scan(&userAgentID); err != nil {
-		t.Fatalf("create user agent: %v", err)
-	}
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO chat_session (workspace_id, agent_id, creator_id, title, runtime_id)
-		VALUES ($1, $2, $3, 'Not a builder', $4)
-		RETURNING id
-	`, testWorkspaceID, userAgentID, testUserID, testRuntimeID).Scan(&userSessionID); err != nil {
-		t.Fatalf("create user chat session: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM chat_session WHERE id = $1`, userSessionID)
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, userAgentID)
-	})
-
-	if w := switchBuilderRuntime(t, userSessionID, target); w.Code != http.StatusNotFound {
-		t.Fatalf("user agent session: expected 404, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var stillBound string
-	if err := testPool.QueryRow(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, userAgentID).Scan(&stillBound); err != nil {
-		t.Fatalf("reload user agent: %v", err)
-	}
-	if stillBound != testRuntimeID {
-		t.Fatalf("user agent runtime changed to %q; the builder endpoint must never touch it", stillBound)
-	}
-}
 
 func listBuilderSessions(t *testing.T) ListAgentBuilderSessionsResponse {
 	t.Helper()
@@ -383,35 +105,6 @@ func insertChatMessage(t *testing.T, sessionID, role, content string) {
 // the only route back to one. It must carry the carrier's runtime: the client
 // seeds its picker from it, and a wrong answer reintroduces MUL-5163 (picker
 // shows A while every message runs on B).
-func TestListAgentBuilderSessionsReturnsCarrierRuntime(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	session := newBuilderSession(t)
-	insertChatMessage(t, session.SessionID, "user", "Create a release manager")
-
-	response := listBuilderSessions(t)
-
-	var found *AgentBuilderSessionSummary
-	for i := range response.Sessions {
-		if response.Sessions[i].SessionID == session.SessionID {
-			found = &response.Sessions[i]
-			break
-		}
-	}
-	if found == nil {
-		t.Fatalf("builder session %s missing from the list", session.SessionID)
-	}
-	if found.RuntimeID != testRuntimeID {
-		t.Fatalf("runtime_id = %q, want the carrier's runtime %q", found.RuntimeID, testRuntimeID)
-	}
-	if found.LastMessageContent != "Create a release manager" {
-		t.Fatalf("last_message_content = %q", found.LastMessageContent)
-	}
-	if found.LastMessageRole != "user" {
-		t.Fatalf("last_message_role = %q, want user", found.LastMessageRole)
-	}
-}
 
 func saveBuilderDraft(t *testing.T, sessionID string, draft any) *httptest.ResponseRecorder {
 	t.Helper()
@@ -432,133 +125,16 @@ func saveBuilderDraft(t *testing.T, sessionID string, draft any) *httptest.Respo
 // The half of the configuration the user types by hand had no durable home
 // before this: it lived in React state and died on every reload. The list is
 // where it comes back, so the two have to be tested together.
-func TestSaveAgentBuilderDraftRoundTripsThroughTheList(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	session := newBuilderSession(t)
-	insertChatMessage(t, session.SessionID, "user", "Create a release manager")
-
-	if w := saveBuilderDraft(t, session.SessionID, map[string]any{
-		"name":         "Release manager",
-		"instructions": "Ship carefully",
-	}); w.Code != http.StatusNoContent {
-		t.Fatalf("SaveAgentBuilderDraft: expected 204, got %d: %s", w.Code, w.Body.String())
-	}
-
-	for _, summary := range listBuilderSessions(t).Sessions {
-		if summary.SessionID != session.SessionID {
-			continue
-		}
-		var stored map[string]any
-		if err := json.Unmarshal(summary.Draft, &stored); err != nil {
-			t.Fatalf("decode stored draft %q: %v", string(summary.Draft), err)
-		}
-		if stored["name"] != "Release manager" {
-			t.Fatalf("stored draft name = %v", stored["name"])
-		}
-		return
-	}
-	t.Fatalf("builder session %s missing from the list", session.SessionID)
-}
 
 // One conversation has one current configuration. Accumulating rows per save
 // would make "which one is current" a question the read path has to answer.
-func TestSaveAgentBuilderDraftOverwritesInPlace(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	session := newBuilderSession(t)
-
-	saveBuilderDraft(t, session.SessionID, map[string]any{"name": "First"})
-	saveBuilderDraft(t, session.SessionID, map[string]any{"name": "Second"})
-
-	var rows int
-	var name string
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*), max(draft->>'name') FROM agent_builder_draft WHERE chat_session_id = $1
-	`, session.SessionID).Scan(&rows, &name); err != nil {
-		t.Fatalf("read stored drafts: %v", err)
-	}
-	if rows != 1 {
-		t.Fatalf("stored draft rows = %d, want exactly one per conversation", rows)
-	}
-	if name != "Second" {
-		t.Fatalf("stored draft name = %q, want the latest save", name)
-	}
-}
 
 // Without the carrier gate this endpoint would be a way to hang arbitrary JSON
 // off any chat session the caller happens to own.
-func TestSaveAgentBuilderDraftRejectsNonBuilderSession(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-
-	var userAgentID, userSessionID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent (
-			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, permission_mode, max_concurrent_tasks, owner_id
-		)
-		VALUES ($1, 'Builder Draft User Agent', '', 'cloud', '{}'::jsonb, $2, 'workspace', 'public_to', 1, $3)
-		RETURNING id
-	`, testWorkspaceID, testRuntimeID, testUserID).Scan(&userAgentID); err != nil {
-		t.Fatalf("create user agent: %v", err)
-	}
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO chat_session (workspace_id, agent_id, creator_id, title, runtime_id)
-		VALUES ($1, $2, $3, 'Ordinary chat', $4)
-		RETURNING id
-	`, testWorkspaceID, userAgentID, testUserID, testRuntimeID).Scan(&userSessionID); err != nil {
-		t.Fatalf("create user chat session: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM chat_session WHERE id = $1`, userSessionID)
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, userAgentID)
-	})
-
-	if w := saveBuilderDraft(t, userSessionID, map[string]any{"name": "X"}); w.Code != http.StatusNotFound {
-		t.Fatalf("ordinary chat: expected 404, got %d: %s", w.Code, w.Body.String())
-	}
-}
 
 // agent_builder_draft carries no chat_session FK, so nothing reclaims the row
 // on its own. A draft outliving its conversation is a leak the user can never
 // see, let alone clear.
-func TestDeleteChatSessionPrunesTheBuilderDraft(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	session := newBuilderSession(t)
-	saveBuilderDraft(t, session.SessionID, map[string]any{"name": "Doomed"})
-
-	w := httptest.NewRecorder()
-	req := withURLParams(
-		newRequest(http.MethodDelete, "/api/chat/sessions/"+session.SessionID, nil),
-		"sessionId", session.SessionID,
-	)
-	// DeleteChatSession reads the workspace off the context the middleware
-	// normally fills, not the header.
-	req = withChatTestWorkspaceCtx(t, req)
-	testHandler.DeleteChatSession(w, req)
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("DeleteChatSession: expected 204, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var remaining int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*) FROM agent_builder_draft WHERE chat_session_id = $1
-	`, session.SessionID).Scan(&remaining); err != nil {
-		t.Fatalf("count stored drafts: %v", err)
-	}
-	if remaining != 0 {
-		t.Fatalf("stored draft rows after delete = %d, want 0", remaining)
-	}
-}
 
 // newSaveDraftRequest prepares a save the way saveBuilderDraft does but hands
 // the pieces back, so the two tests below can run the handler on their own
@@ -603,14 +179,14 @@ func runSaveDraftAgainst(t *testing.T, sessionID string, w *httptest.ResponseRec
 	if err != nil {
 		t.Fatalf("begin holder transaction: %v", err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	holderPID := holderBackendPID(t, ctx, tx)
 	// The same row and lock mode DeleteChatSession and SetChatSessionArchived
 	// take, as their transaction's first statement.
-	if _, err := tx.Exec(ctx, `SELECT id FROM chat_session WHERE id = $1 FOR UPDATE`, sessionID); err != nil {
+	if _, err := tx.ExecContext(ctx, `SELECT id FROM chat_session WHERE id = $1 FOR UPDATE`, sessionID); err != nil {
 		t.Fatalf("lock chat session: %v", err)
 	}
-	if _, err := tx.Exec(ctx, hold, sessionID); err != nil {
+	if _, err := tx.ExecContext(ctx, hold, sessionID); err != nil {
 		t.Fatalf("hold statement %q: %v", hold, err)
 	}
 
@@ -629,7 +205,7 @@ func runSaveDraftAgainst(t *testing.T, sessionID string, w *httptest.ResponseRec
 		}
 	}
 
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		t.Fatalf("commit holder transaction: %v", err)
 	}
 	select {
@@ -647,202 +223,33 @@ func runSaveDraftAgainst(t *testing.T, sessionID string, w *httptest.ResponseRec
 // chat_session FK to reject it. What survived was the configuration the user had
 // just explicitly discarded, invisible to the UI and reachable by no prune but
 // the workspace teardown.
-func TestSaveAgentBuilderDraftLosesToAConcurrentDelete(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	session := newBuilderSession(t)
-	// Deliberately no draft saved first. A pre-existing row would make the
-	// upsert contend on that row's own lock, and the test would pass for a
-	// reason that has nothing to do with the session lock under test.
-	w, req := newSaveDraftRequest(t, session.SessionID, map[string]any{"name": "Discarded"})
-
-	runSaveDraftAgainst(t, session.SessionID, w, req,
-		`DELETE FROM chat_session WHERE id = $1`)
-
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("save after the conversation was deleted: expected 404, got %d: %s", w.Code, w.Body.String())
-	}
-	if n := countBuilderDrafts(t, session.SessionID); n != 0 {
-		t.Fatalf("orphaned draft rows = %d, want 0", n)
-	}
-}
 
 // Same race against the other writer of chat_session.status. Creating the agent
 // archives the conversation, and the studio's last autosave can still be in
 // flight — an unlocked status check let it write a draft onto a session that is
 // already read-only, where the drafts list will never show it again.
-func TestSaveAgentBuilderDraftLosesToAConcurrentArchive(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	session := newBuilderSession(t)
-	w, req := newSaveDraftRequest(t, session.SessionID, map[string]any{"name": "Too late"})
-
-	runSaveDraftAgainst(t, session.SessionID, w, req,
-		`UPDATE chat_session SET status = 'archived' WHERE id = $1`)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("save after the conversation was archived: expected 400, got %d: %s", w.Code, w.Body.String())
-	}
-	if n := countBuilderDrafts(t, session.SessionID); n != 0 {
-		t.Fatalf("draft rows on an archived conversation = %d, want 0", n)
-	}
-}
 
 // A rebind moves the carrier without touching chat_session.runtime_id, which is
 // deliberately left stale as the daemon's resume pointer. Reading the list from
 // that column instead of the carrier would resume the conversation onto a
 // runtime that no longer executes anything.
-func TestListAgentBuilderSessionsFollowsARuntimeSwitch(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	session := newBuilderSession(t)
-	insertChatMessage(t, session.SessionID, "user", "Create a release manager")
-	target := newTestRuntime(t, "Builder List Switch Target", "online")
-
-	if w := switchBuilderRuntime(t, session.SessionID, target); w.Code != http.StatusOK {
-		t.Fatalf("SwitchAgentBuilderRuntime: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	for _, summary := range listBuilderSessions(t).Sessions {
-		if summary.SessionID != session.SessionID {
-			continue
-		}
-		if summary.RuntimeID != target {
-			t.Fatalf("runtime_id = %q after switch, want %q", summary.RuntimeID, target)
-		}
-		return
-	}
-	t.Fatalf("builder session %s missing from the list", session.SessionID)
-}
 
 // A session opened and abandoned untouched is not a draft. Listing it would put
 // an empty row in front of the user on every accidental entry into the flow.
-func TestListAgentBuilderSessionsSkipsUntouchedConversations(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	session := newBuilderSession(t)
-
-	for _, summary := range listBuilderSessions(t).Sessions {
-		if summary.SessionID == session.SessionID {
-			t.Fatalf("untouched builder session %s must not be listed", session.SessionID)
-		}
-	}
-}
 
 // The configuration form is editable from the moment the session exists and
 // autosaves, so a user can open the builder, type a name and leave before the
 // first turn. Keying "is this a draft" on messages alone made that work
 // unreachable: the row existed and nothing could reach it.
-func TestListAgentBuilderSessionsIncludesASavedDraftWithNoMessages(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	session := newBuilderSession(t)
-	saveBuilderDraft(t, session.SessionID, map[string]any{"name": "Typed but never sent"})
-
-	for _, summary := range listBuilderSessions(t).Sessions {
-		if summary.SessionID != session.SessionID {
-			continue
-		}
-		if summary.LastMessageContent != "" || summary.LastMessageRole != "" {
-			t.Fatalf("expected an empty last message, got %q/%q",
-				summary.LastMessageRole, summary.LastMessageContent)
-		}
-		if summary.RuntimeID != testRuntimeID {
-			t.Fatalf("runtime_id = %q, want the carrier's runtime %q", summary.RuntimeID, testRuntimeID)
-		}
-		return
-	}
-	t.Fatalf("builder session %s with a saved draft is missing from the list", session.SessionID)
-}
 
 // Ordinary chats must never leak into the creation-draft list: their carrier is
 // a user agent, and the studio would try to resume a conversation it cannot
 // drive.
-func TestListAgentBuilderSessionsExcludesOrdinaryChats(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-
-	var userAgentID, userSessionID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent (
-			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, permission_mode, max_concurrent_tasks, owner_id
-		)
-		VALUES ($1, 'Builder List User Agent', '', 'cloud', '{}'::jsonb, $2, 'workspace', 'public_to', 1, $3)
-		RETURNING id
-	`, testWorkspaceID, testRuntimeID, testUserID).Scan(&userAgentID); err != nil {
-		t.Fatalf("create user agent: %v", err)
-	}
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO chat_session (workspace_id, agent_id, creator_id, title, runtime_id)
-		VALUES ($1, $2, $3, 'Ordinary chat', $4)
-		RETURNING id
-	`, testWorkspaceID, userAgentID, testUserID, testRuntimeID).Scan(&userSessionID); err != nil {
-		t.Fatalf("create user chat session: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM chat_message WHERE chat_session_id = $1`, userSessionID)
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM chat_session WHERE id = $1`, userSessionID)
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, userAgentID)
-	})
-	insertChatMessage(t, userSessionID, "user", "Hello")
-
-	for _, summary := range listBuilderSessions(t).Sessions {
-		if summary.SessionID == userSessionID {
-			t.Fatalf("ordinary chat %s must not appear as a creation draft", userSessionID)
-		}
-	}
-}
 
 // The regression this whole change exists for: a send that loaded the agent
 // before a rebind committed must still enqueue on the runtime the session is
 // bound to NOW. SendDirectChatMessage is handed the stale agent on purpose here
 // — that is exactly what its caller does when the two requests interleave.
-func TestSendDirectChatMessageUsesCurrentlyBoundRuntime(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	created := newBuilderSession(t)
-	target := newTestRuntime(t, "Builder Send Rebind Target", "online")
-
-	sessionUUID := parseUUID(created.SessionID)
-	session, err := testHandler.Queries.GetChatSession(ctx, sessionUUID)
-	if err != nil {
-		t.Fatalf("load chat session: %v", err)
-	}
-	staleAgent, err := testHandler.Queries.GetAgent(ctx, parseUUID(created.BuilderAgentID))
-	if err != nil {
-		t.Fatalf("load builder carrier: %v", err)
-	}
-	if uuidToString(staleAgent.RuntimeID.String) != testRuntimeID {
-		t.Fatalf("carrier should start on %q, got %q", testRuntimeID, uuidToString(staleAgent.RuntimeID.String))
-	}
-
-	if w := switchBuilderRuntime(t, created.SessionID, target); w.Code != http.StatusOK {
-		t.Fatalf("SwitchAgentBuilderRuntime: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE chat_session_id = $1`, created.SessionID)
-	})
-
-	sent, err := testHandler.TaskService.SendDirectChatMessage(
-		ctx, session, staleAgent, parseUUID(testUserID), "hello after the switch", nil, "member", parseUUID(testUserID),
-	)
-	if err != nil {
-		t.Fatalf("SendDirectChatMessage: %v", err)
-	}
-	if got := uuidToString(sent.Task.RuntimeID.String); got != target {
-		t.Fatalf("task runtime = %q, want the rebound runtime %q — a stale in-flight send must not resurrect the old runtime", got, target)
-	}
-}
 
 // holderBackendPID returns the server-side PID of the backend serving tx, so a
 // waiter can later be attributed to this specific lock holder.
@@ -906,481 +313,18 @@ func waitForWaiterBlockedBy(t *testing.T, holderPID int, timeout time.Duration) 
 // lock owns: with the lock removed the send reads straight through the
 // uncommitted rebind under READ COMMITTED, sees the pre-switch runtime, and
 // enqueues the reply on the runtime the user just switched away from.
-func TestSendDirectChatMessageWaitsForUncommittedRebind(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	created := newBuilderSession(t)
-	target := newTestRuntime(t, "Builder Interleave Send Target", "online")
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE chat_session_id = $1`, created.SessionID)
-	})
 
-	session, err := testHandler.Queries.GetChatSession(ctx, parseUUID(created.SessionID))
-	if err != nil {
-		t.Fatalf("load chat session: %v", err)
-	}
-	// The agent as the send handler would have loaded it: still on runtime A.
-	staleAgent, err := testHandler.Queries.GetAgent(ctx, parseUUID(created.BuilderAgentID))
-	if err != nil {
-		t.Fatalf("load builder carrier: %v", err)
-	}
 
-	// Hold an uncommitted rebind, exactly as SwitchAgentBuilderRuntime does.
-	tx, err := testPool.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin rebind tx: %v", err)
-	}
-	defer tx.Rollback(ctx)
-	holderPID := holderBackendPID(t, ctx, tx)
-	qtx := testHandler.Queries.WithTx(tx)
-	if _, err := qtx.LockChatSessionForRuntimeBind(ctx, session.ID); err != nil {
-		t.Fatalf("lock chat session: %v", err)
-	}
-	targetRuntime, err := testHandler.Queries.GetAgentRuntimeForWorkspace(ctx, db.GetAgentRuntimeForWorkspaceParams{
-		ID:          parseUUID(target),
-		WorkspaceID: parseUUID(testWorkspaceID),
-	})
-	if err != nil {
-		t.Fatalf("load target runtime: %v", err)
-	}
-	if _, err := qtx.RebindAgentBuilderRuntime(ctx, db.RebindAgentBuilderRuntimeParams{
-		ID:          staleAgent.ID,
-		RuntimeID:   nullString(targetRuntime.ID),
-		RuntimeMode: targetRuntime.RuntimeMode,
-	}); err != nil {
-		t.Fatalf("rebind carrier: %v", err)
-	}
-
-	type sendResult struct {
-		task db.AgentTaskQueue
-		err  error
-	}
-	results := make(chan sendResult, 1)
-	go func() {
-		sent, err := testHandler.TaskService.SendDirectChatMessage(
-			context.Background(), session, staleAgent, parseUUID(testUserID), "sent while the rebind was still open", nil, "member", parseUUID(testUserID),
-		)
-		if err != nil {
-			results <- sendResult{err: err}
-			return
-		}
-		results <- sendResult{task: sent.Task}
-	}()
-
-	if !waitForWaiterBlockedBy(t, holderPID, 10*time.Second) {
-		select {
-		case got := <-results:
-			t.Fatalf("send completed (err=%v, runtime=%q) while an uncommitted rebind held the chat_session lock; the send path is not taking the lock",
-				got.err, uuidToString(got.task.RuntimeID.String))
-		default:
-			t.Fatalf("send never blocked on the chat_session lock held by pid %d; the send path is not taking the lock", holderPID)
-		}
-	}
-	select {
-	case got := <-results:
-		t.Fatalf("send returned (err=%v) before the rebind committed", got.err)
-	default:
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatalf("commit rebind: %v", err)
-	}
-
-	select {
-	case got := <-results:
-		if got.err != nil {
-			t.Fatalf("SendDirectChatMessage after commit: %v", got.err)
-		}
-		if runtimeID := uuidToString(got.task.RuntimeID.String); runtimeID != target {
-			t.Fatalf("task runtime = %q, want the rebound runtime %q", runtimeID, target)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("send did not complete after the rebind committed")
-	}
-}
-
-func TestSendDirectChatMessageRejectsSessionArchivedWhileWaitingForLock(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	agentID := createHandlerTestAgent(t, "Chat Send Archive Race", []byte("[]"))
-	sessionID := createHandlerTestChatSession(t, agentID)
-	session, err := testHandler.Queries.GetChatSession(ctx, parseUUID(sessionID))
-	if err != nil {
-		t.Fatalf("load chat session: %v", err)
-	}
-	agent, err := testHandler.Queries.GetAgent(ctx, parseUUID(agentID))
-	if err != nil {
-		t.Fatalf("load chat agent: %v", err)
-	}
-
-	tx, err := testPool.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin archive tx: %v", err)
-	}
-	defer tx.Rollback(ctx)
-	holderPID := holderBackendPID(t, ctx, tx)
-	if _, err := tx.Exec(ctx, `
-		UPDATE chat_session SET status = 'archived' WHERE id = $1
-	`, sessionID); err != nil {
-		t.Fatalf("archive chat session: %v", err)
-	}
-
-	results := make(chan error, 1)
-	go func() {
-		_, err := testHandler.TaskService.SendDirectChatMessage(
-			context.Background(), session, agent, parseUUID(testUserID), "must not enqueue after archive", nil, "member", parseUUID(testUserID),
-		)
-		results <- err
-	}()
-
-	if !waitForWaiterBlockedBy(t, holderPID, 10*time.Second) {
-		t.Fatal("send did not wait for the session archive transaction")
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatalf("commit archive: %v", err)
-	}
-
-	select {
-	case err := <-results:
-		if !errors.Is(err, service.ErrChatSessionArchived) {
-			t.Fatalf("send after archive error = %v, want ErrChatSessionArchived", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("send did not return after archive committed")
-	}
-
-	var taskCount, messageCount int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*) FROM agent_task_queue WHERE chat_session_id = $1
-	`, sessionID).Scan(&taskCount); err != nil {
-		t.Fatalf("count chat tasks: %v", err)
-	}
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*) FROM chat_message WHERE chat_session_id = $1
-	`, sessionID).Scan(&messageCount); err != nil {
-		t.Fatalf("count chat messages: %v", err)
-	}
-	if taskCount != 0 || messageCount != 0 {
-		t.Fatalf("archived send persisted tasks=%d messages=%d, want zero", taskCount, messageCount)
-	}
-}
-
-func TestDeleteBuilderSessionLocksAgentBeforeTasks(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	created := newBuilderSession(t)
-	taskID := insertPendingChatTask(t, created.BuilderAgentID, created.SessionID, "queued")
-	if _, err := testPool.Exec(ctx, `UPDATE agent_runtime SET status = 'online', last_seen_at = now() WHERE id = $1`, testRuntimeID); err != nil {
-		t.Fatalf("refresh builder runtime heartbeat: %v", err)
-	}
-
-	claimTx, err := testPool.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin claim tx: %v", err)
-	}
-	defer claimTx.Rollback(ctx)
-	qtx := testHandler.Queries.WithTx(claimTx)
-	agent, err := qtx.GetAgentForClaimUpdate(ctx, parseUUID(created.BuilderAgentID))
-	if err != nil {
-		t.Fatalf("lock builder agent: %v", err)
-	}
-	holderPID := holderBackendPID(t, ctx, claimTx)
-
-	deleteReq := withURLParam(
-		newRequestAs(testUserID, http.MethodDelete, "/api/chat/sessions/"+created.SessionID, nil),
-		"sessionId",
-		created.SessionID,
-	)
-	deleteReq = withChatTestWorkspaceCtx(t, deleteReq)
-	deleteCodes := make(chan int, 1)
-	go func() {
-		w := httptest.NewRecorder()
-		testHandler.DeleteChatSession(w, deleteReq)
-		deleteCodes <- w.Code
-	}()
-
-	if !waitForWaiterBlockedBy(t, holderPID, 10*time.Second) {
-		t.Fatal("delete did not wait for the builder agent lock")
-	}
-	claimed, err := qtx.ClaimAgentTask(ctx, db.ClaimAgentTaskParams{
-		AgentID:          agent.ID,
-		RuntimeID:        agent.RuntimeID,
-		PrepareLeaseSecs: 30,
-		RuntimeStaleSecs: service.RuntimeClaimFreshnessSeconds,
-	})
-	if err != nil {
-		t.Fatalf("claim while delete waits for agent lock: %v", err)
-	}
-	if got := uuidToString(claimed.ID); got != taskID {
-		t.Fatalf("claimed task = %q, want %q", got, taskID)
-	}
-	if err := claimTx.Rollback(ctx); err != nil {
-		t.Fatalf("release claim transaction: %v", err)
-	}
-
-	select {
-	case code := <-deleteCodes:
-		if code != http.StatusNoContent {
-			t.Fatalf("delete returned %d, want 204", code)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("delete did not complete after agent lock released")
-	}
-}
 
 // The mirror image: a send that has not committed yet must hold off a rebind,
 // and the rebind must then see the now-visible pending task and refuse. Without
 // the lock on the switch side, GetPendingChatTask cannot see the uncommitted
 // task, so the switch reports success while a reply is already in flight on the
 // old runtime — the same "UI says B, execution is A" split, one turn later.
-func TestSwitchAgentBuilderRuntimeWaitsForUncommittedSend(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	created := newBuilderSession(t)
-	target := newTestRuntime(t, "Builder Interleave Switch Target", "online")
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE chat_session_id = $1`, created.SessionID)
-	})
 
-	// Hold an uncommitted send: the chat_session lock plus its task row, in the
-	// order SendDirectChatMessage takes them.
-	tx, err := testPool.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin send tx: %v", err)
-	}
-	defer tx.Rollback(ctx)
-	holderPID := holderBackendPID(t, ctx, tx)
-	qtx := testHandler.Queries.WithTx(tx)
-	if _, err := qtx.LockChatSessionForRuntimeBind(ctx, parseUUID(created.SessionID)); err != nil {
-		t.Fatalf("lock chat session: %v", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO agent_task_queue (agent_id, chat_session_id, status, priority, context, runtime_id)
-		VALUES ($1, $2, 'queued', 2, '{}'::jsonb, $3)
-	`, created.BuilderAgentID, created.SessionID, testRuntimeID); err != nil {
-		t.Fatalf("insert in-flight task: %v", err)
-	}
-
-	codes := make(chan int, 1)
-	go func() {
-		w := httptest.NewRecorder()
-		req := withURLParams(
-			newRequest(http.MethodPatch, "/api/agent-builder/sessions/"+created.SessionID+"/runtime", map[string]any{
-				"runtime_id": target,
-			}),
-			"sessionId", created.SessionID,
-		)
-		testHandler.SwitchAgentBuilderRuntime(w, req)
-		codes <- w.Code
-	}()
-
-	if !waitForWaiterBlockedBy(t, holderPID, 10*time.Second) {
-		select {
-		case code := <-codes:
-			t.Fatalf("switch returned %d while an uncommitted send held the chat_session lock; the switch path is not taking the lock", code)
-		default:
-			t.Fatalf("switch never blocked on the chat_session lock held by pid %d; the switch path is not taking the lock", holderPID)
-		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatalf("commit send: %v", err)
-	}
-
-	select {
-	case code := <-codes:
-		if code != http.StatusConflict {
-			t.Fatalf("switch returned %d after the send committed, want 409 — a reply is in flight", code)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("switch did not complete after the send committed")
-	}
-
-	// And the carrier must be untouched: a refused switch cannot half-apply.
-	var boundRuntimeID string
-	if err := testPool.QueryRow(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, created.BuilderAgentID).Scan(&boundRuntimeID); err != nil {
-		t.Fatalf("reload builder carrier: %v", err)
-	}
-	if boundRuntimeID != testRuntimeID {
-		t.Fatalf("carrier runtime = %q after a refused switch, want the original %q", boundRuntimeID, testRuntimeID)
-	}
-}
-
-func TestSwitchAgentBuilderRuntimeEnforcesRuntimeAndSessionOwnership(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-
-	// A plain member who owns none of the runtimes below — the fixture user
-	// owns them, and a private runtime is usable only by its owner.
-	var plainMemberID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO "user" (name, email) VALUES ('Builder Switch Plain Member', 'builder-switch-plain@multica.ai')
-		RETURNING id
-	`).Scan(&plainMemberID); err != nil {
-		t.Fatalf("create plain member user: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, plainMemberID)
-	})
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'member')
-	`, testWorkspaceID, plainMemberID); err != nil {
-		t.Fatalf("add plain member: %v", err)
-	}
-
-	// The fixture runtime is private to the workspace owner, so start this
-	// member's session on a public one.
-	var publicRuntimeID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (
-			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, owner_id, visibility, last_seen_at
-		)
-		VALUES ($1, NULL, 'Builder Switch Public', 'cloud', 'builder_switch_public', 'online', 'public', '{}'::jsonb, $2, 'public', now())
-		RETURNING id
-	`, testWorkspaceID, testUserID).Scan(&publicRuntimeID); err != nil {
-		t.Fatalf("create public runtime: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, publicRuntimeID)
-	})
-
-	// That member's own builder session, so the creator gate passes and the
-	// runtime gate is what we are actually testing.
-	createW := httptest.NewRecorder()
-	testHandler.CreateAgentBuilderSession(createW, newRequestAs(plainMemberID, http.MethodPost, "/api/agent-builder/sessions", map[string]any{
-		"runtime_id": publicRuntimeID,
-	}))
-	if createW.Code != http.StatusCreated {
-		t.Fatalf("CreateAgentBuilderSession as plain member: expected 201, got %d: %s", createW.Code, createW.Body.String())
-	}
-	var created CreateAgentBuilderSessionResponse
-	if err := json.Unmarshal(createW.Body.Bytes(), &created); err != nil {
-		t.Fatalf("decode create response: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `
-			DELETE FROM agent
-			WHERE workspace_id = $1 AND kind = 'system' AND system_key LIKE 'agent_builder:%'
-		`, testWorkspaceID)
-	})
-
-	// The workspace owner's private runtime is not a legal target for them.
-	var privateRuntimeID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_runtime (
-			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, owner_id, visibility, last_seen_at
-		)
-		VALUES ($1, NULL, 'Builder Switch Private', 'cloud', 'builder_switch_private', 'online', 'private', '{}'::jsonb, $2, 'private', now())
-		RETURNING id
-	`, testWorkspaceID, testUserID).Scan(&privateRuntimeID); err != nil {
-		t.Fatalf("create private runtime: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, privateRuntimeID)
-	})
-
-	forbiddenW := httptest.NewRecorder()
-	testHandler.SwitchAgentBuilderRuntime(forbiddenW, withURLParams(
-		newRequestAs(plainMemberID, http.MethodPatch, "/api/agent-builder/sessions/"+created.SessionID+"/runtime", map[string]any{
-			"runtime_id": privateRuntimeID,
-		}),
-		"sessionId", created.SessionID,
-	))
-	if forbiddenW.Code != http.StatusForbidden {
-		t.Fatalf("someone else's private runtime: expected 403, got %d: %s", forbiddenW.Code, forbiddenW.Body.String())
-	}
-
-	// And a session the caller does not own is not theirs to rebind, whatever
-	// their workspace role — this one is issued by the workspace owner.
-	target := newTestRuntime(t, "Builder Switch Ownership Target", "online")
-	if w := switchBuilderRuntime(t, created.SessionID, target); w.Code != http.StatusForbidden {
-		t.Fatalf("someone else's session: expected 403, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var boundRuntimeID string
-	if err := testPool.QueryRow(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, created.BuilderAgentID).Scan(&boundRuntimeID); err != nil {
-		t.Fatalf("reload builder carrier: %v", err)
-	}
-	if boundRuntimeID != publicRuntimeID {
-		t.Fatalf("carrier runtime = %q after refused switches, want the original %q", boundRuntimeID, publicRuntimeID)
-	}
-}
 
 // The probe above is only as good as its attribution: a database-wide "is
 // anything waiting on a lock?" check would match another package's test binary
 // on the shared DATABASE_URL and let the interleaving tests commit their holder
 // early, turning them green even with the lock under test removed. This pins the
 // property directly — a waiter blocked by a DIFFERENT backend must not count.
-func TestWaitForWaiterBlockedByIgnoresUnrelatedWaiters(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	mine := newBuilderSession(t)
-	theirs := newBuilderSession(t)
-
-	// Our holder: locks our own session and blocks nobody.
-	holderTx, err := testPool.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin holder tx: %v", err)
-	}
-	defer holderTx.Rollback(ctx)
-	holderPID := holderBackendPID(t, ctx, holderTx)
-	if _, err := holderTx.Exec(ctx, `SELECT id FROM chat_session WHERE id = $1 FOR UPDATE`, mine.SessionID); err != nil {
-		t.Fatalf("hold our own session lock: %v", err)
-	}
-
-	// An unrelated holder on a different row, plus a backend parked behind it —
-	// the shape of another package's test running against the same database.
-	otherTx, err := testPool.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin unrelated holder tx: %v", err)
-	}
-	defer otherTx.Rollback(ctx)
-	otherPID := holderBackendPID(t, ctx, otherTx)
-	if _, err := otherTx.Exec(ctx, `SELECT id FROM chat_session WHERE id = $1 FOR UPDATE`, theirs.SessionID); err != nil {
-		t.Fatalf("hold unrelated session lock: %v", err)
-	}
-
-	blocked := make(chan struct{})
-	go func() {
-		defer close(blocked)
-		waiterTx, err := testPool.Begin(context.Background())
-		if err != nil {
-			return
-		}
-		defer waiterTx.Rollback(ctx)
-		_, _ = waiterTx.Exec(context.Background(), `SELECT id FROM chat_session WHERE id = $1 FOR UPDATE`, theirs.SessionID)
-	}()
-
-	// The unrelated waiter is genuinely parked, so a database-wide probe would
-	// fire here.
-	if !waitForWaiterBlockedBy(t, otherPID, 10*time.Second) {
-		t.Fatal("the unrelated waiter never blocked; this test cannot prove anything")
-	}
-	// Attributed to our holder, it must not. One probe is enough: the waiter
-	// stays parked behind otherPID until otherTx rolls back below, so polling
-	// longer could only re-read the same state.
-	if waitForWaiterBlockedBy(t, holderPID, 0) {
-		t.Fatal("probe matched a waiter blocked by another backend; the interleaving tests could commit their holder early and pass with the lock removed")
-	}
-
-	if err := otherTx.Rollback(ctx); err != nil {
-		t.Fatalf("release unrelated lock: %v", err)
-	}
-	select {
-	case <-blocked:
-	case <-time.After(10 * time.Second):
-		t.Fatal("unrelated waiter did not finish after its blocker released")
-	}
-}

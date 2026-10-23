@@ -42,6 +42,10 @@ func (f candidateFailDBTX) ExecContext(ctx context.Context, query string, args .
 	return f.inner.ExecContext(ctx, query, args...)
 }
 
+func (f candidateFailDBTX) PrepareContext(ctx context.Context, query string) (*sql.Stmt, error) {
+	return f.inner.PrepareContext(ctx, query)
+}
+
 func (f candidateFailDBTX) QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
 	if strings.Contains(query, "ListQueuedClaimCandidatesByRuntimes") {
 		return nil, fmt.Errorf("injected candidate query failure")

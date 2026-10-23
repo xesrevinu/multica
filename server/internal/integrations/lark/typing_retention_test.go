@@ -6,8 +6,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 	dbfx "github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -28,7 +27,7 @@ func TestTypingTasklessCrashRecoveryDB(t *testing.T) {
 	f.Exec(t, "UPDATE channel_typing_reaction SET created_at=now()-interval '3 minutes' WHERE chat_message_id=$1", running)
 	// A fresh process has no local states or timers, only the shared database.
 	fresh := NewTypingIndicatorManager(api, fakeTypingCreds{secret: "test"}, f.store, newDiscardLogger())
-	fresh.Reconcile(context.Background(), pgtype.UUID{})
+	fresh.Reconcile(context.Background(), "")
 	if len(api.remote["crashed"]) != 0 || len(api.remote["next"]) != 1 || len(api.remote["running"]) != 1 {
 		t.Fatalf("wrong cleanup scope: %+v", api.remote)
 	}
@@ -66,8 +65,8 @@ func TestTypingRetentionErasesCredentialsAndStopsRetriesDB(t *testing.T) {
 			if !abandoned || !redacted || cleaned {
 				t.Fatalf("failed cleanup not preserved distinctly: abandoned=%v redacted=%v cleaned=%v", abandoned, redacted, cleaned)
 			}
-			_, err := f.store.FinishChannelTypingReactionAdd(context.Background(), db.FinishChannelTypingReactionAddParams{ID: uuidFromString(t, id), ReactionID: "late", CleanupRequired: true})
-			if err != pgx.ErrNoRows {
+			_, err := f.store.FinishChannelTypingReactionAdd(context.Background(), db.FinishChannelTypingReactionAddParams{ID: uuidFromString(t, id), ReactionID: "late", CleanupRequired: 1})
+			if err != sql.ErrNoRows {
 				t.Fatalf("late Add resurrected expired ledger: %v", err)
 			}
 			fresh.Reconcile(context.Background(), f.sessionID)

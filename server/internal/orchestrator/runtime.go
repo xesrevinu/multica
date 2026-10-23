@@ -534,7 +534,7 @@ func (s *Service) activity(ctx context.Context, row *issueRow, d *Decision, sour
 	if s.svcUserID != "" {
 		actor = s.svcUserID
 	}
-	if _, err := s.opt.Pool.ExecContext(ctx, `INSERT INTO activity_log (workspace_id, issue_id, actor_type, actor_id, action, details) VALUES ($1, $2, 'member', $3, 'orchestrator_transition', $4)`, row.Workspace, row.ID, actor, det); err != nil {
+	if _, err := s.opt.Pool.ExecContext(ctx, `INSERT INTO activity_log (id, workspace_id, issue_id, actor_type, actor_id, action, details) VALUES (gen_random_uuid(), $1, $2, 'member', $3, 'orchestrator_transition', $4)`, row.Workspace, row.ID, actor, string(det)); err != nil {
 		slog.Warn("orchestrator: activity log", "issue", row.Key, "err", err)
 	}
 }
@@ -623,8 +623,8 @@ func (s *Service) remindBlocked(ctx context.Context, t *Team, rows []issueRow) {
 
 func (s *Service) ensureServiceUser(ctx context.Context) error {
 	var id string
-	err := s.opt.Pool.QueryRowContext(ctx, `INSERT INTO "user" (name, email) VALUES ('Orchestrator', $1)
-		ON CONFLICT (email) DO UPDATE SET name=EXCLUDED.name RETURNING id::text`, ServiceUserEmail).Scan(&id)
+	err := s.opt.Pool.QueryRowContext(ctx, `INSERT INTO "user" (id, name, email) VALUES (gen_random_uuid(), 'Orchestrator', $1)
+		ON CONFLICT (email) DO UPDATE SET name=EXCLUDED.name RETURNING id`, ServiceUserEmail).Scan(&id)
 	if err != nil {
 		return err
 	}
@@ -634,8 +634,8 @@ func (s *Service) ensureServiceUser(ctx context.Context) error {
 	sum := sha256.Sum256([]byte(tok))
 	// One live token: revoke older ones, mint a fresh in-memory one per boot.
 	_, _ = s.opt.Pool.ExecContext(ctx, `DELETE FROM personal_access_token WHERE user_id=$1 AND name='orchestrator (in-process)'`, id)
-	if _, err := s.opt.Pool.ExecContext(ctx, `INSERT INTO personal_access_token (user_id, name, token_hash, token_prefix, expires_at)
-		VALUES ($1, 'orchestrator (in-process)', $2, $3, now() + interval '3650 days')`, id, hex.EncodeToString(sum[:]), tok[:8]); err != nil {
+	if _, err := s.opt.Pool.ExecContext(ctx, `INSERT INTO personal_access_token (id, user_id, name, token_hash, token_prefix, expires_at)
+		VALUES (gen_random_uuid(), $1, 'orchestrator (in-process)', $2, $3, $4)`, id, hex.EncodeToString(sum[:]), tok[:8], time.Now().UTC().AddDate(10, 0, 0).Format(time.RFC3339Nano)); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -645,7 +645,7 @@ func (s *Service) ensureServiceUser(ctx context.Context) error {
 }
 
 func (s *Service) ensureMember(ctx context.Context, workspaceID string) error {
-	_, err := s.opt.Pool.ExecContext(ctx, `INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'admin') ON CONFLICT (workspace_id, user_id) DO NOTHING`, workspaceID, s.svcUserID)
+	_, err := s.opt.Pool.ExecContext(ctx, `INSERT INTO member (id, workspace_id, user_id, role) VALUES (gen_random_uuid(), $1, $2, 'admin') ON CONFLICT (workspace_id, user_id) DO NOTHING`, workspaceID, s.svcUserID)
 	return err
 }
 

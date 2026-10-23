@@ -203,9 +203,6 @@ func (s *IssueWakeupService) JoinWaitingWakeups(ctx context.Context, task db.Age
 		return []byte(task.Context.String), err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, "SET LOCAL lock_timeout = '50ms'"); err != nil {
-		return []byte(task.Context.String), err
-	}
 	q := s.Tasks.Queries.WithTx(tx)
 	issue, err := q.GetIssue(ctx, task.IssueID.String)
 	if err != nil {

@@ -189,7 +189,13 @@ func (d scanErrDBTX) QueryContext(context.Context, string, ...interface{}) (*sql
 }
 
 func (d scanErrDBTX) QueryRowContext(context.Context, string, ...interface{}) *sql.Row {
-	return errQueryRow()
+	if d.err == nil {
+		return mockQueryRow([][]any{structToRow(db.AgentRuntime{})}, nil)
+	}
+	if errors.Is(d.err, sql.ErrNoRows) {
+		return mockQueryRow(nil, nil)
+	}
+	return mockQueryRow(nil, d.err)
 }
 
 type errRow struct{ err error }
@@ -216,7 +222,11 @@ func (d runtimeRowsDBTX) ExecContext(context.Context, string, ...interface{}) (s
 }
 
 func (d runtimeRowsDBTX) QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error) {
-	return nil, fmt.Errorf("sqlite rows unsupported in test double")
+	rows := make([][]any, len(d.rows))
+	for i, r := range d.rows {
+		rows[i] = structToRow(r)
+	}
+	return mockQueryRows(rows, nil)
 }
 
 func (d runtimeRowsDBTX) QueryRowContext(context.Context, string, ...interface{}) *sql.Row {

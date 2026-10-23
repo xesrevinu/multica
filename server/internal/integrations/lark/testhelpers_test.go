@@ -5,20 +5,16 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
-// Shared unit-test helpers for the lark package. (Formerly defined on
-// hub_test.go, which the channel-engine cutover removed; relocated here so
-// the surviving connector / outbound / runtime tests keep using them.)
-
-func uuidFromString(t *testing.T, s string) pgtype.UUID {
+func uuidFromString(t *testing.T, s string) string {
 	t.Helper()
-	var u pgtype.UUID
-	if err := u.Scan(s); err != nil {
-		t.Fatalf("scan uuid %q: %v", s, err)
+	u, err := uuid.Parse(s)
+	if err != nil {
+		t.Fatalf("parse uuid %q: %v", s, err)
 	}
-	return u
+	return u.String()
 }
 
 func newDiscardLogger() *slog.Logger {

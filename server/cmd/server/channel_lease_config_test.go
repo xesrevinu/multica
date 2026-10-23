@@ -5,8 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
-
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
 )
@@ -16,7 +14,7 @@ type channelLeaseTestStore struct{}
 func (channelLeaseTestStore) ListActiveInstallations(context.Context) ([]engine.Installation, error) {
 	return nil, nil
 }
-func (channelLeaseTestStore) ListHeldWSLeases(context.Context, []pgtype.UUID) (map[string]struct{}, error) {
+func (channelLeaseTestStore) ListHeldWSLeases(context.Context, []string) (map[string]struct{}, error) {
 	return map[string]struct{}{}, nil
 }
 func (channelLeaseTestStore) TryAcquireWSLease(context.Context, engine.AcquireLeaseParams) error {

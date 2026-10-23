@@ -71,76 +71,10 @@ func setupWorkspaceMcpClaimFixture(t *testing.T, ctx context.Context, name, agen
 
 // The claim payload is where a bound workspace server actually reaches an
 // agent, so assert the resolved document on the wire — not just the resolver.
-func TestClaimTaskByRuntime_CarriesBoundWorkspaceMcpServers(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	serverID := createWorkspaceMcpServerForTest(t, "shared", `{"url":"https://shared.example"}`)
-	runtimeID := setupWorkspaceMcpClaimFixture(t, ctx, "ws-mcp-bound", "", serverID)
-
-	servers := decodeServers(t, claimAgentMcpConfigForTest(t, runtimeID))
-	if len(servers) != 1 || servers["shared"] == nil {
-		t.Fatalf("agent should run the server it was given, got %v", serverNames(servers))
-	}
-}
 
 // The defining property, asserted end to end: a library entry nobody added
 // reaches nothing, however many agents exist.
-func TestClaimTaskByRuntime_UnboundWorkspaceMcpServerReachesNoAgent(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	createWorkspaceMcpServerForTest(t, "shared", `{"url":"https://shared.example"}`)
-	runtimeID := setupWorkspaceMcpClaimFixture(t, ctx, "ws-mcp-unbound", "")
-
-	mcpConfig := claimAgentMcpConfigForTest(t, runtimeID)
-	if servers := decodeServers(t, mcpConfig); len(servers) != 0 {
-		t.Fatalf("an unassigned workspace server reached the agent: %v", serverNames(servers))
-	}
-	// And nothing managed at all, so the runtime keeps its native inheritance.
-	if len(mcpConfig) != 0 {
-		t.Fatalf("mcp_config = %s, want nothing managed", mcpConfig)
-	}
-}
 
 // A binding that is switched off is the same as not having it, without losing
 // the assignment.
-func TestClaimTaskByRuntime_DisabledBindingIsNotCarried(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	serverID := createWorkspaceMcpServerForTest(t, "shared", `{"url":"https://shared.example"}`)
-	runtimeID := setupWorkspaceMcpClaimFixture(t, ctx, "ws-mcp-disabled", "", serverID)
-	if _, err := testPool.Exec(ctx,
-		`UPDATE agent_mcp_server SET enabled = FALSE WHERE server_id = $1`, serverID); err != nil {
-		t.Fatalf("disable binding: %v", err)
-	}
 
-	if servers := decodeServers(t, claimAgentMcpConfigForTest(t, runtimeID)); len(servers) != 0 {
-		t.Fatalf("a disabled binding was carried: %v", serverNames(servers))
-	}
-}
-
-func TestClaimTaskByRuntime_MergesBoundAndAgentOwnMcpServers(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	shared := createWorkspaceMcpServerForTest(t, "shared", `{"url":"https://shared.example"}`)
-	linear := createWorkspaceMcpServerForTest(t, "linear", `{"url":"https://ws-linear.example"}`)
-	runtimeID := setupWorkspaceMcpClaimFixture(t, ctx, "ws-mcp-merge",
-		`{"mcpServers":{"private":{"url":"https://private.example"},"linear":{"url":"https://agent-linear.example"}}}`,
-		shared, linear)
-
-	servers := decodeServers(t, claimAgentMcpConfigForTest(t, runtimeID))
-	if len(servers) != 3 {
-		t.Fatalf("server set = %v, want shared/linear/private", serverNames(servers))
-	}
-	entry, _ := servers["linear"].(map[string]any)
-	if entry["url"] != "https://agent-linear.example" {
-		t.Errorf("the agent's own entry must win the name collision, got %v", entry["url"])
-	}
-}

@@ -1538,7 +1538,7 @@ func (h *Handler) triggerPRRefreshFromCIEvent(ctx context.Context, body []byte) 
 // may link; this function only ever narrows it.
 func (h *Handler) mirrorPullRequestForWorkspace(ctx context.Context, wsID string, installationID int64, p *ghPullRequestPayload, linkPolicy prLinkPolicy) {
 	state := derivePRState(p.PullRequest.State, p.PullRequest.Draft, p.PullRequest.Merged)
-	mergeable, _ := derivePRMergeableState(p.Action, p.PullRequest.MergeableState, baseRefChanged(p.Changes))
+	mergeable, clearMergeable := derivePRMergeableState(p.Action, p.PullRequest.MergeableState, baseRefChanged(p.Changes))
 	// The stored state before this event, so a merge is acted on once — when it
 	// happens — and not again on a later edit/label event of a merged PR (that
 	// would re-complete an issue someone reopened on purpose).
@@ -1568,7 +1568,8 @@ func (h *Handler) mirrorPullRequestForWorkspace(ctx context.Context, wsID string
 		PrCreatedAt:         parseGHTimeRequired(p.PullRequest.CreatedAt),
 		PrUpdatedAt:         parseGHTimeRequired(p.PullRequest.UpdatedAt),
 		HeadSha:             p.PullRequest.Head.SHA,
-		MergeableState: mergeable,
+		MergeableState:      mergeable,
+		ClearMergeableState: clearMergeable,
 		Additions:      int64(p.PullRequest.Additions),
 		Deletions:           int64(p.PullRequest.Deletions),
 		ChangedFiles:        int64(p.PullRequest.ChangedFiles),

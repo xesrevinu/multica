@@ -31,16 +31,12 @@ func withIssueTableQueryTimeout(r *http.Request) (*http.Request, context.CancelF
 	return r.WithContext(ctx), cancel
 }
 
-func (h *Handler) beginIssueTableSnapshot(ctx context.Context) (*Handler, *sql.Tx, error) {
+func (h *Handler) beginIssueTableSnapshot(ctx context.Context) (*Handler, handlerTx, error) {
 	if h.TxStarter == nil {
 		return nil, nil, errors.New("transaction starter is unavailable")
 	}
-	tx, err := h.TxStarter.BeginTx(ctx, nil)
+	tx, err := h.TxStarter.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		return nil, nil, err
-	}
-	if _, err := tx.ExecContext(ctx, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"); err != nil {
-		_ = tx.Rollback()
 		return nil, nil, err
 	}
 	snapshot := *h

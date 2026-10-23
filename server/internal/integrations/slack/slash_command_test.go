@@ -8,8 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
+
+	"github.com/google/uuid"
 	"github.com/slack-go/slack"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
@@ -48,10 +49,10 @@ type fakeQuickCreate struct {
 	err   error
 	calls int
 
-	workspaceID pgtype.UUID
-	requesterID pgtype.UUID
-	agentID     pgtype.UUID
-	squadID     pgtype.UUID
+	workspaceID string
+	requesterID string
+	agentID     string
+	squadID     string
 	prompt      string
 }
 
@@ -63,21 +64,21 @@ type fakeSlashControlStarter struct {
 	err        error
 }
 
-func (f *fakeSlashControlStarter) StartSlackDMChat(_ context.Context, _ engine.ResolvedInstallation, _ pgtype.UUID, cmd slack.SlashCommand, envelopeID string) error {
+func (f *fakeSlashControlStarter) StartSlackDMChat(_ context.Context, _ engine.ResolvedInstallation, _ string, cmd slack.SlashCommand, envelopeID string) error {
 	f.newCalls++
 	f.cmd = cmd
 	f.envelopeID = envelopeID
 	return f.err
 }
 
-func (f *fakeSlashControlStarter) ClearSlackDMContext(_ context.Context, _ engine.ResolvedInstallation, _ pgtype.UUID, cmd slack.SlashCommand, envelopeID string) error {
+func (f *fakeSlashControlStarter) ClearSlackDMContext(_ context.Context, _ engine.ResolvedInstallation, _ string, cmd slack.SlashCommand, envelopeID string) error {
 	f.clearCalls++
 	f.cmd = cmd
 	f.envelopeID = envelopeID
 	return f.err
 }
 
-func (f *fakeQuickCreate) EnqueueQuickCreateTask(_ context.Context, workspaceID, requesterID, agentID, squadID pgtype.UUID, prompt, _, _ string, _, _ pgtype.UUID, _ []pgtype.UUID) (db.AgentTaskQueue, error) {
+func (f *fakeQuickCreate) EnqueueQuickCreateTask(_ context.Context, workspaceID, requesterID, agentID, squadID string, prompt, _, _ string, _, _ string, _ []string) (db.AgentTaskQueue, error) {
 	f.calls++
 	f.workspaceID = workspaceID
 	f.requesterID = requesterID
@@ -87,13 +88,12 @@ func (f *fakeQuickCreate) EnqueueQuickCreateTask(_ context.Context, workspaceID,
 	return f.task, f.err
 }
 
-func slashTestUUID(b byte) pgtype.UUID {
-	var u pgtype.UUID
-	for i := range u.Bytes {
-		u.Bytes[i] = b
+func slashTestUUID(b byte) string {
+	var u uuid.UUID
+	for i := range u {
+		u[i] = b
 	}
-	u.Valid = true
-	return u
+	return u.String()
 }
 
 // newTestSlashProcessor builds a processor over fakes and returns it plus a
@@ -124,7 +124,7 @@ func activeSlashInstallation() db.ChannelInstallation {
 		AgentID:         slashTestUUID(3),
 		InstallerUserID: slashTestUUID(4),
 		Status:          "active",
-		Config:          []byte(`{"app_id":"A1","team_id":"T1"}`),
+		Config:          `{"app_id":"A1","team_id":"T1"}`,
 	}
 }
 
@@ -176,7 +176,7 @@ func TestSlashHandle_EnqueuesQuickCreateAndAcks(t *testing.T) {
 	if tasks.requesterID != slashTestUUID(9) {
 		t.Errorf("quick-create requester is not the bound member")
 	}
-	if tasks.squadID.Valid {
+	if tasks.squadID != "" {
 		t.Errorf("slash-command quick-create must not carry a squad id")
 	}
 }
@@ -217,7 +217,7 @@ func TestSlashHandle_EmptyPromptIsUsage(t *testing.T) {
 }
 
 func TestSlashHandle_UnboundUserGetsLink(t *testing.T) {
-	q := &fakeSlashQueries{inst: activeSlashInstallation(), bindErr: pgx.ErrNoRows}
+	q := &fakeSlashQueries{inst: activeSlashInstallation(), bindErr: sql.ErrNoRows}
 	tasks := &fakeQuickCreate{}
 	bind := &fakeBindingMinter{raw: "TOKEN123"}
 	p, captured, _ := newTestSlashProcessor(q, tasks, bind)
@@ -239,7 +239,7 @@ func TestSlashHandle_NonMemberDropped(t *testing.T) {
 	q := &fakeSlashQueries{
 		inst:      activeSlashInstallation(),
 		binding:   db.ChannelUserBinding{MulticaUserID: slashTestUUID(9)},
-		memberErr: pgx.ErrNoRows,
+		memberErr: sql.ErrNoRows,
 	}
 	tasks := &fakeQuickCreate{}
 	p, captured, _ := newTestSlashProcessor(q, tasks, &fakeBindingMinter{})

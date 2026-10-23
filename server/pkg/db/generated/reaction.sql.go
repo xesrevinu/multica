@@ -7,6 +7,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 )
 
 const addReaction = `-- name: AddReaction :one
@@ -26,14 +27,15 @@ type AddReactionParams struct {
 }
 
 type AddReactionRow struct {
-	Column1     int64  `json:"column_1"`
-	ID          string `json:"id"`
-	CommentID   string `json:"comment_id"`
-	WorkspaceID string `json:"workspace_id"`
-	ActorType   string `json:"actor_type"`
-	ActorID     string `json:"actor_id"`
-	Emoji       string `json:"emoji"`
-	CreatedAt   string `json:"created_at"`
+	Column1         int64  `json:"column_1"`
+	ID              string `json:"id"`
+	CommentID       string `json:"comment_id"`
+	WorkspaceID     string `json:"workspace_id"`
+	ActorType       string `json:"actor_type"`
+	ActorID         string `json:"actor_id"`
+	Emoji           string `json:"emoji"`
+	CreatedAt       string `json:"created_at"`
+	CommentRevision int64  `json:"comment_revision"`
 }
 
 // Order: AddReaction, then AddReaction_Step2 when the reaction row was newly
@@ -41,6 +43,11 @@ type AddReactionRow struct {
 // always returns the reaction row; comment_revision is 0 because the bump is
 // Step2 (skip Step2 when the row already existed).
 func (q *Queries) AddReaction(ctx context.Context, arg AddReactionParams) (AddReactionRow, error) {
+	var existing int64
+	existed := q.db.QueryRowContext(ctx, `SELECT 1 FROM comment_reaction WHERE comment_id = ?1 AND actor_type = ?2 AND actor_id = ?3 AND emoji = ?4`,
+		arg.CommentID, arg.ActorType, arg.ActorID, arg.Emoji,
+	).Scan(&existing) == nil
+
 	row := q.db.QueryRowContext(ctx, addReaction,
 		arg.CommentID,
 		arg.WorkspaceID,
@@ -50,7 +57,6 @@ func (q *Queries) AddReaction(ctx context.Context, arg AddReactionParams) (AddRe
 	)
 	var i AddReactionRow
 	err := row.Scan(
-		&i.Column1,
 		&i.ID,
 		&i.CommentID,
 		&i.WorkspaceID,
@@ -58,8 +64,19 @@ func (q *Queries) AddReaction(ctx context.Context, arg AddReactionParams) (AddRe
 		&i.ActorID,
 		&i.Emoji,
 		&i.CreatedAt,
+		&i.Column1,
 	)
-	return i, err
+	if err != nil {
+		return i, err
+	}
+	if !existed {
+		var newRev int64
+		if err := q.db.QueryRowContext(ctx, `UPDATE comment SET revision = revision + 1 WHERE id = ?1 RETURNING revision`, arg.CommentID).Scan(&newRev); err == nil {
+			i.Column1 = newRev
+			i.CommentRevision = newRev
+		}
+	}
+	return i, nil
 }
 
 const addReaction_Step2 = `-- name: AddReaction_Step2 :exec
@@ -142,13 +159,23 @@ type RemoveReactionParams struct {
 }
 
 type RemoveReactionRow struct {
-	Column1  int64       `json:"column_1"`
-	Coalesce interface{} `json:"coalesce"`
+	Column1         int64       `json:"column_1"`
+	Coalesce        interface{} `json:"coalesce"`
+	Changed         bool        `json:"changed"`
+	CommentRevision int64       `json:"comment_revision"`
 }
 
 // Order: RemoveReaction_Step2, then RemoveReaction. Step2 bumps the comment
 // while the reaction row still exists. changed is 1 when that row was removed.
 func (q *Queries) RemoveReaction(ctx context.Context, arg RemoveReactionParams) (RemoveReactionRow, error) {
+	if err := q.RemoveReaction_Step2(ctx, RemoveReaction_Step2Params{
+		ID:        arg.CommentID,
+		ActorType: arg.ActorType,
+		ActorID:   arg.ActorID,
+		Emoji:     arg.Emoji,
+	}); err != nil {
+		return RemoveReactionRow{}, err
+	}
 	row := q.db.QueryRowContext(ctx, removeReaction,
 		arg.CommentID,
 		arg.ActorType,
@@ -157,7 +184,17 @@ func (q *Queries) RemoveReaction(ctx context.Context, arg RemoveReactionParams) 
 	)
 	var i RemoveReactionRow
 	err := row.Scan(&i.Column1, &i.Coalesce)
-	return i, err
+	if err == sql.ErrNoRows {
+		return RemoveReactionRow{}, nil
+	}
+	if err != nil {
+		return i, err
+	}
+	i.Changed = i.Column1 != 0
+	if v, ok := i.Coalesce.(int64); ok {
+		i.CommentRevision = v
+	}
+	return i, nil
 }
 
 const removeReaction_Step2 = `-- name: RemoveReaction_Step2 :exec

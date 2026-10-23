@@ -21,17 +21,12 @@ const sourceContextCleanupTestLock = int64(0x53434f4e54455854)
 // unlocking and handing it back to the shared pool: closing the connection
 // always releases a session-level advisory lock, whereas an unlock that failed
 // on a pooled session would block every later taker of the key.
-func lockSourceContextCleanupTests(t *testing.T, pool *sql.DB) {
+var sourceContextCleanupTestMu sync.Mutex
+
+func lockSourceContextCleanupTests(t *testing.T, _ *sql.DB) {
 	t.Helper()
-	pooled, err := pool.Acquire(context.Background())
-	if err != nil {
-		t.Fatalf("acquire source-context cleanup test lock connection: %v", err)
-	}
-	conn := pooled.Hijack()
-	t.Cleanup(func() { _ = conn.Close(context.Background()) })
-	if _, err := conn.ExecContext(context.Background(), `SELECT pg_advisory_lock($1)`, sourceContextCleanupTestLock); err != nil {
-		t.Fatalf("lock source-context cleanup tests: %v", err)
-	}
+	sourceContextCleanupTestMu.Lock()
+	t.Cleanup(sourceContextCleanupTestMu.Unlock)
 }
 
 // failingSourceContextObjectStore records the context each delete received and

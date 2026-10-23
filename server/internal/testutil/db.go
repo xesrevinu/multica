@@ -7,8 +7,14 @@ import (
 	"strings"
 
 	"database/sql"
+	"encoding/json"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/sqliteutil"
 )
 
 // Cols is one fixture row: column name to value. Values are bound as query
@@ -29,16 +35,272 @@ type Raw string
 // The zero value is not usable; call New. WorkspaceID and UserID are the
 // defaults every builder falls back to, so a test that only cares about one
 // column names only that column.
+// Pool wraps *sql.DB with context-first helper methods (Begin, Exec, QueryRow,
+// Query, Ping) so tests and TxStarter adapters that expect context-first
+// signatures work directly over SQLite without pgxpool.
+type Pool struct {
+	*sql.DB
+}
+
+func WrapPool(db *sql.DB) *Pool {
+	if db == nil {
+		return nil
+	}
+	return &Pool{DB: db}
+}
+
+var (
+	rePGCast           = regexp.MustCompile(`(?i)::(?:jsonb|json|uuid\[\]|text\[\]|int4\[\]|int8\[\]|uuid|text|timestamptz|timestamp|int8|int4|int2|integer|bigint|smallint|int|boolean|bool|bytea|numeric|float8|real)(?:\[\])?`)
+	reNowMinusInterval = regexp.MustCompile(`(?i)\bnow\(\)\s*-\s*interval\s*'([^']+)'`)
+	reNowPlusInterval  = regexp.MustCompile(`(?i)\bnow\(\)\s*\+\s*interval\s*'([^']+)'`)
+	reForUpdate        = regexp.MustCompile(`(?i)\s+FOR\s+(?:UPDATE(?:\s+OF\s+\w+)?(?:\s+SKIP\s+LOCKED|\s+NOWAIT)?|SHARE)\b`)
+)
+
+func normalizeTestSQL(q string) string {
+	q = rePGCast.ReplaceAllString(q, "")
+	q = reNowMinusInterval.ReplaceAllString(q, "strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-$1')")
+	q = reNowPlusInterval.ReplaceAllString(q, "strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+$1')")
+	q = reForUpdate.ReplaceAllString(q, "")
+	return q
+}
+
+func normalizeTestArgs(args []any) []any {
+	if len(args) == 0 {
+		return args
+	}
+	out := make([]any, len(args))
+	for i, a := range args {
+		switch v := a.(type) {
+		case time.Time:
+			out[i] = v.UTC().Format(time.RFC3339Nano)
+		case *time.Time:
+			if v == nil {
+				out[i] = nil
+			} else {
+				out[i] = v.UTC().Format(time.RFC3339Nano)
+			}
+		case uuid.UUID:
+			out[i] = v.String()
+		default:
+			out[i] = a
+		}
+	}
+	return out
+}
+
+func (p *Pool) Begin(ctx context.Context) (*sql.Tx, error) {
+	return p.DB.BeginTx(ctx, nil)
+}
+
+func (p *Pool) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return p.DB.ExecContext(ctx, normalizeTestSQL(query), normalizeTestArgs(args)...)
+}
+
+func (p *Pool) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	return p.DB.QueryRowContext(ctx, normalizeTestSQL(query), normalizeTestArgs(args)...)
+}
+
+func (p *Pool) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return p.DB.QueryContext(ctx, normalizeTestSQL(query), normalizeTestArgs(args)...)
+}
+
+func (p *Pool) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return p.ExecContext(ctx, query, args...)
+}
+
+type TestRow struct {
+	row *sql.Row
+}
+
+func (r *TestRow) Scan(dest ...any) error {
+	return r.row.Scan(wrapScanDest(dest)...)
+}
+
+func (r *TestRow) Err() error {
+	return r.row.Err()
+}
+
+type TestRows struct {
+	*sql.Rows
+}
+
+func (r *TestRows) Scan(dest ...any) error {
+	return r.Rows.Scan(wrapScanDest(dest)...)
+}
+
+func parseFlexTime(s string) (time.Time, error) {
+	s = strings.TrimSpace(s)
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999Z",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05",
+		"2006-01-02",
+	}
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.UTC(), nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("cannot parse time %q", s)
+}
+
+type flexScanner struct {
+	dest any
+}
+
+func (fs *flexScanner) Scan(src any) error {
+	switch d := fs.dest.(type) {
+	case *time.Time:
+		if src == nil {
+			*d = time.Time{}
+			return nil
+		}
+		switch v := src.(type) {
+		case time.Time:
+			*d = v
+			return nil
+		case string:
+			t, err := parseFlexTime(v)
+			if err != nil {
+				return err
+			}
+			*d = t
+			return nil
+		case []byte:
+			t, err := parseFlexTime(string(v))
+			if err != nil {
+				return err
+			}
+			*d = t
+			return nil
+		}
+	case **time.Time:
+		if src == nil {
+			*d = nil
+			return nil
+		}
+		var t time.Time
+		if err := (&flexScanner{dest: &t}).Scan(src); err != nil {
+			return err
+		}
+		*d = &t
+		return nil
+	case *sql.NullTime:
+		if src == nil {
+			*d = sql.NullTime{}
+			return nil
+		}
+		var t time.Time
+		if err := (&flexScanner{dest: &t}).Scan(src); err != nil {
+			return err
+		}
+		*d = sql.NullTime{Time: t, Valid: true}
+		return nil
+	case *[]string:
+		if src == nil {
+			*d = nil
+			return nil
+		}
+		var raw string
+		switch v := src.(type) {
+		case string:
+			raw = strings.TrimSpace(v)
+		case []byte:
+			raw = strings.TrimSpace(string(v))
+		default:
+			return fmt.Errorf("cannot scan %T into *[]string", src)
+		}
+		if raw == "" || raw == "{}" || raw == "[]" || raw == "null" {
+			*d = []string{}
+			return nil
+		}
+		var out []string
+		if err := json.Unmarshal([]byte(raw), &out); err == nil {
+			*d = out
+			return nil
+		}
+		if strings.HasPrefix(raw, "{") && strings.HasSuffix(raw, "}") {
+			inner := raw[1 : len(raw)-1]
+			if inner == "" {
+				*d = []string{}
+				return nil
+			}
+			parts := strings.Split(inner, ",")
+			for i := range parts {
+				parts[i] = strings.Trim(strings.TrimSpace(parts[i]), `"`)
+			}
+			*d = parts
+			return nil
+		}
+		return fmt.Errorf("cannot parse string slice from %q", raw)
+	}
+	return fmt.Errorf("unsupported flexScanner dest %T", fs.dest)
+}
+
+func wrapScanDest(dest []any) []any {
+	out := make([]any, len(dest))
+	for i, d := range dest {
+		switch d.(type) {
+		case *time.Time, **time.Time, *sql.NullTime, *[]string:
+			out[i] = &flexScanner{dest: d}
+		default:
+			out[i] = d
+		}
+	}
+	return out
+}
+
+func (p *Pool) QueryRow(ctx context.Context, query string, args ...any) *TestRow {
+	return &TestRow{row: p.QueryRowContext(ctx, query, args...)}
+}
+
+func (p *Pool) Query(ctx context.Context, query string, args ...any) (*TestRows, error) {
+	rows, err := p.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	return &TestRows{Rows: rows}, nil
+}
+
+func (p *Pool) Ping(ctx context.Context) error {
+	return p.DB.PingContext(ctx)
+}
+
+func (p *Pool) Acquire(_ context.Context) (*Pool, error) {
+	return p, nil
+}
+
+func (p *Pool) Release() {}
+
+func (p *Pool) Conn() *Pool {
+	return p
+}
+
 type Fixture struct {
-	Pool        *sql.DB
+	Pool        *Pool
 	WorkspaceID string
 	UserID      string
 }
 
 // New returns a Fixture bound to the workspace and user a test suite set up in
 // its TestMain.
-func New(pool *sql.DB, workspaceID, userID string) *Fixture {
-	return &Fixture{Pool: pool, WorkspaceID: workspaceID, UserID: userID}
+func New(pool any, workspaceID, userID string) *Fixture {
+	var p *Pool
+	switch v := pool.(type) {
+	case *Pool:
+		p = v
+	case *sql.DB:
+		p = &Pool{DB: v}
+	case nil:
+		p = nil
+	default:
+		panic(fmt.Sprintf("testutil.New: unsupported pool type %T", pool))
+	}
+	return &Fixture{Pool: p, WorkspaceID: workspaceID, UserID: userID}
 }
 
 // Insert writes one row into table, registers its deletion with t.Cleanup and
@@ -125,7 +387,7 @@ func (f *Fixture) QueryRow(t TB, sql string, args ...any) *Row {
 // matched nothing.
 func (r *Row) Scan(dest ...any) {
 	r.t.Helper()
-	if err := r.f.Pool.QueryRowContext(context.Background(), r.sql, r.args...).Scan(dest...); err != nil {
+	if err := r.f.Pool.QueryRowContext(context.Background(), r.sql, r.args...).Scan(wrapScanDest(dest)...); err != nil {
 		r.t.Fatalf("query: %v\nSQL: %s", err, strings.TrimSpace(r.sql))
 	}
 }
@@ -362,4 +624,42 @@ func quoteIdent(s string) string {
 
 func quoteLiteral(s string) string {
 	return `'` + strings.ReplaceAll(s, `'`, `''`) + `'`
+}
+
+// OpenTestPool opens a fresh in-memory SQLite database with the full schema applied.
+func OpenTestPool() (*sql.DB, error) {
+	ctx := context.Background()
+	_, thisFile, _, _ := runtime.Caller(0)
+	schemaPath := filepath.Join(filepath.Dir(thisFile), "..", "..", "schema", "sqlite.sql")
+	dsn := fmt.Sprintf("file:testdb-%s?mode=memory&cache=shared", uuid.NewString())
+	db, err := sqliteutil.Open(ctx, dsn)
+	if err != nil {
+		return nil, err
+	}
+	if err := sqliteutil.ApplySchema(ctx, db, schemaPath); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+// OpenTestDB opens a fresh in-memory SQLite database for t and closes it in t.Cleanup.
+func OpenTestDB(t TB) *sql.DB {
+	t.Helper()
+	db, err := OpenTestPool()
+	if err != nil {
+		t.Fatalf("testutil.OpenTestDB: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
+// SetupTestDB opens a fresh in-memory SQLite database wrapped in *Pool.
+func SetupTestDB(t TB) *Pool {
+	t.Helper()
+	return &Pool{DB: OpenTestDB(t)}
+}
+
+func (p *Pool) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
+	return p.DB.BeginTx(ctx, opts)
 }

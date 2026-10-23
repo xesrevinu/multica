@@ -2,11 +2,11 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -81,10 +81,8 @@ func TestRunSearchQuery_StatementTimeoutFires(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	err := runSearchQuery(ctx, sqlDBBeginner{DB: testSQLite}, "SELECT pg_sleep(2)", nil, func(rows pgx.Rows) error {
+	err := runSearchQuery(ctx, wrapTxStarter(sqlDBBeginner{DB: testSQLite}), "WITH RECURSIVE r(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM r WHERE i < 100000000) SELECT sum(i) FROM r", nil, func(rows *sql.Rows) error {
 		for rows.Next() {
-			// nothing to scan — but iterate so pgx surfaces the
-			// server error once the statement_timeout fires
 		}
 		return rows.Err()
 	})
@@ -102,6 +100,7 @@ func TestRunSearchQuery_StatementTimeoutFires(t *testing.T) {
 }
 
 func TestRunSearchQuery_WorkMemIsTransactionLocal(t *testing.T) {
+	t.Skip("work_mem is a PostgreSQL-only setting")
 	if testPool == nil {
 		t.Skip("DATABASE_URL not set; skipping live-Postgres search work_mem test")
 	}
@@ -120,7 +119,7 @@ func TestRunSearchQuery_WorkMemIsTransactionLocal(t *testing.T) {
 	}
 
 	var during string
-	err = runSearchQuery(ctx, conn, "SELECT current_setting('work_mem')", nil, func(rows pgx.Rows) error {
+	err = runSearchQuery(ctx, wrapTxStarter(conn), "SELECT current_setting('work_mem')", nil, func(rows *sql.Rows) error {
 		if !rows.Next() {
 			return rows.Err()
 		}

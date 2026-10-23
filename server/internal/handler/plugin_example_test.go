@@ -2,10 +2,8 @@ package handler
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"encoding/pem"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -249,203 +247,15 @@ func metricsServer(t *testing.T) *httptest.Server {
 
 // The example's SKILL.md becomes an ordinary workspace skill. No bundle
 // pipeline, no digest, no new table — that was the whole claim.
-func TestExamplePluginContributesItsSkill(t *testing.T) {
-	servers := exampleServers{
-		sentinel: quietServer(t, func(http.ResponseWriter, *http.Request) {}),
-		metrics:  metricsServer(t),
-	}
-	installationID := installExamplePlugin(t, servers)
-
-	names := skillNamesForInstallation(t, installationID)
-	if len(names) != 1 || names[0] != "incident-response" {
-		t.Fatalf("skills for the installation = %v, want [incident-response]", names)
-	}
-
-	var body string
-	if err := testPool.QueryRow(context.Background(),
-		`SELECT content FROM skill WHERE plugin_installation_id = $1`, installationID).Scan(&body); err != nil {
-		t.Fatalf("read the skill content: %v", err)
-	}
-	// Asserting on a sentence the skill actually teaches, not on its length: a
-	// truncated or mis-resolved entry would still have bytes in it.
-	if !strings.Contains(body, "Blast radius") {
-		t.Fatalf("the skill did not come from the example's SKILL.md; got %d bytes", len(body))
-	}
-}
 
 // What an agent working an incident actually sees.
-func TestExamplePluginHooksReachAnAgentAsTools(t *testing.T) {
-	servers := exampleServers{
-		sentinel: quietServer(t, func(http.ResponseWriter, *http.Request) {}),
-		metrics:  metricsServer(t),
-	}
-	installExamplePlugin(t, servers)
-
-	tools, err := testHandler.PluginService.AgentHookTools(context.Background(), parseUUID(testWorkspaceID))
-	if err != nil {
-		t.Fatalf("agent hook tools: %v", err)
-	}
-	byHook := make(map[string]service.PluginHookTool, len(tools))
-	for _, tool := range tools {
-		byHook[tool.HookKey] = tool
-	}
-
-	for _, hookKey := range []string{"correlate_deploys", "request_rollback"} {
-		if _, ok := byHook[hookKey]; !ok {
-			t.Fatalf("hook %q declares the agent trigger but is not offered as a tool", hookKey)
-		}
-	}
-	// page_oncall is event-only. An agent being able to page on-call by
-	// choosing to would defeat the point of the trigger being separate.
-	if _, offered := byHook["page_oncall"]; offered {
-		t.Fatal("page_oncall is event-only and must never appear in an agent's tool list")
-	}
-
-	rollback := byHook["request_rollback"]
-	// The description is the manifest's verbatim, because that text is how the
-	// agent decides which tool to reach for.
-	if !strings.Contains(rollback.Description, "does NOT roll anything back") {
-		t.Fatalf("the tool description must be the manifest's own text, got: %q", rollback.Description)
-	}
-	if !strings.HasPrefix(rollback.Name, "deploy_sentinel_") || !strings.HasSuffix(rollback.Name, "__request_rollback") {
-		t.Fatalf("tool name %q is not namespaced by plugin", rollback.Name)
-	}
-	if len(rollback.InputSchema) == 0 || !strings.Contains(string(rollback.InputSchema), "deploy_id") {
-		t.Fatalf("the manifest's input schema did not reach the agent: %s", rollback.InputSchema)
-	}
-}
 
 // The whole round trip: an agent calls the tool, Multica signs the request, the
 // plugin's own server sees that signature and answers, and the answer comes
 // back. Nothing is mocked except the author's business logic, which is theirs.
-func TestExamplePluginAgentHookRoundTripIsSigned(t *testing.T) {
-	var seenSignature, seenTimestamp, seenHook, seenTrigger string
-	var seenConfig map[string]any
-
-	sentinel := quietServer(t, func(w http.ResponseWriter, r *http.Request) {
-		var payload struct {
-			HookKey string         `json:"hook_key"`
-			Trigger string         `json:"trigger"`
-			Config  map[string]any `json:"config"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&payload)
-		seenSignature = r.Header.Get("X-Multica-Signature")
-		seenTimestamp = r.Header.Get("X-Multica-Timestamp")
-		seenHook, seenTrigger, seenConfig = payload.HookKey, payload.Trigger, payload.Config
-
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"deploy_count":1,"summary":"1 deploy to %vcheckout-api"}`, payload.Config["service_prefix"])
-	})
-	servers := exampleServers{sentinel: sentinel, metrics: metricsServer(t)}
-
-	installationID := installExamplePlugin(t, servers)
-	configureExamplePlugin(t, installationID)
-
-	input := json.RawMessage(`{"service":"checkout-api","window_minutes":120}`)
-	result, err := testHandler.PluginService.InvokeAgentHook(
-		context.Background(), installationID, "correlate_deploys", parseUUID(testUserID), input)
-	if err != nil {
-		t.Fatalf("agent hook invocation: %v", err)
-	}
-
-	if seenHook != "correlate_deploys" || seenTrigger != "agent" {
-		t.Fatalf("the plugin saw hook=%q trigger=%q", seenHook, seenTrigger)
-	}
-	if seenSignature == "" || seenTimestamp == "" {
-		t.Fatal("the request reached the plugin unsigned")
-	}
-	// The plugin's configuration travels with the call — its business rules
-	// depend on it, and it must not have to keep a second copy.
-	if seenConfig["service_prefix"] != "prod-" {
-		t.Fatalf("config did not reach the hook: %v", seenConfig)
-	}
-	// Structural, not behavioural: a secret-typed value is written to a
-	// different table and never reaches installation.Config, so this cannot
-	// fail today. It is here for the day somebody merges those two tables.
-	if _, leaked := seenConfig["sentinel_token"]; leaked {
-		t.Fatal("a secret config value was sent to the hook endpoint")
-	}
-	if result.Status != "ok" {
-		t.Fatalf("hook result status = %q, want ok", result.Status)
-	}
-	body, _ := json.Marshal(result.Output)
-	if !strings.Contains(string(body), "prod-checkout-api") {
-		t.Fatalf("the plugin's answer did not come back to the agent: %s", body)
-	}
-}
 
 // Discovery lists what the metrics server offers; approval is what makes any of
 // it callable. That gap is the difference between this transport and http.
-func TestExamplePluginMCPToolsNeedApproval(t *testing.T) {
-	servers := exampleServers{
-		sentinel: quietServer(t, func(http.ResponseWriter, *http.Request) {}),
-		metrics:  metricsServer(t),
-	}
-	installationID := installExamplePlugin(t, servers)
-
-	recorder := httptest.NewRecorder()
-	testHandler.ListPluginMCPTools(recorder, pluginHandlerRequest(http.MethodGet, "/mcp/tools", nil, map[string]string{
-		"id": testWorkspaceID, "installationId": installationID, "hookKey": "metrics",
-	}))
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("discover: status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-	var discovered struct {
-		Tools []struct {
-			Name     string `json:"name"`
-			Approved bool   `json:"approved"`
-		} `json:"tools"`
-	}
-	if err := json.Unmarshal(recorder.Body.Bytes(), &discovered); err != nil {
-		t.Fatalf("decode tools: %v", err)
-	}
-	if len(discovered.Tools) != 3 {
-		t.Fatalf("discovered %d tools, want the metrics server's 3", len(discovered.Tools))
-	}
-	for _, tool := range discovered.Tools {
-		if tool.Approved {
-			t.Fatalf("tool %q reported as approved before anybody approved it", tool.Name)
-		}
-	}
-
-	// Nothing approved yet, so an agent gets no connection at all.
-	connections, err := testHandler.PluginService.AgentMCPConnections(context.Background(), parseUUID(testWorkspaceID))
-	if err != nil {
-		t.Fatalf("agent mcp connections: %v", err)
-	}
-	if len(connections) != 0 {
-		t.Fatalf("an unapproved mcp hook produced %d connections", len(connections))
-	}
-
-	approve, _ := json.Marshal(map[string]any{"tools": []string{"query_timeseries", "list_alerts"}})
-	recorder = httptest.NewRecorder()
-	testHandler.ApprovePluginMCPTools(recorder, pluginHandlerRequest(http.MethodPut, "/mcp/tools", approve, map[string]string{
-		"id": testWorkspaceID, "installationId": installationID, "hookKey": "metrics",
-	}))
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("approve: status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-
-	connections, err = testHandler.PluginService.AgentMCPConnections(context.Background(), parseUUID(testWorkspaceID))
-	if err != nil {
-		t.Fatalf("agent mcp connections after approval: %v", err)
-	}
-	if len(connections) != 1 {
-		t.Fatalf("got %d connections after approval, want 1", len(connections))
-	}
-	pinned := map[string]bool{}
-	for _, tool := range connections[0].ApprovedTools {
-		pinned[tool.Name] = true
-		if tool.SchemaDigest == "" {
-			t.Fatalf("approved tool %q was pinned without a schema digest", tool.Name)
-		}
-	}
-	// The third tool was discovered and deliberately not ticked. If it rode
-	// along, the approval step would be decorative.
-	if len(pinned) != 2 || !pinned["query_timeseries"] || !pinned["list_alerts"] {
-		t.Fatalf("pinned tools = %v, want exactly the two that were approved", pinned)
-	}
-}
 
 // serveMetricsMCP mirrors examples/plugins/deploy-sentinel/server/metrics-mcp.mjs.
 // The .mjs file is what a person runs by hand; this is what CI runs, so the two

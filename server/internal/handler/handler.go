@@ -52,8 +52,39 @@ func randomID() string {
 	return hex.EncodeToString(b)
 }
 
+type handlerTx interface {
+	db.DBTX
+	Commit() error
+	Rollback() error
+}
+
 type txStarter interface {
-	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (handlerTx, error)
+}
+
+type stdTxStarterAdapter struct {
+	inner service.TxStarter
+}
+
+func (a stdTxStarterAdapter) BeginTx(ctx context.Context, opts *sql.TxOptions) (handlerTx, error) {
+	if a.inner == nil {
+		return nil, sql.ErrConnDone
+	}
+	return a.inner.BeginTx(ctx, opts)
+}
+
+func WrapTxStarter(s service.TxStarter) txStarter {
+	return wrapTxStarter(s)
+}
+
+func wrapTxStarter(s service.TxStarter) txStarter {
+	if s == nil {
+		return nil
+	}
+	if ts, ok := any(s).(txStarter); ok {
+		return ts
+	}
+	return stdTxStarterAdapter{inner: s}
 }
 
 type dbExecutor interface {
@@ -383,7 +414,7 @@ type Handler struct {
 	cfg       Config
 }
 
-func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *events.Bus, emailService *service.EmailService, store storage.Storage, cfSigner *auth.CloudFrontSigner, analyticsClient analytics.Client, cfg Config, daemonHubs ...*daemonws.Hub) *Handler {
+func New(queries *db.Queries, txStarter service.TxStarter, hub *realtime.Hub, bus *events.Bus, emailService *service.EmailService, store storage.Storage, cfSigner *auth.CloudFrontSigner, analyticsClient analytics.Client, cfg Config, daemonHubs ...*daemonws.Hub) *Handler {
 	var executor dbExecutor
 	if candidate, ok := txStarter.(dbExecutor); ok {
 		executor = candidate
@@ -450,7 +481,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		Queries:                      queries,
 		ReadSelector:                 dbreader.NewPrimaryOnly(queries),
 		DB:                           executor,
-		TxStarter:                    txStarter,
+		TxStarter:                    wrapTxStarter(txStarter),
 		Hub:                          hub,
 		DaemonHub:                    daemonHub,
 		DaemonProfileRefresh:         daemonProfileRefresh,
@@ -855,16 +886,28 @@ func isNotFound(err error) bool {
 }
 
 func isUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
 	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return true
+	}
+	return strings.Contains(err.Error(), "UNIQUE constraint failed")
 }
 
 // isCheckViolation reports whether err is a PostgreSQL CHECK constraint
 // violation (SQLSTATE 23514). Used to translate column-level CHECK failures
 // into a 4xx instead of a generic 500.
 func isCheckViolation(err error) bool {
+	if err == nil {
+		return false
+	}
 	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23514"
+	if errors.As(err, &pgErr) && pgErr.Code == "23514" {
+		return true
+	}
+	return strings.Contains(err.Error(), "CHECK constraint failed")
 }
 
 func requestUserID(r *http.Request) string {

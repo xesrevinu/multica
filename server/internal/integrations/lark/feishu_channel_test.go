@@ -394,7 +394,7 @@ func TestFeishuMediaResolver_RecordsIntentBeforeUpload(t *testing.T) {
 	if rec.ChatMessageID != messageID {
 		t.Fatalf("intent message id = %v, want %v", rec.ChatMessageID, messageID)
 	}
-	if !rec.WorkspaceID.Valid || !rec.InstallationID.Valid {
+	if rec.WorkspaceID == "" || rec.InstallationID == "" {
 		t.Fatalf("intent must carry workspace and installation ids: %+v", rec)
 	}
 }

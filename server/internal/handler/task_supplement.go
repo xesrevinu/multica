@@ -272,7 +272,7 @@ func (h *Handler) CreateTaskSupplement(w http.ResponseWriter, r *http.Request) {
 
 	created, err := h.Queries.CreateTaskSupplement(r.Context(), db.CreateTaskSupplementParams{
 		TaskID: task.ID, IssueID: nullString(issue.ID), WorkspaceID: issue.WorkspaceID,
-		AuthorID: authorID, Content: req.Content,
+		AuthorID: authorID, Content: req.Content, ClientRequestID: requestID,
 	})
 	if isUniqueViolation(err) {
 		if existing, loadErr := h.Queries.GetTaskSupplementByRequest(r.Context(), lookup); loadErr == nil {

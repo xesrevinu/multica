@@ -1547,7 +1547,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		// Unique constraint on (workspace_id, name) — return a clear conflict error
 		// so the UI can show the right message instead of a generic 500.
 		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "agent_workspace_name_unique" {
+		if (errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "agent_workspace_name_unique") || isUniqueViolation(err) {
 			writeError(w, http.StatusConflict, fmt.Sprintf("an agent named %q already exists in this workspace", req.Name))
 			return
 		}
@@ -2070,7 +2070,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		// signal the caller gets that a rename collided rather than the server
 		// faulting.
 		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "agent_workspace_name_unique" {
+		if (errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "agent_workspace_name_unique") || isUniqueViolation(err) {
 			name := ""
 			if req.Name != nil {
 				name = *req.Name
@@ -2528,7 +2528,7 @@ func (h *Handler) ListAgentTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	// An infinite upper bound gives both first and subsequent pages an indexed
 	// tuple comparison, without an optional-cursor OR in the query plan.
-	beforeCreatedAt := ""
+	beforeCreatedAt := "9999-12-31T23:59:59.999999999Z"
 	beforeID := agent.ID
 	if raw := r.URL.Query().Get("before"); raw != "" {
 		beforeCreatedAt, beforeID = parseTranscriptCursor(raw)

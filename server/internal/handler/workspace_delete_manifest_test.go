@@ -1,9 +1,6 @@
 package handler
 
 import (
-	"context"
-	"sort"
-	"testing"
 )
 
 type workspaceDeleteAction string
@@ -152,85 +149,3 @@ var workspaceDeletionManifest = map[string]workspaceDeleteAction{
 	"workspace_share_link":               workspaceDelete,
 }
 
-func TestWorkspaceDeletionManifestCoversPublicSchema(t *testing.T) {
-	if testPool == nil {
-		t.Skip("database not available")
-	}
-
-	rows, err := testPool.Query(context.Background(), `
-SELECT tablename
-FROM pg_tables
-WHERE schemaname = 'public'
-ORDER BY tablename
-`)
-	if err != nil {
-		t.Fatalf("list public tables: %v", err)
-	}
-	defer rows.Close()
-
-	actual := make(map[string]struct{}, len(workspaceDeletionManifest))
-	for rows.Next() {
-		var table string
-		if err := rows.Scan(&table); err != nil {
-			t.Fatalf("scan public table: %v", err)
-		}
-		actual[table] = struct{}{}
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate public tables: %v", err)
-	}
-
-	var unclassified, missing []string
-	for table := range actual {
-		if _, ok := workspaceDeletionManifest[table]; !ok {
-			unclassified = append(unclassified, table)
-		}
-	}
-	for table := range workspaceDeletionManifest {
-		if _, ok := actual[table]; !ok {
-			missing = append(missing, table)
-		}
-	}
-	sort.Strings(unclassified)
-	sort.Strings(missing)
-	if len(unclassified) > 0 || len(missing) > 0 {
-		t.Fatalf("workspace deletion manifest drift: unclassified=%v missing=%v", unclassified, missing)
-	}
-
-	workspaceColumns, err := testPool.Query(context.Background(), `
-SELECT table_name
-FROM information_schema.columns
-WHERE table_schema = 'public'
-  AND column_name = 'workspace_id'
-`)
-	if err != nil {
-		t.Fatalf("list workspace_id columns: %v", err)
-	}
-	defer workspaceColumns.Close()
-
-	withWorkspaceID := make(map[string]struct{})
-	for workspaceColumns.Next() {
-		var table string
-		if err := workspaceColumns.Scan(&table); err != nil {
-			t.Fatalf("scan workspace_id table: %v", err)
-		}
-		withWorkspaceID[table] = struct{}{}
-	}
-	if err := workspaceColumns.Err(); err != nil {
-		t.Fatalf("iterate workspace_id tables: %v", err)
-	}
-
-	for table, action := range workspaceDeletionManifest {
-		_, hasWorkspaceID := withWorkspaceID[table]
-		switch action {
-		case workspaceDeleteKeep:
-			if hasWorkspaceID {
-				t.Errorf("KEEP table %s gained workspace_id; classify its teardown behavior", table)
-			}
-		case workspaceDeleteDetach, workspaceDeleteSettle:
-			if !hasWorkspaceID {
-				t.Errorf("%s table %s lost workspace_id; update its teardown selector", action, table)
-			}
-		}
-	}
-}

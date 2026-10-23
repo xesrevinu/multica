@@ -293,7 +293,7 @@ func (s *IssueWakeupService) EditInstruction(ctx context.Context, issueID, id, m
 	defer tx.Rollback()
 	q := s.Tasks.Queries.WithTx(tx)
 	var workspace string
-	if err = tx.QueryRowContext(ctx, "SELECT w.id FROM workspace w JOIN issue i ON i.workspace_id=w.id WHERE i.id=$1 FOR KEY SHARE OF w", issueID).Scan(&workspace); err != nil {
+	if err = tx.QueryRowContext(ctx, "SELECT w.id FROM workspace w JOIN issue i ON i.workspace_id=w.id WHERE i.id=$1", issueID).Scan(&workspace); err != nil {
 		return err
 	}
 	issue, err := q.LockWakeupIssue(ctx, issueID)
@@ -351,7 +351,7 @@ func (s *IssueWakeupService) save(ctx context.Context, issueID, member, source, 
 	defer tx.Rollback()
 	q := s.Tasks.Queries.WithTx(tx)
 	var workspace string
-	if err = tx.QueryRowContext(ctx, "SELECT w.id FROM workspace w JOIN issue i ON i.workspace_id=w.id WHERE i.id=$1 FOR KEY SHARE OF w", issueID).Scan(&workspace); err != nil {
+	if err = tx.QueryRowContext(ctx, "SELECT w.id FROM workspace w JOIN issue i ON i.workspace_id=w.id WHERE i.id=$1", issueID).Scan(&workspace); err != nil {
 		return out, err
 	}
 	issue, err := q.LockWakeupIssue(ctx, issueID)
@@ -365,8 +365,8 @@ func (s *IssueWakeupService) save(ctx context.Context, issueID, member, source, 
 	if !active {
 		return out, fmt.Errorf("%w: issue is closed", ErrWakeupInput)
 	}
-	var now time.Time
-	if err = tx.QueryRowContext(ctx, "SELECT now()").Scan(&now); err != nil {
+	now, err := txNow(ctx, tx)
+	if err != nil {
 		return out, err
 	}
 
@@ -975,13 +975,10 @@ func (s *IssueWakeupService) dispatch(ctx context.Context, prev db.IssueWakeup) 
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, "SET LOCAL lock_timeout = '50ms'"); err != nil {
-		return err
-	}
 	q := s.Tasks.Queries.WithTx(tx)
 	var fenced bool
 	if candidate.ID != "" {
-		if err = tx.QueryRowContext(ctx, "SELECT lock_task_owner_rows($1,$2,$3)", candidate.ID, prev.IssueID, candidate.RuntimeID).Scan(&fenced); err != nil {
+		if fenced, err = lockTaskOwnerRows(ctx, tx, candidate.ID, prev.IssueID, candidate.RuntimeID); err != nil {
 			return err
 		}
 		if !fenced {
@@ -1037,8 +1034,8 @@ func (s *IssueWakeupService) dispatch(ctx context.Context, prev db.IssueWakeup) 
 	if _, err = tx.ExecContext(ctx, "UPDATE issue_wakeup_receipt SET processed_at=now() WHERE wakeup_id=$1 AND revision<>$2 AND processed_at IS NULL", w.ID, w.Revision); err != nil {
 		return err
 	}
-	var now time.Time
-	if err = tx.QueryRowContext(ctx, "SELECT now()").Scan(&now); err != nil {
+	now, err := txNow(ctx, tx)
+	if err != nil {
 		return err
 	}
 	next := w.NextFireAt
@@ -1390,7 +1387,7 @@ func (s *IssueWakeupService) Disable(ctx context.Context, issueID, id, member st
 	defer tx.Rollback()
 	q := s.Tasks.Queries.WithTx(tx)
 	var workspace string
-	if err = tx.QueryRowContext(ctx, "SELECT w.id FROM workspace w JOIN issue i ON i.workspace_id=w.id WHERE i.id=$1 FOR KEY SHARE OF w", issueID).Scan(&workspace); err != nil {
+	if err = tx.QueryRowContext(ctx, "SELECT w.id FROM workspace w JOIN issue i ON i.workspace_id=w.id WHERE i.id=$1", issueID).Scan(&workspace); err != nil {
 		return out, err
 	}
 	issue, err := q.LockWakeupIssue(ctx, issueID)
@@ -1479,4 +1476,23 @@ func (s *IssueWakeupService) CheckClaim(ctx context.Context, task db.AgentTaskQu
 		return err
 	}
 	return s.authorize(ctx, s.Tasks.Queries, w.WorkspaceID, w.CreatedBy.String, agent)
+}
+
+func txNow(ctx context.Context, tx *sql.Tx) (time.Time, error) {
+	var s string
+	if err := tx.QueryRowContext(ctx, "SELECT now()").Scan(&s); err != nil {
+		return time.Time{}, err
+	}
+	return time.Parse(time.RFC3339Nano, s)
+}
+
+func lockTaskOwnerRows(ctx context.Context, tx *sql.Tx, agentID, issueID, runtimeID any) (bool, error) {
+	var ok bool
+	err := tx.QueryRowContext(ctx, `
+		SELECT
+			($1 IS NULL OR $1 = '' OR EXISTS (SELECT 1 FROM agent WHERE id = $1 AND EXISTS (SELECT 1 FROM workspace WHERE id = agent.workspace_id)))
+			AND ($2 IS NULL OR $2 = '' OR EXISTS (SELECT 1 FROM issue WHERE id = $2 AND EXISTS (SELECT 1 FROM workspace WHERE id = issue.workspace_id)))
+			AND ($3 IS NULL OR $3 = '' OR EXISTS (SELECT 1 FROM agent_runtime WHERE id = $3 AND EXISTS (SELECT 1 FROM workspace WHERE id = agent_runtime.workspace_id)))
+	`, agentID, issueID, runtimeID).Scan(&ok)
+	return ok, err
 }

@@ -218,7 +218,7 @@ func validateCondition(ctx context.Context, tx *sql.Tx, issue db.Issue, raw json
 // evaluateCondition reports whether the predicate holds, a fingerprint of the
 // satisfying facts (so a rule fires when they change, not on every tick) and a
 // small observation for the woken agent's trigger facts.
-func (s *IssueWakeupService) evaluateCondition(ctx context.Context, tx *sql.Tx, q *db.Queries, w db.IssueWakeup) (bool, string, map[string]any, error) {
+func (s *IssueWakeupService) evaluateCondition(ctx context.Context, tx db.DBTX, q *db.Queries, w db.IssueWakeup) (bool, string, map[string]any, error) {
 	var c WakeupCondition
 	if err := json.Unmarshal([]byte(w.Condition.String), &c); err != nil {
 		return false, "", nil, err
@@ -227,11 +227,12 @@ func (s *IssueWakeupService) evaluateCondition(ctx context.Context, tx *sql.Tx, 
 	case "issue_field":
 		var status, assigneeType string
 		var assigneeID string
-		var property json.RawMessage
+		var propertyRaw string
 		var labeled bool
-		err := tx.QueryRowContext(ctx, `SELECT status,COALESCE(assignee_type,''),assignee_id,COALESCE(properties->($2::text),'null'::jsonb),
-			EXISTS(SELECT 1 FROM issue_to_label l WHERE l.issue_id=issue.id AND l.label_id::text=$3::text)
-			FROM issue WHERE id=$1`, w.IssueID, c.PropertyID, c.LabelID).Scan(&status, &assigneeType, &assigneeID, &property, &labeled)
+		err := tx.QueryRowContext(ctx, `SELECT status,COALESCE(assignee_type,''),COALESCE(assignee_id,''),COALESCE(properties->$2,'null'),
+			EXISTS(SELECT 1 FROM issue_to_label l WHERE l.issue_id=issue.id AND l.label_id=$3)
+			FROM issue WHERE id=$1`, w.IssueID, c.PropertyID, c.LabelID).Scan(&status, &assigneeType, &assigneeID, &propertyRaw, &labeled)
+		property := json.RawMessage(propertyRaw)
 		if err != nil {
 			return false, "", nil, err
 		}
@@ -339,7 +340,7 @@ const conditionHintSQL = "wakeup_id=$1 AND processed_at IS NULL AND event_type N
 // agent runs that caused them, or nil when any hint came from elsewhere (a
 // person, the platform, or several merged events), so a satisfied condition
 // can tell whether the target agent brought it about itself.
-func consumeConditionHints(ctx context.Context, tx *sql.Tx, id string) (bool, []string, error) {
+func consumeConditionHints(ctx context.Context, tx db.DBTX, id string) (bool, []string, error) {
 	rows, err := tx.QueryContext(ctx, "UPDATE issue_wakeup_receipt SET processed_at=now() WHERE "+conditionHintSQL+" RETURNING payload", id)
 	if err != nil {
 		return false, nil, err
@@ -380,7 +381,7 @@ func consumeConditionHints(ctx context.Context, tx *sql.Tx, id string) (bool, []
 // pollCondition evaluates a condition rule when it is due or a related event
 // arrived, and returns the next scheduled evaluation. A newly satisfied
 // predicate becomes one condition.met input for the ordinary dispatch below.
-func (s *IssueWakeupService) pollCondition(ctx context.Context, tx *sql.Tx, q *db.Queries, w db.IssueWakeup, now time.Time) (sql.NullString, error) {
+func (s *IssueWakeupService) pollCondition(ctx context.Context, tx db.DBTX, q *db.Queries, w db.IssueWakeup, now time.Time) (sql.NullString, error) {
 	hinted, causes, err := consumeConditionHints(ctx, tx, w.ID)
 	if err != nil {
 		return w.NextFireAt, err
@@ -422,7 +423,7 @@ func conditionFiresOnChange(raw []byte) bool {
 
 // baselineCondition records which facts already satisfy a new or re-enabled
 // rule, so it wakes the agent when they change rather than immediately.
-func (s *IssueWakeupService) baselineCondition(ctx context.Context, tx *sql.Tx, q *db.Queries, w db.IssueWakeup, now time.Time) error {
+func (s *IssueWakeupService) baselineCondition(ctx context.Context, tx db.DBTX, q *db.Queries, w db.IssueWakeup, now time.Time) error {
 	met, fingerprint, _, err := s.evaluateCondition(ctx, tx, q, w)
 	if err != nil && !conditionDiagnostic(err) {
 		return err
@@ -468,7 +469,7 @@ type subIssue struct {
 	Cancelled bool
 }
 
-func loadSubIssues(ctx context.Context, tx *sql.Tx, q *db.Queries, parent, workspace string) ([]subIssue, error) {
+func loadSubIssues(ctx context.Context, tx db.DBTX, q *db.Queries, parent, workspace string) ([]subIssue, error) {
 	rows, err := tx.QueryContext(ctx, "SELECT id,status,stage FROM issue WHERE parent_issue_id=$1 AND workspace_id=$2 ORDER BY id", parent, workspace)
 	if err != nil {
 		return nil, err

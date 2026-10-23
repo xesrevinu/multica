@@ -62,11 +62,7 @@ func TestCancelTasksForArchivedAgentPublishesCommittedChatCancellations(t *testi
 
 	// Hold a separate connection before cancellation starts, so the observer
 	// cannot reuse the transaction connection or see its uncommitted writes.
-	observer, err := fx.Pool.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("acquire event observer: %v", err)
-	}
-	defer observer.Release()
+	observer := fx.Pool
 	bus := events.New()
 	seen := make(map[string]int)
 	bus.Subscribe(protocol.EventTaskCancelled, func(e events.Event) {
@@ -197,7 +193,7 @@ func TestCancelTasksForArchivedAgentCommitFailureDoesNotPublish(t *testing.T) {
 		"chat_session_id": fx.ChatSession(t, agentID), "runtime_id": runtimeID, "status": "running",
 	})
 	injectedErr := errors.New("injected archive cancellation commit failure")
-	starter := &archiveCancelRejectCommit{pool: fx.Pool, taskID: taskID, err: injectedErr}
+	starter := &archiveCancelRejectCommit{pool: fx.Pool.DB, taskID: taskID, err: injectedErr}
 	bus := events.New()
 	var published int
 	bus.Subscribe(protocol.EventTaskCancelled, func(events.Event) { published++ })

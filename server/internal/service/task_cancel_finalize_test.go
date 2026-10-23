@@ -412,7 +412,7 @@ func TestFinalizeDeferredCancelledChat_BroadcastLost_RestoreIsRecoverable(t *tes
 	if restores[0].Content != "run the thing" {
 		t.Errorf("restore content = %q, want %q", restores[0].Content, "run the thing")
 	}
-	if len(restores[0].AttachmentIds) != 1 || util.UUIDToString(restores[0].AttachmentIds[0]) != attachmentID {
+	if restores[0].AttachmentIds != attachmentID && restores[0].AttachmentIds != `["`+attachmentID+`"]` {
 		t.Errorf("restore attachment_ids = %v, want [%s]", restores[0].AttachmentIds, attachmentID)
 	}
 	// The attachment row itself must have survived the message delete

@@ -34,11 +34,15 @@ func parseDBTime(s string) time.Time {
 	if s == "" {
 		return time.Time{}
 	}
-	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
-		return t.UTC()
-	}
-	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return t.UTC()
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.UTC()
+		}
 	}
 	return time.Time{}
 }
@@ -97,7 +101,7 @@ func tryClaim(
 			?, ?, ?, ?,
 			'RUNNING', 1, ?,
 			?, gen_random_uuid(),
-			?, datetime(?, '+' || ? || ' seconds'),
+			?, strftime('%Y-%m-%dT%H:%M:%fZ', ?, '+' || ? || ' seconds'),
 			?, ?,
 			COALESCE(NULLIF(?, ''), gen_random_uuid())
 		)
@@ -143,7 +147,7 @@ func tryClaim(
 		       runner_id     = ?,
 		       lease_token   = gen_random_uuid(),
 		       heartbeat_at  = ?,
-		       stale_after   = datetime(?, '+' || ? || ' seconds'),
+		       stale_after   = strftime('%Y-%m-%dT%H:%M:%fZ', ?, '+' || ? || ' seconds'),
 		       started_at    = ?,
 		       finished_at   = NULL,
 		       duration_ms   = NULL,
@@ -157,9 +161,9 @@ func tryClaim(
 		   AND plan_time  = ?
 		   AND attempt < max_attempts
 		   AND (
-		        (status = 'FAILED' AND COALESCE(next_retry_at, ?) <= ?)
+		        (status = 'FAILED' AND unixepoch(COALESCE(next_retry_at, ?), 'subsec') <= unixepoch(?, 'subsec'))
 		        OR
-		        (status = 'RUNNING' AND stale_after < ? AND ?)
+		        (status = 'RUNNING' AND unixepoch(stale_after, 'subsec') < unixepoch(?, 'subsec') AND ?)
 		   )
 		RETURNING id, lease_token, attempt
 	`
@@ -208,7 +212,7 @@ func markStaleAsFailed(
 		       updated_at  = ?
 		 WHERE job_name    = ?
 		   AND status      = 'RUNNING'
-		   AND stale_after < ?
+		   AND unixepoch(stale_after, 'subsec') < unixepoch(?, 'subsec')
 	`, formatDBTime(dbTime), formatDBTime(dbTime), jobName, formatDBTime(dbTime))
 	if err != nil {
 		return 0, fmt.Errorf("scheduler: mark stale failed: %w", err)
@@ -229,7 +233,7 @@ func heartbeat(
 	tag, err := pool.ExecContext(ctx, `
 		UPDATE sys_cron_executions
 		   SET heartbeat_at = now(),
-		       stale_after  = datetime(now(), '+' || ? || ' seconds'),
+		       stale_after  = strftime('%Y-%m-%dT%H:%M:%fZ', now(), '+' || ? || ' seconds'),
 		       updated_at   = now()
 		 WHERE id          = ?
 		   AND lease_token = ?

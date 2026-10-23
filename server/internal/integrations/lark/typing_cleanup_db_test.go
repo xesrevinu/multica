@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 	dbfx "github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -74,17 +74,17 @@ func TestTypingCleanupPreservesRollbackAndNextInputDB(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback(context.Background())
-	if _, err = tx.Exec(context.Background(), "UPDATE agent_task_queue SET status='cancelled' WHERE id=$1", f.taskID); err != nil {
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(context.Background(), "UPDATE agent_task_queue SET status='cancelled' WHERE id=$1", f.taskID); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Rollback(); err != nil {
 		t.Fatal(err)
 	}
 	b := NewTypingIndicatorManager(api, fakeTypingCreds{secret: "test"}, f.store, newDiscardLogger())
 	b.Reconcile(context.Background(), f.sessionID)
 	if len(api.remote["old"]) != 1 || len(api.remote["next"]) != 1 {
 		t.Fatalf("uncommitted terminal state removed reactions: %+v", api.remote)
-	}
-	if err = tx.Rollback(context.Background()); err != nil {
-		t.Fatal(err)
 	}
 	f.Exec(t, "UPDATE agent_task_queue SET status='cancelled' WHERE id=$1", f.taskID)
 	b.Reconcile(context.Background(), f.sessionID)
@@ -131,16 +131,16 @@ func TestTypingUnrecordedAddRetainsRecoveryAnchorDB(t *testing.T) {
 func TestTypingSettlementWorkspaceAndRollbackDB(t *testing.T) {
 	f := newTypingDBFixture(t)
 	f.Exec(t, "UPDATE chat_message SET task_id=NULL WHERE id=$1", f.messageID)
-	arg := db.SettleChannelTypingInputsParams{ChatSessionID: f.sessionID, ThroughMessageID: f.messageID, WorkspaceID: f.inst.WorkspaceID, InstallationID: f.inst.ID, ContextRevision: pgtype.Int8{Int64: 1, Valid: true}}
+	arg := db.SettleChannelTypingInputsParams{ChatSessionID: f.sessionID, ThroughMessageID: f.messageID, WorkspaceID: f.inst.WorkspaceID, InstallationID: f.inst.ID, ContextRevision: sql.NullInt64{Int64: 1, Valid: true}}
 	tx, err := f.Pool.Begin(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback(context.Background())
+	defer tx.Rollback()
 	if err = f.store.WithTx(tx).SettleChannelTypingInputs(context.Background(), arg); err != nil {
 		t.Fatal(err)
 	}
-	if err = tx.Rollback(context.Background()); err != nil {
+	if err = tx.Rollback(); err != nil {
 		t.Fatal(err)
 	}
 	arg.WorkspaceID = f.taskID

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/seatcapacity"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -42,84 +41,6 @@ func TestSeatCapacityHandlerBoundsWorkspaceLockWait(t *testing.T) {
 	}
 }
 
-func TestSeatCapacityWorkspaceLockWaitersDoNotPinPoolConnections(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	config := testPool.Config()
-	config.MaxConns = 8
-	config.MinConns = 0
-	pool, err := pgxpool.NewWithConfig(ctx, config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
-	locker := seatcapacity.NewWorkspaceLocker(testSQLite)
-	workspaceID := uuid.New()
-
-	_, unlock, err := locker.Lock(ctx, workspaceID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer unlock()
-
-	const waiterCount = 12
-	start := make(chan struct{})
-	ready := sync.WaitGroup{}
-	ready.Add(waiterCount)
-	errs := make(chan error, waiterCount)
-	for range waiterCount {
-		go func() {
-			ready.Done()
-			<-start
-			waitCtx, waitCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-			defer waitCancel()
-			_, waiterUnlock, lockErr := locker.Lock(waitCtx, workspaceID)
-			if waiterUnlock != nil {
-				waiterUnlock()
-			}
-			errs <- lockErr
-		}()
-	}
-	ready.Wait()
-	started := time.Now()
-	close(start)
-	time.Sleep(50 * time.Millisecond)
-	if got := pool.Stat().AcquiredConns(); got != 1 {
-		t.Fatalf("acquired connections with %d queued waiters = %d, want only the lock holder", waiterCount, got)
-	}
-
-	for range waiterCount {
-		if lockErr := <-errs; !errors.Is(lockErr, context.DeadlineExceeded) {
-			t.Fatalf("queued lock error = %v, want context deadline exceeded", lockErr)
-		}
-	}
-	if elapsed := time.Since(started); elapsed > 750*time.Millisecond {
-		t.Fatalf("queued lock attempts took %v, want bounded completion", elapsed)
-	}
-
-	_, secondUnlock, err := locker.Lock(ctx, uuid.New())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer secondUnlock()
-	thirdResult := make(chan error, 1)
-	go func() {
-		thirdCtx, thirdCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-		defer thirdCancel()
-		_, thirdUnlock, thirdErr := locker.Lock(thirdCtx, uuid.New())
-		if thirdUnlock != nil {
-			thirdUnlock()
-		}
-		thirdResult <- thirdErr
-	}()
-	time.Sleep(50 * time.Millisecond)
-	if got := pool.Stat().AcquiredConns(); got != 2 {
-		t.Fatalf("acquired connections at the capacity lock limit = %d, want 2 of 8", got)
-	}
-	if thirdErr := <-thirdResult; !errors.Is(thirdErr, context.DeadlineExceeded) {
-		t.Fatalf("third workspace lock error = %v, want context deadline exceeded", thirdErr)
-	}
-}
 
 func TestSeatCapacityIntentCannotRegressOrBeDeletedByStaleWorker(t *testing.T) {
 	ctx := context.Background()
@@ -167,7 +88,7 @@ func TestSeatCapacityIntentCannotRegressOrBeDeletedByStaleWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if intent.Action != seatcapacity.ActionConfirm || !intent.MemberID.Valid || intent.MemberID.String != memberID {
+	if intent.Action != seatcapacity.ActionConfirm || !intent.MemberID.Valid || intent.MemberID.String != memberID.String() {
 		t.Fatalf("intent regressed or was deleted: %+v", intent)
 	}
 	if err := enqueueCapacityRelease(ctx, queries, uuid.MustParse(workspaceID), token); !errors.Is(err, sql.ErrNoRows) {

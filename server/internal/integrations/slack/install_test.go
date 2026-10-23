@@ -2,12 +2,13 @@ package slack
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"sync"
 	"testing"
+	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
-
+	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/internal/util/secretbox"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -26,7 +27,7 @@ func testBox(t *testing.T) *secretbox.Box {
 	return box
 }
 
-func mustUUID(t *testing.T, s string) pgtype.UUID {
+func mustUUID(t *testing.T, s string) string {
 	t.Helper()
 	u, err := util.ParseUUID(s)
 	if err != nil {
@@ -36,48 +37,39 @@ func mustUUID(t *testing.T, s string) pgtype.UUID {
 }
 
 type fakeInstallQueries struct {
-	// existing, when set, is the agent's current row; UpsertChannelInstallation
-	// returns it (an UPDATE) so a reconnect reuses the same row id.
-	existing *db.ChannelInstallation
-	// appIDTaken makes UpsertChannelInstallation report a unique-constraint
-	// violation on the (channel_type, app_id) routing index — i.e. the pasted app
-	// is already connected to a LIVE owner (the reclaim has run by then).
-	appIDTaken   bool
-	upsertParams db.UpsertChannelInstallationParams
-	upsertCalled bool
-	rowID        pgtype.UUID
-
-	// reclaimedID, when set, is returned by ReclaimDeadChannelInstallationByAppID
-	// to model a dead prior owner having been cleared; otherwise it reports
-	// pgx.ErrNoRows (nothing was dead). reclaimCalled records that the install
-	// path ran the reclaim before upserting.
-	reclaimedID   *pgtype.UUID
-	reclaimCalled bool
-	// ownerWorkspaceID / ownerArchived / ownerMissing drive the live-owner lookup
-	// that classifies an appIDTaken conflict into the right sentinel.
-	ownerWorkspaceID pgtype.UUID
+	existing         *db.ChannelInstallation
+	appIDTaken       bool
+	upsertParams     db.UpsertChannelInstallationParams
+	upsertCalled     bool
+	rowID            string
+	reclaimedID      *string
+	reclaimCalled    bool
+	ownerWorkspaceID string
 	ownerArchived    bool
 	ownerMissing     bool
 }
 
-// WithTx returns the same fake — the fake tx is a no-op token.
-func (f *fakeInstallQueries) WithTx(_ pgx.Tx) installQueries { return f }
+func (f *fakeInstallQueries) WithTx(_ *sql.Tx) installQueries { return f }
 
-func (f *fakeInstallQueries) ReclaimDeadChannelInstallationByAppID(_ context.Context, _ db.ReclaimDeadChannelInstallationByAppIDParams) (pgtype.UUID, error) {
+func (f *fakeInstallQueries) ReclaimDeadChannelInstallationByAppID(_ context.Context, _ db.ReclaimDeadChannelInstallationByAppIDParams) (string, error) {
 	f.reclaimCalled = true
 	if f.reclaimedID != nil {
 		return *f.reclaimedID, nil
 	}
-	return pgtype.UUID{}, pgx.ErrNoRows
+	return "", sql.ErrNoRows
 }
 
 func (f *fakeInstallQueries) GetChannelInstallationOwnerByAppID(_ context.Context, _ db.GetChannelInstallationOwnerByAppIDParams) (db.GetChannelInstallationOwnerByAppIDRow, error) {
 	if f.ownerMissing {
-		return db.GetChannelInstallationOwnerByAppIDRow{}, pgx.ErrNoRows
+		return db.GetChannelInstallationOwnerByAppIDRow{}, sql.ErrNoRows
+	}
+	var archived sql.NullString
+	if f.ownerArchived {
+		archived = sql.NullString{String: time.Now().UTC().Format(time.RFC3339Nano), Valid: true}
 	}
 	return db.GetChannelInstallationOwnerByAppIDRow{
 		WorkspaceID:     f.ownerWorkspaceID,
-		AgentArchivedAt: pgtype.Timestamptz{Valid: f.ownerArchived},
+		AgentArchivedAt: archived,
 	}, nil
 }
 
@@ -85,11 +77,11 @@ func (f *fakeInstallQueries) UpsertChannelInstallation(_ context.Context, arg db
 	f.upsertCalled = true
 	f.upsertParams = arg
 	if f.appIDTaken {
-		return db.ChannelInstallation{}, &pgconn.PgError{Code: "23505"}
+		return db.ChannelInstallation{}, errors.New("UNIQUE constraint failed: channel_installation")
 	}
 	id := f.rowID
 	if f.existing != nil {
-		id = f.existing.ID // reconnect updates the agent's existing row in place
+		id = f.existing.ID
 	}
 	return db.ChannelInstallation{
 		ID:              id,
@@ -114,24 +106,27 @@ func (f *fakeInstallQueries) SetChannelInstallationStatus(_ context.Context, _ d
 	return nil
 }
 
-// fakeTx is a no-op pgx.Tx: embedding the interface satisfies it, and the
-// install paths only ever call Commit / Rollback. committed records whether the
-// install committed (the happy path) vs rolled back (a rejected install).
-type fakeTx struct {
-	pgx.Tx
-	committed bool
+var (
+	slackTxDBOnce sync.Once
+	slackTxDB     *sql.DB
+)
+
+type fakeTxStarter struct{}
+
+func (f *fakeTxStarter) Begin(ctx context.Context) (*sql.Tx, error) {
+	slackTxDBOnce.Do(func() {
+		var err error
+		slackTxDB, err = testutil.OpenTestPool()
+		if err != nil {
+			panic(err)
+		}
+	})
+	return slackTxDB.BeginTx(ctx, nil)
 }
-
-func (t *fakeTx) Commit(context.Context) error   { t.committed = true; return nil }
-func (t *fakeTx) Rollback(context.Context) error { return nil }
-
-type fakeTxStarter struct{ tx *fakeTx }
-
-func (f *fakeTxStarter) Begin(context.Context) (pgx.Tx, error) { return f.tx, nil }
 
 func newTestInstallService(t *testing.T, q installQueries) *InstallService {
 	t.Helper()
-	svc, err := newInstallService(q, &fakeTxStarter{tx: &fakeTx{}}, testBox(t), nil)
+	svc, err := newInstallService(q, &fakeTxStarter{}, testBox(t), nil)
 	if err != nil {
 		t.Fatalf("newInstallService: %v", err)
 	}

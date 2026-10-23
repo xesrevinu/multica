@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"database/sql"
 	"net/http"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -38,7 +37,7 @@ func (h *Handler) withWakeupActor(r *http.Request) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), wakeupActorKey{}, wakeupActor{kind, id, task}))
 }
 
-func (h *Handler) beginWakeupWrite(ctx context.Context) (*sql.Tx, error) {
+func (h *Handler) beginWakeupWrite(ctx context.Context) (handlerTx, error) {
 	tx, err := h.TxStarter.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err

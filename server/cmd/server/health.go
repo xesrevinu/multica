@@ -24,9 +24,25 @@ const readinessQuery = `SELECT COUNT(*) FROM schema_migrations WHERE version IN 
 
 const readinessCacheTTL = 3 * time.Second
 
+type readinessRow interface {
+	Scan(dest ...any) error
+}
+
 type readinessDB interface {
-	PingContext(ctx context.Context) error
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	Ping(ctx context.Context) error
+	QueryRow(ctx context.Context, query string, args ...any) readinessRow
+}
+
+type sqlReadinessDB struct {
+	db *sql.DB
+}
+
+func (s sqlReadinessDB) Ping(ctx context.Context) error {
+	return s.db.PingContext(ctx)
+}
+
+func (s sqlReadinessDB) QueryRow(ctx context.Context, query string, args ...any) readinessRow {
+	return s.db.QueryRowContext(ctx, query, args...)
 }
 
 type serverHealth struct {
@@ -72,7 +88,7 @@ type readinessChecks struct {
 func newServerHealth(pool *sql.DB) *serverHealth {
 	requiredMigrations, err := migrations.AllVersions()
 	return &serverHealth{
-		db:                 pool,
+		db: func() readinessDB { if pool == nil { return nil }; return sqlReadinessDB{db: pool} }(),
 		requiredMigrations: requiredMigrations,
 		initErr:            err,
 		cacheTTL:           readinessCacheTTL,
@@ -148,7 +164,7 @@ func (h *serverHealth) computeReadiness(parent context.Context) (readinessRespon
 	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 	defer cancel()
 
-	if err := h.db.PingContext(ctx); err != nil {
+	if err := h.db.Ping(ctx); err != nil {
 		resp.Status = "not_ready"
 		resp.Checks.DB = "error"
 		resp.Checks.Migrations = "unknown"
@@ -168,7 +184,7 @@ func (h *serverHealth) computeReadiness(parent context.Context) (readinessRespon
 		return resp, http.StatusServiceUnavailable
 	}
 	var appliedCount int
-	if err := h.db.QueryRowContext(ctx, readinessQuery, string(versions)).Scan(&appliedCount); err != nil {
+	if err := h.db.QueryRow(ctx, readinessQuery, string(versions)).Scan(&appliedCount); err != nil {
 		resp.Status = "not_ready"
 		resp.Checks.Migrations = "error"
 		return resp, http.StatusServiceUnavailable

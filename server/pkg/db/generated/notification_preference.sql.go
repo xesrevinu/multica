@@ -76,7 +76,7 @@ INSERT INTO notification_preference (workspace_id, user_id, preferences)
 VALUES (?1, ?2, ?3)
 ON CONFLICT (workspace_id, user_id)
 DO UPDATE SET
-    preferences = notification_preference.preferences || EXCLUDED.preferences,
+    preferences = json_patch(COALESCE(notification_preference.preferences, '{}'), EXCLUDED.preferences),
     updated_at = now()
 RETURNING id, workspace_id, user_id, preferences, updated_at
 `

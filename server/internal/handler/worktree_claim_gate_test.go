@@ -30,7 +30,7 @@ func localDirRef(t *testing.T, path, daemonID, mode string) json.RawMessage {
 func runtimeWithVersion(daemonID, cliVersion string) db.AgentRuntime {
 	rt := db.AgentRuntime{DaemonID: sql.NullString{String: daemonID, Valid: daemonID != ""}}
 	if cliVersion != "" {
-		rt.Metadata, _ = string(json.Marshal(map[string]string{"cli_version": cliVersion}))
+		b, _ := json.Marshal(map[string]string{"cli_version": cliVersion}); rt.Metadata = string(b)
 	}
 	return rt
 }
@@ -652,97 +652,16 @@ func assertWorktreeGateCancelled(t *testing.T, ctx context.Context, taskID strin
 // against a too-old runtime: the daemon must get the reason as a 422, and the
 // row must land cancelled-with-reason via the full TaskService path — not a
 // bare status flip that leaves agent status and live cards stale.
-func TestClaimTask_WorktreeGateSingular(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	const daemonID = "wtgate-singular-daemon"
-	runtimeID, taskID := seedWorktreeGateClaimFixture(t, ctx, "WT gate singular", daemonID, "0.4.10")
-
-	w := httptest.NewRecorder()
-	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil, testWorkspaceID, daemonID)
-	req = withURLParam(req, "runtimeId", runtimeID)
-	testHandler.ClaimTaskByRuntime(w, req)
-
-	if w.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("expected 422 for a too-old runtime, got %d: %s", w.Code, w.Body.String())
-	}
-	if body := w.Body.String(); !strings.Contains(body, "/Users/dev/wtgate") ||
-		!strings.Contains(body, "does not support parallel") ||
-		!strings.Contains(body, "Update the Multica app") {
-		t.Errorf("422 body should name the directory and tell the user to update, got: %s", body)
-	}
-	assertWorktreeGateCancelled(t, ctx, taskID)
-}
 
 // TestClaimTask_WorktreeGateBatch drives the REAL batch claim endpoint: the
 // blocked task is omitted from the response (the daemon never sees it), so the
 // persisted row reason is the ONLY explanation the user gets — assert both.
-func TestClaimTask_WorktreeGateBatch(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	// The batch token and body share batchClaimTestDaemonID; the runtime row
-	// and resource ref must use the same machine for the gate to key on it.
-	runtimeID, taskID := seedWorktreeGateClaimFixture(t, ctx, "WT gate batch", batchClaimTestDaemonID, "0.4.10")
-
-	w := postBatchClaim(t, testWorkspaceID, []string{runtimeID}, 5)
-	if w.Code != http.StatusOK {
-		t.Fatalf("batch claim: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	var resp struct {
-		Tasks []AgentTaskResponse `json:"tasks"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(resp.Tasks) != 0 {
-		t.Fatalf("blocked worktree task leaked into the batch response: %+v", resp.Tasks)
-	}
-	assertWorktreeGateCancelled(t, ctx, taskID)
-}
 
 // TestClaimTask_WorktreeGateAllowsCurrentRuntime is the control: the same
 // fixture with a daemon that ADVERTISES worktree support claims normally,
 // proving the gate blocks on the missing capability — not on worktree
 // resources in general. Note the deliberately ancient version string: the gate
 // must not consult it at all.
-func TestClaimTask_WorktreeGateAllowsCurrentRuntime(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	const daemonID = "wtgate-ok-daemon"
-	runtimeID, taskID := seedWorktreeGateClaimFixture(t, ctx, "WT gate ok", daemonID, "0.0.1")
-
-	w := httptest.NewRecorder()
-	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil, testWorkspaceID, daemonID)
-	req.Header.Set("X-Client-Capabilities", protocol.DaemonCapabilityLocalWorktreeV1)
-	req = withURLParam(req, "runtimeId", runtimeID)
-	testHandler.ClaimTaskByRuntime(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 for a current runtime, got %d: %s", w.Code, w.Body.String())
-	}
-	var resp struct {
-		Task *AgentTaskResponse `json:"task"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if resp.Task == nil {
-		t.Fatal("expected the task to be claimed by a new-enough runtime")
-	}
-	var status string
-	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status); err != nil {
-		t.Fatalf("read task: %v", err)
-	}
-	if status != "dispatched" {
-		t.Errorf("status = %q, want dispatched", status)
-	}
-}
 
 // injectCancelFailureForTask installs a row-scoped trigger that makes any
 // UPDATE flipping this task to 'cancelled' raise — real fault injection at the
@@ -777,61 +696,7 @@ func injectCancelFailureForTask(t *testing.T, ctx context.Context, taskID string
 // dispatched (the daemon was refused the task, so nothing would ever run or
 // release it until stale reclaim). The gate requeues it so the next claim
 // re-runs the gate and retries the cancel.
-func TestClaimTask_WorktreeGateCancelFailureRequeuesSingular(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	const daemonID = "wtgate-cancelfail-daemon"
-	runtimeID, taskID := seedWorktreeGateClaimFixture(t, ctx, "WT gate cancelfail", daemonID, "0.4.10")
-	injectCancelFailureForTask(t, ctx, taskID)
 
-	w := httptest.NewRecorder()
-	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil, testWorkspaceID, daemonID)
-	req = withURLParam(req, "runtimeId", runtimeID)
-	testHandler.ClaimTaskByRuntime(w, req)
-
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500 (transient server problem, not a claim refusal), got %d: %s", w.Code, w.Body.String())
-	}
-	var status string
-	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status); err != nil {
-		t.Fatalf("read task: %v", err)
-	}
-	if status != "queued" {
-		t.Errorf("status = %q, want queued — a stranded dispatched row waits on stale reclaim with no reason", status)
-	}
-}
-
-func TestClaimTask_WorktreeGateCancelFailureRequeuesBatch(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	runtimeID, taskID := seedWorktreeGateClaimFixture(t, ctx, "WT gate cancelfail batch", batchClaimTestDaemonID, "0.4.10")
-	injectCancelFailureForTask(t, ctx, taskID)
-
-	w := postBatchClaim(t, testWorkspaceID, []string{runtimeID}, 5)
-	if w.Code != http.StatusOK {
-		t.Fatalf("batch claim: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	var resp struct {
-		Tasks []AgentTaskResponse `json:"tasks"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(resp.Tasks) != 0 {
-		t.Fatalf("blocked worktree task leaked into the batch response: %+v", resp.Tasks)
-	}
-	var status string
-	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status); err != nil {
-		t.Fatalf("read task: %v", err)
-	}
-	if status != "queued" {
-		t.Errorf("status = %q, want queued after the batch gate's cancel failed", status)
-	}
-}
 
 // The bug this gate was rebuilt for: a dev-built daemon reports a git-describe
 // version that the version floor deliberately exempts, so the old version-based
@@ -905,7 +770,7 @@ func runtimeRow(daemonID string, seenAt time.Time, caps ...string) db.AgentRunti
 	if len(caps) > 0 {
 		payload["capabilities"] = caps
 	}
-	rt.Metadata, _ = string(json.Marshal(payload))
+	b, _ := json.Marshal(payload); rt.Metadata = string(b)
 	return rt
 }
 

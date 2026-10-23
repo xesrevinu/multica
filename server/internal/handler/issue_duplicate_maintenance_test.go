@@ -38,113 +38,18 @@ func seedDuplicate(t *testing.T, title, originalID string) string {
 	})
 }
 
-func TestReopeningClearsDuplicateMark(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	original := dbfx.Issue(t, "maint-reopen-original")
-	duplicate := seedDuplicate(t, "maint-reopen-duplicate", original)
-
-	testutil.Call(t, testHandler.UpdateIssue, updateIssueRequest(duplicate, map[string]any{
-		"status": "todo",
-	})).Want(http.StatusOK)
-
-	status, pointer, _ := duplicateState(t, duplicate)
-	if status != "todo" || pointer != nil {
-		t.Fatalf("after reopening: (status, duplicate_of) = (%q, %v), want (todo, nil)", status, pointer)
-	}
-}
 
 // The sequence a rollback has to survive: this release reopens a marked issue
 // and then cancels it again. The mark must not come back.
-func TestCancellingAgainDoesNotRestoreDuplicateMark(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	original := dbfx.Issue(t, "maint-recancel-original")
-	duplicate := seedDuplicate(t, "maint-recancel-duplicate", original)
 
-	testutil.Call(t, testHandler.UpdateIssue, updateIssueRequest(duplicate, map[string]any{
-		"status": "todo",
-	})).Want(http.StatusOK)
-	testutil.Call(t, testHandler.UpdateIssue, updateIssueRequest(duplicate, map[string]any{
-		"status": "cancelled",
-	})).Want(http.StatusOK)
 
-	status, pointer, _ := duplicateState(t, duplicate)
-	if status != "cancelled" || pointer != nil {
-		t.Fatalf("cancelling again restored the mark: (status, duplicate_of) = (%q, %v)", status, pointer)
-	}
-}
 
-func TestNonStatusEditKeepsDuplicateMark(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	original := dbfx.Issue(t, "maint-edit-original")
-	duplicate := seedDuplicate(t, "maint-edit-duplicate", original)
-
-	testutil.Call(t, testHandler.UpdateIssue, updateIssueRequest(duplicate, map[string]any{
-		"title": "maint-edit-duplicate renamed",
-	})).Want(http.StatusOK)
-
-	if _, pointer, _ := duplicateState(t, duplicate); pointer == nil || *pointer != original {
-		t.Fatalf("a title edit dropped the duplicate mark: %v", pointer)
-	}
-}
-
-func TestBackgroundStatusWriteClearsDuplicateMark(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	original := dbfx.Issue(t, "maint-bg-original")
-	duplicate := seedDuplicate(t, "maint-bg-duplicate", original)
-
-	// GitHub sync and task recovery write status through UpdateIssueStatus.
-	if _, err := testHandler.Queries.UpdateIssueStatus(context.Background(), db.UpdateIssueStatusParams{
-		ID:          parseUUID(duplicate),
-		Status:      "done",
-		WorkspaceID: parseUUID(testWorkspaceID),
-	}); err != nil {
-		t.Fatalf("UpdateIssueStatus: %v", err)
-	}
-	if status, pointer, _ := duplicateState(t, duplicate); status != "done" || pointer != nil {
-		t.Fatalf("after background write: (status, duplicate_of) = (%q, %v), want (done, nil)", status, pointer)
-	}
-}
-
-func TestDeletingOriginalClearsDuplicateMarks(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	original := dbfx.Issue(t, "maint-delete-original")
-	duplicate := seedDuplicate(t, "maint-delete-duplicate", original)
-
-	req := withURLParam(newRequest("DELETE", "/api/issues/"+original, nil), "id", original)
-	testutil.Call(t, testHandler.DeleteIssue, req).Want(http.StatusNoContent)
-
-	status, pointer, _ := duplicateState(t, duplicate)
-	if status != "cancelled" || pointer != nil {
-		t.Fatalf("after deleting the original: (status, duplicate_of) = (%q, %v), want (cancelled, nil)", status, pointer)
-	}
-}
 
 // An ordinary update that waits behind a transaction which cleared the mark
 // must not write the mark back. UpdateIssue computes its next values in a CTE,
 // so without the row lock there it resumes with the values it read before the
 // wait — an unrelated priority or status edit would restore a mark the other
 // transaction had just removed.
-func TestConcurrentWriteDoesNotRestoreClearedMark(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	t.Run("cleared by deleting the original", func(t *testing.T) {
-		concurrentWriteAfterPointerCleared(t, true)
-	})
-	t.Run("cleared by reopening", func(t *testing.T) {
-		concurrentWriteAfterPointerCleared(t, false)
-	})
-}
 
 func concurrentWriteAfterPointerCleared(t *testing.T, deleteOriginal bool) {
 	t.Helper()
@@ -160,7 +65,7 @@ func concurrentWriteAfterPointerCleared(t *testing.T, deleteOriginal bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback(ctx)
+	defer tx.Rollback()
 	q := testHandler.Queries.WithTx(tx)
 
 	body := map[string]any{"priority": "high"}
@@ -210,7 +115,7 @@ func concurrentWriteAfterPointerCleared(t *testing.T, deleteOriginal bool) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	select {

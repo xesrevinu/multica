@@ -69,7 +69,7 @@ func TestDeleteWorkspace_RetainsTypingCleanupUntilAcknowledged(t *testing.T) {
 				t.Fatalf("deleted workspace cleanup: rows=%d err=%v", len(rows), err)
 			}
 			row := rows[0]
-			if row.ID != parseUUID(reactionID) || row.ChannelMessageID != "remote-input" || row.ReactionID != "remote-reaction" || !row.CleanupRequired || row.CleanedAt.Valid {
+			if row.ID != parseUUID(reactionID) || row.ChannelMessageID != "remote-input" || row.ReactionID != "remote-reaction" || row.CleanupRequired == 0 || row.CleanedAt.Valid {
 				t.Fatalf("cleanup anchor was lost or prematurely acknowledged: %+v", row)
 			}
 			var snapshotPreserved bool

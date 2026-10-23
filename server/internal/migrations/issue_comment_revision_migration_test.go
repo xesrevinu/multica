@@ -3,6 +3,7 @@ package migrations
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -13,7 +14,7 @@ const issueCommentRevisionMigrationTestSchema = "issue_comment_revision_migratio
 
 func TestIssueCommentRevisionMigrationUpDownPreservesData(t *testing.T) {
 	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
+	if !strings.HasPrefix(dbURL, "postgres") {
 		t.Skip("integration test requires Postgres at DATABASE_URL")
 	}
 

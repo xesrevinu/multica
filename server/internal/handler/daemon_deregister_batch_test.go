@@ -2,13 +2,12 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/testutil"
@@ -29,19 +28,23 @@ var errInjectedRuntimeBatchRead = errors.New("injected runtime batch read failur
 // the batched GetAgentRuntimes read, which it fails.
 type runtimeBatchFailDBTX struct{ inner db.DBTX }
 
-func (f runtimeBatchFailDBTX) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	return f.inner.Exec(ctx, sql, args...)
+func (f runtimeBatchFailDBTX) ExecContext(ctx context.Context, sqlQuery string, args ...any) (sql.Result, error) {
+	return f.inner.ExecContext(ctx, sqlQuery, args...)
 }
 
-func (f runtimeBatchFailDBTX) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
-	if strings.Contains(sql, "FROM agent_runtime") && strings.Contains(sql, "= ANY(") {
+func (f runtimeBatchFailDBTX) PrepareContext(ctx context.Context, sqlQuery string) (*sql.Stmt, error) {
+	return f.inner.PrepareContext(ctx, sqlQuery)
+}
+
+func (f runtimeBatchFailDBTX) QueryContext(ctx context.Context, sql string, args ...any) (*sql.Rows, error) {
+	if strings.Contains(sql, "FROM agent_runtime") && (strings.Contains(sql, "= ANY(") || strings.Contains(sql, "json_each(")) {
 		return nil, errInjectedRuntimeBatchRead
 	}
-	return f.inner.Query(ctx, sql, args...)
+	return f.inner.QueryContext(ctx, sql, args...)
 }
 
-func (f runtimeBatchFailDBTX) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	return f.inner.QueryRow(ctx, sql, args...)
+func (f runtimeBatchFailDBTX) QueryRowContext(ctx context.Context, sql string, args ...any) *sql.Row {
+	return f.inner.QueryRowContext(ctx, sql, args...)
 }
 
 // newRuntimeBatchReadFailureHandler is testHandler with the batched runtime

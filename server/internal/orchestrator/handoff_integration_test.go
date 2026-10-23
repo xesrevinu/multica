@@ -23,9 +23,9 @@ func TestIntegrationReviewRejectHandoff(t *testing.T) {
 		h := f.gh.heads[key]
 		f.gh.mu.Unlock()
 		var issueID string
-		_ = f.svc.opt.Pool.QueryRowContext(f.ctx, `SELECT id::text FROM issue WHERE workspace_id=$1 AND number=$2`, f.ws, strings.TrimPrefix(key, f.prefix+"-")).Scan(&issueID)
+		_ = f.svc.opt.Pool.QueryRowContext(f.ctx, `SELECT id FROM issue WHERE workspace_id=$1 AND number=$2`, f.ws, strings.TrimPrefix(key, f.prefix+"-")).Scan(&issueID)
 		rid, _ := f.svc.st.agentID(f.ctx, f.ws, "rev")
-		f.exec(`INSERT INTO comment (issue_id, workspace_id, author_type, author_id, content) VALUES ($1, $2, 'agent', $3, $4)`, issueID, f.ws, rid, "1 important: [important] src/sq.js:3 negative input returns NaN")
+		f.exec(`INSERT INTO comment (id, issue_id, workspace_id, author_type, author_id, content) VALUES (gen_random_uuid(), $1, $2, 'agent', $3, $4)`, issueID, f.ws, rid, "1 important: [important] src/sq.js:3 negative input returns NaN")
 		m["verdict"], m["reviewed_sha"] = "changes", h
 	}
 	id, _ := f.issue("add sq")

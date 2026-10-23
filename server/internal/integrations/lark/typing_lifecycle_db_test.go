@@ -2,12 +2,9 @@ package lark
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 	dbfx "github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -17,20 +14,12 @@ type typingDBFixture struct {
 	runtimeID                    string
 	store                        *ChannelStore
 	inst                         Installation
-	sessionID, messageID, taskID pgtype.UUID
+	sessionID, messageID, taskID string
 }
 
 func newTypingDBFixture(t *testing.T) *typingDBFixture {
 	t.Helper()
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL required for durable typing lifecycle regression")
-	}
-	pool, err := pgxpool.New(context.Background(), dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
+	pool := dbfx.SetupTestDB(t)
 	fx := dbfx.New(pool, "", "")
 	suffix := uuid.NewString()
 	fx.UserID = fx.User(t, "Typing tester", "typing-"+suffix+"@multica.test")
@@ -101,17 +90,17 @@ func TestTypingInputLifecycleDB(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer tx.Rollback(ctx)
-				if _, err = tx.Exec(ctx, "UPDATE agent_task_queue SET status='cancelled' WHERE id=$1", f.taskID); err != nil {
+				defer tx.Rollback()
+				if _, err = tx.ExecContext(ctx, "UPDATE agent_task_queue SET status='cancelled' WHERE id=$1", f.taskID); err != nil {
+					t.Fatal(err)
+				}
+				if err = tx.Rollback(); err != nil {
 					t.Fatal(err)
 				}
 				// A separate process must not observe an uncommitted terminal state.
 				live, err := f.store.IsChannelMessageTypingActive(ctx, arg)
 				if err != nil || !live {
 					t.Fatalf("uncommitted cancellation leaked: active=%v err=%v", live, err)
-				}
-				if err = tx.Rollback(ctx); err != nil {
-					t.Fatal(err)
 				}
 				want = true
 			case "next turn":

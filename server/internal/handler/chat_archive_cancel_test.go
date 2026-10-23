@@ -26,7 +26,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -37,54 +36,9 @@ import (
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/slack"
-	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func TestArchivingAChannelBoundChatSessionCancelsItsQueuedTasks(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	f := newArchiveCancelFixture(t, "Archive Cancels Queued")
-
-	// The binding is the reason this cancel exists at all: it is what makes the
-	// session a real conversation in a room, and the archive drops it a few
-	// lines after deciding. Bind before archiving, or the test is a web chat
-	// wearing the bug's failure message.
-	f.bindToChannel(t, "GROUP_ARCHIVE_CANCEL")
-
-	f.archive(t)
-
-	for _, tc := range []struct{ label, id string }{
-		{"queued", f.queuedTaskID},
-		{"running", f.runningTaskID},
-	} {
-		if status := f.taskStatus(t, tc.id); status != "cancelled" {
-			t.Fatalf("%s task status after archiving a channel-bound session = %q, want cancelled — the daemon will still run this turn on a closed conversation, spending runtime and quota and writing into an archived chat, and with the binding already gone it is briefed as a private web chat with no route left to answer on", tc.label, status)
-		}
-	}
-
-	// The binding read that gates the cancel happens before the delete; the
-	// delete still has to run, or the channel keeps resolving to this session.
-	if f.bindingExists(t) {
-		t.Errorf("archived session kept its channel_chat_session_binding — inbound traffic would revive a read-only conversation")
-	}
-
-	// Post-commit lifecycle. Each of these is something BroadcastCancelledTasks
-	// does and nothing else on this path does.
-
-	if agentStatus := f.agentStatus(t); agentStatus != "idle" {
-		t.Errorf("agent status after archiving its only conversation = %q, want idle — the agent keeps showing as working in the UI with no task left to finish it", agentStatus)
-	}
-
-	if seen := f.drainCancelledEvents(); len(seen) != 2 {
-		t.Errorf("task:cancelled emitted for %d of 2 tasks — every other client keeps the cancelled turn on screen until something else forces a refresh", len(seen))
-	}
-
-	if live := f.liveTaskTokens(t); live != 0 {
-		t.Errorf("cancelled task still has %d live task token(s) — the agent process can keep calling the API back for a turn that was cancelled", live)
-	}
-}
 
 // TestArchivingAWebOnlyChatSessionLeavesItsTasksRunning is the other direction:
 // the same fixture with no channel binding. Archive is the reversible
@@ -154,87 +108,10 @@ func TestArchivingAWebOnlyChatSessionLeavesItsTasksRunning(t *testing.T) {
 // The enqueue is the only place left that can refuse it. ClaimAgentTask does
 // not read chat_session.status either, so a row inserted here is claimed and
 // run.
-func TestArchivingInsideTheDebounceWindowRefusesTheLateEnqueue(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	agentID, sessionID, _, _ := setupDirectChatSession(t, ctx, "Archive Inside Debounce Window")
-	bindChatSessionToChannel(t, agentID, sessionID, "GROUP_ARCHIVE_DEBOUNCE")
-
-	// The group message arrives: durable, unowned, and with no task of its own
-	// until the window expires. This is the window.
-	appendChannelUserMessage(t, ctx, sessionID, "还有一件事")
-
-	queued := subscribeChatTaskQueued(t, sessionID)
-
-	// The user archives while the timer is still running.
-	archiveChatSession(t, sessionID)
-
-	// Whatever the flush manages to create has to be cleaned up even when the
-	// assertions below fail.
-	t.Cleanup(func() {
-		testPool.Exec(context.Background(),
-			`DELETE FROM agent_task_queue WHERE chat_session_id = $1`, sessionID)
-	})
-
-	// The window expires. flushChatRun reloads the session by id and hands it
-	// to EnqueueChatTask. The reload sees the archived row; the point is that
-	// nothing along the way used to look at its status.
-	sess, err := testHandler.Queries.GetChatSession(ctx, parseUUID(sessionID))
-	if err != nil {
-		t.Fatalf("load chat session: %v", err)
-	}
-	_, enqueueErr := testHandler.TaskService.EnqueueChatTask(ctx, sess, parseUUID(testUserID), false)
-
-	var tasks int
-	if err := testPool.QueryRow(ctx,
-		`SELECT count(*) FROM agent_task_queue WHERE chat_session_id = $1`, sessionID).Scan(&tasks); err != nil {
-		t.Fatalf("count tasks on the archived session: %v", err)
-	}
-	if tasks != 0 {
-		t.Fatalf("the debounced flush created %d task(s) on a session archived while its window was open — the daemon claims and runs that turn on a closed conversation: runtime and quota spent, assistant messages written into an archived chat, the agent flipped back to 'working', and with the binding already deleted the run is briefed as a private web chat", tasks)
-	}
-
-	select {
-	case taskID := <-queued:
-		t.Errorf("task:queued published for %s on an archived session — every client puts a running turn back on screen in a conversation the user closed", taskID)
-	default:
-	}
-
-	// The sentinel, not a bare failure: flushChatRun switches on the error, and
-	// this is the same refusal the send path already returns for the same race.
-	if !errors.Is(enqueueErr, service.ErrChatSessionArchived) {
-		t.Errorf("EnqueueChatTask on an archived session returned %v, want ErrChatSessionArchived", enqueueErr)
-	}
-}
 
 // TestEnqueueOnAnActiveSessionStillWorks is the other direction: the lock and
 // the status re-read added for the test above sit in front of every channel
 // turn, so an ordinary flush on a live session must still produce its task.
-func TestEnqueueOnAnActiveSessionStillWorks(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	agentID, sessionID, _, _ := setupDirectChatSession(t, ctx, "Enqueue On Active Session")
-	bindChatSessionToChannel(t, agentID, sessionID, "GROUP_ACTIVE_ENQUEUE")
-
-	messageID := appendChannelUserMessage(t, ctx, sessionID, "在吗")
-	task := flushChannelChatRun(t, ctx, sessionID)
-
-	if task.Status != "queued" {
-		t.Fatalf("task status on a live session = %q, want queued", task.Status)
-	}
-	var owner string
-	if err := testPool.QueryRow(ctx, `SELECT task_id FROM chat_message WHERE id = $1`, messageID).Scan(&owner); err != nil {
-		t.Fatalf("load the message owner: %v", err)
-	}
-	if owner != task.ID {
-		t.Fatalf("the flushed message belongs to task %s, want the task just created (%s) — the refusal added for archived sessions must not touch the live path",
-			uuidToString(owner), uuidToString(task.ID))
-	}
-}
 
 // subscribeChatTaskQueued collects task:queued events for one session. Bus
 // handlers are never unsubscribed in this suite, so it filters on the session

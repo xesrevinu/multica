@@ -54,7 +54,7 @@ func condition(t *testing.T, v map[string]any) json.RawMessage {
 func TestWakeupConditionFieldValueWakesOnceWhenItHolds(t *testing.T) {
 	f, s, issue, agent := conditionFixture(t)
 	w := wakeCreate(t, f, s, issue, WakeupInput{AgentID: agent, Kind: "event", Instruction: "Review when ready",
-		Condition: nullString(string(condition(t, map[string]any{"type": "issue_field", "field": "status", "value": "in_review"})))})
+		Condition: condition(t, map[string]any{"type": "issue_field", "field": "status", "value": "in_review"})})
 	if len(w.EventTypes) != 1 || strings.Contains(w.EventTypes, "issue.status_changed") || w.Mode != "once" {
 		t.Fatalf("condition rule = %+v", w)
 	}
@@ -101,7 +101,7 @@ func TestWakeupConditionOtherIssueUsesScheduledChecks(t *testing.T) {
 	workspace := parseTestUUID(t, f.WorkspaceID)
 	other := f.Issue(t, "Waiting for review", testutil.Cols{"status": "in_progress"})
 	w := wakeCreate(t, f, s, issue, WakeupInput{AgentID: agent, Kind: "event", Instruction: "Continue after review",
-		Condition: nullString(string(condition(t, map[string]any{"type": "other_issue", "issue_id": other, "state": "in_review"})))})
+		Condition: condition(t, map[string]any{"type": "other_issue", "issue_id": other, "state": "in_review"})})
 	if len(w.EventTypes) != 0 || !w.NextFireAt.Valid {
 		t.Fatalf("poll-only rule: events=%v next_fire_at=%+v", w.EventTypes, w.NextFireAt)
 	}
@@ -118,7 +118,7 @@ func TestWakeupConditionOtherIssueUsesScheduledChecks(t *testing.T) {
 	}
 	got := tick()
 	if (got.Enabled == 0) || got.FireCount != 0 || wakeRuns(t, f, w.ID) != 0 {
-		t.Fatalf("unmet condition: enabled=%t fire_count=%d", got.Enabled, got.FireCount)
+		t.Fatalf("unmet condition: enabled=%t fire_count=%d", (got.Enabled != 0), got.FireCount)
 	}
 	if !got.NextFireAt.Valid || !asTime(got.NextFireAt).After(asTime(w.NextFireAt)) {
 		t.Fatalf("unmet condition was not scheduled for another check: %+v", got.NextFireAt)
@@ -141,7 +141,7 @@ func TestWakeupConditionOtherIssueUsesScheduledChecks(t *testing.T) {
 	f.Exec(t, "UPDATE issue_wakeup SET next_fire_at=now()-interval '1 second' WHERE id=$1", w.ID)
 	got = tick()
 	if (got.Enabled != 0) || got.FireCount != 1 || got.LastError.Valid || wakeRuns(t, f, w.ID) != 1 {
-		t.Fatalf("due condition: enabled=%t fire_count=%d last_error=%+v", got.Enabled, got.FireCount, got.LastError)
+		t.Fatalf("due condition: enabled=%t fire_count=%d last_error=%+v", (got.Enabled != 0), got.FireCount, got.LastError)
 	}
 	task, err := f.q.GetAgentTask(ctx, got.LastTaskID.String)
 	if err != nil {
@@ -161,7 +161,7 @@ func TestWakeupConditionRepeatsOnlyWhenItBecomesTrueAgain(t *testing.T) {
 	label := f.Insert(t, "issue_label", testutil.Cols{"workspace_id": f.WorkspaceID, "name": "approved", "color": "#123456"})
 	f.Cleanup(t, "DELETE FROM issue_to_label WHERE label_id=$1", label)
 	w := wakeCreate(t, f, s, issue, WakeupInput{AgentID: agent, Kind: "event", Mode: "continuous", Instruction: "Ship it",
-		Condition: nullString(string(condition(t, map[string]any{"type": "issue_field", "field": "label", "label_id": label})))})
+		Condition: condition(t, map[string]any{"type": "issue_field", "field": "label", "label_id": label})})
 	if !w.MaxFires.Valid || w.MaxFires.Int64 != wakeupDefaultMaxFires {
 		t.Fatalf("repeating rule cap = %+v, want default", w.MaxFires)
 	}
@@ -180,7 +180,7 @@ func TestWakeupConditionRepeatsOnlyWhenItBecomesTrueAgain(t *testing.T) {
 		t.Fatalf("re-satisfied condition fired %d times total, want 2", n)
 	}
 	if (got.Enabled == 0) || got.FireCount != 2 {
-		t.Fatalf("continuous rule after two fires: enabled=%t fire_count=%d", got.Enabled, got.FireCount)
+		t.Fatalf("continuous rule after two fires: enabled=%t fire_count=%d", (got.Enabled != 0), got.FireCount)
 	}
 }
 
@@ -190,9 +190,9 @@ func TestWakeupConditionChildrenAndOtherIssue(t *testing.T) {
 	f.Issue(t, "Stage 2 child", testutil.Cols{"parent_issue_id": issue, "status": "todo", "stage": 2})
 	other := f.Issue(t, "Blocking issue", testutil.Cols{"status": "in_progress"})
 	stage := wakeCreate(t, f, s, issue, WakeupInput{AgentID: agent, Kind: "event", Instruction: "Start stage 2",
-		Condition: nullString(string(condition(t, map[string]any{"type": "children_done", "stage": 1})))})
+		Condition: condition(t, map[string]any{"type": "children_done", "stage": 1})})
 	watch := wakeCreate(t, f, s, issue, WakeupInput{AgentID: agent, Kind: "event", Instruction: "Continue after the blocker",
-		Condition: nullString(string(condition(t, map[string]any{"type": "other_issue", "issue_id": other, "state": "done"})))})
+		Condition: condition(t, map[string]any{"type": "other_issue", "issue_id": other, "state": "done"})})
 	wakeTick(t, f, s, stage.ID)
 	wakeTick(t, f, s, watch.ID)
 	if wakeRuns(t, f, stage.ID)+wakeRuns(t, f, watch.ID) != 0 {
@@ -201,7 +201,7 @@ func TestWakeupConditionChildrenAndOtherIssue(t *testing.T) {
 	var watched WakeupCondition
 	_ = json.Unmarshal([]byte(watch.Condition.String), &watched)
 	if !strings.Contains(watched.Identifier, "-") {
-		t.Fatalf("watched issue identifier not recorded: %s", watch.Condition)
+		t.Fatalf("watched issue identifier not recorded: %s", watch.Condition.String)
 	}
 	f.Exec(t, "UPDATE issue SET status='cancelled' WHERE id=$1", first)
 	f.Exec(t, "UPDATE issue SET status='done' WHERE id=$1", other)
@@ -232,7 +232,7 @@ func TestWakeupConditionPullRequestChecksWaitForNewResult(t *testing.T) {
 	f.Cleanup(t, "DELETE FROM issue_pull_request WHERE pull_request_id=$1", pr)
 	f.Exec(t, "INSERT INTO issue_pull_request(issue_id,pull_request_id) VALUES($1,$2)", issue, pr)
 	w := wakeCreate(t, f, s, issue, WakeupInput{AgentID: agent, Kind: "event", Instruction: "Look at CI",
-		Condition: nullString(string(condition(t, map[string]any{"type": "pull_request", "event": "checks_finished"})))})
+		Condition: condition(t, map[string]any{"type": "pull_request", "event": "checks_finished"})})
 	// Finished checks from before registration belong to an older push.
 	wakeTick(t, f, s, w.ID)
 	f.Exec(t, "UPDATE github_pull_request SET snapshot_head_sha='bbb',checks_rollup_state='PENDING' WHERE id=$1", pr)
@@ -259,15 +259,15 @@ func TestWakeupConditionValidation(t *testing.T) {
 	ctx := context.Background()
 	member := parseTestUUID(t, f.UserID)
 	for name, in := range map[string]WakeupInput{
-		"unknown status":    {Condition: nullString(string(condition(t, map[string]any{"type": "issue_field", "field": "status", "value": "nope"})))},
-		"this issue":        {Condition: nullString(string(condition(t, map[string]any{"type": "other_issue", "issue_id": util.UUIDToString(issue), "state": "done"})))},
-		"unknown field":     {Condition: nullString(string(condition(t, map[string]any{"type": "issue_field", "field": "title", "value": "x"})))},
-		"extra key":         {Condition: nullString(string(condition(t, map[string]any{"type": "children_done", "when": "soon"})))},
-		"with events":       {EventTypes: []string{"comment.created"}, Condition: nullString(string(condition(t, map[string]any{"type": "children_done"})))},
-		"time kind":         {Kind: "at", AfterSeconds: 60, Condition: nullString(string(condition(t, map[string]any{"type": "children_done"})))},
-		"cap on once":       {MaxFires: 3, Condition: nullString(string(condition(t, map[string]any{"type": "children_done"})))},
-		"foreign assignee":  {Condition: nullString(string(condition(t, map[string]any{"type": "issue_field", "field": "assignee", "assignee_type": "agent", "assignee_id": util.UUIDToString(parseTestUUID(t, "00000000-0000-0000-0000-000000000001"))})))},
-		"property archived": {Condition: nullString(string(condition(t, map[string]any{"type": "issue_field", "field": "property", "property_id": "00000000-0000-0000-0000-000000000002", "value": "x"})))},
+		"unknown status":    {Condition: condition(t, map[string]any{"type": "issue_field", "field": "status", "value": "nope"})},
+		"this issue":        {Condition: condition(t, map[string]any{"type": "other_issue", "issue_id": util.UUIDToString(issue), "state": "done"})},
+		"unknown field":     {Condition: condition(t, map[string]any{"type": "issue_field", "field": "title", "value": "x"})},
+		"extra key":         {Condition: condition(t, map[string]any{"type": "children_done", "when": "soon"})},
+		"with events":       {EventTypes: []string{"comment.created"}, Condition: condition(t, map[string]any{"type": "children_done"})},
+		"time kind":         {Kind: "at", AfterSeconds: 60, Condition: condition(t, map[string]any{"type": "children_done"})},
+		"cap on once":       {MaxFires: 3, Condition: condition(t, map[string]any{"type": "children_done"})},
+		"foreign assignee":  {Condition: condition(t, map[string]any{"type": "issue_field", "field": "assignee", "assignee_type": "agent", "assignee_id": util.UUIDToString(parseTestUUID(t, "00000000-0000-0000-0000-000000000001"))})},
+		"property archived": {Condition: condition(t, map[string]any{"type": "issue_field", "field": "property", "property_id": "00000000-0000-0000-0000-000000000002", "value": "x"})},
 	} {
 		in.AgentID, in.Instruction = agent, "x"
 		if in.Kind == "" {
@@ -295,11 +295,11 @@ func TestWakeupConditionPRDiagnosticsRecover(t *testing.T) {
 			f.Cleanup(t, "DELETE FROM issue_pull_request WHERE pull_request_id=$1", pr)
 			f.Exec(t, "INSERT INTO issue_pull_request(issue_id,pull_request_id) VALUES($1,$2)", parent, pr)
 			w := wakeCreate(t, f, s, issue, WakeupInput{AgentID: agent, Kind: "event", Instruction: "Review PR",
-				Condition: nullString(string(condition(t, map[string]any{"type": "pull_request", "event": event})))})
+				Condition: condition(t, map[string]any{"type": "pull_request", "event": event})})
 			assertWaiting := func(w db.IssueWakeup, diagnostic error) {
 				t.Helper()
 				if (w.Enabled == 0) || !w.LastError.Valid || w.LastError.String != conditionDiagnosticPrefix+diagnostic.Error() || w.FireCount != 0 || wakeRuns(t, f, w.ID) != 0 {
-					t.Fatalf("expected enabled, unfired rule with %q; got enabled=%t fires=%d error=%+v", diagnostic, w.Enabled, w.FireCount, w.LastError)
+					t.Fatalf("expected enabled, unfired rule with %q; got enabled=%t fires=%d error=%+v", diagnostic, (w.Enabled != 0), w.FireCount, w.LastError)
 				}
 				if !w.NextFireAt.Valid {
 					t.Fatal("diagnostic stopped condition polling")
@@ -335,7 +335,7 @@ func TestWakeupConditionPRDiagnosticsRecover(t *testing.T) {
 			f.Exec(t, "UPDATE github_pull_request SET state='merged',checks_rollup_state='SUCCESS' WHERE id=$1", pr)
 			got = wakeTick(t, f, s, w.ID)
 			if (got.Enabled != 0) || got.LastError.Valid || wakeRuns(t, f, w.ID) != 1 {
-				t.Fatalf("recovered condition failed to fire once: enabled=%t error=%+v", got.Enabled, got.LastError)
+				t.Fatalf("recovered condition failed to fire once: enabled=%t error=%+v", (got.Enabled != 0), got.LastError)
 			}
 		})
 	}

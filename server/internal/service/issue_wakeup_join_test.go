@@ -77,7 +77,7 @@ func TestJoinedWakeupCountsTowardTheCap(t *testing.T) {
 		t.Fatal(err)
 	}
 	if (got.Enabled != 0) || got.PausedReason.String != wakeupPausedMaxFires || got.FireCount != 1 {
-		t.Fatalf("after joining once with max_fires=1: enabled=%t paused=%q fire_count=%d", got.Enabled, got.PausedReason.String, got.FireCount)
+		t.Fatalf("after joining once with max_fires=1: enabled=%t paused=%q fire_count=%d", (got.Enabled != 0), got.PausedReason.String, got.FireCount)
 	}
 }
 
@@ -250,7 +250,7 @@ func TestWakeupKeepsItsInputWhenTheWaitingRunDoesNotTakeIt(t *testing.T) {
 		}
 		got := wakeTick(t, f, s, w.ID)
 		if n := f.Count(t, "SELECT count(*) FROM agent_task_queue WHERE context->>'wakeup_id'=$1 AND status='queued'", util.UUIDToString(w.ID)); n != 1 {
-			t.Fatalf("queued runs of the rule = %d (enabled=%t fire_count=%d), want 1", n, got.Enabled, got.FireCount)
+			t.Fatalf("queued runs of the rule = %d (enabled=%t fire_count=%d), want 1", n, (got.Enabled != 0), got.FireCount)
 		}
 	})
 	t.Run("run claimed by an older daemon", func(t *testing.T) {

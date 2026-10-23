@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -68,7 +67,7 @@ func TestDelegatedSubscribe_SkipsOriginatorRemovedFromWorkspace(t *testing.T) {
 	// Revoked mid-run. The task survives and keeps decomposing.
 	revoke()
 
-	issueID := createAgentOriginIssue(t, agentID, "agent_create", task, pgtype.UUID{})
+	issueID := createAgentOriginIssue(t, agentID, "agent_create", task, "")
 	publishAgentIssueCreated(bus, issueID, agentID)
 
 	if isSubscribed(t, queries, issueID, "member", userID) {
@@ -94,7 +93,7 @@ func TestDelegatedSubscribe_SubscribesOriginatorStillInWorkspace(t *testing.T) {
 
 	agentID, runtimeID := firstFixtureAgent(t)
 	task := createAgentTaskWithOriginator(t, agentID, runtimeID, util.MustParseUUID(userID))
-	issueID := createAgentOriginIssue(t, agentID, "agent_create", task, pgtype.UUID{})
+	issueID := createAgentOriginIssue(t, agentID, "agent_create", task, "")
 
 	publishAgentIssueCreated(bus, issueID, agentID)
 

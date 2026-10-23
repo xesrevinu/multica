@@ -328,7 +328,7 @@ func TestDecodeCredentials(t *testing.T) {
 		"bot_user_id": "UBOT",
 		"bot_token_encrypted": "eG94Yi1ib3Q="
 	}`)
-	creds, err := decodeCredentials(raw, nil)
+	creds, err := decodeCredentials(string(raw), nil)
 	if err != nil {
 		t.Fatalf("decodeCredentials: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestDecodeCredentials(t *testing.T) {
 	if creds.BotToken != "xoxb-bot" {
 		t.Errorf("bot token = %q", creds.BotToken)
 	}
-	if _, err := decodeCredentials(nil, nil); err == nil {
+	if _, err := decodeCredentials("", nil); err == nil {
 		t.Error("empty config should error")
 	}
 }

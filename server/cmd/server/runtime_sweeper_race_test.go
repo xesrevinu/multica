@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -59,8 +58,8 @@ func TestMarkRuntimesOfflineByIDs_RespectsConcurrentHeartbeat(t *testing.T) {
 	// is now fresh, so the stale predicate inside MarkRuntimesOfflineByIDs
 	// vetoes the write.
 	rows, err := queries.MarkRuntimesOfflineByIDs(ctx, db.MarkRuntimesOfflineByIDsParams{
-		Ids:          []pgtype.UUID{parseUUID(runtimeID)},
-		StaleSeconds: staleThresholdSeconds,
+		Ids:          []string{parseUUID(runtimeID)},
+		StaleSeconds: nullSeconds(staleThresholdSeconds),
 	})
 	if err != nil {
 		t.Fatalf("MarkRuntimesOfflineByIDs: %v", err)
@@ -112,8 +111,8 @@ func TestMarkRuntimesOfflineByIDs_OfflinesGenuinelyStale(t *testing.T) {
 	})
 
 	rows, err := queries.MarkRuntimesOfflineByIDs(ctx, db.MarkRuntimesOfflineByIDsParams{
-		Ids:          []pgtype.UUID{parseUUID(runtimeID)},
-		StaleSeconds: staleThresholdSeconds,
+		Ids:          []string{parseUUID(runtimeID)},
+		StaleSeconds: nullSeconds(staleThresholdSeconds),
 	})
 	if err != nil {
 		t.Fatalf("MarkRuntimesOfflineByIDs: %v", err)

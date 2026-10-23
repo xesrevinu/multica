@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
+	"database/sql"
 	"github.com/slack-go/slack"
 
 	"github.com/multica-ai/multica/server/internal/events"
@@ -227,7 +227,7 @@ func TestTypingIndicator_ClearsAfterSessionDeleteRemovedTheBinding(t *testing.T)
 
 	// The session and its binding are deleted; the cancel is broadcast after.
 	q.binding = db.ChannelChatSessionBinding{}
-	q.bindingErr = pgx.ErrNoRows
+	q.bindingErr = sql.ErrNoRows
 
 	bus.Publish(events.Event{
 		Type:          protocol.EventTaskCancelled,
@@ -265,7 +265,7 @@ func TestTypingIndicator_ClearsOnCancelOfATaskThatReadsAsAWebRun(t *testing.T) {
 	q := &fakeOutboundQueries{
 		binding:             db.ChannelChatSessionBinding{InstallationID: uid(1)},
 		inst:                db.ChannelInstallation{ID: uid(1), Status: "active", Config: slackInstallConfigJSON()},
-		task:                db.AgentTaskQueue{ChatInputTaskID: uid(9)},
+		task:                db.AgentTaskQueue{ChatInputTaskID: sql.NullString{String: uid(9), Valid: true}},
 		taskChannelIngested: false,
 	}
 	fr := &fakeReactor{}
@@ -320,7 +320,7 @@ func TestTypingIndicator_TeardownDeletedInstallationStillClears(t *testing.T) {
 	}
 
 	// The teardown transaction has committed: the installation is gone.
-	q.instErr = pgx.ErrNoRows
+	q.instErr = sql.ErrNoRows
 
 	bus := events.New()
 	m.Register(bus)

@@ -559,7 +559,7 @@ func (q *Queries) ListUnprocessedClosedChildren(ctx context.Context, parentID st
 }
 
 const mergeWorkspaceSettings = `-- name: MergeWorkspaceSettings :exec
-UPDATE workspace SET settings=COALESCE(settings,'{}') || ?1,updated_at=now() WHERE id= ?2
+UPDATE workspace SET settings=json_patch(COALESCE(settings,'{}'), ?1),updated_at=now() WHERE id= ?2
 `
 
 type MergeWorkspaceSettingsParams struct {

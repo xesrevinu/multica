@@ -113,6 +113,8 @@ type CreateAttachmentParams struct {
 type CreateAttachmentRow struct {
 	Coalesce        interface{}    `json:"coalesce"`
 	Coalesce_2      interface{}    `json:"coalesce_2"`
+	IssueRevision   int64          `json:"issue_revision"`
+	CommentRevision int64          `json:"comment_revision"`
 	ID              string         `json:"id"`
 	WorkspaceID     string         `json:"workspace_id"`
 	IssueID         sql.NullString `json:"issue_id"`
@@ -151,8 +153,6 @@ func (q *Queries) CreateAttachment(ctx context.Context, arg CreateAttachmentPara
 	)
 	var i CreateAttachmentRow
 	err := row.Scan(
-		&i.Coalesce,
-		&i.Coalesce_2,
 		&i.ID,
 		&i.WorkspaceID,
 		&i.IssueID,
@@ -168,8 +168,29 @@ func (q *Queries) CreateAttachment(ctx context.Context, arg CreateAttachmentPara
 		&i.ChatMessageID,
 		&i.TaskID,
 		&i.SourceContextID,
+		&i.Coalesce,
+		&i.Coalesce_2,
 	)
-	return i, err
+	if err != nil {
+		return i, err
+	}
+	if v, ok := i.Coalesce.(int64); ok {
+		i.IssueRevision = v
+	}
+	if v, ok := i.Coalesce_2.(int64); ok {
+		i.CommentRevision = v
+	}
+	if arg.IssueID.Valid {
+		if err := q.CreateAttachment_Step2(ctx, arg.IssueID); err != nil {
+			return i, err
+		}
+	}
+	if arg.CommentID.Valid {
+		if err := q.CreateAttachment_Step3(ctx, arg.CommentID); err != nil {
+			return i, err
+		}
+	}
+	return i, nil
 }
 
 const createAttachment_Step2 = `-- name: CreateAttachment_Step2 :exec
@@ -267,19 +288,41 @@ type DeleteAttachmentParams struct {
 }
 
 type DeleteAttachmentRow struct {
-	Column1    int64       `json:"column_1"`
-	Coalesce   interface{} `json:"coalesce"`
-	Coalesce_2 interface{} `json:"coalesce_2"`
+	Column1         int64       `json:"column_1"`
+	Coalesce        interface{} `json:"coalesce"`
+	Coalesce_2      interface{} `json:"coalesce_2"`
+	Changed         bool        `json:"changed"`
+	IssueRevision   int64       `json:"issue_revision"`
+	CommentRevision int64       `json:"comment_revision"`
 }
 
 // Order: DeleteAttachment_Step2, DeleteAttachment_Step3, then DeleteAttachment.
 // The steps bump issue and comment revisions while the attachment row still
 // exists. This statement removes the row and returns those post-bump revisions.
 func (q *Queries) DeleteAttachment(ctx context.Context, arg DeleteAttachmentParams) (DeleteAttachmentRow, error) {
+	if err := q.DeleteAttachment_Step2(ctx, DeleteAttachment_Step2Params{ID: arg.ID, WorkspaceID: arg.WorkspaceID}); err != nil {
+		return DeleteAttachmentRow{}, err
+	}
+	if err := q.DeleteAttachment_Step3(ctx, DeleteAttachment_Step3Params{ID: arg.ID, WorkspaceID: arg.WorkspaceID}); err != nil {
+		return DeleteAttachmentRow{}, err
+	}
 	row := q.db.QueryRowContext(ctx, deleteAttachment, arg.ID, arg.WorkspaceID)
 	var i DeleteAttachmentRow
 	err := row.Scan(&i.Column1, &i.Coalesce, &i.Coalesce_2)
-	return i, err
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return DeleteAttachmentRow{}, nil
+		}
+		return i, err
+	}
+	i.Changed = i.Column1 != 0
+	if v, ok := i.Coalesce.(int64); ok {
+		i.IssueRevision = v
+	}
+	if v, ok := i.Coalesce_2.(int64); ok {
+		i.CommentRevision = v
+	}
+	return i, nil
 }
 
 const deleteAttachment_Step2 = `-- name: DeleteAttachment_Step2 :exec
@@ -645,23 +688,57 @@ type LinkAttachmentsToIssueParams struct {
 }
 
 type LinkAttachmentsToIssueRow struct {
-	C   int64       `json:"c"`
-	Iif interface{} `json:"iif"`
+	C             int64       `json:"c"`
+	Iif           interface{} `json:"iif"`
+	LinkedCount   int64       `json:"linked_count"`
+	IssueRevision int64       `json:"issue_revision"`
 }
 
 // Order: LinkAttachmentsToIssue, then LinkAttachmentsToIssue_Step2.
 // Step2 bumps the issue when bump_revision is true and a row was linked.
 // issue_revision is that post-bump value, or 0 when Step2 does not bump.
 func (q *Queries) LinkAttachmentsToIssue(ctx context.Context, arg LinkAttachmentsToIssueParams) (LinkAttachmentsToIssueRow, error) {
-	row := q.db.QueryRowContext(ctx, linkAttachmentsToIssue,
+	res, err := q.db.ExecContext(ctx, `UPDATE attachment
+SET issue_id = ?1
+WHERE attachment.workspace_id = ?2
+  AND attachment.issue_id IS NULL
+  AND attachment.source_context_id IS NULL
+  AND attachment.id IN (SELECT value FROM json_each(?3))`,
 		arg.IssueID,
 		arg.WorkspaceID,
 		arg.AttachmentIds,
-		arg.BumpRevision,
 	)
-	var i LinkAttachmentsToIssueRow
-	err := row.Scan(&i.C, &i.Iif)
-	return i, err
+	if err != nil {
+		return LinkAttachmentsToIssueRow{}, err
+	}
+	linkedCount, err := res.RowsAffected()
+	if err != nil {
+		return LinkAttachmentsToIssueRow{}, err
+	}
+	if linkedCount == 0 {
+		return LinkAttachmentsToIssueRow{Iif: int64(0)}, nil
+	}
+	bump := false
+	switch v := arg.BumpRevision.(type) {
+	case bool:
+		bump = v
+	case int64:
+		bump = v != 0
+	case int:
+		bump = v != 0
+	}
+	var issueRev int64
+	if bump && arg.IssueID.Valid {
+		if err := q.db.QueryRowContext(ctx, `UPDATE issue SET revision = revision + 1, updated_at = now() WHERE issue.id = ?1 RETURNING revision`, arg.IssueID.String).Scan(&issueRev); err != nil && err != sql.ErrNoRows {
+			return LinkAttachmentsToIssueRow{}, err
+		}
+	}
+	return LinkAttachmentsToIssueRow{
+		C:             linkedCount,
+		Iif:           issueRev,
+		LinkedCount:   linkedCount,
+		IssueRevision: issueRev,
+	}, nil
 }
 
 const linkAttachmentsToIssue_Step2 = `-- name: LinkAttachmentsToIssue_Step2 :exec

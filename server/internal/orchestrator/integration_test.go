@@ -18,14 +18,14 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
-	"os"
-	"strings"
+		"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"database/sql"
 	"github.com/multica-ai/multica/server/internal/events"
+	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -118,7 +118,7 @@ func (f *fixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	case r.Method == "POST" && len(parts) == 4 && parts[3] == "rerun":
 		var aid string
-		_ = f.pool.QueryRowContext(f.ctx, `SELECT assignee_id::text FROM issue WHERE id=$1`, id).Scan(&aid)
+		_ = f.pool.QueryRowContext(f.ctx, `SELECT COALESCE(assignee_id,'') FROM issue WHERE id=$1`, id).Scan(&aid)
 		f.queue(id, aid)
 	case r.Method == "POST" && len(parts) == 6 && parts[5] == "cancel":
 		f.exec(`UPDATE agent_task_queue SET status='cancelled', completed_at=now() WHERE id=$1`, parts[4])
@@ -137,12 +137,12 @@ func (f *fixture) exec(q string, args ...any) {
 }
 
 func (f *fixture) queue(issueID, agentID string) {
-	f.exec(`INSERT INTO agent_task_queue (agent_id, issue_id, status, runtime_id) VALUES ($1, $2, 'queued', $3)`, agentID, issueID, f.runtime)
+	f.exec(`INSERT INTO agent_task_queue (id, agent_id, issue_id, status, runtime_id) VALUES (gen_random_uuid(), $1, $2, 'queued', $3)`, agentID, issueID, f.runtime)
 }
 
 // work runs every queued task: the scripted agent acts, then the task ends.
 func (f *fixture) work() int {
-	rows, err := f.pool.QueryContext(f.ctx, `SELECT q.id::text, q.agent_id::text, q.issue_id::text, w.issue_prefix || '-' || i.number
+	rows, err := f.pool.QueryContext(f.ctx, `SELECT q.id, q.agent_id, q.issue_id, w.issue_prefix || '-' || i.number
 		FROM agent_task_queue q JOIN issue i ON i.id=q.issue_id JOIN workspace w ON w.id=i.workspace_id
 		WHERE q.status='queued' AND i.workspace_id=$1 ORDER BY q.created_at`, f.ws)
 	if err != nil {
@@ -180,21 +180,13 @@ func (f *fixture) writeMeta(issueID string, meta map[string]string) {
 		return
 	}
 	b, _ := json.Marshal(meta)
-	f.exec(`UPDATE issue SET metadata = metadata || $2::jsonb, revision=revision+1, updated_at=now() WHERE id=$1`, issueID, string(b))
+	f.exec(`UPDATE issue SET metadata = json_patch(COALESCE(metadata, '{}'), $2), revision=revision+1, updated_at=now() WHERE id=$1`, issueID, string(b))
 }
 
 func newFixture(t *testing.T, specYAML string) *fixture {
-	url := os.Getenv("ORCH_TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("ORCH_TEST_DATABASE_URL not set (see scripts/orch-testdb.sh)")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	t.Cleanup(cancel)
-	pool, err := sql.Open("sqlite", url)
-	if err != nil || pool.PingContext(ctx) != nil {
-		t.Skipf("test database unreachable: %v", err)
-	}
-	t.Cleanup(func() { _ = pool.Close() })
+	pool := testutil.OpenTestDB(t)
 	f := &fixture{t: t, ctx: ctx, pool: pool, gh: newFakeGH(), agents: map[string]string{}, names: map[string]string{}, script: map[string]agentFn{}}
 	sfx := fmt.Sprintf("%d", rand.Int63())
 	f.prefix = "T" + sfx[:4]
@@ -205,24 +197,24 @@ func newFixture(t *testing.T, specYAML string) *fixture {
 		}
 		return id
 	}
-	f.human = q(`INSERT INTO "user" (name, email) VALUES ('Ray', $1) RETURNING id::text`, "ray+"+sfx+"@example.com")
-	f.ws = q(`INSERT INTO workspace (name, slug, issue_prefix) VALUES ('it', $1, $2) RETURNING id::text`, "it-"+sfx, f.prefix)
+	f.human = q(`INSERT INTO "user" (id, name, email) VALUES (gen_random_uuid(), 'Ray', $1) RETURNING id`, "ray+"+sfx+"@example.com")
+	f.ws = q(`INSERT INTO workspace (id, name, slug, issue_prefix) VALUES (gen_random_uuid(), 'it', $1, $2) RETURNING id`, "it-"+sfx, f.prefix)
 	t.Cleanup(func() {
 		_, _ = pool.ExecContext(context.Background(), `DELETE FROM workspace WHERE id=$1`, f.ws)
 		_, _ = pool.ExecContext(context.Background(), `DELETE FROM "user" WHERE id=$1`, f.human)
 	})
-	f.exec(`INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'owner')`, f.ws, f.human)
-	f.runtime = q(`INSERT INTO agent_runtime (workspace_id, name, provider, runtime_mode) VALUES ($1, 'it', 'fake', 'local') RETURNING id::text`, f.ws)
+	f.exec(`INSERT INTO member (id, workspace_id, user_id, role) VALUES (gen_random_uuid(), $1, $2, 'owner')`, f.ws, f.human)
+	f.runtime = q(`INSERT INTO agent_runtime (id, workspace_id, name, provider, runtime_mode) VALUES (gen_random_uuid(), $1, 'it', 'fake', 'local') RETURNING id`, f.ws)
 	for _, n := range []string{"lead", "rev", "a", "b"} {
-		id := q(`INSERT INTO agent (workspace_id, name, runtime_mode, runtime_id) VALUES ($1, $2, 'local', $3) RETURNING id::text`, f.ws, n, f.runtime)
+		id := q(`INSERT INTO agent (id, workspace_id, name, runtime_mode, runtime_id) VALUES (gen_random_uuid(), $1, $2, 'local', $3) RETURNING id`, f.ws, n, f.runtime)
 		f.agents[n], f.names[id] = id, n
 	}
-	f.proj = q(`INSERT INTO project (workspace_id, title) VALUES ($1, 'it') RETURNING id::text`, f.ws)
+	f.proj = q(`INSERT INTO project (id, workspace_id, title) VALUES (gen_random_uuid(), $1, 'it') RETURNING id`, f.ws)
 	sp, err := ParseSpec([]byte(specYAML))
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.exec(`INSERT INTO orchestrator_team (project_id, workspace_id, spec, spec_yaml, human_user_id) VALUES ($1,$2,$3,$4,$5)`, f.proj, f.ws, sp.JSON(), specYAML, f.human)
+	f.exec(`INSERT INTO orchestrator_team (project_id, workspace_id, spec, spec_yaml, human_user_id) VALUES ($1,$2,$3,$4,$5)`, f.proj, f.ws, string(sp.JSON()), specYAML, f.human)
 
 	f.svc = New(Options{Pool: pool, Bus: events.New(), Queries: db.New(pool)})
 	f.svc.disabled = false
@@ -239,15 +231,15 @@ func newFixture(t *testing.T, specYAML string) *fixture {
 
 func (f *fixture) issue(title string, labels ...string) (id, key string) {
 	var n int
-	if err := f.pool.QueryRowContext(f.ctx, `INSERT INTO issue (workspace_id, project_id, title, status, creator_type, creator_id, number)
-		VALUES ($1,$2,$3,'todo','member',$4, COALESCE((SELECT max(number) FROM issue WHERE workspace_id=$1),0)+1) RETURNING id::text, number`,
+	if err := f.pool.QueryRowContext(f.ctx, `INSERT INTO issue (id, workspace_id, project_id, title, status, creator_type, creator_id, number)
+		VALUES (gen_random_uuid(), $1,$2,$3,'todo','member',$4, COALESCE((SELECT max(number) FROM issue WHERE workspace_id=$1),0)+1) RETURNING id, number`,
 		f.ws, f.proj, title, f.human).Scan(&id, &n); err != nil {
 		f.t.Fatal(err)
 	}
 	for _, l := range labels {
 		var lid string
-		if err := f.pool.QueryRowContext(f.ctx, `WITH x AS (INSERT INTO issue_label (workspace_id, name, color) VALUES ($1,$2,'#888') ON CONFLICT DO NOTHING RETURNING id)
-			SELECT id::text FROM x UNION ALL SELECT id::text FROM issue_label WHERE workspace_id=$1 AND name=$2 LIMIT 1`, f.ws, l).Scan(&lid); err != nil {
+		_, _ = f.pool.ExecContext(f.ctx, `INSERT INTO issue_label (id, workspace_id, name, color) VALUES (gen_random_uuid(), $1, $2, '#888') ON CONFLICT DO NOTHING`, f.ws, l)
+		if err := f.pool.QueryRowContext(f.ctx, `SELECT id FROM issue_label WHERE workspace_id=$1 AND name=$2 LIMIT 1`, f.ws, l).Scan(&lid); err != nil {
 			f.t.Fatal(err)
 		}
 		f.exec(`INSERT INTO issue_to_label (label_id, issue_id) VALUES ($1,$2)`, lid, id)
@@ -285,7 +277,7 @@ func (f *fixture) tids(issueID string) []string {
 
 func (f *fixture) state(issueID string) (status, assignee string, meta map[string]string) {
 	var raw []byte
-	if err := f.pool.QueryRowContext(f.ctx, `SELECT i.status, COALESCE(a.name, i.assignee_id::text, ''), i.metadata FROM issue i LEFT JOIN agent a ON a.id=i.assignee_id WHERE i.id=$1`, issueID).Scan(&status, &assignee, &raw); err != nil {
+	if err := f.pool.QueryRowContext(f.ctx, `SELECT i.status, COALESCE(a.name, i.assignee_id, ''), i.metadata FROM issue i LEFT JOIN agent a ON a.id=i.assignee_id WHERE i.id=$1`, issueID).Scan(&status, &assignee, &raw); err != nil {
 		f.t.Fatal(err)
 	}
 	return status, assignee, metaStrings(raw)

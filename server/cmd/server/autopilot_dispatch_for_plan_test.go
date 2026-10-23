@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -44,12 +44,12 @@ func TestDispatchAutopilotForPlanIsIdempotent(t *testing.T) {
 	ap, err := queries.CreateAutopilot(ctx, db.CreateAutopilotParams{
 		WorkspaceID:        parseUUID(testWorkspaceID),
 		Title:              "Dispatch for plan idempotency",
-		Description:        pgtype.Text{String: "Dispatch for plan test", Valid: true},
+		Description:        sql.NullString{String: "Dispatch for plan test", Valid: true},
 		AssigneeType:       "agent",
 		AssigneeID:         parseUUID(agentID),
 		Status:             "active",
 		ExecutionMode:      "run_only",
-		IssueTitleTemplate: pgtype.Text{},
+		IssueTitleTemplate: sql.NullString{},
 		CreatedByType:      "member",
 		CreatedByID:        parseUUID(testUserID),
 	})
@@ -66,13 +66,13 @@ func TestDispatchAutopilotForPlanIsIdempotent(t *testing.T) {
 	trigger, err := queries.CreateAutopilotTrigger(ctx, db.CreateAutopilotTriggerParams{
 		AutopilotID:    ap.ID,
 		Kind:           "schedule",
-		Enabled:        true,
-		CronExpression: pgtype.Text{String: "*/5 * * * *", Valid: true},
-		Timezone:       pgtype.Text{String: "UTC", Valid: true},
+		Enabled:        1,
+		CronExpression: sql.NullString{String: "*/5 * * * *", Valid: true},
+		Timezone:       sql.NullString{String: "UTC", Valid: true},
 		// MUL-6951: the trigger's creator is the human its runs act as, and
 		// dispatch fails closed without one.
-		CreatedByType: pgtype.Text{String: "member", Valid: true},
-		CreatedByID:   ap.CreatedByID,
+		CreatedByType: sql.NullString{String: "member", Valid: true},
+		CreatedByID:   sql.NullString{String: ap.CreatedByID, Valid: ap.CreatedByID != ""},
 	})
 	if err != nil {
 		t.Fatalf("CreateAutopilotTrigger: %v", err)
@@ -96,9 +96,9 @@ func TestDispatchAutopilotForPlanIsIdempotent(t *testing.T) {
 	if !first.PlannedAt.Valid {
 		t.Fatalf("first run should have planned_at set")
 	}
-	if !first.PlannedAt.Time.Equal(plannedAt) {
+	if !util.ParseTime(first.PlannedAt.String).Equal(plannedAt) {
 		t.Fatalf("first run planned_at mismatch: got %s, want %s",
-			first.PlannedAt.Time.Format(time.RFC3339Nano),
+			util.ParseTime(first.PlannedAt.String).Format(time.RFC3339Nano),
 			plannedAt.Format(time.RFC3339Nano))
 	}
 
@@ -172,12 +172,12 @@ func TestDispatchAutopilotSuppressesRecentDuplicateIssue(t *testing.T) {
 	ap, err := queries.CreateAutopilot(ctx, db.CreateAutopilotParams{
 		WorkspaceID:        parseUUID(testWorkspaceID),
 		Title:              "Recent duplicate issue guard",
-		Description:        pgtype.Text{String: "Recent duplicate issue guard test", Valid: true},
+		Description:        sql.NullString{String: "Recent duplicate issue guard test", Valid: true},
 		AssigneeType:       "agent",
 		AssigneeID:         parseUUID(agentID),
 		Status:             "active",
 		ExecutionMode:      "create_issue",
-		IssueTitleTemplate: pgtype.Text{String: title, Valid: true},
+		IssueTitleTemplate: sql.NullString{String: title, Valid: true},
 		CreatedByType:      "member",
 		CreatedByID:        parseUUID(testUserID),
 	})
@@ -244,7 +244,7 @@ func TestDispatchAutopilotForPlanRejectsZeroArgs(t *testing.T) {
 
 	t.Run("invalid trigger_id", func(t *testing.T) {
 		_, err := autopilotSvc.DispatchAutopilotForPlan(
-			ctx, ap, pgtype.UUID{}, "schedule", nil, time.Now().UTC(),
+			ctx, ap, "", "schedule", nil, time.Now().UTC(),
 		)
 		if err == nil {
 			t.Fatalf("expected error for invalid trigger_id")
@@ -296,12 +296,12 @@ func TestDispatchAutopilotForPlanRecoversPartialRun(t *testing.T) {
 			ap, err := queries.CreateAutopilot(ctx, db.CreateAutopilotParams{
 				WorkspaceID:        parseUUID(testWorkspaceID),
 				Title:              "Partial recovery " + mode,
-				Description:        pgtype.Text{String: "partial run recovery test", Valid: true},
+				Description:        sql.NullString{String: "partial run recovery test", Valid: true},
 				AssigneeType:       "agent",
 				AssigneeID:         parseUUID(agentID),
 				Status:             "active",
 				ExecutionMode:      mode,
-				IssueTitleTemplate: pgtype.Text{String: "Partial recovery", Valid: true},
+				IssueTitleTemplate: sql.NullString{String: "Partial recovery", Valid: true},
 				CreatedByType:      "member",
 				CreatedByID:        parseUUID(testUserID),
 			})
@@ -318,19 +318,19 @@ func TestDispatchAutopilotForPlanRecoversPartialRun(t *testing.T) {
 			trigger, err := queries.CreateAutopilotTrigger(ctx, db.CreateAutopilotTriggerParams{
 				AutopilotID:    ap.ID,
 				Kind:           "schedule",
-				Enabled:        true,
-				CronExpression: pgtype.Text{String: "*/5 * * * *", Valid: true},
-				Timezone:       pgtype.Text{String: "UTC", Valid: true},
+				Enabled:        1,
+				CronExpression: sql.NullString{String: "*/5 * * * *", Valid: true},
+				Timezone:       sql.NullString{String: "UTC", Valid: true},
 				// MUL-6951: see the sibling fixture above.
-				CreatedByType: pgtype.Text{String: "member", Valid: true},
-				CreatedByID:   ap.CreatedByID,
+				CreatedByType: sql.NullString{String: "member", Valid: true},
+				CreatedByID:   sql.NullString{String: ap.CreatedByID, Valid: ap.CreatedByID != ""},
 			})
 			if err != nil {
 				t.Fatalf("CreateAutopilotTrigger: %v", err)
 			}
 
 			plannedAt := time.Now().UTC().Truncate(time.Second).Add(-2 * time.Minute)
-			plannedTS := pgtype.Timestamptz{Time: plannedAt, Valid: true}
+			plannedTS := sql.NullString{String: plannedAt.UTC().Format(time.RFC3339Nano), Valid: true}
 
 			// Seed a PARTIAL run: a prior attempt wrote the run row
 			// (status reflects the dispatch path's initial state) but
@@ -343,10 +343,10 @@ func TestDispatchAutopilotForPlanRecoversPartialRun(t *testing.T) {
 			}
 			partial, err := queries.CreateAutopilotRun(ctx, db.CreateAutopilotRunParams{
 				AutopilotID:    ap.ID,
-				TriggerID:      trigger.ID,
+				TriggerID:      sql.NullString{String: trigger.ID, Valid: trigger.ID != ""},
 				Source:         "schedule",
 				Status:         initialStatus,
-				TriggerPayload: nil,
+				TriggerPayload: sql.NullString{},
 				PlannedAt:      plannedTS,
 			})
 			if err != nil {
@@ -377,8 +377,8 @@ func TestDispatchAutopilotForPlanRecoversPartialRun(t *testing.T) {
 			// The partial row must now be FAILED with planned_at
 			// cleared, so the new row's planned_at is unique.
 			var partialStatus string
-			var partialPlannedAt pgtype.Timestamptz
-			var partialFailureReason pgtype.Text
+			var partialPlannedAt sql.NullString
+			var partialFailureReason sql.NullString
 			if err := testPool.QueryRow(ctx,
 				`SELECT status, planned_at, failure_reason FROM autopilot_run WHERE id = $1`,
 				partial.ID,
@@ -401,9 +401,9 @@ func TestDispatchAutopilotForPlanRecoversPartialRun(t *testing.T) {
 			if !fresh.PlannedAt.Valid {
 				t.Fatalf("fresh run planned_at must be set")
 			}
-			if !fresh.PlannedAt.Time.Equal(plannedAt) {
+			if !util.ParseTime(fresh.PlannedAt.String).Equal(plannedAt) {
 				t.Fatalf("fresh run planned_at mismatch: got %s want %s",
-					fresh.PlannedAt.Time.Format(time.RFC3339Nano),
+					util.ParseTime(fresh.PlannedAt.String).Format(time.RFC3339Nano),
 					plannedAt.Format(time.RFC3339Nano))
 			}
 			switch mode {

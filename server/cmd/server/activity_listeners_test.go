@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -21,7 +22,7 @@ import (
 func listActivitiesForIssue(t *testing.T, queries *db.Queries, issueID string) []db.ActivityLog {
 	t.Helper()
 	activities, err := queries.ListActivitiesForIssue(context.Background(), db.ListActivitiesForIssueParams{
-		IssueID: util.MustParseUUID(issueID),
+		IssueID: sql.NullString{String: util.MustParseUUID(issueID), Valid: true},
 		Limit:   100,
 	})
 	if err != nil {
@@ -174,7 +175,7 @@ func TestActivityIssueUpdated_StatusChanged(t *testing.T) {
 	}
 
 	var details map[string]string
-	if err := json.Unmarshal(activities[0].Details, &details); err != nil {
+	if err := json.Unmarshal([]byte(activities[0].Details), &details); err != nil {
 		t.Fatalf("failed to unmarshal details: %v", err)
 	}
 	if details["from"] != "todo" {
@@ -233,7 +234,7 @@ func TestActivityIssueUpdated_AssigneeChanged(t *testing.T) {
 	}
 
 	var details map[string]string
-	if err := json.Unmarshal(activities[0].Details, &details); err != nil {
+	if err := json.Unmarshal([]byte(activities[0].Details), &details); err != nil {
 		t.Fatalf("failed to unmarshal details: %v", err)
 	}
 	if details["to_type"] != "member" {
@@ -293,7 +294,7 @@ func TestActivityIssueUpdated_WorkflowHandoff(t *testing.T) {
 		t.Fatalf("expected one status_changed activity, got %+v", activities)
 	}
 	var details map[string]string
-	if err := json.Unmarshal(activities[0].Details, &details); err != nil {
+	if err := json.Unmarshal([]byte(activities[0].Details), &details); err != nil {
 		t.Fatalf("failed to unmarshal details: %v", err)
 	}
 	for key, want := range map[string]string{
@@ -385,7 +386,7 @@ func TestActivityIssueUpdated_TitleChanged(t *testing.T) {
 	}
 
 	var details map[string]string
-	if err := json.Unmarshal(activities[0].Details, &details); err != nil {
+	if err := json.Unmarshal([]byte(activities[0].Details), &details); err != nil {
 		t.Fatalf("failed to unmarshal details: %v", err)
 	}
 	if details["from"] != "activity test issue" {
@@ -516,7 +517,7 @@ func activityDetails(t *testing.T, queries *db.Queries, issueID, action string) 
 		t.Fatalf("expected exactly 1 %q activity on %s, got %d", action, issueID, len(found))
 	}
 	var details map[string]string
-	if err := json.Unmarshal(found[0].Details, &details); err != nil {
+	if err := json.Unmarshal([]byte(found[0].Details), &details); err != nil {
 		t.Fatalf("failed to unmarshal details: %v", err)
 	}
 	return details
@@ -542,7 +543,7 @@ func testIssueIdentifier(t *testing.T, queries *db.Queries, issueID string) stri
 	if err != nil {
 		t.Fatalf("GetWorkspace: %v", err)
 	}
-	return service.IssueIdentifier(ws.IssuePrefix, issue.Number)
+	return service.IssueIdentifier(ws.IssuePrefix, int32(issue.Number))
 }
 
 func newDuplicateTestIssues(t *testing.T, queries *db.Queries) (bus *events.Bus, duplicateID, originalID string) {

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -15,7 +14,7 @@ import (
 
 // pickFixtureAgent grabs the first agent in the workspace fixture. The
 // integration TestMain seeds exactly one agent, so this is deterministic.
-func pickFixtureAgent(t *testing.T) pgtype.UUID {
+func pickFixtureAgent(t *testing.T) string {
 	t.Helper()
 	var agentID string
 	if err := testPool.QueryRow(context.Background(),
@@ -29,7 +28,7 @@ func pickFixtureAgent(t *testing.T) pgtype.UUID {
 
 // seedAutopilot creates an autopilot owned by the given creator (member or
 // agent UUID + type) and registers cleanup. Status defaults to "active".
-func seedAutopilot(t *testing.T, queries *db.Queries, title, creatorType string, creatorID pgtype.UUID, agentID pgtype.UUID) db.Autopilot {
+func seedAutopilot(t *testing.T, queries *db.Queries, title, creatorType string, creatorID string, agentID string) db.Autopilot {
 	t.Helper()
 	ctx := context.Background()
 	ap, err := queries.CreateAutopilot(ctx, db.CreateAutopilotParams{
@@ -59,7 +58,7 @@ func seedAutopilot(t *testing.T, queries *db.Queries, title, creatorType string,
 // `failed` of which have status='failed' and the rest 'completed'. All runs
 // are timestamped at `runAt` so they fall inside or outside a chosen lookback
 // window deterministically.
-func seedAutopilotRuns(t *testing.T, autopilotID pgtype.UUID, total, failed int, runAt time.Time) {
+func seedAutopilotRuns(t *testing.T, autopilotID string, total, failed int, runAt time.Time) {
 	t.Helper()
 	ctx := context.Background()
 	for i := 0; i < total; i++ {
@@ -76,7 +75,7 @@ func seedAutopilotRuns(t *testing.T, autopilotID pgtype.UUID, total, failed int,
 	}
 }
 
-func reloadAutopilotStatus(t *testing.T, queries *db.Queries, id pgtype.UUID) string {
+func reloadAutopilotStatus(t *testing.T, queries *db.Queries, id string) string {
 	t.Helper()
 	ap, err := queries.GetAutopilot(context.Background(), id)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -15,7 +16,7 @@ const dingtalkRouteMigrationTestSchema = "dingtalk_route_migration_test"
 
 func TestDingTalkGroupRouteMigrationsUpDownAndCatalog(t *testing.T) {
 	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
+	if !strings.HasPrefix(dbURL, "postgres") {
 		t.Skip("integration test requires Postgres at DATABASE_URL")
 	}
 

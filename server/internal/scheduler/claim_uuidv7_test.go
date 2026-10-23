@@ -39,12 +39,13 @@ func TestClaimIDIsUUIDv7(t *testing.T) {
 	}
 
 	// The value the row holds, not just the value RETURNING echoed back.
-	var stored uuid.UUID
-	if err := pool.QueryRow(ctx,
+	var storedStr string
+	if err := pool.QueryRowContext(ctx,
 		`SELECT id FROM sys_cron_executions WHERE job_name = $1 AND plan_time = $2`,
-		job.Name, planTime).Scan(&stored); err != nil {
+		job.Name, formatDBTime(planTime)).Scan(&storedStr); err != nil {
 		t.Fatalf("read back execution row: %v", err)
 	}
+	stored, _ := uuid.Parse(storedStr)
 	if stored != c.ID {
 		t.Errorf("stored id %s != claimed id %s", stored, c.ID)
 	}

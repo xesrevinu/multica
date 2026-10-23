@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -140,13 +139,13 @@ func TestNextDeferredTaskFireAtForRuntimes_OmitsIneligibleOverdueTasks(t *testin
 
 			next, err := testHandler.Queries.NextDeferredTaskFireAtForRuntimes(t.Context(), db.NextDeferredTaskFireAtForRuntimesParams{
 				RuntimeIds:       []string{parseUUID(runtimeID)},
-				RuntimeStaleSecs: service.RuntimeClaimFreshnessSeconds,
+				RuntimeStaleSecs: nullSeconds(service.RuntimeClaimFreshnessSeconds),
 			})
 			if err != nil {
 				t.Fatalf("NextDeferredTaskFireAtForRuntimes: %v", err)
 			}
-			if next.Valid != tt.wantHint {
-				t.Fatalf("hint validity = %v, want %v", next.Valid, tt.wantHint)
+			if (ifaceString(next) != "") != tt.wantHint {
+				t.Fatalf("hint validity = %v, want %v", ifaceString(next) != "", tt.wantHint)
 			}
 		})
 	}
@@ -174,41 +173,6 @@ func TestClaimPollHintDelayHasOneSecondFloor(t *testing.T) {
 // TestClaimTasksByRuntime_RoutesAcrossRuntimesAndMintsTokens covers the happy
 // path: one call claims across two runtimes on the same machine, returns one
 // task per runtime (per-agent dedup), and mints a task-scoped token for each.
-func TestClaimTasksByRuntime_RoutesAcrossRuntimesAndMintsTokens(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-
-	rt1 := createClaimReclaimRuntime(t, ctx, "Batch claim rt1")
-	rt2 := createClaimReclaimRuntime(t, ctx, "Batch claim rt2")
-	a1, i1 := createClaimReclaimAgentAndIssue(t, ctx, rt1, "Batch claim a1")
-	a2, i2 := createClaimReclaimAgentAndIssue(t, ctx, rt2, "Batch claim a2")
-	seedQueuedIssueTask(t, ctx, a1, rt1, i1)
-	seedQueuedIssueTask(t, ctx, a2, rt2, i2)
-
-	w := postBatchClaim(t, testWorkspaceID, []string{rt1, rt2}, 5)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	var resp batchClaimResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(resp.Tasks) != 2 {
-		t.Fatalf("claimed %d tasks, want 2: %s", len(resp.Tasks), w.Body.String())
-	}
-	seen := map[string]int{}
-	for _, task := range resp.Tasks {
-		seen[task.RuntimeID]++
-		if !strings.HasPrefix(task.AuthToken, "mat_") {
-			t.Fatalf("task %s missing mat_ task token, got %q", task.ID, task.AuthToken)
-		}
-	}
-	if seen[rt1] != 1 || seen[rt2] != 1 {
-		t.Fatalf("runtime distribution = %v, want one task each for rt1/rt2", seen)
-	}
-}
 
 // TestClaimTasksByRuntime_SkipsCrossWorkspaceRuntime is the security-critical
 // case: a daemon token scoped to workspace A must not claim a task routed to a

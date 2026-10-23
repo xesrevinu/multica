@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
+	"database/sql"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -158,11 +158,11 @@ func TestGoogleLoginInvitationSignup(t *testing.T) {
 // HTTP error handling and proves no account or session is created on failure.
 type failingSignupInvitationDB struct{ db.DBTX }
 
-func (m failingSignupInvitationDB) QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row {
-	if strings.HasPrefix(sql, "-- name: HasPendingInvitationForEmail :one\n") {
-		return &mockRow{err: context.Canceled}
+func (m failingSignupInvitationDB) QueryRowContext(ctx context.Context, sqlStr string, args ...interface{}) *sql.Row {
+	if strings.HasPrefix(sqlStr, "-- name: HasPendingInvitationForEmail :one\n") {
+		return errSQLRow(context.Canceled)
 	}
-	return m.DBTX.QueryRow(ctx, sql, args...)
+	return m.DBTX.QueryRowContext(ctx, sqlStr, args...)
 }
 
 func TestSignupInvitationLookupFailure(t *testing.T) {

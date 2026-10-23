@@ -2,17 +2,13 @@ package engine
 
 import (
 	"context"
+	"database/sql"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/service"
@@ -61,7 +57,7 @@ func TestRouter_RealServiceLookupFailure_ReleasesInsteadOfDenying(t *testing.T) 
 			// The real policy, reached through the real service, with one
 			// query failing the way an unreachable database fails it.
 			h.router = NewRouter(h.issues,
-				&service.TaskService{Queries: db.New(failQuery{inner: pool, match: tc.sql})},
+				&service.TaskService{Queries: db.New(failQuery{inner: pool.DB, match: tc.sql})},
 				h.reader, RouterConfig{Logger: discardLogger(), Lifecycle: h.lifecycle})
 			// A fresh Router holds no resolver sets, and Handle answers that
 			// with an error too — which would look exactly like the failure
@@ -113,34 +109,37 @@ type failQuery struct {
 
 var errInjected = errors.New("injected: database unreachable")
 
-func (f failQuery) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	if strings.Contains(sql, f.match) {
-		return pgconn.CommandTag{}, errInjected
-	}
-	return f.inner.Exec(ctx, sql, args...)
-}
-
-func (f failQuery) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
-	if strings.Contains(sql, f.match) {
+func (f failQuery) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	if strings.Contains(query, f.match) {
 		return nil, errInjected
 	}
-	return f.inner.Query(ctx, sql, args...)
+	return f.inner.ExecContext(ctx, query, args...)
 }
 
-func (f failQuery) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	if strings.Contains(sql, f.match) {
-		return errRow{}
+func (f failQuery) PrepareContext(ctx context.Context, query string) (*sql.Stmt, error) {
+	if strings.Contains(query, f.match) {
+		return nil, errInjected
 	}
-	return f.inner.QueryRow(ctx, sql, args...)
+	return f.inner.PrepareContext(ctx, query)
 }
 
-type errRow struct{}
+func (f failQuery) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	if strings.Contains(query, f.match) {
+		return nil, errInjected
+	}
+	return f.inner.QueryContext(ctx, query, args...)
+}
 
-func (errRow) Scan(...any) error { return errInjected }
+func (f failQuery) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	if strings.Contains(query, f.match) {
+		return f.inner.QueryRowContext(ctx, "SELECT * FROM __nonexistent_injected_failure_table__")
+	}
+	return f.inner.QueryRowContext(ctx, query, args...)
+}
 
 // seedPublicToAgent builds the one shape where the two swallowed queries are
 // reached at all: a public_to agent the sender does not own.
-func seedPublicToAgent(t *testing.T, pool *pgxpool.Pool) (agentID, senderID pgtype.UUID) {
+func seedPublicToAgent(t *testing.T, pool *dbfx.Pool) (agentID, senderID string) {
 	t.Helper()
 	tag := strings.ReplaceAll(uuid.NewString(), "-", "")[:10]
 	f := dbfx.New(pool, "", "")
@@ -151,21 +150,7 @@ func seedPublicToAgent(t *testing.T, pool *pgxpool.Pool) (agentID, senderID pgty
 	return uuidFromString(t, agent), uuidFromString(t, sender)
 }
 
-func invokeGateTestDB(t *testing.T) *pgxpool.Pool {
+func invokeGateTestDB(t *testing.T) *dbfx.Pool {
 	t.Helper()
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
-	}
-	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Skipf("no database: %v", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		t.Skipf("database not reachable: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	return pool
+	return dbfx.SetupTestDB(t)
 }

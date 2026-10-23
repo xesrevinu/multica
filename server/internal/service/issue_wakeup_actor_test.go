@@ -155,7 +155,7 @@ func TestIssueWakeupActorFilterSurvivesEnableAndExplicitReplacement(t *testing.T
 func TestIssueWakeupLegacyMutationAgentFilterNormalizes(t *testing.T) {
 	f, s, issue, agent := wakeFixture(t)
 	w := wakeCreate(t, f, s, issue, WakeupInput{AgentID: agent, Kind: "event", EventTypes: []string{"comment.created"}, FilterAgentID: agent, Instruction: "wait"})
-	if w.FilterAgentID.Valid || w.FilterActorType.String != "agent" || w.FilterActorID != parseTestUUID(t, agent) {
+	if w.FilterAgentID.Valid || w.FilterActorType.String != "agent" || w.FilterActorID.String != parseTestUUID(t, agent) {
 		t.Fatalf("legacy alias not normalized: %+v", w)
 	}
 	f.Comment(t, util.UUIDToString(issue), "human")

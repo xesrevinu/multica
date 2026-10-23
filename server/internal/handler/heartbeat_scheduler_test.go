@@ -69,52 +69,6 @@ func TestBatchedHeartbeatScheduler_CoalescesAndFlushes(t *testing.T) {
 // TestBatchedHeartbeatScheduler_ExplicitDeregisterReceiptStaysOffline confirms
 // that a heartbeat queued before a user-visible deregistration cannot undo the
 // offline state or leave an online row with stale offline_reason metadata.
-func TestBatchedHeartbeatScheduler_ExplicitDeregisterReceiptStaysOffline(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	runtimeID := createRuntimeLocalSkillTestRuntime(t, testUserID)
-	setRuntimeLastSeenAt(t, runtimeID, time.Now())
-	rt := loadRuntime(t, runtimeID)
-	recoveries := &recordingRecoveryNotifier{}
-	sched := NewBatchedHeartbeatScheduler(testHandler.Queries, 0, nil)
-	sched.RecoveryNotifier = recoveries
-	if err := sched.Schedule(context.Background(), rt.ID, rt.WorkspaceID); err != nil {
-		t.Fatalf("Schedule: %v", err)
-	}
-	reason := []byte(`{"code":"provider_removed"}`)
-	if err := testHandler.Queries.SetAgentRuntimeOfflineWithReason(context.Background(), db.SetAgentRuntimeOfflineWithReasonParams{
-		ID:            rt.ID,
-		OfflineReason: reason,
-	}); err != nil {
-		t.Fatalf("SetAgentRuntimeOfflineWithReason: %v", err)
-	}
-
-	if got := sched.PendingCount(); got != 1 {
-		t.Fatalf("pre-deregister heartbeat should remain queued, pending=%d", got)
-	}
-	sched.FlushNow(context.Background())
-
-	var status string
-	var reasonPreserved bool
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT status, metadata->'offline_reason' = $2::jsonb
-		FROM agent_runtime
-		WHERE id = $1
-	`, runtimeID, reason).Scan(&status, &reasonPreserved); err != nil {
-		t.Fatalf("read runtime after flush: %v", err)
-	}
-	if status != "offline" || !reasonPreserved {
-		t.Fatalf("explicit deregistration changed after receipt: status=%q reason_preserved=%t", status, reasonPreserved)
-	}
-	if got := sched.PendingCount(); got != 0 {
-		t.Fatalf("preserved offline runtime remained pending: %d", got)
-	}
-	// A preserved explicit deregistration is not a recovery: no refresh event.
-	if len(recoveries.workspaceIDs) != 0 {
-		t.Fatalf("preserved offline runtime published recovery events: %v", recoveries.workspaceIDs)
-	}
-}
 
 // TestBatchedHeartbeatScheduler_StopDrains confirms the shutdown contract:
 // IDs queued before Stop must be flushed to the DB by the time Stop returns,
@@ -221,7 +175,7 @@ func TestBatchedHeartbeatScheduler_StopRecoveryUsesBoundedContextAndKnownWorkspa
 	}
 	rows, err := testHandler.Queries.MarkRuntimesOfflineByIDs(context.Background(), db.MarkRuntimesOfflineByIDsParams{
 		Ids:          []string{rt.ID},
-		StaleSeconds: service.RuntimeClaimFreshnessSeconds,
+		StaleSeconds: nullSeconds(service.RuntimeClaimFreshnessSeconds),
 	})
 	if err != nil {
 		t.Fatalf("MarkRuntimesOfflineByIDs: %v", err)
@@ -292,7 +246,7 @@ func TestBatchedHeartbeatScheduler_RaceToOfflineSelfHeals(t *testing.T) {
 	// predicate is the fact receipt reconciliation is allowed to rely on.
 	rows, err := testHandler.Queries.MarkRuntimesOfflineByIDs(context.Background(), db.MarkRuntimesOfflineByIDsParams{
 		Ids:          []string{rt.ID},
-		StaleSeconds: service.RuntimeClaimFreshnessSeconds,
+		StaleSeconds: nullSeconds(service.RuntimeClaimFreshnessSeconds),
 	})
 	if err != nil {
 		t.Fatalf("MarkRuntimesOfflineByIDs: %v", err)

@@ -379,11 +379,11 @@ INSERT INTO agent_task_queue (
     coalesced_comment_ids, trigger_summary, force_fresh_session, is_leader_task, handoff_note,
     squad_id, context, originator_user_id, accountable_user_id, runtime_mcp_overlay, runtime_connected_apps,
     originator_source, delegated_from_task_id, rule_version_id, rerun_of_task_id, trigger_evidence_kind, trigger_evidence_ref_id,
-    workflow_step, id
+    workflow_step, comment_thread_id, id
 )
 SELECT
     ?1 AS agent_id, ?2 AS runtime_id, ?3 AS issue_id, 'queued' AS status, ?4 AS priority, ?5 AS trigger_comment_id,
-    COALESCE(?6, '{}') AS coalesced_comment_ids,
+    COALESCE(?6, '[]') AS coalesced_comment_ids,
     ?7 AS trigger_summary,
     COALESCE(?8, FALSE) AS force_fresh_session,
     COALESCE(?9, FALSE) AS is_leader_task,
@@ -411,6 +411,7 @@ SELECT
         (SELECT s.workflow_step FROM agent_task_queue s WHERE s.id = ?19 AND s.issue_id = ?3),
         (SELECT i.status FROM issue i WHERE i.id = ?3)
     ) AS workflow_step,
+    COALESCE(NULLIF(json_extract(?13, '$.wakeup_id'), ''), CASE WHEN ?5 IS NULL THEN NULL ELSE COALESCE((WITH RECURSIVE ancestors(id, parent_id, issue_id, depth) AS (SELECT c.id, c.parent_id, c.issue_id, 1 FROM comment c WHERE c.id = ?5 UNION ALL SELECT p.id, p.parent_id, p.issue_id, a.depth + 1 FROM ancestors a JOIN comment p ON p.id = a.parent_id AND p.issue_id = a.issue_id WHERE a.depth < 32) SELECT id FROM ancestors ORDER BY depth DESC LIMIT 1), ?5) END) AS comment_thread_id,
     COALESCE(?24, gen_random_uuid()) AS id
 WHERE (?1 IS NULL OR EXISTS (SELECT 1 FROM agent WHERE id = ?1)) AND (?3 IS NULL OR EXISTS (SELECT 1 FROM issue WHERE id = ?3)) AND (?2 IS NULL OR EXISTS (SELECT 1 FROM agent_runtime WHERE id = ?2))
 RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for, branch_name, durable_work_dir, channel_context_revision, comment_thread_id, cancelled_by_type, cancelled_by_id, cancelled_by_name, issue_snapshot, workflow_step

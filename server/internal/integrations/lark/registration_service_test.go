@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
+	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/events"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -97,7 +97,7 @@ func TestBotNamePreset(t *testing.T) {
 
 // plantSession registers a pending session and returns the in-memory
 // handle the polling goroutine would have held.
-func plantSession(t *testing.T, s *RegistrationService, id string, ws pgtype.UUID, expiresAt time.Time) *registrationSession {
+func plantSession(t *testing.T, s *RegistrationService, id string, ws string, expiresAt time.Time) *registrationSession {
 	t.Helper()
 	if err := s.sessionStore.Create(context.Background(), InstallSessionState{
 		ID:          id,
@@ -358,7 +358,7 @@ func (f *fakeInstallerBinder) BindInstallerTx(_ context.Context, _ *ChannelStore
 // actually called.
 type fakeTxStarter struct{}
 
-func (fakeTxStarter) Begin(_ context.Context) (pgx.Tx, error) {
+func (fakeTxStarter) Begin(_ context.Context) (*sql.Tx, error) {
 	return nil, errors.New("fakeTxStarter Begin not implemented")
 }
 
@@ -376,13 +376,13 @@ func newRegistrationServiceForTest(t *testing.T) *RegistrationService {
 	}
 }
 
-func uuidFromStringSvc(t *testing.T, s string) pgtype.UUID {
+func uuidFromStringSvc(t *testing.T, s string) string {
 	t.Helper()
-	var u pgtype.UUID
-	if err := u.Scan(s); err != nil {
+	u, err := uuid.Parse(s)
+	if err != nil {
 		t.Fatalf("scan uuid: %v", err)
 	}
-	return u
+	return u.String()
 }
 
 type fakeClockSvc struct {

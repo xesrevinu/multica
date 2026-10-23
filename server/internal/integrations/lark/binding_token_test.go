@@ -6,8 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
-
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -58,7 +56,7 @@ func TestRandomTokenURLSafe(t *testing.T) {
 // documented above depends on that transaction existing.
 func TestRedeemAndBindRequiresTxStarter(t *testing.T) {
 	svc := &BindingTokenService{}
-	_, err := svc.RedeemAndBind(context.Background(), "tok", pgtype.UUID{})
+	_, err := svc.RedeemAndBind(context.Background(), "tok", "")
 	if err == nil {
 		t.Fatal("expected error when TxStarter is nil, got nil")
 	}
@@ -106,14 +104,16 @@ func TestBindingTokenMintClampsAppClockSkew(t *testing.T) {
 		t.Fatalf("Mint with app clock ahead of database: %v", err)
 	}
 
-	var storedExpiresAt, createdAt time.Time
+	var storedExpiresStr, createdStr string
 	if err := pool.QueryRow(ctx, `
 		SELECT expires_at, created_at
 		FROM channel_binding_token
 		WHERE installation_id = $1
-	`, installationID).Scan(&storedExpiresAt, &createdAt); err != nil {
+	`, installationID).Scan(&storedExpiresStr, &createdStr); err != nil {
 		t.Fatalf("read minted token: %v", err)
 	}
+	storedExpiresAt, _ := time.Parse(time.RFC3339Nano, storedExpiresStr)
+	createdAt, _ := time.Parse(time.RFC3339Nano, createdStr)
 	if storedExpiresAt.After(createdAt.Add(BindingTokenTTL)) {
 		t.Fatalf("stored TTL exceeds cap: created=%s expires=%s", createdAt, storedExpiresAt)
 	}

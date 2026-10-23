@@ -17,15 +17,23 @@ type DBTX interface {
 }
 
 func New(db DBTX) *Queries {
-	return &Queries{db: db}
+	return &Queries{db: wrapDBTX(db)}
 }
 
 type Queries struct {
 	db DBTX
 }
 
-func (q *Queries) WithTx(tx *sql.Tx) *Queries {
+func (q *Queries) WithTx(tx DBTX) *Queries {
+	if s, ok := q.db.(sqliteDBTX); ok {
+		if w, ok := s.inner.(TxWrapper); ok {
+			return &Queries{db: wrapDBTX(w.WrapTx(tx))}
+		}
+	}
+	if w, ok := q.db.(TxWrapper); ok {
+		return &Queries{db: wrapDBTX(w.WrapTx(tx))}
+	}
 	return &Queries{
-		db: tx,
+		db: wrapDBTX(tx),
 	}
 }

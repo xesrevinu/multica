@@ -369,9 +369,11 @@ func (s *Service) prSnapshot(ctx context.Context, sp *Spec, num string, maxAge t
 		return nil
 	}
 	p := &prSnap{}
-	err := s.opt.Pool.QueryRowContext(ctx, `SELECT COALESCE(snapshot_head_sha, head_sha, ''), COALESCE(checks_rollup_state,''), COALESCE(api_mergeable::text, mergeable_state, ''), snapshot_fetched_at
-		FROM github_pull_request WHERE lower(repo_owner)=lower($1) AND lower(repo_name)=lower($2) AND pr_number::text=$3 AND snapshot_fetched_at > now() - make_interval(secs => $4)`,
-		parts[0], parts[1], num, maxAge.Seconds()).Scan(&p.headSHA, &p.rollup, &p.mergeable, &p.fetched)
+	cutoff := time.Now().UTC().Add(-maxAge).Format(time.RFC3339Nano)
+	err := s.opt.Pool.QueryRowContext(ctx, `SELECT COALESCE(snapshot_head_sha, head_sha, ''), COALESCE(checks_rollup_state,''),
+		COALESCE(CASE WHEN api_mergeable = 1 THEN 'true' WHEN api_mergeable = 0 THEN 'false' ELSE NULL END, mergeable_state, ''), snapshot_fetched_at
+		FROM github_pull_request WHERE lower(repo_owner)=lower($1) AND lower(repo_name)=lower($2) AND CAST(pr_number AS TEXT)=$3 AND snapshot_fetched_at > $4`,
+		parts[0], parts[1], num, cutoff).Scan(&p.headSHA, &p.rollup, &p.mergeable, sqlTime{&p.fetched})
 	if err != nil {
 		return nil
 	}

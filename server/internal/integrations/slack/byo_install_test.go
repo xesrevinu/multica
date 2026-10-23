@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
-
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -71,12 +69,8 @@ func byoParams(ws, agent string) RegisterBYOParams {
 
 // pgtypeUUID is a test-local UUID parse that panics on bad input (test data is
 // always valid), so byoParams stays a plain literal.
-func pgtypeUUID(s string) pgtype.UUID {
-	var u pgtype.UUID
-	if err := u.Scan(s); err != nil {
-		panic(err)
-	}
-	return u
+func pgtypeUUID(s string) string {
+	return s
 }
 
 func TestParseSlackAppID(t *testing.T) {
@@ -129,7 +123,7 @@ func TestRegisterBYO_PersistsEncryptedTokensKeyedByAppID(t *testing.T) {
 	}
 
 	var cfg installConfig
-	if err := json.Unmarshal(q.upsertParams.Config, &cfg); err != nil {
+	if err := json.Unmarshal([]byte(q.upsertParams.Config), &cfg); err != nil {
 		t.Fatalf("decode upserted config: %v", err)
 	}
 	// Keyed by the REAL app id (parsed from the xapp token), NOT the team id —

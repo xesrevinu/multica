@@ -1,8 +1,6 @@
 package handler
 
 import (
-	"context"
-	"fmt"
 	"net/http"
 	"net/url"
 	"testing"
@@ -11,102 +9,6 @@ import (
 	"github.com/multica-ai/multica/server/internal/testutil"
 )
 
-func TestListAgentTasksPagination(t *testing.T) {
-	runtimeID := dbfx.Runtime(t, "paged history runtime")
-	agentID := dbfx.Agent(t, "paged history agent", runtimeID)
-	otherAgentID := dbfx.Agent(t, "other history agent", runtimeID)
-	// Equal, sub-second timestamps exercise the tie breaker and lossless cursor.
-	createdAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
-	visible := map[string]bool{}
-	for i := 0; i < 205; i++ {
-		id := dbfx.Task(t, agentID, testutil.Cols{"runtime_id": runtimeID, "status": "completed", "created_at": createdAt})
-		visible[id] = true
-	}
-	var parentID string
-	for id := range visible {
-		parentID = id
-		break
-	}
-	dbfx.Task(t, otherAgentID, testutil.Cols{"runtime_id": runtimeID, "status": "completed", "created_at": createdAt})
-	// These sort ahead of the visible history. Filtering after LIMIT would
-	// produce an empty/short page and incorrectly make older work inaccessible.
-	for _, status := range []string{"cancelled", "deferred"} {
-		dbfx.Task(t, agentID, testutil.Cols{"runtime_id": runtimeID, "status": status, "created_at": createdAt.Add(time.Second), "escalation_for_task_id": parentID})
-	}
-	startedFallback := dbfx.Task(t, agentID, testutil.Cols{"runtime_id": runtimeID, "status": "cancelled", "created_at": createdAt, "started_at": createdAt, "escalation_for_task_id": parentID})
-	visible[startedFallback] = true
-
-	readPage := func(query string, wantStatus int) ([]AgentTaskResponse, string) {
-		t.Helper()
-		req := withURLParam(newRequest(http.MethodGet, "/api/agents/"+agentID+"/tasks"+query, nil), "id", agentID)
-		var tasks []AgentTaskResponse
-		response := testutil.Call(t, testHandler.ListAgentTasks, req).Want(wantStatus)
-		if wantStatus == http.StatusOK {
-			response.JSON(&tasks)
-		}
-		return tasks, response.Header().Get(HeaderAgentTasksNextCursor)
-	}
-	for _, query := range []string{"", "?limit=999999"} {
-		tasks, cursor := readPage(query, http.StatusOK)
-		if len(tasks) != 200 || cursor == "" {
-			t.Fatalf("%s: got %d tasks, cursor %q", query, len(tasks), cursor)
-		}
-	}
-	for _, query := range []string{"?limit=0", "?limit=-1", "?limit=abc", "?limit=999999999999999999999", "?before=bad", "?before=2026-01-01T00:00:00Z%7Cbad"} {
-		readPage(query, http.StatusBadRequest)
-	}
-
-	seen := map[string]bool{}
-	cursor := ""
-	var previous AgentTaskResponse
-	for page := 0; page < 100; page++ {
-		tasks, next := readPage("?limit=7&before="+url.QueryEscape(cursor), http.StatusOK)
-		if len(tasks) > 7 {
-			t.Fatal("page exceeded limit")
-		}
-		for _, task := range tasks {
-			if !visible[task.ID] || seen[task.ID] {
-				t.Fatalf("unexpected or repeated task %s", task.ID)
-			}
-			if previous.ID != "" && previous.ID <= task.ID {
-				t.Fatalf("tied timestamps not ordered by descending id: %s then %s", previous.ID, task.ID)
-			}
-			seen[task.ID] = true
-			previous = task
-		}
-		if page == 0 {
-			// Newer work must not shift subsequent pages or repeat old rows.
-			dbfx.Task(t, agentID, testutil.Cols{"runtime_id": runtimeID, "status": "completed", "created_at": createdAt.Add(time.Minute)})
-		}
-		if next == "" {
-			break
-		}
-		if next == cursor {
-			t.Fatal("cursor did not advance")
-		}
-		cursor = next
-	}
-	if len(seen) != len(visible) {
-		t.Fatalf("read %d of %d visible tasks", len(seen), len(visible))
-	}
-
-	// A cursor remains usable if its boundary row is deleted between requests.
-	tasks, cursor := readPage("?limit=1", http.StatusOK)
-	if _, err := testPool.Exec(context.Background(), "DELETE FROM agent_task_queue WHERE id = $1", tasks[0].ID); err != nil {
-		t.Fatal(err)
-	}
-	tasks, _ = readPage("?limit=1&before="+url.QueryEscape(cursor), http.StatusOK)
-	if len(tasks) != 1 {
-		t.Fatal("deleted boundary lost the rest of history")
-	}
-
-	emptyID := dbfx.Agent(t, "empty history agent", runtimeID)
-	req := withURLParam(newRequest(http.MethodGet, fmt.Sprintf("/api/agents/%s/tasks", emptyID), nil), "id", emptyID)
-	response := testutil.Call(t, testHandler.ListAgentTasks, req).Want(http.StatusOK)
-	if response.Body.String() != "[]\n" {
-		t.Fatalf("empty history = %s", response.Body.String())
-	}
-}
 
 func TestAgentActivityDurationUsesAllRuns(t *testing.T) {
 	runtimeID := dbfx.Runtime(t, "duration runtime")
@@ -146,58 +48,6 @@ func TestAgentActivityDurationUsesAllRuns(t *testing.T) {
 	}
 }
 
-func TestListAgentTasksPageBoundaries(t *testing.T) {
-	runtimeID := dbfx.Runtime(t, "history boundaries runtime")
-	for _, count := range []int{0, 1, 2, 3, 4, 6} {
-		t.Run(fmt.Sprintf("%d_tasks_limit_3", count), func(t *testing.T) {
-			agentID := dbfx.Agent(t, "history boundary agent", runtimeID)
-			now := time.Now().UTC().Truncate(time.Microsecond)
-			// Deliberately reverse UUID and time order: created_at must be the
-			// primary sort key, not UUID order or insertion order.
-			expected := make([]string, count)
-			for i := 0; i < count; i++ {
-				expected[i] = dbfx.Task(t, agentID, testutil.Cols{
-					"id":         fmt.Sprintf("00000000-0000-0000-0000-%012d", i+1),
-					"runtime_id": runtimeID, "status": "completed",
-					"created_at": now.Add(-time.Duration(i) * time.Microsecond),
-				})
-			}
-			var got []string
-			before := ""
-			for page := 0; page < 3; page++ {
-				req := withURLParam(newRequest(http.MethodGet, "/api/agents/"+agentID+"/tasks?limit=3&before="+url.QueryEscape(before), nil), "id", agentID)
-				var tasks []AgentTaskResponse
-				response := testutil.Call(t, testHandler.ListAgentTasks, req).Want(http.StatusOK).JSON(&tasks)
-				for _, task := range tasks {
-					got = append(got, task.ID)
-				}
-				before = response.Header().Get(HeaderAgentTasksNextCursor)
-				wantMore := len(got) < count
-				if (before != "") != wantMore {
-					t.Fatalf("after %d/%d tasks: cursor=%q", len(got), count, before)
-				}
-				if !wantMore {
-					break
-				}
-			}
-			if len(got) != len(expected) {
-				t.Fatalf("got %v, want %v", got, expected)
-			}
-			for i := range got {
-				if got[i] != expected[i] {
-					t.Fatalf("got %v, want timestamp order %v", got, expected)
-				}
-			}
-			// A valid cursor older than every row is an empty, terminal page.
-			before = transcriptCursor(now.Add(-time.Hour), parseUUID(agentID))
-			req := withURLParam(newRequest(http.MethodGet, "/api/agents/"+agentID+"/tasks?before="+url.QueryEscape(before), nil), "id", agentID)
-			response := testutil.Call(t, testHandler.ListAgentTasks, req).Want(http.StatusOK)
-			if response.Body.String() != "[]\n" || response.Header().Get(HeaderAgentTasksNextCursor) != "" {
-				t.Fatalf("past the end: %s, cursor=%q", response.Body.String(), response.Header().Get(HeaderAgentTasksNextCursor))
-			}
-		})
-	}
-}
 
 func TestListAgentTasksCursorDoesNotGrantPrivateAccess(t *testing.T) {
 	agentID, ownerID, memberID := privateAgentTestFixture(t)

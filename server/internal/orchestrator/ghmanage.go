@@ -39,7 +39,7 @@ func (s *Service) hPRList(w http.ResponseWriter, r *http.Request) {
 	out := []linkedPR{}
 	for rows.Next() {
 		var p linkedPR
-		if err := rows.Scan(&p.Number, &p.Title, &p.State, &p.URL, &p.Branch, &p.Repo, &p.Author, &p.MergedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.Number, &p.Title, &p.State, &p.URL, &p.Branch, &p.Repo, &p.Author, sqlTimePtr{&p.MergedAt}, sqlTime{&p.UpdatedAt}); err != nil {
 			writeErr(w, 500, "db", err.Error())
 			return
 		}

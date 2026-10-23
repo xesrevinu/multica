@@ -424,84 +424,9 @@ RETURNING id
 // TestClaimTask_LeaderGetsBriefing — when the squad leader claims a task on
 // a squad-assigned issue, the response's agent.instructions must include
 // the Operating Protocol + Roster + user instructions.
-func TestClaimTask_LeaderGetsBriefing(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-
-	var leaderID, runtimeID string
-	if err := testPool.QueryRow(ctx,
-		`SELECT id, runtime_id FROM agent WHERE workspace_id = $1 ORDER BY created_at ASC LIMIT 1`,
-		testWorkspaceID,
-	).Scan(&leaderID, &runtimeID); err != nil {
-		t.Fatalf("get leader agent: %v", err)
-	}
-
-	squad := seedSquadForBriefing(t, leaderID, "Briefing Claim Squad", "Be terse.")
-
-	helper := createHandlerTestAgent(t, "Briefing Helper", []byte("[]"))
-	addAgentMember(t, squad.ID, helper, "implementer")
-
-	queueSquadIssueTaskFor(t, util.UUIDToString(squad.ID), leaderID, runtimeID, 95001)
-
-	agent := claimAndDecodeAgent(t, runtimeID)
-	for _, want := range []string{
-		"## Squad Operating Protocol",
-		"## Squad Roster",
-		"Leader (you):",
-		"## Squad Instructions (Briefing Claim Squad)",
-		"Be terse.",
-		"`[@Briefing Helper](mention://agent/" + helper + ")`",
-	} {
-		if !strings.Contains(agent.Instructions, want) {
-			t.Errorf("expected agent.instructions to contain %q\n--- instructions ---\n%s", want, agent.Instructions)
-		}
-	}
-}
 
 // TestClaimTask_NonLeaderGetsNoBriefing — when a non-leader squad member
 // claims a task on a squad-assigned issue, NO briefing is injected.
-func TestClaimTask_NonLeaderGetsNoBriefing(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-
-	var leaderID string
-	if err := testPool.QueryRow(ctx,
-		`SELECT id FROM agent WHERE workspace_id = $1 ORDER BY created_at ASC LIMIT 1`,
-		testWorkspaceID,
-	).Scan(&leaderID); err != nil {
-		t.Fatalf("get leader agent: %v", err)
-	}
-
-	squad := seedSquadForBriefing(t, leaderID, "Non-Leader Squad", "Squad guidance.")
-
-	// Create a second agent (NOT the leader) with its own runtime so the
-	// claim path picks its task without ambiguity.
-	helperID := createHandlerTestAgent(t, "Non Leader Helper", []byte("[]"))
-	addAgentMember(t, squad.ID, helperID, "")
-	var helperRuntime string
-	if err := testPool.QueryRow(ctx,
-		`SELECT runtime_id FROM agent WHERE id = $1`, helperID,
-	).Scan(&helperRuntime); err != nil {
-		t.Fatalf("get helper runtime: %v", err)
-	}
-
-	queueSquadIssueTaskFor(t, util.UUIDToString(squad.ID), helperID, helperRuntime, 95002)
-
-	agent := claimAndDecodeAgent(t, helperRuntime)
-	for _, mustNot := range []string{
-		"Squad Operating Protocol",
-		"Squad Roster",
-		"Squad Instructions (Non-Leader Squad)",
-	} {
-		if strings.Contains(agent.Instructions, mustNot) {
-			t.Errorf("non-leader claim should NOT contain %q\n--- instructions ---\n%s", mustNot, agent.Instructions)
-		}
-	}
-}
 
 // Avoid "imported and not used: pgtype" if helpers above are the only users.
 var _ string

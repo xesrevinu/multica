@@ -6,8 +6,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
+
+	"github.com/google/uuid"
 	"github.com/slack-go/slack"
 
 	"github.com/multica-ai/multica/server/internal/events"
@@ -16,11 +17,10 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
-func uid(b byte) pgtype.UUID {
-	var u pgtype.UUID
-	u.Bytes[0] = b
-	u.Valid = true
-	return u
+func uid(b byte) string {
+	var u uuid.UUID
+	u[0] = b
+	return u.String()
 }
 
 type fakeOutboundQueries struct {
@@ -38,15 +38,15 @@ type fakeOutboundQueries struct {
 	recordOutboundErr   error
 }
 
-func (f *fakeOutboundQueries) GetAgentTask(context.Context, pgtype.UUID) (db.AgentTaskQueue, error) {
+func (f *fakeOutboundQueries) GetAgentTask(context.Context, string) (db.AgentTaskQueue, error) {
 	return f.task, f.taskErr
 }
 
-func (f *fakeOutboundQueries) TaskHasChannelIngestedMessages(context.Context, pgtype.UUID) (bool, error) {
+func (f *fakeOutboundQueries) TaskHasChannelIngestedMessages(context.Context, sql.NullString) (bool, error) {
 	return f.taskChannelIngested, nil
 }
 
-func (f *fakeOutboundQueries) GetChannelTaskDelivery(context.Context, pgtype.UUID) (db.ChannelTaskDelivery, error) {
+func (f *fakeOutboundQueries) GetChannelTaskDelivery(context.Context, string) (db.ChannelTaskDelivery, error) {
 	if f.bindingErr != nil {
 		return db.ChannelTaskDelivery{}, f.bindingErr
 	}
@@ -93,13 +93,13 @@ func (f *fakeSender) SendWithMetadata(_ context.Context, out channel.OutboundMes
 
 // slackInstallConfigJSON builds an installation config blob with base64 tokens
 // (a nil Decrypter treats the decoded bytes as plaintext).
-func slackInstallConfigJSON() []byte {
+func slackInstallConfigJSON() string {
 	b, _ := json.Marshal(map[string]string{
 		"app_id":              "T1",
 		"bot_user_id":         "UBOT",
 		"bot_token_encrypted": base64.StdEncoding.EncodeToString([]byte("xoxb-test")),
 	})
-	return b
+	return string(b)
 }
 
 func newTestOutbound(q outboundQueries, fs *fakeSender) *Outbound {
@@ -122,11 +122,11 @@ func chatDoneEvent(sessionID string, content string) events.Event {
 
 func TestOutbound_SkipsDirectChatTaskOnBoundSlackSession(t *testing.T) {
 	q := &fakeOutboundQueries{
-		task: db.AgentTaskQueue{ChatInputTaskID: uid(2)},
+		task: db.AgentTaskQueue{ChatInputTaskID: sql.NullString{String: uid(2), Valid: true}},
 		binding: db.ChannelChatSessionBinding{
 			InstallationID: uid(1),
 			ChannelChatID:  "C123",
-			Config:         []byte(`{"channel_id":"C123"}`),
+			Config:         `{"channel_id":"C123"}`,
 		},
 		inst: db.ChannelInstallation{ID: uid(1), Status: "active", Config: slackInstallConfigJSON()},
 	}
@@ -144,12 +144,12 @@ func TestOutbound_SkipsDirectChatTaskOnBoundSlackSession(t *testing.T) {
 // Slack reply is silently dropped.
 func TestOutbound_PostsSealedChannelTaskReply(t *testing.T) {
 	q := &fakeOutboundQueries{
-		task:                db.AgentTaskQueue{ChatInputTaskID: uid(2)},
+		task:                db.AgentTaskQueue{ChatInputTaskID: sql.NullString{String: uid(2), Valid: true}},
 		taskChannelIngested: true,
 		binding: db.ChannelChatSessionBinding{
 			InstallationID: uid(1),
 			ChannelChatID:  "C123",
-			Config:         []byte(`{"channel_id":"C123"}`),
+			Config:         `{"channel_id":"C123"}`,
 		},
 		inst: db.ChannelInstallation{ID: uid(1), Status: "active", Config: slackInstallConfigJSON()},
 	}
@@ -160,13 +160,13 @@ func TestOutbound_PostsSealedChannelTaskReply(t *testing.T) {
 	if fs.called != 1 {
 		t.Fatalf("sender called %d times, want 1 for a sealed channel task", fs.called)
 	}
-	if len(q.gotProvenance.MessageIds) != 2 || q.gotProvenance.MessageIds[0] != "1.1" || q.gotProvenance.MessageIds[1] != "1.2" {
+	if q.gotProvenance.MessageIds.String != `["1.1","1.2"]` {
 		t.Fatalf("recorded message ids = %v, want [1.1 1.2]", q.gotProvenance.MessageIds)
 	}
 	if !q.gotProvenance.ChannelType.Valid || q.gotProvenance.ChannelType.String != "slack" {
 		t.Fatalf("recorded channel type = %+v, want slack", q.gotProvenance.ChannelType)
 	}
-	if q.gotProvenance.InstallationID != uid(1) || !q.gotProvenance.ChannelChatID.Valid || q.gotProvenance.ChannelChatID.String != "C123" {
+	if q.gotProvenance.InstallationID.String != uid(1) || !q.gotProvenance.ChannelChatID.Valid || q.gotProvenance.ChannelChatID.String != "C123" {
 		t.Fatalf("recorded target = installation:%+v chat:%+v", q.gotProvenance.InstallationID, q.gotProvenance.ChannelChatID)
 	}
 }
@@ -178,8 +178,8 @@ func TestOutbound_PostsReplyToBoundSlackChannel(t *testing.T) {
 		binding: db.ChannelChatSessionBinding{
 			InstallationID: uid(1),
 			ChannelChatID:  "C123:1111.0",
-			Config:         []byte(`{"channel_id":"C123"}`),
-			LastThreadID:   pgtype.Text{String: "1111.0", Valid: true},
+			Config:         `{"channel_id":"C123"}`,
+			LastThreadID:   sql.NullString{String: "1111.0", Valid: true},
 		},
 		inst: db.ChannelInstallation{ID: uid(1), Status: "active", Config: slackInstallConfigJSON()},
 	}
@@ -205,7 +205,7 @@ func TestOutbound_PostsReplyToBoundSlackChannel(t *testing.T) {
 func TestOutbound_IgnoresNonSlackAndEmptyAndRevoked(t *testing.T) {
 	const sid = "00000000-0000-0000-0000-000000000001"
 	activeInst := db.ChannelInstallation{ID: uid(1), Status: "active", Config: slackInstallConfigJSON()}
-	boundBinding := db.ChannelChatSessionBinding{InstallationID: uid(1), ChannelChatID: "C1", Config: []byte(`{"channel_id":"C1"}`)}
+	boundBinding := db.ChannelChatSessionBinding{InstallationID: uid(1), ChannelChatID: "C1", Config: `{"channel_id":"C1"}`}
 
 	cases := []struct {
 		name string
@@ -214,7 +214,7 @@ func TestOutbound_IgnoresNonSlackAndEmptyAndRevoked(t *testing.T) {
 	}{
 		{
 			name: "no slack binding (Feishu / web session)",
-			q:    &fakeOutboundQueries{bindingErr: pgx.ErrNoRows},
+			q:    &fakeOutboundQueries{bindingErr: sql.ErrNoRows},
 			evt:  chatDoneEvent(sid, "hi"),
 		},
 		{

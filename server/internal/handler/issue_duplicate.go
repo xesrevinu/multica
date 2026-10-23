@@ -90,7 +90,7 @@ func lockAndCheckDuplicateMark(ctx context.Context, q *db.Queries, workspaceID, 
 			continue
 		}
 		targetFound = true
-		if row.IsDuplicate != 0 {
+		if ifaceBool(row.IsDuplicate) {
 			return errDuplicateTargetIsDuplicate
 		}
 	}

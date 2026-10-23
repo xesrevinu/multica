@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
+	"database/sql"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
@@ -66,7 +66,7 @@ func TestResolveSenderReuse(t *testing.T) {
 		return engine.ResolvedInstallation{
 			ID:          instB,
 			WorkspaceID: wsID,
-			Platform:    db.ChannelInstallation{ID: instB, WorkspaceID: wsID, Config: cfg},
+			Platform:    db.ChannelInstallation{ID: instB, WorkspaceID: wsID, Config: string(cfg)},
 		}
 	}
 	msg := inbound(channel.ChatTypeP2P, "D1", "", "1.0")
@@ -88,7 +88,7 @@ func TestResolveSenderReuse(t *testing.T) {
 
 	t.Run("unlinked sender reuses a same-team link and materializes it", func(t *testing.T) {
 		f := &fakeIdentityQueries{
-			bindErr:  pgx.ErrNoRows,
+			bindErr:  sql.ErrNoRows,
 			reusable: db.ChannelUserBinding{MulticaUserID: userID, InstallationID: instA},
 		}
 		got, err := (&identityResolver{q: f}).ResolveSender(context.Background(), inst("T1"), msg)
@@ -113,7 +113,7 @@ func TestResolveSenderReuse(t *testing.T) {
 	})
 
 	t.Run("no direct binding and nothing to reuse prompts a link", func(t *testing.T) {
-		f := &fakeIdentityQueries{bindErr: pgx.ErrNoRows, reusableErr: pgx.ErrNoRows}
+		f := &fakeIdentityQueries{bindErr: sql.ErrNoRows, reusableErr: sql.ErrNoRows}
 		_, err := (&identityResolver{q: f}).ResolveSender(context.Background(), inst("T1"), msg)
 		if !errors.Is(err, engine.ErrSenderUnbound) {
 			t.Fatalf("err = %v, want ErrSenderUnbound", err)
@@ -125,9 +125,9 @@ func TestResolveSenderReuse(t *testing.T) {
 
 	t.Run("reusable link whose user left the workspace prompts a fresh link", func(t *testing.T) {
 		f := &fakeIdentityQueries{
-			bindErr:   pgx.ErrNoRows,
+			bindErr:   sql.ErrNoRows,
 			reusable:  db.ChannelUserBinding{MulticaUserID: userID, InstallationID: instA},
-			memberErr: pgx.ErrNoRows,
+			memberErr: sql.ErrNoRows,
 		}
 		_, err := (&identityResolver{q: f}).ResolveSender(context.Background(), inst("T1"), msg)
 		if !errors.Is(err, engine.ErrSenderUnbound) {
@@ -139,7 +139,7 @@ func TestResolveSenderReuse(t *testing.T) {
 	})
 
 	t.Run("legacy installation with no team never attempts reuse", func(t *testing.T) {
-		f := &fakeIdentityQueries{bindErr: pgx.ErrNoRows}
+		f := &fakeIdentityQueries{bindErr: sql.ErrNoRows}
 		_, err := (&identityResolver{q: f}).ResolveSender(context.Background(), inst(""), msg)
 		if !errors.Is(err, engine.ErrSenderUnbound) {
 			t.Fatalf("err = %v, want ErrSenderUnbound", err)
@@ -150,7 +150,7 @@ func TestResolveSenderReuse(t *testing.T) {
 	})
 
 	t.Run("directly-bound non-member surfaces not-member", func(t *testing.T) {
-		f := &fakeIdentityQueries{binding: db.ChannelUserBinding{MulticaUserID: userID}, memberErr: pgx.ErrNoRows}
+		f := &fakeIdentityQueries{binding: db.ChannelUserBinding{MulticaUserID: userID}, memberErr: sql.ErrNoRows}
 		_, err := (&identityResolver{q: f}).ResolveSender(context.Background(), inst("T1"), msg)
 		if !errors.Is(err, engine.ErrSenderNotMember) {
 			t.Fatalf("err = %v, want ErrSenderNotMember", err)

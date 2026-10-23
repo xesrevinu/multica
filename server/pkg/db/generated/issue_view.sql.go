@@ -98,8 +98,16 @@ type DeleteIssueViewParams struct {
 func (q *Queries) DeleteIssueView(ctx context.Context, arg DeleteIssueViewParams) (string, error) {
 	row := q.db.QueryRowContext(ctx, deleteIssueView, arg.ID, arg.WorkspaceID)
 	var id string
-	err := row.Scan(&id)
-	return id, err
+	if err := row.Scan(&id); err != nil {
+		return "", err
+	}
+	if err := q.DeleteIssueView_Step2(ctx, DeleteIssueView_Step2Params{
+		ItemID:      id,
+		WorkspaceID: arg.WorkspaceID,
+	}); err != nil {
+		return id, err
+	}
+	return id, nil
 }
 
 const deleteIssueViewPreferencesByUser = `-- name: DeleteIssueViewPreferencesByUser :exec
@@ -145,8 +153,10 @@ type DeleteIssueViewsByProjectScopeParams struct {
 }
 
 func (q *Queries) DeleteIssueViewsByProjectScope(ctx context.Context, arg DeleteIssueViewsByProjectScopeParams) error {
-	_, err := q.db.ExecContext(ctx, deleteIssueViewsByProjectScope, arg.WorkspaceID, arg.ScopeID)
-	return err
+	if _, err := q.db.ExecContext(ctx, deleteIssueViewsByProjectScope, arg.WorkspaceID, arg.ScopeID); err != nil {
+		return err
+	}
+	return q.DeleteIssueViewsByProjectScope_Step2(ctx, arg.WorkspaceID)
 }
 
 const deleteIssueViewsByProjectScope_Step2 = `-- name: DeleteIssueViewsByProjectScope_Step2 :exec
@@ -174,8 +184,10 @@ type DeletePrivateIssueViewsByOwnerParams struct {
 }
 
 func (q *Queries) DeletePrivateIssueViewsByOwner(ctx context.Context, arg DeletePrivateIssueViewsByOwnerParams) error {
-	_, err := q.db.ExecContext(ctx, deletePrivateIssueViewsByOwner, arg.WorkspaceID, arg.OwnerID)
-	return err
+	if _, err := q.db.ExecContext(ctx, deletePrivateIssueViewsByOwner, arg.WorkspaceID, arg.OwnerID); err != nil {
+		return err
+	}
+	return q.DeletePrivateIssueViewsByOwner_Step2(ctx, arg.WorkspaceID)
 }
 
 const deletePrivateIssueViewsByOwner_Step2 = `-- name: DeletePrivateIssueViewsByOwner_Step2 :exec

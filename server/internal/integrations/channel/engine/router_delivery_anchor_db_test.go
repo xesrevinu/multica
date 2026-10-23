@@ -5,8 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
+
+	"github.com/multica-ai/multica/server/internal/testutil"
 
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
@@ -39,7 +40,7 @@ type realSessionBinder struct {
 	session *ChatSession
 }
 
-func (b realSessionBinder) EnsureSession(ctx context.Context, p EnsureSessionParams) (pgtype.UUID, error) {
+func (b realSessionBinder) EnsureSession(ctx context.Context, p EnsureSessionParams) (string, error) {
 	return b.session.EnsureSession(ctx, EnsureSessionInput{
 		WorkspaceID: p.Installation.WorkspaceID, AgentID: p.Installation.AgentID,
 		InstallationID: p.Installation.ID, Sender: p.Sender,
@@ -63,7 +64,7 @@ func (b realSessionBinder) StartSession(ctx context.Context, p StartSessionParam
 	})
 }
 
-func (b realSessionBinder) MarkPendingFresh(ctx context.Context, sessionID pgtype.UUID, messageID string) error {
+func (b realSessionBinder) MarkPendingFresh(ctx context.Context, sessionID string, messageID string) error {
 	return b.session.MarkPendingFresh(ctx, sessionID, messageID)
 }
 
@@ -90,7 +91,7 @@ func (b realSessionBinder) BindMedia(context.Context, BindMediaParams) (BindMedi
 }
 
 type anchorHarness struct {
-	pool    *pgxpool.Pool
+	pool    *testutil.Pool
 	router  *Router
 	timers  *fakeTimerFactory
 	fixture sessionPersistenceFixture
@@ -126,11 +127,11 @@ func newAnchorHarness(t *testing.T) *anchorHarness {
 	})
 	t.Cleanup(func() {
 		cleanupCtx := context.Background()
-		_, _ = pool.Exec(cleanupCtx, `
+		_, _ = pool.ExecContext(cleanupCtx, `
 			DELETE FROM channel_task_delivery WHERE task_id IN (
 				SELECT id FROM agent_task_queue WHERE chat_session_id = $1)`, fixture.sessionID)
-		_, _ = pool.Exec(cleanupCtx, `DELETE FROM agent_task_queue WHERE chat_session_id = $1`, fixture.sessionID)
-		_, _ = pool.Exec(cleanupCtx, `DELETE FROM chat_message WHERE chat_session_id = $1`, fixture.sessionID)
+		_, _ = pool.ExecContext(cleanupCtx, `DELETE FROM agent_task_queue WHERE chat_session_id = $1`, fixture.sessionID)
+		_, _ = pool.ExecContext(cleanupCtx, `DELETE FROM chat_message WHERE chat_session_id = $1`, fixture.sessionID)
 	})
 	return &anchorHarness{pool: pool, router: router, timers: timers, fixture: fixture}
 }
@@ -154,9 +155,9 @@ func (h *anchorHarness) inbound(messageID, threadID, senderID, text string) chan
 
 // generationTrigger reads back what the PRODUCTION write path recorded for one
 // context generation of this session.
-func (h *anchorHarness) generationTrigger(t *testing.T, sessionID pgtype.UUID, revision int64) (messageID, threadID, senderID pgtype.Text) {
+func (h *anchorHarness) generationTrigger(t *testing.T, sessionID string, revision int64) (messageID, threadID, senderID sql.NullString) {
 	t.Helper()
-	if err := h.pool.QueryRow(context.Background(), `
+	if err := h.pool.QueryRowContext(context.Background(), `
 		SELECT last_message_id, last_thread_id, last_sender_id
 		FROM channel_chat_context_generation
 		WHERE chat_session_id = $1 AND revision = $2`, sessionID, revision,
@@ -166,9 +167,9 @@ func (h *anchorHarness) generationTrigger(t *testing.T, sessionID pgtype.UUID, r
 	return messageID, threadID, senderID
 }
 
-func (h *anchorHarness) deliveryForRevision(t *testing.T, revision int64) (taskID pgtype.UUID, messageID, threadID, senderID pgtype.Text) {
+func (h *anchorHarness) deliveryForRevision(t *testing.T, revision int64) (taskID string, messageID, threadID, senderID sql.NullString) {
 	t.Helper()
-	if err := h.pool.QueryRow(context.Background(), `
+	if err := h.pool.QueryRowContext(context.Background(), `
 		SELECT task.id, delivery.channel_message_id, delivery.channel_thread_id, delivery.channel_sender_id
 		FROM agent_task_queue AS task
 		JOIN channel_task_delivery AS delivery ON delivery.task_id = task.id
@@ -184,7 +185,7 @@ func (h *anchorHarness) waitForDeliveries(t *testing.T, want int) {
 	t.Helper()
 	if !waitFor(5*time.Second, func() bool {
 		var n int
-		if err := h.pool.QueryRow(context.Background(), `
+		if err := h.pool.QueryRowContext(context.Background(), `
 			SELECT count(*) FROM channel_task_delivery AS delivery
 			JOIN agent_task_queue AS task ON task.id = delivery.task_id
 			WHERE task.chat_session_id = $1`, h.fixture.sessionID).Scan(&n); err != nil {
@@ -235,8 +236,8 @@ func TestRouterAnchorsPendingGenerationToItsOwnTriggerAcrossClear(t *testing.T) 
 
 	// Pin the hazard: the session-wide cursor has moved to B, so reading the
 	// delivery from the binding would hand generation 1 B's message.
-	var cursorMessage pgtype.Text
-	if err := h.pool.QueryRow(ctx, `
+	var cursorMessage sql.NullString
+	if err := h.pool.QueryRowContext(ctx, `
 		SELECT last_message_id FROM channel_chat_session_binding WHERE chat_session_id = $1`,
 		h.fixture.sessionID).Scan(&cursorMessage); err != nil {
 		t.Fatalf("load binding cursor: %v", err)
@@ -293,8 +294,8 @@ func TestRouterKeepsCommandTurnOutOfGenerationTrigger(t *testing.T) {
 
 	// The binding cursor DOES advance for the command, which is what makes the
 	// generation trigger the only trustworthy source here.
-	var cursorMessage pgtype.Text
-	if err := h.pool.QueryRow(ctx, `
+	var cursorMessage sql.NullString
+	if err := h.pool.QueryRowContext(ctx, `
 		SELECT last_message_id FROM channel_chat_session_binding WHERE chat_session_id = $1`,
 		h.fixture.sessionID).Scan(&cursorMessage); err != nil {
 		t.Fatalf("load binding cursor: %v", err)
@@ -326,8 +327,8 @@ func TestRouterRecordsGenerationTriggerOnNewRouteFirstTurn(t *testing.T) {
 
 	// `/new` rotates to a fresh session; its generation 1 is the one that must
 	// carry the trigger.
-	var rotatedSession pgtype.UUID
-	if err := h.pool.QueryRow(ctx, `
+	var rotatedSession string
+	if err := h.pool.QueryRowContext(ctx, `
 		SELECT chat_session_id FROM channel_chat_session_binding
 		WHERE installation_id = $1 AND channel_chat_id = $2 AND retired_at IS NULL`,
 		h.fixture.installationID, h.fixture.channelChatID).Scan(&rotatedSession); err != nil {

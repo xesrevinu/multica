@@ -143,7 +143,7 @@ func TestSetAgentSkillEnabledControlsExecutionWithoutRemovingAssignment(t *testi
 
 	// Disabled assignments remain visible to management surfaces.
 	rows, err := testHandler.Queries.ListAgentSkillSummaries(context.Background(), parseUUID(agentID))
-	if err != nil || len(rows) != 1 || rows[0].Enabled {
+	if err != nil || len(rows) != 1 || rows[0].Enabled != 0 {
 		t.Fatalf("disabled assignment not preserved: rows=%+v err=%v", rows, err)
 	}
 	// Execution only receives enabled skills.

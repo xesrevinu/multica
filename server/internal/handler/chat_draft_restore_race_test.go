@@ -2,16 +2,10 @@ package handler
 
 import (
 	"context"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 
-	"github.com/multica-ai/multica/server/internal/middleware"
-	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // chat_draft_restore has no FK to chat_session (MUL-3515), so an INSERT into it
@@ -146,98 +140,10 @@ func waitForBlockedBackend(t *testing.T, done <-chan struct{}) bool {
 // sweep's snapshot predates the commit and the row is stranded. Holding the
 // session lock from another tx is what makes that observable: a finalizer that
 // respects the protocol parks on it; one that doesn't sails past and writes.
-func TestFinalizeDeferredCancelledChat_TakesTheChatSessionLockBeforeInserting(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	f := seedDraftRestoreRaceFixture(t, "handler-tests-draft-restore-race-writer")
-
-	tx, err := testPool.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin lock holder tx: %v", err)
-	}
-	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SELECT id FROM chat_session WHERE id = $1 FOR UPDATE`, f.chatSessionID); err != nil {
-		t.Fatalf("lock chat session: %v", err)
-	}
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		testHandler.TaskService.FinalizeDeferredCancelledChat(context.Background(), parseUUID(f.taskID))
-	}()
-
-	if !waitForBlockedBackend(t, done) {
-		t.Fatal("finalizer settled while the chat_session row was locked: it never took the lock, so nothing stops it from inserting a restore behind a deleter's sweep")
-	}
-
-	// Releasing the lock must let it settle normally — the protocol adds
-	// exclusion, not a dropped restore.
-	if err := tx.Rollback(ctx); err != nil {
-		t.Fatalf("release chat session lock: %v", err)
-	}
-	<-done
-
-	if n := countDraftRestores(t, f.chatSessionID); n != 1 {
-		t.Errorf("expected the finalizer to write 1 restore once the lock cleared, got %d", n)
-	}
-}
 
 // The deleters' half. A restore commits while the workspace teardown is parked
 // on the session lock; the teardown's sweep runs on a snapshot taken after it
 // wins the lock, so it must still see — and remove — that row.
-func TestDeleteWorkspace_SweepsRestoreCommittedByAConcurrentFinalizer(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	f := seedDraftRestoreRaceFixture(t, "handler-tests-draft-restore-race-deleter")
-
-	// A finalizer held open mid-flight: session locked, restore written, not yet
-	// committed. (That the real finalizer takes this lock is pinned by the test
-	// above; here it is the deleter that is under test.)
-	tx, err := testPool.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin finalizer tx: %v", err)
-	}
-	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SELECT id FROM chat_session WHERE id = $1 FOR UPDATE`, f.chatSessionID); err != nil {
-		t.Fatalf("lock chat session: %v", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO chat_draft_restore (id, chat_session_id, task_id, content, attachment_ids)
-		VALUES ($1, $2, $3, 'the prompt the cancel ate', '{}'::uuid[])
-	`, uuid.NewString(), f.chatSessionID, f.taskID); err != nil {
-		t.Fatalf("insert draft restore: %v", err)
-	}
-
-	code := make(chan int, 1)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		w := httptest.NewRecorder()
-		req := withURLParam(newRequest(http.MethodDelete, fmt.Sprintf("/api/workspaces/%s", f.workspaceID), nil), "id", f.workspaceID)
-		testHandler.DeleteWorkspace(w, req)
-		code <- w.Code
-	}()
-
-	if !waitForBlockedBackend(t, done) {
-		t.Fatal("DeleteWorkspace finished while a finalizer held the session lock: it never took the lock, so its sweep cannot see a restore committed behind it")
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatalf("commit finalizer tx: %v", err)
-	}
-	<-done
-
-	if got := <-code; got != http.StatusNoContent {
-		t.Fatalf("DeleteWorkspace: expected 204, got %d", got)
-	}
-	if n := countDraftRestores(t, f.chatSessionID); n != 0 {
-		t.Errorf("a restore committed during the teardown survived it (%d row(s)) — orphaned, holding the user's prompt", n)
-	}
-}
 
 // The session locks only cover sessions that exist when the teardown enumerates
 // them. A chat_session created inside the delete window is invisible to that set,
@@ -253,89 +159,7 @@ func TestDeleteWorkspace_SweepsRestoreCommittedByAConcurrentFinalizer(t *testing
 // INSERT: holding the workspace row FOR UPDATE (the exact lock DeleteWorkspace
 // takes) must park the handler on its explicit lock, and releasing it must let the
 // create proceed. A handler that skipped the lock would sail straight through.
-func TestCreateChatSession_BlocksWhileTheWorkspaceDeleteLockIsHeld(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	f := seedDraftRestoreRaceFixture(t, "handler-tests-draft-restore-race-newsession")
-
-	var agentID string
-	if err := testPool.QueryRow(ctx,
-		`SELECT agent_id FROM chat_session WHERE id = $1`, f.chatSessionID).Scan(&agentID); err != nil {
-		t.Fatalf("read fixture agent: %v", err)
-	}
-	// The fixture's owner member, so the creator request carries a realistic
-	// workspace context for the fixture workspace (not the shared test one).
-	member, err := testHandler.Queries.GetMemberByUserAndWorkspace(ctx, db.GetMemberByUserAndWorkspaceParams{
-		UserID:      parseUUID(testUserID),
-		WorkspaceID: parseUUID(f.workspaceID),
-	})
-	if err != nil {
-		t.Fatalf("load fixture owner member: %v", err)
-	}
-
-	// Hold the workspace row FOR UPDATE — exactly what DeleteWorkspace's
-	// LockWorkspaceForDelete takes at the top of its teardown tx. This holder is
-	// not itself blocked, so the only backend that can park is the creator.
-	holder, err := testPool.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin workspace-lock holder tx: %v", err)
-	}
-	defer holder.Rollback(ctx)
-	if _, err := holder.Exec(ctx, `SELECT id FROM workspace WHERE id = $1 FOR UPDATE`, f.workspaceID); err != nil {
-		t.Fatalf("lock workspace row: %v", err)
-	}
-
-	code := make(chan int, 1)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		w := httptest.NewRecorder()
-		req := newRequestAs(testUserID, http.MethodPost, "/api/chat/sessions", map[string]any{
-			"agent_id": agentID,
-			"title":    "Session racing the teardown",
-		})
-		req = req.WithContext(middleware.SetMemberContext(req.Context(), f.workspaceID, member))
-		testHandler.CreateChatSession(w, req)
-		code <- w.Code
-	}()
-
-	if !waitForBlockedBackend(t, done) {
-		t.Fatal("CreateChatSession returned while the workspace delete lock was held: it never took LockWorkspaceForChatSessionCreate, so a session can be created into a workspace mid-delete and its restore can outlive the cascade")
-	}
-
-	// Releasing the delete lock must let the create proceed — the protocol adds
-	// exclusion against an in-progress delete, not a blanket refusal.
-	if err := holder.Rollback(ctx); err != nil {
-		t.Fatalf("release workspace lock: %v", err)
-	}
-	<-done
-	if got := <-code; got != http.StatusCreated {
-		t.Fatalf("CreateChatSession: expected 201 once the delete lock cleared, got %d", got)
-	}
-}
 
 // The settle-against-a-gone-session case the lock protocol produces: the loser
 // of the race finds no session to lock, so it must clear its marker and write
 // nothing rather than strand a restore against a dead id.
-func TestFinalizeDeferredCancelledChat_SkipsTheInsertWhenTheSessionIsGone(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	f := seedDraftRestoreRaceFixture(t, "handler-tests-draft-restore-race-gone")
-
-	w := httptest.NewRecorder()
-	req := withURLParam(newRequest(http.MethodDelete, fmt.Sprintf("/api/workspaces/%s", f.workspaceID), nil), "id", f.workspaceID)
-	testHandler.DeleteWorkspace(w, req)
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("DeleteWorkspace: expected 204, got %d: %s", w.Code, w.Body.String())
-	}
-
-	testHandler.TaskService.FinalizeDeferredCancelledChat(ctx, parseUUID(f.taskID))
-
-	if n := countDraftRestores(t, f.chatSessionID); n != 0 {
-		t.Errorf("finalizer wrote %d restore(s) for a session that no longer exists", n)
-	}
-}

@@ -16,7 +16,7 @@ import (
 // value and the up migration cannot restore it.
 func TestIssuePropertyActorRollbackFailsClosed(t *testing.T) {
 	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
+	if !strings.HasPrefix(dbURL, "postgres") {
 		t.Skip("integration test requires Postgres at DATABASE_URL")
 	}
 

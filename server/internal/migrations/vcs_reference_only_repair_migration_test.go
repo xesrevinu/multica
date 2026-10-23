@@ -3,6 +3,7 @@ package migrations
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -12,7 +13,7 @@ const vcsReferenceOnlyRepairMigrationTestSchema = "vcs_reference_only_repair_mig
 
 func TestVCSReferenceOnlyRepairMigrationRestoresPartialSchema(t *testing.T) {
 	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
+	if !strings.HasPrefix(dbURL, "postgres") {
 		t.Skip("integration test requires Postgres at DATABASE_URL")
 	}
 

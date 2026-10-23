@@ -15,6 +15,11 @@ import (
 // isAssignmentRecipientType reports whether an assignee can own a subscriber
 // or inbox row. Squads are routing objects whose work runs through the leader;
 // they are not user identities and have no inbox to consume.
+type subscriberListenerPool interface {
+	db.DBTX
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+}
+
 func isAssignmentRecipientType(assigneeType string) bool {
 	return assigneeType == "member" || assigneeType == "agent"
 }
@@ -26,7 +31,7 @@ func isAssignmentRecipientType(assigneeType string) bool {
 // Takes the pool rather than *db.Queries because the delegated rule needs a
 // transaction: its eligibility checks and its write must sit inside one
 // serialization boundary (see subscribeDelegatedHuman).
-func registerSubscriberListeners(bus *events.Bus, pool *sql.DB) {
+func registerSubscriberListeners(bus *events.Bus, pool subscriberListenerPool) {
 	queries := db.New(pool)
 	// issue:created — subscribe creator + assignee (if different)
 	bus.Subscribe(protocol.EventIssueCreated, func(e events.Event) {
@@ -159,7 +164,7 @@ func registerSubscriberListeners(bus *events.Bus, pool *sql.DB) {
 //
 // Everything is best-effort and logged, never fatal — the issue is already
 // committed and a subscription hiccup must not look like a creation failure.
-func subscribeDelegatedHuman(bus *events.Bus, pool *sql.DB, queries *db.Queries, workspaceID, issueID string) {
+func subscribeDelegatedHuman(bus *events.Bus, pool subscriberListenerPool, queries *db.Queries, workspaceID, issueID string) {
 	ctx := context.Background()
 	issueUUID := parseUUID(issueID)
 

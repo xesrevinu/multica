@@ -46,15 +46,12 @@ func blockedTx(t *testing.T, userID string, write func(*db.Queries) error) (rele
 	committed := false
 	t.Cleanup(func() {
 		if !committed {
-			tx.Rollback(context.Background())
+			tx.Rollback()
 		}
 	})
 
 	qtx := db.New(testPool).WithTx(tx)
-	if err := qtx.LockSubscriberWrites(ctx, db.LockSubscriberWritesParams{
-		WorkspaceID: util.MustParseUUID(testWorkspaceID),
-		UserID:      util.MustParseUUID(userID),
-	}); err != nil {
+	if err := qtx.LockSubscriberWrites(ctx); err != nil {
 		t.Fatalf("competing tx lock: %v", err)
 	}
 	if err := write(qtx); err != nil {
@@ -62,7 +59,7 @@ func blockedTx(t *testing.T, userID string, write func(*db.Queries) error) (rele
 	}
 
 	return func() {
-		if err := tx.Commit(context.Background()); err != nil {
+		if err := tx.Commit(); err != nil {
 			t.Fatalf("commit competing tx: %v", err)
 		}
 		committed = true
@@ -116,6 +113,11 @@ func TestDelegatedSubscribe_BlocksOnConcurrentSubtreeOptOut(t *testing.T) {
 
 	task := createAgentTaskWithOriginator(t, agentID, runtimeID, util.MustParseUUID(testUserID))
 
+	// The agent files a NEW child under that tree before the single SQLite
+	// connection is held by blockedTx; fireDelegatedRule still runs while
+	// blockedTx is uncommitted.
+	childID := createAgentOriginIssue(t, agentID, "agent_create", task, util.MustParseUUID(parentID))
+
 	// The user leaves the whole tree. Still uncommitted.
 	release := blockedTx(t, testUserID, func(qtx *db.Queries) error {
 		_, err := qtx.UnsubscribeFromIssueSubtree(context.Background(), db.UnsubscribeFromIssueSubtreeParams{
@@ -125,10 +127,6 @@ func TestDelegatedSubscribe_BlocksOnConcurrentSubtreeOptOut(t *testing.T) {
 		})
 		return err
 	})
-
-	// The agent files a NEW child under that tree, after the opt-out was
-	// written but before it committed.
-	childID := createAgentOriginIssue(t, agentID, "agent_create", task, util.MustParseUUID(parentID))
 
 	done := fireDelegatedRule(bus, childID, agentID)
 	assertBlocked(t, done, "delegated subscribe")
@@ -160,12 +158,12 @@ func TestDelegatedSubscribe_BlocksOnConcurrentMemberRevoke(t *testing.T) {
 	agentID, runtimeID := firstFixtureAgent(t)
 	task := createAgentTaskWithOriginator(t, agentID, runtimeID, util.MustParseUUID(userID))
 
+	issueID := createAgentOriginIssue(t, agentID, "agent_create", task, util.MustParseUUID(createTestIssue(t, testWorkspaceID, testUserID)))
+
 	// The member is being revoked. Still uncommitted.
 	release := blockedTx(t, userID, func(qtx *db.Queries) error {
 		return revokeMemberInTx(qtx, userID)
 	})
-
-	issueID := createAgentOriginIssue(t, agentID, "agent_create", task, util.MustParseUUID(createTestIssue(t, testWorkspaceID, testUserID)))
 
 	done := fireDelegatedRule(bus, issueID, agentID)
 	assertBlocked(t, done, "delegated subscribe")

@@ -130,28 +130,14 @@ func runSearchQuery(
 		}
 	}()
 
-	// SET LOCAL is transaction-scoped, so pgxpool can safely hand this
-	// connection back out after COMMIT without search-specific settings leaking
-	// to unrelated queries.
-	timeoutMs := int(effectiveSearchStatementTimeout() / time.Millisecond)
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL statement_timeout = %d", timeoutMs)); err != nil {
-		return fmt.Errorf("set search statement_timeout: %w", err)
+	qctx, cancel := context.WithTimeout(ctx, effectiveSearchStatementTimeout())
+	defer cancel()
+	_ = searchWorkMemValue()
+	normArgs := make([]any, len(args))
+	for i, a := range args {
+		normArgs[i] = normalizeDynamicSQLArg(a)
 	}
-	if workMem := searchWorkMemValue(); workMem != "" {
-		// workMem is constructed only from the bounded integer parsed above, so
-		// interpolating it cannot introduce SQL syntax or user input.
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL work_mem = '%s'", workMem)); err != nil {
-			return fmt.Errorf("set search work_mem: %w", err)
-		}
-	}
-	// The read-only mode is applied here rather than via TxOptions so we
-	// keep the txStarter interface signature (Begin only) intact. It's
-	// belt-and-suspenders — the search queries only SELECT anyway.
-	if _, err := tx.ExecContext(ctx, "SET LOCAL transaction_read_only = on"); err != nil {
-		return fmt.Errorf("set search transaction_read_only: %w", err)
-	}
-
-	rows, err := tx.QueryContext(ctx, sql, args...)
+	rows, err := tx.QueryContext(qctx, sql, normArgs...)
 	if err != nil {
 		return err
 	}
@@ -178,6 +164,9 @@ func runSearchQuery(
 func isSearchStatementTimeout(err error) bool {
 	if err == nil {
 		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
 	}
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {

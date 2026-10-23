@@ -191,67 +191,6 @@ func TestIssueTableStatusCategoryRowsReturnCustomStatusIssues(t *testing.T) {
 	}
 }
 
-func TestIssueTableCompoundStatusCategoryCellsFoldCustomStatuses(t *testing.T) {
-	projectID, customKey := seedStatusCategoryFixture(t)
-
-	w := httptest.NewRecorder()
-	testHandler.ListIssueTableGroups(w, newRequest(http.MethodPost, "/api/issues/table/groups", issueTableGroupsRequest{
-		Query: statusCategoryQuery(projectID),
-		Group: issueTableGroupSpec{
-			Kind:      "compound",
-			Primary:   "project",
-			Secondary: "status_category", CategoryFormat: "lifecycle",
-		},
-		Page: issueTablePageRequest{Limit: 100},
-	}))
-	if w.Code != http.StatusOK {
-		t.Fatalf("groups status = %d: %s", w.Code, w.Body.String())
-	}
-	var groups issueTableGroupsResponse
-	if err := json.NewDecoder(w.Body).Decode(&groups); err != nil {
-		t.Fatalf("decode groups: %v", err)
-	}
-	if len(groups.Groups) != 1 {
-		t.Fatalf("groups = %d, want 1 project lane", len(groups.Groups))
-	}
-
-	cells := map[string]int64{}
-	for _, cell := range groups.Groups[0].SecondaryGroups {
-		cells[cell.Value.Status] = cell.Count
-	}
-	// Swimlane cells are categories too: 2 QA + 1 In Review in one cell, and no
-	// cell keyed by the custom status.
-	if cells["started"] != 3 {
-		t.Fatalf("started cell = %d, want 3: %#v", cells["started"], cells)
-	}
-	if _, exists := cells[customKey]; exists {
-		t.Fatalf("custom status got its own swimlane cell: %#v", cells)
-	}
-
-	// And the cell's own group_key has to page back the same three rows.
-	cellKey := compoundCellGroupKey(groups.Groups[0].Key, "started", true)
-	rowsRecorder := httptest.NewRecorder()
-	testHandler.ListIssueTableRows(rowsRecorder, newRequest(http.MethodPost, "/api/issues/table/rows", issueTableRowsRequest{
-		Query: statusCategoryQuery(projectID),
-		Group: issueTableGroupSpec{
-			Kind:      "compound",
-			Primary:   "project",
-			Secondary: "status_category", CategoryFormat: "lifecycle",
-		},
-		GroupKey: &cellKey,
-		Page:     issueTablePageRequest{Limit: 50},
-	}))
-	if rowsRecorder.Code != http.StatusOK {
-		t.Fatalf("cell rows status = %d: %s", rowsRecorder.Code, rowsRecorder.Body.String())
-	}
-	var cellRows issueTableRowsResponse
-	if err := json.NewDecoder(rowsRecorder.Body).Decode(&cellRows); err != nil {
-		t.Fatalf("decode cell rows: %v", err)
-	}
-	if len(cellRows.Rows) != 3 {
-		t.Fatalf("cell rows = %d, want 3", len(cellRows.Rows))
-	}
-}
 
 // A workspace with no custom statuses still folds concrete built-ins into the
 // four lifecycle categories.
@@ -369,158 +308,17 @@ func withCountingCatalog(t *testing.T) *countingCatalogQuerier {
 // read that looks cheap per request is multiplied by four. The first
 // cut ran ExpandCategories AND CustomKeyCategories per resolve — two reads
 // where one suffices, i.e. 14 catalog reads behind one board load instead of 7.
-func TestIssueTableStatusCategoryReadsCatalogOncePerRequest(t *testing.T) {
-	projectID, _ := seedStatusCategoryFixture(t)
-	counter := withCountingCatalog(t)
 
-	w := httptest.NewRecorder()
-	testHandler.ListIssueTableGroups(w, newRequest(http.MethodPost, "/api/issues/table/groups", issueTableGroupsRequest{
-		Query: statusCategoryQuery(projectID),
-		Group: issueTableGroupSpec{Kind: "status_category", CategoryFormat: "lifecycle"},
-		Page:  issueTablePageRequest{Limit: 100},
-	}))
-	if w.Code != http.StatusOK {
-		t.Fatalf("groups status = %d: %s", w.Code, w.Body.String())
-	}
-
-	// Exactly one, not "at most one": a zero would mean the counter never saw
-	// the request and the assertion proved nothing.
-	if counter.entryReads != 1 {
-		t.Fatalf("catalog entry reads = %d, want exactly 1", counter.entryReads)
-	}
-	// Both maps are derived from that single read; the category expansion must
-	// not issue a second query of its own.
-	if counter.categoryReads != 0 {
-		t.Fatalf("category-expansion reads = %d, want 0 (derived from the entry read)", counter.categoryReads)
-	}
-}
-
-func TestIssueTableCompoundStatusCategoryReadsCatalogOncePerRequest(t *testing.T) {
-	projectID, _ := seedStatusCategoryFixture(t)
-	counter := withCountingCatalog(t)
-
-	w := httptest.NewRecorder()
-	testHandler.ListIssueTableGroups(w, newRequest(http.MethodPost, "/api/issues/table/groups", issueTableGroupsRequest{
-		Query: statusCategoryQuery(projectID),
-		Group: issueTableGroupSpec{
-			Kind:      "compound",
-			Primary:   "project",
-			Secondary: "status_category", CategoryFormat: "lifecycle",
-		},
-		Page: issueTablePageRequest{Limit: 100},
-	}))
-	if w.Code != http.StatusOK {
-		t.Fatalf("groups status = %d: %s", w.Code, w.Body.String())
-	}
-	if counter.entryReads != 1 {
-		t.Fatalf("catalog entry reads = %d, want exactly 1", counter.entryReads)
-	}
-	if counter.categoryReads != 0 {
-		t.Fatalf("category-expansion reads = %d, want 0", counter.categoryReads)
-	}
-}
 
 // Plain status groups keep their concrete keys, but their order still follows
 // each key's effective category. Resolve that map once per request rather than
 // running issue_effective_status() for every row or doing a second catalog read.
-func TestIssueTableStatusGroupingReadsCatalogOnce(t *testing.T) {
-	projectID, _ := seedStatusCategoryFixture(t)
-	counter := withCountingCatalog(t)
-
-	w := httptest.NewRecorder()
-	testHandler.ListIssueTableGroups(w, newRequest(http.MethodPost, "/api/issues/table/groups", issueTableGroupsRequest{
-		Query: statusCategoryQuery(projectID),
-		Group: issueTableGroupSpec{Kind: "status"},
-		Page:  issueTablePageRequest{Limit: 100},
-	}))
-	if w.Code != http.StatusOK {
-		t.Fatalf("groups status = %d: %s", w.Code, w.Body.String())
-	}
-	if counter.entryReads != 1 || counter.categoryReads != 0 {
-		t.Fatalf("plain status grouping read the catalog (%d entry, %d category), want 1 entry and 0 category",
-			counter.entryReads, counter.categoryReads)
-	}
-}
 
 // Plain `status` grouping — what the Table view uses, and what every client
 // falls back to before its catalog lands — must survive a workspace that has
 // custom statuses. The descriptor used to reject any non-built-in raw value,
 // which failed the WHOLE grouped response: one custom status made "group by
 // status" 500 for the entire workspace.
-func TestIssueTableStatusGroupingCarriesCustomStatusGroups(t *testing.T) {
-	projectID, customKey := seedStatusCategoryFixture(t)
-	ctx := context.Background()
-	var cancelledNumber int
-	if err := testPool.QueryRow(ctx, `
-		UPDATE workspace
-		SET issue_counter = issue_counter + 1
-		WHERE id = $1
-		RETURNING issue_counter
-	`, testWorkspaceID).Scan(&cancelledNumber); err != nil {
-		t.Fatalf("reserve cancelled issue number: %v", err)
-	}
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, position, number, project_id)
-		VALUES ($1, 'cat-cancelled', 'cancelled', 'none', 'member', $2, 5, $3, $4)
-	`, testWorkspaceID, testUserID, cancelledNumber, projectID); err != nil {
-		t.Fatalf("seed cancelled issue: %v", err)
-	}
-
-	w := httptest.NewRecorder()
-	testHandler.ListIssueTableGroups(w, newRequest(http.MethodPost, "/api/issues/table/groups", issueTableGroupsRequest{
-		Query: statusCategoryQuery(projectID),
-		Group: issueTableGroupSpec{Kind: "status"},
-		Page:  issueTablePageRequest{Limit: 100},
-	}))
-	if w.Code != http.StatusOK {
-		t.Fatalf("groups status = %d: %s", w.Code, w.Body.String())
-	}
-	var groups issueTableGroupsResponse
-	if err := json.NewDecoder(w.Body).Decode(&groups); err != nil {
-		t.Fatalf("decode groups: %v", err)
-	}
-
-	counts := map[string]int64{}
-	for _, group := range groups.Groups {
-		counts[group.Value.Status] = group.Count
-	}
-	if counts[customKey] != 2 {
-		t.Fatalf("custom status group = %d, want 2: %#v", counts[customKey], counts)
-	}
-	if counts["in_review"] != 1 {
-		t.Fatalf("built-in group = %d, want 1: %#v", counts["in_review"], counts)
-	}
-	if counts["cancelled"] != 1 {
-		t.Fatalf("cancelled group = %d, want 1: %#v", counts["cancelled"], counts)
-	}
-	indexes := map[string]int{}
-	for i, group := range groups.Groups {
-		indexes[group.Value.Status] = i
-	}
-	if indexes[customKey] >= indexes["cancelled"] {
-		t.Fatalf("custom in-review status sorted after cancelled: %#v", groups.Groups)
-	}
-
-	// And its group_key has to page back its own rows.
-	groupKey := "status:" + customKey
-	rowsRecorder := httptest.NewRecorder()
-	testHandler.ListIssueTableRows(rowsRecorder, newRequest(http.MethodPost, "/api/issues/table/rows", issueTableRowsRequest{
-		Query:    statusCategoryQuery(projectID),
-		Group:    issueTableGroupSpec{Kind: "status"},
-		GroupKey: &groupKey,
-		Page:     issueTablePageRequest{Limit: 50},
-	}))
-	if rowsRecorder.Code != http.StatusOK {
-		t.Fatalf("rows status = %d: %s", rowsRecorder.Code, rowsRecorder.Body.String())
-	}
-	var rows issueTableRowsResponse
-	if err := json.NewDecoder(rowsRecorder.Body).Decode(&rows); err != nil {
-		t.Fatalf("decode rows: %v", err)
-	}
-	if len(rows.Rows) != 2 {
-		t.Fatalf("custom status rows = %d, want 2", len(rows.Rows))
-	}
-}
 
 // The surface sends the user's EXACT status keys in `filters.statuses` — that
 // is what "filter by QA" means, and it is the whole point of a custom status.

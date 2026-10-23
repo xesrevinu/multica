@@ -18,7 +18,10 @@ type startReplayDB struct {
 
 func (m *startReplayDB) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
 	m.calls++
-	return errQueryRow()
+	if errors.Is(m.startErr, sql.ErrNoRows) {
+		return mockQueryRow(nil, nil)
+	}
+	return mockQueryRow(nil, m.startErr)
 }
 
 func TestStartTaskLegacyDoesNotAcknowledgeReplayOrDatabaseFailure(t *testing.T) {

@@ -103,7 +103,7 @@ func (h *Handler) UpsertClientUsage(w http.ResponseWriter, r *http.Request) {
 
 	workspaceUUID := ""
 	queries := h.Queries
-	var tx *sql.Tx
+	var tx handlerTx
 	if workspaceID := h.resolveWorkspaceID(r); workspaceID != "" {
 		workspaceUUID, ok = parseUUIDOrBadRequest(w, workspaceID, "workspace id")
 		if !ok {

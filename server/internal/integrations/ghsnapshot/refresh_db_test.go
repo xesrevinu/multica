@@ -8,20 +8,13 @@ import (
 
 	"database/sql"
 
+	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	_ "modernc.org/sqlite"
 )
 
 func testDBPool(t *testing.T) *sql.DB {
 	t.Helper()
-	pool, err := sql.Open("sqlite", "file:"+t.TempDir()+"/ghsnap.db?_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Skipf("skipping DB test: %v", err)
-	}
-	if err := pool.PingContext(context.Background()); err != nil {
-		pool.Close()
-		t.Skipf("skipping DB test: database not reachable: %v", err)
-	}
+	pool := testutil.OpenTestDB(t)
 	// Close via t.Cleanup, registered FIRST, so it runs LAST — after every
 	// row-deleting cleanup the test registers later, and after the context
 	// cancel that stops the manager's workers. The previous shape, a `defer
@@ -35,7 +28,6 @@ func testDBPool(t *testing.T) *sql.DB {
 	// it. That is the "trailing refresh did not replace old snapshot" failure,
 	// and the "closed pool" WARN spam was the same ordering bug seen from the
 	// worker's side.
-	t.Cleanup(func() { _ = pool.Close() })
 	return pool
 }
 
@@ -141,7 +133,7 @@ func TestListStaleUndecidedGitHubPRsExcludesDecidedAndRotatesCursor(t *testing.T
 			SET snapshot_head_sha=head_sha, snapshot_fetched_at=$2,
 			    api_mergeable=$3, checks_rollup_state=$4
 			WHERE id=$1`,
-			pr.ID, fetchedAt, mergeable, rollup); err != nil {
+			pr.ID, fetchedAt.UTC().Format(time.RFC3339Nano), mergeable, rollup); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -178,8 +170,9 @@ func TestListStaleUndecidedGitHubPRsExcludesDecidedAndRotatesCursor(t *testing.T
 	}
 
 	first, err := q.ListStaleUndecidedGitHubPRs(ctx, db.ListStaleUndecidedGitHubPRsParams{
-		OlderThan: tsFromTime(now.Add(-10 * time.Minute)),
-		MaxRows:   1,
+		OlderThan:           tsFromTime(now.Add(-10 * time.Minute)),
+		AfterInstallationID: beforeFixtures,
+		MaxRows:             1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -191,8 +184,12 @@ func TestListStaleUndecidedGitHubPRsExcludesDecidedAndRotatesCursor(t *testing.T
 	// Advance from the last returned address without changing its stale data.
 	// Even a perpetually failing first address cannot pin the LIMIT forever.
 	second, err := q.ListStaleUndecidedGitHubPRs(ctx, db.ListStaleUndecidedGitHubPRsParams{
-		OlderThan: tsFromTime(now.Add(-10 * time.Minute)),
-		MaxRows:   1,
+		OlderThan:           tsFromTime(now.Add(-10 * time.Minute)),
+		AfterInstallationID: first[0].InstallationID,
+		AfterRepoOwner:      first[0].RepoOwner,
+		AfterRepoName:       first[0].RepoName,
+		AfterPrNumber:       first[0].PrNumber,
+		MaxRows:             1,
 	})
 	if err != nil {
 		t.Fatal(err)

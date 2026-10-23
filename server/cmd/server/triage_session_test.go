@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -31,8 +31,8 @@ func insertTriageTask(t *testing.T, agentID, runtimeID, issueID, sessionID strin
 func lastTaskSession(t *testing.T, agentID, issueID string) (db.GetLastTaskSessionRow, error) {
 	t.Helper()
 	return db.New(testPool).GetLastTaskSession(context.Background(), db.GetLastTaskSessionParams{
-		AgentID: pgtype.UUID{Bytes: parseUUIDBytes(agentID), Valid: true},
-		IssueID: pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		AgentID: parseUUID(agentID),
+		IssueID: sql.NullString{String: parseUUID(issueID), Valid: true},
 	})
 }
 
@@ -186,13 +186,13 @@ func TestGetLatestTaskRolloutMissingIgnoresTriageRuns(t *testing.T) {
 	rolloutMissing := func() bool {
 		t.Helper()
 		missing, err := db.New(testPool).GetLatestTaskRolloutMissing(ctx, db.GetLatestTaskRolloutMissingParams{
-			AgentID: pgtype.UUID{Bytes: parseUUIDBytes(agentID), Valid: true},
-			IssueID: pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+			AgentID: parseUUID(agentID),
+			IssueID: sql.NullString{String: parseUUID(issueID), Valid: true},
 		})
 		if err != nil {
 			t.Fatalf("GetLatestTaskRolloutMissing failed: %v", err)
 		}
-		return missing
+		return missing != 0
 	}
 
 	// An ordinary execution run that carried its context over cleanly.

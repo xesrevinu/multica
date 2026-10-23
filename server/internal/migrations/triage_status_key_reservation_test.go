@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -24,7 +25,7 @@ type triageMigrationSandbox struct {
 func newTriageMigrationSandbox(t *testing.T, schema string) *triageMigrationSandbox {
 	t.Helper()
 	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
+	if !strings.HasPrefix(dbURL, "postgres") {
 		t.Skip("integration test requires Postgres at DATABASE_URL")
 	}
 	ctx := context.Background()

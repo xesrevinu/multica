@@ -2,13 +2,10 @@ package lark
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
@@ -20,18 +17,7 @@ import (
 // on a quote-format migration to keep context out of a user's Chat title.
 func TestFeishuChannelTitleUsesCurrentInstructionDB(t *testing.T) {
 	ctx := context.Background()
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL is required for the channel title integration test")
-	}
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	if err := pool.Ping(ctx); err != nil {
-		t.Fatal(err)
-	}
+	pool := dbfx.SetupTestDB(t)
 	for _, tc := range []struct {
 		name                 string
 		start, recent, fresh bool
@@ -57,13 +43,7 @@ func TestFeishuChannelTitleUsesCurrentInstructionDB(t *testing.T) {
 			fx.Cleanup(t, `DELETE FROM channel_chat_session_binding WHERE installation_id = $1`, installationID)
 			fx.Cleanup(t, `DELETE FROM channel_chat_context_generation WHERE chat_session_id IN (SELECT id FROM chat_session WHERE workspace_id = $1)`, fx.WorkspaceID)
 			fx.Cleanup(t, `DELETE FROM chat_message WHERE chat_session_id IN (SELECT id FROM chat_session WHERE workspace_id = $1)`, fx.WorkspaceID)
-			asUUID := func(s string) pgtype.UUID {
-				var u pgtype.UUID
-				if err := u.Scan(s); err != nil {
-					t.Fatal(err)
-				}
-				return u
-			}
+			asUUID := func(s string) string { return s }
 			inst := engine.ResolvedInstallation{ID: asUUID(installationID), WorkspaceID: asUUID(fx.WorkspaceID), AgentID: asUUID(agentID)}
 			sender := asUUID(fx.UserID)
 			fake := newEnricherFake()
@@ -86,7 +66,8 @@ func TestFeishuChannelTitleUsesCurrentInstructionDB(t *testing.T) {
 				msg.CommandText, _ = engine.ParseNewChatCommand(msg.CommandText)
 			}
 			binder := &feishuSessionBinder{session: engine.NewChatSession(db.New(pool), pool, channel.TypeFeishu, engine.SessionTitles{})}
-			var sessionID pgtype.UUID
+			var sessionID string
+			var err error
 			var result engine.AppendResult
 			if tc.start {
 				started, e := binder.StartSession(ctx, engine.StartSessionParams{Installation: inst, Creator: sender, Sender: sender, Message: msg, PersistMessage: true})

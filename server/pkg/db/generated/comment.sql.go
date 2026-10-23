@@ -285,26 +285,17 @@ type CreateCommentRow struct {
 	RecoverySettledAt  sql.NullString `json:"recovery_settled_at"`
 	DeletedAt          sql.NullString `json:"deleted_at"`
 	SuppressedAgentIds sql.NullString `json:"suppressed_agent_ids"`
+	IssueRevision      int64          `json:"issue_revision"`
 }
 
-// A new comment counts as activity on its issue, so the same statement bumps
-// the parent issue's updated_at and last_activity_at. The touch is a leading data-modifying CTE and
-// the INSERT selects the issue/workspace back out of it, which makes the two
-// inseparable and gives two query-level guarantees:
-//   - atomicity - the insert and the timestamp bump commit or roll back
-//     together, so an issue is never left with a stale updated_at after a
-//     comment persists; and
-//   - tenant integrity - the comment can only be created against an issue that
-//     actually exists in the given workspace. A mismatched (issue, workspace)
-//     pair matches 0 rows in the CTE, the dependent INSERT then selects nothing,
-//     and the :one query returns pgx.ErrNoRows. A wrong workspace can therefore
-//     never leave a mis-attributed comment or a silently un-touched issue.
-//
-// Centralizing this here means every comment entrypoint inherits both
-// guarantees regardless of what a caller passes. The "Updated date" sort and
-// the daemon GC TTL both read updated_at, so this consistency is load-bearing.
 // Call in order: CreateComment_Step2, CreateComment.
 func (q *Queries) CreateComment(ctx context.Context, arg CreateCommentParams) (CreateCommentRow, error) {
+	if err := q.CreateComment_Step2(ctx, CreateComment_Step2Params{
+		IssueID:     arg.IssueID,
+		WorkspaceID: arg.WorkspaceID,
+	}); err != nil {
+		return CreateCommentRow{}, err
+	}
 	row := q.db.QueryRowContext(ctx, createComment,
 		arg.AuthorType,
 		arg.AuthorID,
@@ -321,7 +312,6 @@ func (q *Queries) CreateComment(ctx context.Context, arg CreateCommentParams) (C
 	)
 	var i CreateCommentRow
 	err := row.Scan(
-		&i.Revision,
 		&i.ID,
 		&i.IssueID,
 		&i.AuthorType,
@@ -338,11 +328,13 @@ func (q *Queries) CreateComment(ctx context.Context, arg CreateCommentParams) (C
 		&i.SourceTaskID,
 		&i.QuickActionID,
 		&i.ViaPluginID,
-		&i.Revision_2,
+		&i.Revision,
 		&i.RecoverySettledAt,
 		&i.DeletedAt,
 		&i.SuppressedAgentIds,
+		&i.Revision_2,
 	)
+	i.IssueRevision = i.Revision_2
 	return i, err
 }
 
@@ -1420,7 +1412,7 @@ const listReconcilableCommentsForIssueSince = `-- name: ListReconcilableComments
 SELECT c.id, c.issue_id, c.author_type, c.author_id, c.content, c.type, c.created_at, c.updated_at, c.parent_id, c.workspace_id, c.resolved_at, c.resolved_by_type, c.resolved_by_id, c.source_task_id, c.quick_action_id, c.via_plugin_id, c.revision, c.recovery_settled_at, c.deleted_at, c.suppressed_agent_ids FROM comment c
 WHERE c.issue_id = ?1
   AND (c.id IN (SELECT value FROM json_each(?2))
-       OR comment_thread_root_id(c.id) = ?3)
+       OR (CASE WHEN c.id IS NULL THEN NULL ELSE COALESCE((WITH RECURSIVE ancestors(id, parent_id, issue_id, depth) AS (SELECT c.id, c.parent_id, c.issue_id, 1 FROM comment c WHERE c.id = c.id UNION ALL SELECT p.id, p.parent_id, p.issue_id, a.depth + 1 FROM ancestors a JOIN comment p ON p.id = a.parent_id AND p.issue_id = a.issue_id WHERE a.depth < 32) SELECT id FROM ancestors ORDER BY depth DESC LIMIT 1), c.id) END) = ?3)
   -- A deleted comment is no longer input, even when replies keep its row.
   AND c.deleted_at IS NULL
   -- A comment that steered this agent's running turn belongs to that turn,
@@ -1434,7 +1426,7 @@ WHERE c.issue_id = ?1
         AND bound.agent_id = ?4
   )
   -- Nor does a comment whose author chose not to start this agent for it.
-  AND NOT COALESCE(@agent_id IN (SELECT value FROM json_each(c.suppressed_agent_ids)), false)
+  AND NOT COALESCE(?4 IN (SELECT value FROM json_each(c.suppressed_agent_ids)), false)
   AND (
       (
           c.author_type IN ('member', 'agent')
@@ -2353,10 +2345,20 @@ type UpdateCommentRow struct {
 	Revision       int64          `json:"revision"`
 	DeletedAt      sql.NullString `json:"deleted_at"`
 	Column19       int64          `json:"column_19"`
+	IssueRevision  int64          `json:"issue_revision"`
 }
 
 // Call in order: UpdateComment_Step2, UpdateComment.
 func (q *Queries) UpdateComment(ctx context.Context, arg UpdateCommentParams) (UpdateCommentRow, error) {
+	if err := q.UpdateComment_Step2(ctx, UpdateComment_Step2Params{
+		ID:               arg.ID,
+		Content:          arg.Content,
+		ExpectedRevision: arg.ExpectedRevision,
+		ContentBase:      arg.ContentBase,
+		SourceTaskID:     arg.SourceTaskID,
+	}); err != nil {
+		return UpdateCommentRow{}, err
+	}
 	row := q.db.QueryRowContext(ctx, updateComment,
 		arg.ID,
 		arg.Content,
@@ -2387,6 +2389,7 @@ func (q *Queries) UpdateComment(ctx context.Context, arg UpdateCommentParams) (U
 		&i.DeletedAt,
 		&i.Column19,
 	)
+	i.IssueRevision = i.Column19
 	return i, err
 }
 

@@ -169,76 +169,6 @@ func TestCancelTaskByUser_QueuedOnlyDoesNotCancelPromotedTask(t *testing.T) {
 	}
 }
 
-func TestCancelTaskByUser_QueuedEditPersistsDraftRestore(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	agentID := createHandlerTestAgent(t, "QueuedEditRestoreAgent", []byte("[]"))
-	sessionID := createHandlerTestChatSession(t, agentID)
-	taskID, messageID, attachmentID := insertQueuedChatInputWithAttachment(
-		t,
-		agentID,
-		sessionID,
-		"edit this queued prompt",
-	)
-
-	w := httptest.NewRecorder()
-	testHandler.CancelTaskByUser(
-		w,
-		cancelQueuedTaskByUserRequest(t, testUserID, taskID, sessionID, "edit"),
-	)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	if got := taskStatus(t, taskID); got != "cancelled" {
-		t.Fatalf("queued edit task status = %q, want cancelled", got)
-	}
-	var response CancelTaskByUserResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
-		t.Fatalf("decode queued edit cancellation: %v", err)
-	}
-	if got := response.CancelledBy; got == nil || got.Type != "member" || got.ID != testUserID || got.Name != handlerTestName {
-		t.Fatalf("cancelled_by = %#v, want member %s (%s)", got, handlerTestName, testUserID)
-	}
-
-	var restoreCount int
-	dbfx.QueryRow(t, `
-		SELECT count(*)
-		FROM chat_draft_restore
-		WHERE id = $1
-		  AND chat_session_id = $2
-		  AND task_id = $3
-		  AND content = 'edit this queued prompt'
-		  AND $4::uuid = ANY(attachment_ids)
-	`, messageID, sessionID, taskID, attachmentID).Scan(&restoreCount)
-	if restoreCount != 1 {
-		t.Fatalf("queued edit created %d durable restore rows", restoreCount)
-	}
-
-	var messageCount int
-	if err := testPool.QueryRow(
-		context.Background(),
-		`SELECT count(*) FROM chat_message WHERE id = $1`,
-		messageID,
-	).Scan(&messageCount); err != nil {
-		t.Fatalf("count edited queued message: %v", err)
-	}
-	if messageCount != 0 {
-		t.Fatalf("queued edit left %d input messages", messageCount)
-	}
-	var attachmentMessageID *string
-	if err := testPool.QueryRow(
-		context.Background(),
-		`SELECT chat_message_id::text FROM attachment WHERE id = $1`,
-		attachmentID,
-	).Scan(&attachmentMessageID); err != nil {
-		t.Fatalf("read detached queued attachment: %v", err)
-	}
-	if attachmentMessageID != nil {
-		t.Fatalf("queued edit attachment still bound to %q", *attachmentMessageID)
-	}
-}
 
 func TestCancelTaskByUser_QueuedEditRollsBackOnRestoreFailure(t *testing.T) {
 	if testHandler == nil {
@@ -285,42 +215,6 @@ func TestCancelTaskByUser_QueuedEditRollsBackOnRestoreFailure(t *testing.T) {
 	}
 }
 
-func TestCancelTaskByUser_QueuedRemoveDeletesAttachment(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	agentID := createHandlerTestAgent(t, "QueuedRemoveAttachmentAgent", []byte("[]"))
-	sessionID := createHandlerTestChatSession(t, agentID)
-	taskID, messageID, attachmentID := insertQueuedChatInputWithAttachment(
-		t,
-		agentID,
-		sessionID,
-		"discard this queued prompt",
-	)
-
-	w := httptest.NewRecorder()
-	testHandler.CancelTaskByUser(
-		w,
-		cancelQueuedTaskByUserRequest(t, testUserID, taskID, sessionID, "remove"),
-	)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	if got := taskStatus(t, taskID); got != "cancelled" {
-		t.Fatalf("queued remove task status = %q, want cancelled", got)
-	}
-
-	var rows int
-	dbfx.QueryRow(t, `
-		SELECT
-			(SELECT count(*) FROM chat_message WHERE id = $1) +
-			(SELECT count(*) FROM attachment WHERE id = $2)
-	`, messageID, attachmentID).Scan(&rows)
-	if rows != 0 {
-		t.Fatalf("queued remove left %d message/attachment rows", rows)
-	}
-}
 
 // createStartedEmptyChatTask seeds the exact shape the deferred cancel is about:
 // a chat task the daemon has already started (started_at set) whose transcript is

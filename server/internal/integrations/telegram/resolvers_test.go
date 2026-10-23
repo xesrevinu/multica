@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
@@ -16,16 +15,16 @@ type captureChatSession struct {
 	appendIn engine.AppendInput
 }
 
-func (f *captureChatSession) EnsureSession(context.Context, engine.EnsureSessionInput) (pgtype.UUID, error) {
-	return pgtype.UUID{}, nil
+func (f *captureChatSession) EnsureSession(context.Context, engine.EnsureSessionInput) (string, error) {
+	return "", nil
 }
 
 func (f *captureChatSession) StartSession(_ context.Context, in engine.StartSessionInput) (engine.StartSessionResult, error) {
 	f.startIn = in
-	return engine.StartSessionResult{SessionID: pgtype.UUID{Valid: true}}, nil
+	return engine.StartSessionResult{SessionID: "00000000-0000-0000-0000-000000000001"}, nil
 }
 
-func (f *captureChatSession) MarkPendingFresh(context.Context, pgtype.UUID, string) error {
+func (f *captureChatSession) MarkPendingFresh(context.Context, string, string) error {
 	return nil
 }
 
@@ -86,7 +85,7 @@ func TestTelegramSessionBinder_StartSessionPreservesRouteAndFirstTurn(t *testing
 		t.Fatalf("StartSession: %v", err)
 	}
 
-	if !result.SessionID.Valid {
+	if result.SessionID == "" {
 		t.Fatal("StartSession result lost session id")
 	}
 	if got := session.startIn.BindingKey; got != "-100200:42" {

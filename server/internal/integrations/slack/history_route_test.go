@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 	"github.com/slack-go/slack"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
@@ -13,7 +13,7 @@ import (
 
 func TestHistoryRouteBoundaryPendingReturnsEmptyWithoutSlackRead(t *testing.T) {
 	binding := dmBinding()
-	binding.HistoryBoundaryPending = true
+	binding.HistoryBoundaryPending = 1
 	client := &fakeHistoryClient{historyMsgs: []slack.Message{msg("U1", "old", "1.0")}}
 	page, err := newTestHistory(&fakeHistoryQueries{binding: binding, inst: activeSlackInstall()}, client).
 		Thread(context.Background(), uid(1), "", channel.HistoryOptions{})
@@ -27,8 +27,8 @@ func TestHistoryRouteBoundaryPendingReturnsEmptyWithoutSlackRead(t *testing.T) {
 
 func TestHistoryAppliesRouteAndContextIntersection(t *testing.T) {
 	binding := dmBinding()
-	binding.HistoryStartMessageID = pgtype.Text{String: "2.0", Valid: true}
-	binding.HistoryEndMessageID = pgtype.Text{String: "5.0", Valid: true}
+	binding.HistoryStartMessageID = sql.NullString{String: "2.0", Valid: true}
+	binding.HistoryEndMessageID = sql.NullString{String: "5.0", Valid: true}
 	client := &fakeHistoryClient{historyMsgs: []slack.Message{
 		msg("U1", "before route", "1.0"), msg("U1", "route start", "2.0"),
 		msg("U1", "context start", "3.0"), msg("U1", "context end", "4.0"),
@@ -49,7 +49,7 @@ func TestHistoryAppliesRouteAndContextIntersection(t *testing.T) {
 
 func TestHistoryNormalizesNewChatBoundaryMessage(t *testing.T) {
 	binding := dmBinding()
-	binding.HistoryStartMessageID = pgtype.Text{String: "2.0", Valid: true}
+	binding.HistoryStartMessageID = sql.NullString{String: "2.0", Valid: true}
 	client := &fakeHistoryClient{historyMsgs: []slack.Message{
 		msg("U1", "<@UBOT> /new investigate latency\nwith traces", "2.0"),
 	}}

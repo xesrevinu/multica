@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
+	"database/sql"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -27,12 +27,12 @@ type lookupFaultPool struct {
 	called bool
 }
 
-func (f *lookupFaultPool) QueryRow(ctx context.Context, query string, args ...any) pgx.Row {
+func (f *lookupFaultPool) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
 	if strings.Contains(query, "-- name: "+f.query+" :one") {
 		f.called = true
-		return &mockRow{err: context.DeadlineExceeded}
+		return errSQLRow(context.DeadlineExceeded)
 	}
-	return f.DBTX.QueryRow(ctx, query, args...)
+	return f.DBTX.QueryRowContext(ctx, query, args...)
 }
 
 // TestGetTaskStatus_DoesNotResolveSourceWorkspace pins the hot-path contract:

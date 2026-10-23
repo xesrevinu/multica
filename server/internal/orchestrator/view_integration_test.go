@@ -28,15 +28,15 @@ func TestIntegrationIssueViewsAndMemberActions(t *testing.T) {
 	orchID, orchKey := f.issue("orchestrated")
 	_, bareKey := f.issue("bare")
 	f.exec(`UPDATE issue SET project_id=NULL, priority='high' WHERE workspace_id=$1 AND title='bare'`, f.ws)
-	childID, _ := f.issue("child")
-	f.exec(`UPDATE issue SET parent_issue_id=$2, status='done' WHERE id=$1`, childID, orchID)
 	var prID string
-	if err := f.pool.QueryRowContext(f.ctx, `INSERT INTO github_pull_request (workspace_id, installation_id, repo_owner, repo_name, pr_number, title, state, html_url, branch, head_sha, pr_created_at, pr_updated_at, additions, deletions)
-		VALUES ($1, 1, 'o', 'r', 9, 'pr', 'open', 'https://x/9', 'agent/x', 'abc', now(), now(), 5, 2) RETURNING id::text`, f.ws).Scan(&prID); err != nil {
+	if err := f.pool.QueryRowContext(f.ctx, `INSERT INTO github_pull_request (id, workspace_id, installation_id, repo_owner, repo_name, pr_number, title, state, html_url, branch, head_sha, pr_created_at, pr_updated_at, additions, deletions)
+		VALUES (gen_random_uuid(), $1, 1, 'o', 'r', 9, 'pr', 'open', 'https://x/9', 'agent/x', 'abc', now(), now(), 5, 2) RETURNING id`, f.ws).Scan(&prID); err != nil {
 		t.Fatal(err)
 	}
 	f.exec(`INSERT INTO issue_pull_request (issue_id, pull_request_id) VALUES ($1,$2)`, orchID, prID)
 	f.svc.reconcile(f.ctx) // loads the team, starts T1
+	childID, _ := f.issue("child")
+	f.exec(`UPDATE issue SET parent_issue_id=$2, status='done' WHERE id=$1`, childID, orchID)
 
 	code, body := f.api("GET", "/issues")
 	if code != 200 {

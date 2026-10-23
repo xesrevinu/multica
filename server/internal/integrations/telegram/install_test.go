@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -10,10 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
-
 	"github.com/multica-ai/multica/server/internal/util/secretbox"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -21,7 +18,7 @@ import (
 type fakeTelegramInstallQueries struct {
 	upsertCalled bool
 	upsert       db.UpsertChannelInstallationParams
-	rowID        pgtype.UUID
+	rowID        string
 	appIDTaken   bool
 	owner        db.GetChannelInstallationOwnerByAppIDRow
 	ownerErr     error
@@ -35,14 +32,14 @@ type fakeTelegramInstallQueries struct {
 	statusErr    error
 }
 
-func (f *fakeTelegramInstallQueries) WithTx(pgx.Tx) installQueries { return f }
-func (f *fakeTelegramInstallQueries) ReclaimDeadChannelInstallationByAppID(context.Context, db.ReclaimDeadChannelInstallationByAppIDParams) (pgtype.UUID, error) {
-	return pgtype.UUID{}, pgx.ErrNoRows
+func (f *fakeTelegramInstallQueries) WithTx(*sql.Tx) installQueries { return f }
+func (f *fakeTelegramInstallQueries) ReclaimDeadChannelInstallationByAppID(context.Context, db.ReclaimDeadChannelInstallationByAppIDParams) (string, error) {
+	return "", sql.ErrNoRows
 }
 func (f *fakeTelegramInstallQueries) UpsertChannelInstallation(_ context.Context, p db.UpsertChannelInstallationParams) (db.ChannelInstallation, error) {
 	f.upsertCalled, f.upsert = true, p
 	if f.appIDTaken {
-		return db.ChannelInstallation{}, &pgconn.PgError{Code: pgUniqueViolation}
+		return db.ChannelInstallation{}, errors.New("UNIQUE constraint failed: channel_installation")
 	}
 	return db.ChannelInstallation{ID: f.rowID, WorkspaceID: p.WorkspaceID, AgentID: p.AgentID, ChannelType: p.ChannelType, Config: p.Config, InstallerUserID: p.InstallerUserID, Status: "active"}, nil
 }
@@ -62,17 +59,11 @@ func (f *fakeTelegramInstallQueries) SetChannelInstallationStatus(_ context.Cont
 	return f.statusErr
 }
 
-type fakeTelegramTx struct {
-	pgx.Tx
-	committed bool
+type fakeTelegramTxStarter struct{}
+
+func (fakeTelegramTxStarter) Begin(ctx context.Context) (*sql.Tx, error) {
+	return testPool.BeginTx(ctx, nil)
 }
-
-func (t *fakeTelegramTx) Commit(context.Context) error   { t.committed = true; return nil }
-func (t *fakeTelegramTx) Rollback(context.Context) error { return nil }
-
-type fakeTelegramTxStarter struct{ tx *fakeTelegramTx }
-
-func (f fakeTelegramTxStarter) Begin(context.Context) (pgx.Tx, error) { return f.tx, nil }
 
 func telegramInstallTestBox(t *testing.T) *secretbox.Box {
 	t.Helper()
@@ -89,7 +80,7 @@ func telegramInstallTestBox(t *testing.T) *secretbox.Box {
 
 func newTelegramInstallTestService(t *testing.T, q installQueries) *InstallService {
 	t.Helper()
-	svc, err := newInstallService(q, fakeTelegramTxStarter{tx: &fakeTelegramTx{}}, telegramInstallTestBox(t), testLogger())
+	svc, err := newInstallService(q, fakeTelegramTxStarter{}, telegramInstallTestBox(t), testLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +117,7 @@ func TestRegisterValidatesAndEncryptsBotToken(t *testing.T) {
 		t.Fatalf("persisted row = %+v params = %+v", row, q.upsert)
 	}
 	var cfg installConfig
-	if err := json.Unmarshal(q.upsert.Config, &cfg); err != nil {
+	if err := json.Unmarshal([]byte(q.upsert.Config), &cfg); err != nil {
 		t.Fatal(err)
 	}
 	if cfg.AppID != "12345" || cfg.BotUsername != "multica_test_bot" || strings.Contains(cfg.BotTokenEncrypted, "secret") {
@@ -198,7 +189,7 @@ func TestInstallationManagementStaysWorkspaceAndChannelScoped(t *testing.T) {
 }
 
 func TestGetInstallationMapsMissingRowWithoutLeakingScope(t *testing.T) {
-	q := &fakeTelegramInstallQueries{getErr: pgx.ErrNoRows}
+	q := &fakeTelegramInstallQueries{getErr: sql.ErrNoRows}
 	svc := newTelegramInstallTestService(t, q)
 	_, err := svc.GetInWorkspace(context.Background(), telegramTestUUID(2), telegramTestUUID(1))
 	if !errors.Is(err, ErrInstallationNotFound) {
@@ -223,7 +214,7 @@ func TestLiveBotOwnerConflictIsClassified(t *testing.T) {
 			name: "same workspace archived agent",
 			owner: db.GetChannelInstallationOwnerByAppIDRow{
 				WorkspaceID:     workspaceID,
-				AgentArchivedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+				AgentArchivedAt: sql.NullString{String: time.Now().UTC().Format(time.RFC3339Nano), Valid: true},
 			},
 			want: ErrBotOwnedByArchivedAgent,
 		},

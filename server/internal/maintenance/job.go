@@ -15,6 +15,8 @@ import (
 
 	"database/sql"
 	"strings"
+	"sync"
+
 )
 
 var (
@@ -94,6 +96,17 @@ type Processor interface {
 	Preflight(context.Context, *sql.Tx) error
 	Step(context.Context, *sql.Tx, Job) (checkpoint, progress, result json.RawMessage, complete bool, err error)
 }
+var jobLocks sync.Map
+
+func tryLockJob(id string) (func(), bool) {
+	muI, _ := jobLocks.LoadOrStore(id, &sync.Mutex{})
+	mu := muI.(*sync.Mutex)
+	if !mu.TryLock() {
+		return nil, false
+	}
+	return mu.Unlock, true
+}
+
 type Service struct {
 	pool       *sql.DB
 	processors map[string]Processor
@@ -125,23 +138,36 @@ func decode(raw []byte, target any) error {
 }
 func asJSON(v any) json.RawMessage { b, _ := json.Marshal(v); return b }
 
-const columns = `id::text, job_type, job_version, scope_key, idempotency_key, request_hash, status, revision,
+const columns = `id, job_type, job_version, scope_key, idempotency_key, request_hash, status, revision,
 dry_run, options, parameters, checkpoint, progress, result, last_error, next_allowed_at,
 created_at, updated_at, completed_at`
 
 func scan(row scanner) (Job, error) {
 	var j Job
-	var opts []byte
+	var opts, params, cp, prog, res, nextAllowedStr, createdStr, updatedStr string
+	var completedStr sql.NullString
 	err := row.Scan(&j.ID, &j.Type, &j.Version, &j.Scope, &j.IdempotencyKey, &j.RequestHash, &j.Status, &j.Revision,
-		&j.DryRun, &opts, &j.Parameters, &j.Checkpoint, &j.Progress, &j.Result, &j.LastError,
-		&j.NextAllowedAt, &j.CreatedAt, &j.UpdatedAt, &j.CompletedAt)
+		&j.DryRun, &opts, &params, &cp, &prog, &res, &j.LastError,
+		&nextAllowedStr, &createdStr, &updatedStr, &completedStr)
 	if errors.Is(err, sql.ErrNoRows) {
 		return j, ErrNotFound
 	}
 	if err != nil {
 		return j, err
 	}
-	err = decode(opts, &j.Options)
+	j.Parameters = json.RawMessage(params)
+	j.Checkpoint = json.RawMessage(cp)
+	j.Progress = json.RawMessage(prog)
+	j.Result = json.RawMessage(res)
+	j.NextAllowedAt, _ = parseMaintenanceTime(nextAllowedStr)
+	j.CreatedAt, _ = parseMaintenanceTime(createdStr)
+	j.UpdatedAt, _ = parseMaintenanceTime(updatedStr)
+	if completedStr.Valid && completedStr.String != "" {
+		if t, err := parseMaintenanceTime(completedStr.String); err == nil {
+			j.CompletedAt = &t
+		}
+	}
+	err = decode([]byte(opts), &j.Options)
 	return j, err
 }
 func (s *Service) processor(j Job) (Processor, error) {
@@ -152,7 +178,7 @@ func (s *Service) processor(j Job) (Processor, error) {
 	return p, nil
 }
 func (s *Service) Get(ctx context.Context, id string) (Job, error) {
-	return scan(s.pool.QueryRowContext(ctx, "SELECT "+columns+" FROM maintenance_job WHERE id=$1::uuid", id))
+	return scan(s.pool.QueryRowContext(ctx, "SELECT "+columns+" FROM maintenance_job WHERE id=$1", id))
 }
 func setTimeouts(ctx context.Context, tx *sql.Tx, o Options) error {
 	_, err := tx.ExecContext(ctx, `SELECT set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)`,
@@ -203,23 +229,13 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (Job, error) {
 	}
 	// Every processor relies on these shared identity/concurrency constraints.
 	var count int
-	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM pg_index i
- WHERE i.indrelid='maintenance_job'::regclass AND i.indexrelid IN
- (to_regclass('idx_maintenance_job_id'),to_regclass('idx_maintenance_job_idempotency'),to_regclass('idx_maintenance_job_active'))
- AND i.indisvalid AND i.indisunique`).Scan(&count); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master
+ WHERE type='index' AND tbl_name='maintenance_job' AND name IN
+ ('idx_maintenance_job_id','idx_maintenance_job_idempotency','idx_maintenance_job_active')`).Scan(&count); err != nil {
 		return Job{}, err
 	}
 	if count != 3 {
 		return Job{}, fmt.Errorf("maintenance indexes are missing or invalid; finish migrations 480-482")
-	}
-	// Serialize creation requests for this type/scope; the unique indexes remain the final guard.
-	var locked bool
-	err = tx.QueryRowContext(ctx, "SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))", "maintenance:"+r.Type+":"+r.Scope).Scan(&locked)
-	if err != nil {
-		return Job{}, err
-	}
-	if !locked {
-		return Job{}, ErrBusy
 	}
 	existing, err := scan(tx.QueryRowContext(ctx, "SELECT "+columns+" FROM maintenance_job WHERE idempotency_key=$1", r.IdempotencyKey))
 	if err == nil {
@@ -237,7 +253,7 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (Job, error) {
 	j, err = scan(tx.QueryRowContext(ctx, `INSERT INTO maintenance_job
  (job_type,job_version,scope_key,idempotency_key,status,dry_run,options,parameters,request_hash)
  VALUES ($1,$2,$3,$4,'ready',$5,$6,$7,$8) RETURNING `+columns,
-		r.Type, r.Version, r.Scope, r.IdempotencyKey, dry, asJSON(r.Options), params, hash))
+		r.Type, r.Version, r.Scope, r.IdempotencyKey, dry, string(asJSON(r.Options)), string(params), hash))
 	if err != nil {
 		return Job{}, classify(err)
 	}
@@ -263,6 +279,11 @@ func (s *Service) mutate(ctx context.Context, id string, revision int64, action 
 	if revision < 0 {
 		return Job{}, ErrInvalid
 	}
+	unlock, ok := tryLockJob(id)
+	if !ok {
+		return Job{}, ErrBusy
+	}
+	defer unlock()
 	tx, err := s.pool.BeginTx(ctx, nil)
 	if err != nil {
 		return Job{}, err
@@ -271,7 +292,7 @@ func (s *Service) mutate(ctx context.Context, id string, revision int64, action 
 	if err = setTimeouts(ctx, tx, Options{LockTimeoutMS: 500, StatementTimeoutMS: 5000}); err != nil {
 		return Job{}, err
 	}
-	j, err := scan(tx.QueryRowContext(ctx, "SELECT "+columns+" FROM maintenance_job WHERE id=$1::uuid FOR UPDATE NOWAIT", id))
+	j, err := scan(tx.QueryRowContext(ctx, "SELECT "+columns+" FROM maintenance_job WHERE id=$1", id))
 	if err != nil {
 		return Job{}, classify(err)
 	}
@@ -302,11 +323,7 @@ func (s *Service) mutate(ctx context.Context, id string, revision int64, action 
 		if e != nil {
 			return j, e
 		}
-		var eligible bool
-		if err = tx.QueryRowContext(ctx, "SELECT clock_timestamp() >= $1", j.NextAllowedAt).Scan(&eligible); err != nil {
-			return j, err
-		}
-		if !eligible {
+		if time.Now().UTC().Before(j.NextAllowedAt) {
 			return j, ErrThrottled
 		}
 		if _, e = p.Validate(j.Scope, j.DryRun, j.Parameters); e != nil {
@@ -330,15 +347,16 @@ func (s *Service) mutate(ctx context.Context, id string, revision int64, action 
 			cp, progress, result, complete, e = p.Step(ctx, batch, j)
 		}
 		if e != nil {
-			if rollbackErr := batch.Rollback(); rollbackErr != nil {
+			if _, rollbackErr := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT maintenance_batch"); rollbackErr != nil {
 				return j, e
 			}
+			_, _ = tx.ExecContext(ctx, "RELEASE SAVEPOINT maintenance_batch")
 			stepErr = e
 			j.LastError = e.Error()
 			// Repeated failures require an explicit operator resume.
 			j.Status = "paused"
 		} else {
-			if e = batch.Commit(); e != nil {
+			if _, e = tx.ExecContext(ctx, "RELEASE SAVEPOINT maintenance_batch"); e != nil {
 				return j, e
 			}
 			j.Checkpoint, j.Progress, j.Result = cp, progress, result
@@ -350,13 +368,28 @@ func (s *Service) mutate(ctx context.Context, id string, revision int64, action 
 	default:
 		return j, ErrInvalid
 	}
+	nowUTC := time.Now().UTC()
+	nowStr := formatMaintenanceTime(nowUTC)
+	nextAllowed := j.NextAllowedAt
+	if action == "advance" || action == "configure" {
+		cand := nowUTC.Add(time.Duration(j.Options.DelayMS) * time.Millisecond)
+		if cand.After(nextAllowed) {
+			nextAllowed = cand
+		}
+	}
+	var completedAt sql.NullString
+	if j.Status == "completed" || j.Status == "cancelled" {
+		completedAt = sql.NullString{String: nowStr, Valid: true}
+	} else if j.CompletedAt != nil {
+		completedAt = sql.NullString{String: formatMaintenanceTime(*j.CompletedAt), Valid: true}
+	}
 	j, err = scan(tx.QueryRowContext(ctx, `UPDATE maintenance_job SET status=$2, revision=revision+1,
- checkpoint=$3,progress=$4,result=$5,last_error=$6,updated_at=clock_timestamp(),
-	next_allowed_at=CASE WHEN $7 THEN GREATEST(next_allowed_at,clock_timestamp()+$8*interval '1 millisecond') ELSE next_allowed_at END,
+ checkpoint=$3,progress=$4,result=$5,last_error=$6,updated_at=$7,
+	next_allowed_at=$8,
 	options=$9,
- completed_at=CASE WHEN $2 IN ('completed','cancelled') THEN clock_timestamp() ELSE completed_at END
- WHERE id=$1::uuid RETURNING `+columns, id, j.Status, j.Checkpoint, j.Progress, j.Result, j.LastError,
-		action == "advance" || action == "configure", j.Options.DelayMS, asJSON(j.Options)))
+ completed_at=$10
+ WHERE id=$1 RETURNING `+columns, id, j.Status, string(j.Checkpoint), string(j.Progress), string(j.Result), j.LastError,
+		nowStr, formatMaintenanceTime(nextAllowed), string(asJSON(j.Options)), completedAt))
 	if err != nil {
 		return j, err
 	}
@@ -365,4 +398,17 @@ func (s *Service) mutate(ctx context.Context, id string, revision int64, action 
 	}
 	slog.Info("maintenance job operation committed", "job_id", j.ID, "job_type", j.Type, "action", action, "status", j.Status, "revision", j.Revision, "progress", string(j.Progress))
 	return j, stepErr
+}
+
+func formatMaintenanceTime(t time.Time) string {
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
+func parseMaintenanceTime(s string) (time.Time, error) {
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02 15:04:05.999999999Z07:00", "2006-01-02 15:04:05.999999999", "2006-01-02T15:04:05.999Z"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.UTC(), nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("cannot parse time %q", s)
 }

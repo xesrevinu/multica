@@ -2,6 +2,8 @@ package scheduler
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -47,12 +49,23 @@ func SearchIndexChangePruneJob(queries *db.Queries) JobSpec {
 func makeSearchIndexChangePruneHandler(queries *db.Queries) Handler {
 	return func(ctx context.Context, in HandlerInput) (HandlerResult, error) {
 		cutoff := in.PlanTime.Add(-SearchIndexChangeRetention)
+		cutoffStr := cutoff.UTC().Format(time.RFC3339Nano)
 		var total int64
 		for batch := 0; batch < searchIndexPruneMaxBatches; batch++ {
+			if err := queries.PruneSearchIndexChanges_Step2(ctx, db.PruneSearchIndexChanges_Step2Params{
+				Cutoff:    cutoffStr,
+				BatchSize: searchIndexPruneBatchSize,
+			}); err != nil {
+				return HandlerResult{RowsAffected: total}, fmt.Errorf("prune search index changes mark: %w", err)
+			}
 			deleted, err := queries.PruneSearchIndexChanges(ctx, db.PruneSearchIndexChangesParams{
-				Cutoff:    cutoff.UTC().Format(time.RFC3339Nano),
+				Cutoff:    cutoffStr,
 				BatchSize: searchIndexPruneBatchSize,
 			})
+			if errors.Is(err, sql.ErrNoRows) {
+				deleted = 0
+				err = nil
+			}
 			if err != nil {
 				return HandlerResult{RowsAffected: total}, fmt.Errorf("prune search index changes: %w", err)
 			}
@@ -68,7 +81,6 @@ func makeSearchIndexChangePruneHandler(queries *db.Queries) Handler {
 		}
 		return HandlerResult{
 			RowsAffected: total,
-			Result:       map[string]any{"cutoff": cutoff.UTC().Format(time.RFC3339)},
 		}, nil
 	}
 }

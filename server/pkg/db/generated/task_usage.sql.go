@@ -450,8 +450,8 @@ WHERE a.workspace_id = ?1
   AND atq.completed_at IS NOT NULL
   AND atq.completed_at >= ?3
   AND (?4 IS NULL OR i.project_id = ?4)
-GROUP BY CASE WHEN sqlc.arg('tz') IS NOT NULL THEN date(atq.completed_at) END
-ORDER BY CASE WHEN sqlc.arg('tz') IS NOT NULL THEN date(atq.completed_at) END DESC
+GROUP BY CASE WHEN ?2 IS NOT NULL THEN date(atq.completed_at) END
+ORDER BY CASE WHEN ?2 IS NOT NULL THEN date(atq.completed_at) END DESC
 `
 
 type ListDashboardRunTimeDailyParams struct {
@@ -639,7 +639,7 @@ WHERE workspace_id = ?1
   AND bucket_hour >= ?3
   AND (?4 IS NULL OR project_id = ?4)
 GROUP BY CASE WHEN ?2 IS NOT NULL THEN date(bucket_hour) END, LOWER(provider), model
-ORDER BY CASE WHEN sqlc.arg('tz') IS NOT NULL THEN date(bucket_hour) END DESC, LOWER(provider), model
+ORDER BY CASE WHEN ?2 IS NOT NULL THEN date(bucket_hour) END DESC, LOWER(provider), model
 `
 
 type ListDashboardUsageDailyParams struct {

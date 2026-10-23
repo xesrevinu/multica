@@ -6,10 +6,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
 
+	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -18,28 +17,10 @@ import (
 // local DSN, same as the handler suite) and returns a pool, or skips when no
 // migrated database is reachable. Kept local to this file so the rest of the
 // lark package stays DB-free.
-func channelScopeTestDB(t *testing.T) *pgxpool.Pool {
+func channelScopeTestDB(t *testing.T) *testutil.Pool {
 	t.Helper()
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
-	}
-	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Skipf("no database: %v", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		t.Skipf("database not reachable: %v", err)
-	}
-	var present bool
-	if err := pool.QueryRow(ctx, "SELECT to_regclass('public.channel_installation') IS NOT NULL").Scan(&present); err != nil || !present {
-		pool.Close()
-		t.Skip("channel_installation not present (database not migrated)")
-	}
-	t.Cleanup(pool.Close)
-	return pool
+	_ = os.Getenv("DATABASE_URL")
+	return testutil.SetupTestDB(t)
 }
 
 // TestChannelStore_ScopesToFeishu is the MUL-3515 regression guard: the
@@ -78,7 +59,7 @@ func TestChannelStore_ScopesToFeishu(t *testing.T) {
 	clean()
 	t.Cleanup(clean)
 
-	insertInstallation := func(channelType, app string) pgtype.UUID {
+	insertInstallation := func(channelType, app string) string {
 		var id string
 		if err := pool.QueryRow(ctx, `
 INSERT INTO channel_installation (workspace_id, agent_id, channel_type, config, installer_user_id)
@@ -115,15 +96,15 @@ VALUES ($1, $2, 'slack', 'oc_scope_slack', 'om_scope_slack', 'pending')
 	if got, err := store.GetLarkInstallation(ctx, feishuID); err != nil || got.AppID != feishuApp {
 		t.Fatalf("GetLarkInstallation(feishu): got app=%q err=%v, want app=%q nil", got.AppID, err, feishuApp)
 	}
-	if _, err := store.GetLarkInstallation(ctx, slackID); !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("GetLarkInstallation(slack): err=%v, want pgx.ErrNoRows (scoped out)", err)
+	if _, err := store.GetLarkInstallation(ctx, slackID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetLarkInstallation(slack): err=%v, want sql.ErrNoRows (scoped out)", err)
 	}
 
 	if got, err := store.GetLarkInstallationInWorkspace(ctx, GetInstallationInWorkspaceParams{ID: feishuID, WorkspaceID: wsUUID}); err != nil || got.AppID != feishuApp {
 		t.Fatalf("GetLarkInstallationInWorkspace(feishu): got app=%q err=%v, want app=%q nil", got.AppID, err, feishuApp)
 	}
-	if _, err := store.GetLarkInstallationInWorkspace(ctx, GetInstallationInWorkspaceParams{ID: slackID, WorkspaceID: wsUUID}); !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("GetLarkInstallationInWorkspace(slack): err=%v, want pgx.ErrNoRows (scoped out)", err)
+	if _, err := store.GetLarkInstallationInWorkspace(ctx, GetInstallationInWorkspaceParams{ID: slackID, WorkspaceID: wsUUID}); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetLarkInstallationInWorkspace(slack): err=%v, want sql.ErrNoRows (scoped out)", err)
 	}
 
 	// list-by-workspace: only the Feishu installation in this workspace
@@ -145,10 +126,10 @@ VALUES ($1, $2, 'slack', 'oc_scope_slack', 'om_scope_slack', 'pending')
 
 	// --- outbound reads: a Slack binding/card must not be seen as Feishu ---
 
-	if _, err := store.GetLarkChatSessionBindingBySession(ctx, sessionUUID); !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("GetLarkChatSessionBindingBySession(slack-bound session): err=%v, want pgx.ErrNoRows (scoped out)", err)
+	if _, err := store.GetLarkChatSessionBindingBySession(ctx, sessionUUID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetLarkChatSessionBindingBySession(slack-bound session): err=%v, want sql.ErrNoRows (scoped out)", err)
 	}
-	if _, err := store.GetLarkOutboundCardByTask(ctx, taskUUID); !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("GetLarkOutboundCardByTask(slack card): err=%v, want pgx.ErrNoRows (scoped out)", err)
+	if _, err := store.GetLarkOutboundCardByTask(ctx, taskUUID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetLarkOutboundCardByTask(slack card): err=%v, want sql.ErrNoRows (scoped out)", err)
 	}
 }

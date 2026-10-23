@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
@@ -90,7 +90,7 @@ func newSlackMediaTestEnv(t *testing.T, files map[string][]byte, contentType str
 	return env
 }
 
-func slackMediaFixture(t *testing.T, files ...slackRawFile) (engine.ResolvedInstallation, pgtype.UUID, channel.InboundMessage) {
+func slackMediaFixture(t *testing.T, files ...slackRawFile) (engine.ResolvedInstallation, string, channel.InboundMessage) {
 	t.Helper()
 	cfg, _ := json.Marshal(installConfig{
 		AppID:  "A1",
@@ -98,15 +98,14 @@ func slackMediaFixture(t *testing.T, files ...slackRawFile) (engine.ResolvedInst
 		// nil Decrypter treats the base64-decoded bytes as the plaintext token.
 		BotTokenEncrypted: base64.StdEncoding.EncodeToString([]byte("xoxb-test-token")),
 	})
-	var ws, instID, chatMessageID pgtype.UUID
-	ws.Bytes[0], instID.Bytes[0], chatMessageID.Bytes[0] = 0xAB, 0xCD, 0xEF
-	ws.Valid, instID.Valid, chatMessageID.Valid = true, true, true
+	var ws, instID, chatMessageID uuid.UUID
+	ws[0], instID[0], chatMessageID[0] = 0xAB, 0xCD, 0xEF
 	raw, _ := json.Marshal(slackRawEvent{TeamID: "T1", APIAppID: "A1", EventType: "message", Files: files})
 	inst := engine.ResolvedInstallation{
-		ID: instID, WorkspaceID: ws,
-		Platform: db.ChannelInstallation{Config: cfg},
+		ID: instID.String(), WorkspaceID: ws.String(),
+		Platform: db.ChannelInstallation{Config: string(cfg)},
 	}
-	return inst, chatMessageID, channel.InboundMessage{MessageID: "1700000000.000100", Type: channel.MsgTypeText, Text: "see attached", Raw: raw}
+	return inst, chatMessageID.String(), channel.InboundMessage{MessageID: "1700000000.000100", Type: channel.MsgTypeText, Text: "see attached", Raw: raw}
 }
 
 func (env *slackMediaTestEnv) fileURL(id string) string { return env.host.URL + "/files/" + id }
@@ -130,7 +129,7 @@ func TestSlackMediaResolver_HappyPath(t *testing.T) {
 		ID: "F1", Name: "report.pdf", Mimetype: "application/pdf", Size: int64(len(pdf)), DownloadURL: env.fileURL("F1"),
 	})
 
-	got := env.resolver.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, pgtype.UUID{}, chatMessageID, msg)
+	got := env.resolver.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, "", chatMessageID, msg)
 
 	if len(got.MediaRefs) != 1 {
 		t.Fatalf("MediaRefs = %d, want 1", len(got.MediaRefs))
@@ -162,7 +161,7 @@ func TestSlackMediaResolver_MediaKinds(t *testing.T) {
 	inst, chatMessageID, msg := slackMediaFixture(t, slackRawFile{
 		ID: "F1", Name: "shot.png", Mimetype: "image/png", DownloadURL: env.fileURL("F1"),
 	})
-	got := env.resolver.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, pgtype.UUID{}, chatMessageID, msg)
+	got := env.resolver.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, "", chatMessageID, msg)
 	if len(got.MediaRefs) != 1 || got.MediaRefs[0].Type != channel.MsgTypeImage {
 		t.Fatalf("MediaRefs = %+v, want one image ref", got.MediaRefs)
 	}
@@ -174,7 +173,7 @@ func TestSlackMediaResolver_BlockedHost(t *testing.T) {
 	inst, chatMessageID, msg := slackMediaFixture(t, slackRawFile{
 		ID: "F1", Name: "x.bin", DownloadURL: env.fileURL("F1"),
 	})
-	got := env.resolver.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, pgtype.UUID{}, chatMessageID, msg)
+	got := env.resolver.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, "", chatMessageID, msg)
 	if len(got.MediaRefs) != 0 {
 		t.Fatalf("MediaRefs = %d, want 0 for a non-Slack host", len(got.MediaRefs))
 	}
@@ -202,7 +201,7 @@ func TestSlackMediaResolver_HTMLResponseRequiresExplicitDeclaration(t *testing.T
 			inst, chatMessageID, msg := slackMediaFixture(t, slackRawFile{
 				ID: "F1", Name: "report.html", Mimetype: tt.declaredType, DownloadURL: env.fileURL("F1"),
 			})
-			got := env.resolver.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, pgtype.UUID{}, chatMessageID, msg)
+			got := env.resolver.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, "", chatMessageID, msg)
 			if len(got.MediaRefs) != tt.wantRefs {
 				t.Fatalf("MediaRefs = %d, want %d", len(got.MediaRefs), tt.wantRefs)
 			}
@@ -222,7 +221,7 @@ func TestSlackMediaResolver_ReconcilerOwnedKeySkips(t *testing.T) {
 	inst, chatMessageID, msg := slackMediaFixture(t, slackRawFile{
 		ID: "F1", Name: "x.bin", DownloadURL: env.fileURL("F1"),
 	})
-	got := env.resolver.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, pgtype.UUID{}, chatMessageID, msg)
+	got := env.resolver.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, "", chatMessageID, msg)
 	if len(got.MediaRefs) != 0 || len(env.store.uploads) != 0 {
 		t.Fatal("a reconciler-owned key must not be re-uploaded")
 	}
@@ -234,7 +233,7 @@ func TestSlackMediaResolver_OneFailureDoesNotStopTheRest(t *testing.T) {
 		slackRawFile{ID: "F1", Name: "missing.bin", DownloadURL: env.fileURL("F1")},
 		slackRawFile{ID: "F2", Name: "there.txt", Mimetype: "text/plain", DownloadURL: env.fileURL("F2")},
 	)
-	got := env.resolver.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, pgtype.UUID{}, chatMessageID, msg)
+	got := env.resolver.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, "", chatMessageID, msg)
 	if len(got.MediaRefs) != 1 || got.MediaRefs[0].Filename != "there.txt" {
 		t.Fatalf("MediaRefs = %+v, want only the second file", got.MediaRefs)
 	}
@@ -325,7 +324,7 @@ func TestSlackMediaResolver_FollowsSameHostRedirect(t *testing.T) {
 	inst, chatMessageID, msg := slackMediaFixture(t, slackRawFile{
 		ID: "F1", Name: "report.pdf", Mimetype: "application/pdf", DownloadURL: srv.URL + "/first",
 	})
-	got := env.resolver.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, pgtype.UUID{}, chatMessageID, msg)
+	got := env.resolver.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, "", chatMessageID, msg)
 	if len(got.MediaRefs) != 1 {
 		t.Fatalf("MediaRefs = %d, want 1 across a redirect", len(got.MediaRefs))
 	}
@@ -355,7 +354,7 @@ func TestSlackMediaResolver_DeclaredSizeLimit(t *testing.T) {
 			inst, chatMessageID, msg := slackMediaFixture(t, slackRawFile{
 				ID: "F1", Name: "big.txt", Mimetype: "text/plain", Size: tt.size, DownloadURL: env.fileURL("F1"),
 			})
-			got := env.resolver.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, pgtype.UUID{}, chatMessageID, msg)
+			got := env.resolver.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, "", chatMessageID, msg)
 			if len(got.MediaRefs) != tt.wantRefs {
 				t.Fatalf("MediaRefs = %d, want %d", len(got.MediaRefs), tt.wantRefs)
 			}
@@ -378,7 +377,7 @@ func TestSlackMediaResolver_BodyExceedingCapIsRejected(t *testing.T) {
 	inst, chatMessageID, msg := slackMediaFixture(t, slackRawFile{
 		ID: "F1", Name: "liar.bin", Mimetype: "application/octet-stream", Size: 10, DownloadURL: env.fileURL("F1"),
 	})
-	got := env.resolver.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, pgtype.UUID{}, chatMessageID, msg)
+	got := env.resolver.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, "", chatMessageID, msg)
 	if len(got.MediaRefs) != 0 {
 		t.Fatalf("MediaRefs = %d, want 0", len(got.MediaRefs))
 	}
@@ -415,7 +414,7 @@ func TestSlackMediaResolver_StopsOnceBudgetIsSpent(t *testing.T) {
 	)
 	expired, cancel := context.WithCancel(context.Background())
 	cancel()
-	got := env.resolver.ResolveMedia(expired, inst, engine.ResolvedIdentity{}, pgtype.UUID{}, chatMessageID, msg)
+	got := env.resolver.ResolveMedia(expired, inst, engine.ResolvedIdentity{}, "", chatMessageID, msg)
 	if len(got.MediaRefs) != 0 {
 		t.Fatalf("MediaRefs = %d, want 0", len(got.MediaRefs))
 	}

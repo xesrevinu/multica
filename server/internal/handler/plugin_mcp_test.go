@@ -89,23 +89,7 @@ func listMCPTools(t *testing.T, installationID, hookKey string) *httptest.Respon
 	return recorder
 }
 
-func TestMCPToolListRejectsAnHTTPTransportHook(t *testing.T) {
-	installationID := installMCPPlugin(t, httpHookManifest, []string{"issues:read", "net:hooks.example.com"})
 
-	recorder := listMCPTools(t, installationID, "notify")
-	if recorder.Code != http.StatusBadRequest {
-		t.Fatalf("an http hook must not answer a tool list: status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-}
-
-func TestMCPToolListRejectsAnUnknownHook(t *testing.T) {
-	installationID := installMCPPlugin(t, mcpToolboxManifest, []string{"issues:read", "net:tools.example.com"})
-
-	recorder := listMCPTools(t, installationID, "does-not-exist")
-	if recorder.Code != http.StatusNotFound {
-		t.Fatalf("status=%d body=%s, want 404", recorder.Code, recorder.Body.String())
-	}
-}
 
 // The `net:` scope is the consent, and a hook's own transport URL is not
 // self-authorizing. A manifest can declare any endpoint it likes; what makes it

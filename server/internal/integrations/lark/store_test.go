@@ -7,18 +7,18 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
+	"github.com/google/uuid"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-func uuidFrom(b byte) pgtype.UUID {
-	var u pgtype.UUID
-	for i := range u.Bytes {
-		u.Bytes[i] = b
+func uuidFrom(b byte) string {
+	var u uuid.UUID
+	for i := range u {
+		u[i] = b
 	}
-	u.Valid = true
-	return u
+	return u.String()
 }
 
 // sealedSecret returns an n-byte value standing in for a secretbox-sealed app
@@ -57,11 +57,11 @@ func TestInstallationConfigRoundTrip(t *testing.T) {
 		AgentID:            uuidFrom(0x33),
 		AppID:              "cli_app_123",
 		AppSecretEncrypted: secret,
-		TenantKey:          pgtype.Text{String: "tenant_xyz", Valid: true},
+		TenantKey:          sql.NullString{String: "tenant_xyz", Valid: true},
 		BotOpenID:          "ou_bot_open",
 		InstallerUserID:    uuidFrom(0x44),
 		Region:             "lark",
-		BotUnionID:         pgtype.Text{String: "on_union_999", Valid: true},
+		BotUnionID:         sql.NullString{String: "on_union_999", Valid: true},
 	}
 
 	cfg, err := encodeInstallConfig(in)
@@ -71,7 +71,7 @@ func TestInstallationConfigRoundTrip(t *testing.T) {
 
 	// The encoder must emit unwrapped base64 — embedded newlines are exactly
 	// what breaks Go's json []byte decode path.
-	if bytes.ContainsAny(cfg, "\n\r") {
+	if strings.ContainsAny(cfg, "\n\r") {
 		t.Fatalf("encoded config carries wrapped base64 / newlines: %s", cfg)
 	}
 
@@ -83,7 +83,7 @@ func TestInstallationConfigRoundTrip(t *testing.T) {
 		Config:          cfg,
 		Status:          "active",
 		InstallerUserID: in.InstallerUserID,
-		WsLeaseToken:    pgtype.Text{String: "node-1-g3", Valid: true},
+		WsLeaseToken:    sql.NullString{String: "node-1-g3", Valid: true},
 	}
 
 	got, err := installationFromRow(row)
@@ -127,7 +127,7 @@ func TestInstallationToleratesMimeWrappedSecret(t *testing.T) {
 		t.Fatalf("marshal config: %v", err)
 	}
 
-	got, err := installationFromRow(db.ChannelInstallation{Config: cfg, Status: "active"})
+	got, err := installationFromRow(db.ChannelInstallation{Config: string(cfg), Status: "active"})
 	if err != nil {
 		t.Fatalf("installationFromRow with wrapped secret: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestInstallConfigOmitsEmptyOptionalFields(t *testing.T) {
 		t.Fatalf("encodeInstallConfig: %v", err)
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(cfg, &raw); err != nil {
+	if err := json.Unmarshal([]byte(cfg), &raw); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	for _, k := range []string{"tenant_key", "bot_union_id", "app_secret_encrypted"} {
@@ -172,7 +172,7 @@ func TestUserBindingConfigRoundTrip(t *testing.T) {
 		MulticaUserID:  uuidFrom(0x66),
 		InstallationID: uuidFrom(0x11),
 		ChannelUserID:  "ou_sender",
-		UnionID:        pgtype.Text{String: "on_union_777", Valid: true},
+		UnionID:        sql.NullString{String: "on_union_777", Valid: true},
 	}
 	cfg, err := encodeBindingConfig(in)
 	if err != nil {

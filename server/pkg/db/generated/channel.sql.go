@@ -356,7 +356,7 @@ WITH due AS (
     FROM channel_media_pending_object AS cand
     WHERE cand.next_attempt_at <= now()
       AND (
-          (cand.state = 'pending' AND cand.created_at <= now() - ?3)
+          (cand.state = 'pending' AND cand.created_at <= datetime(now(), '-' || ?3))
           OR (cand.state = 'deleting' AND (cand.lease_expires_at IS NULL OR cand.lease_expires_at <= now()))
           OR (cand.state = 'tombstoned' AND (cand.lease_expires_at IS NULL OR cand.lease_expires_at <= now()))
       )
@@ -366,7 +366,7 @@ WITH due AS (
 UPDATE channel_media_pending_object
 SET state = CASE WHEN channel_media_pending_object.state = 'tombstoned' THEN 'tombstoned' ELSE 'deleting' END,
     lease_token = ?1,
-    lease_expires_at = now() + ?2,
+    lease_expires_at = datetime(now(), '+' || ?2),
     attempt = channel_media_pending_object.attempt + 1
 WHERE channel_media_pending_object.storage_key = (SELECT due.storage_key FROM due)
 RETURNING storage_key, workspace_id, chat_message_id, storage_url, installation_id, state, lease_token, lease_expires_at, attempt, next_attempt_at, last_error, tombstone_pass, created_at
@@ -514,13 +514,28 @@ type ClearChannelInstallationBotScopedRowsRow struct {
 func (q *Queries) ClearChannelInstallationBotScopedRows(ctx context.Context, installationID string) (ClearChannelInstallationBotScopedRowsRow, error) {
 	row := q.db.QueryRowContext(ctx, clearChannelInstallationBotScopedRows, installationID)
 	var i ClearChannelInstallationBotScopedRowsRow
-	err := row.Scan(
+	if err := row.Scan(
 		&i.UserBindings,
 		&i.ChatSessionBindings,
 		&i.TaskDeliveries,
 		&i.OutboundMessages,
-	)
-	return i, err
+	); err != nil {
+		return i, err
+	}
+	for _, step := range []func(context.Context, string) error{
+		q.ClearChannelInstallationBotScopedRows_Step2,
+		q.ClearChannelInstallationBotScopedRows_Step3,
+		q.ClearChannelInstallationBotScopedRows_Step4,
+		q.ClearChannelInstallationBotScopedRows_Step5,
+		q.ClearChannelInstallationBotScopedRows_Step6,
+		q.ClearChannelInstallationBotScopedRows_Step7,
+		q.ClearChannelInstallationBotScopedRows_Step8,
+	} {
+		if err := step(ctx, installationID); err != nil {
+			return i, err
+		}
+	}
+	return i, nil
 }
 
 const clearChannelInstallationBotScopedRows_Step2 = `-- name: ClearChannelInstallationBotScopedRows_Step2 :exec
@@ -607,7 +622,7 @@ INSERT INTO channel_reply_delivery (
 )
 ON CONFLICT (turn_id) DO UPDATE
 SET phase = 'settled',
-    settled_reason = @settled_reason,
+    settled_reason = EXCLUDED.settled_reason,
     owner_token = NULL,
     owner_expires_at = NULL,
     updated_at = now()
@@ -1165,6 +1180,16 @@ WHERE chat_session_id = ?1
 // and the Chat's context generations.
 // Call in order: DeleteChannelChatSessionBindingBySession_Step2, DeleteChannelChatSessionBindingBySession_Step3, DeleteChannelChatSessionBindingBySession_Step4, DeleteChannelChatSessionBindingBySession_Step5, DeleteChannelChatSessionBindingBySession.
 func (q *Queries) DeleteChannelChatSessionBindingBySession(ctx context.Context, chatSessionID string) error {
+	for _, step := range []func(context.Context, string) error{
+		q.DeleteChannelChatSessionBindingBySession_Step2,
+		q.DeleteChannelChatSessionBindingBySession_Step3,
+		q.DeleteChannelChatSessionBindingBySession_Step4,
+		q.DeleteChannelChatSessionBindingBySession_Step5,
+	} {
+		if err := step(ctx, chatSessionID); err != nil {
+			return err
+		}
+	}
 	_, err := q.db.ExecContext(ctx, deleteChannelChatSessionBindingBySession, chatSessionID)
 	return err
 }
@@ -1244,6 +1269,15 @@ type DeleteChannelChatSessionBindingsByInstallationParams struct {
 // them after this statement commits.
 // Call in order: DeleteChannelChatSessionBindingsByInstallation_Step2, DeleteChannelChatSessionBindingsByInstallation_Step3, DeleteChannelChatSessionBindingsByInstallation_Step4, DeleteChannelChatSessionBindingsByInstallation.
 func (q *Queries) DeleteChannelChatSessionBindingsByInstallation(ctx context.Context, arg DeleteChannelChatSessionBindingsByInstallationParams) error {
+	if err := q.DeleteChannelChatSessionBindingsByInstallation_Step2(ctx, DeleteChannelChatSessionBindingsByInstallation_Step2Params(arg)); err != nil {
+		return err
+	}
+	if err := q.DeleteChannelChatSessionBindingsByInstallation_Step3(ctx, DeleteChannelChatSessionBindingsByInstallation_Step3Params(arg)); err != nil {
+		return err
+	}
+	if err := q.DeleteChannelChatSessionBindingsByInstallation_Step4(ctx, DeleteChannelChatSessionBindingsByInstallation_Step4Params(arg)); err != nil {
+		return err
+	}
 	_, err := q.db.ExecContext(ctx, deleteChannelChatSessionBindingsByInstallation, arg.InstallationID, arg.ChannelType)
 	return err
 }
@@ -1320,6 +1354,25 @@ WHERE agent_id IN (
 // here would take a working bot away from an agent that is still there.
 // Call in order: Step2, Step3, Step4, Step5, Step6, Step7, Step8, Step9, Step10, Step11, Step12, Step13, Step14, DeleteChannelInstallationsBySystemRuntimeAgents.
 func (q *Queries) DeleteChannelInstallationsBySystemRuntimeAgents(ctx context.Context, runtimeID sql.NullString) error {
+	for _, step := range []func(context.Context, sql.NullString) error{
+		q.DeleteChannelInstallationsBySystemRuntimeAgents_Step2,
+		q.DeleteChannelInstallationsBySystemRuntimeAgents_Step3,
+		q.DeleteChannelInstallationsBySystemRuntimeAgents_Step4,
+		q.DeleteChannelInstallationsBySystemRuntimeAgents_Step5,
+		q.DeleteChannelInstallationsBySystemRuntimeAgents_Step6,
+		q.DeleteChannelInstallationsBySystemRuntimeAgents_Step7,
+		q.DeleteChannelInstallationsBySystemRuntimeAgents_Step8,
+		q.DeleteChannelInstallationsBySystemRuntimeAgents_Step9,
+		q.DeleteChannelInstallationsBySystemRuntimeAgents_Step10,
+		q.DeleteChannelInstallationsBySystemRuntimeAgents_Step11,
+		q.DeleteChannelInstallationsBySystemRuntimeAgents_Step12,
+		q.DeleteChannelInstallationsBySystemRuntimeAgents_Step13,
+		q.DeleteChannelInstallationsBySystemRuntimeAgents_Step14,
+	} {
+		if err := step(ctx, runtimeID); err != nil {
+			return err
+		}
+	}
 	_, err := q.db.ExecContext(ctx, deleteChannelInstallationsBySystemRuntimeAgents, runtimeID)
 	return err
 }
@@ -2266,7 +2319,7 @@ WITH RECURSIVE chain AS (
     JOIN chain ON parent.id = chain.parent_task_id
 )
 SELECT
-    (SELECT root.task_id FROM chain root WHERE root.parent_task_id IS NULL LIMIT 1) AS turn_id,
+    COALESCE((SELECT root.task_id FROM chain root WHERE root.parent_task_id IS NULL LIMIT 1), '') AS turn_id,
     (SELECT COALESCE(MAX(step.depth), 0) FROM chain step) AS attempt_depth
 `
 
@@ -3080,8 +3133,31 @@ func (q *Queries) ReclaimDeadChannelInstallationByAppID(ctx context.Context, arg
 		arg.AgentID,
 	)
 	var id string
-	err := row.Scan(&id)
-	return id, err
+	if err := row.Scan(&id); err != nil {
+		return "", err
+	}
+	for _, step := range []func(context.Context, string) error{
+		q.ReclaimDeadChannelInstallationByAppID_Step2,
+		q.ReclaimDeadChannelInstallationByAppID_Step3,
+		q.ReclaimDeadChannelInstallationByAppID_Step4,
+		q.ReclaimDeadChannelInstallationByAppID_Step5,
+		q.ReclaimDeadChannelInstallationByAppID_Step6,
+		q.ReclaimDeadChannelInstallationByAppID_Step7,
+		q.ReclaimDeadChannelInstallationByAppID_Step8,
+		q.ReclaimDeadChannelInstallationByAppID_Step9,
+		q.ReclaimDeadChannelInstallationByAppID_Step10,
+		q.ReclaimDeadChannelInstallationByAppID_Step11,
+		q.ReclaimDeadChannelInstallationByAppID_Step12,
+		q.ReclaimDeadChannelInstallationByAppID_Step13,
+	} {
+		if err := step(ctx, id); err != nil {
+			return id, err
+		}
+	}
+	if err := q.ReclaimDeadChannelInstallationByAppID_Step14(ctx, sql.NullString{String: id, Valid: id != ""}); err != nil {
+		return id, err
+	}
+	return id, nil
 }
 
 const reclaimDeadChannelInstallationByAppID_Step10 = `-- name: ReclaimDeadChannelInstallationByAppID_Step10 :exec
@@ -3452,7 +3528,7 @@ const releaseChannelMediaPendingObject = `-- name: ReleaseChannelMediaPendingObj
 UPDATE channel_media_pending_object
 SET lease_token = NULL,
     lease_expires_at = NULL,
-    next_attempt_at = now() + ?1,
+    next_attempt_at = datetime(now(), '+' || ?1),
     last_error = ?2
 WHERE storage_key = ?3
   AND workspace_id = ?4
@@ -3750,7 +3826,7 @@ UPDATE channel_media_pending_object
 SET state = 'tombstoned',
     lease_token = NULL,
     lease_expires_at = NULL,
-    next_attempt_at = now() + ?1,
+    next_attempt_at = datetime(now(), '+' || ?1),
     -- The pass index lives in its own column: a failed re-delete writes
     -- last_error, so carrying the schedule position there would reset the
     -- walk on every failure and a flaky store could keep the row alive
@@ -3824,6 +3900,12 @@ type UpdateChannelChatSessionBindingReplyTargetParams struct {
 // after a later generation has already moved it.
 // Call in order: UpdateChannelChatSessionBindingReplyTarget_Step2, UpdateChannelChatSessionBindingReplyTarget.
 func (q *Queries) UpdateChannelChatSessionBindingReplyTarget(ctx context.Context, arg UpdateChannelChatSessionBindingReplyTargetParams) error {
+	if err := q.UpdateChannelChatSessionBindingReplyTarget_Step2(ctx, UpdateChannelChatSessionBindingReplyTarget_Step2Params{
+		LastMessageID:      arg.LastMessageID,
+		ReplyChatSessionID: arg.ReplyChatSessionID,
+	}); err != nil {
+		return err
+	}
 	_, err := q.db.ExecContext(ctx, updateChannelChatSessionBindingReplyTarget, arg.LastMessageID, arg.LastThreadID, arg.ReplyChatSessionID)
 	return err
 }
@@ -3953,7 +4035,7 @@ INSERT INTO channel_installation (
 ) VALUES (
     ?1, ?2, ?3, ?4, ?5
 )
-ON CONFLICT (channel_type, (config ->> 'app_id')) DO UPDATE SET
+ON CONFLICT (channel_type, (json_extract(config, '$.app_id'))) DO UPDATE SET
     agent_id          = EXCLUDED.agent_id,
     config            = EXCLUDED.config,
     installer_user_id = EXCLUDED.installer_user_id,

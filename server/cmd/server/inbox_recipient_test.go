@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 
@@ -41,17 +42,17 @@ func TestCreateInboxItem_RecipientWorkspace(t *testing.T) {
 		{"agent ID as member", "member", agent, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			params := db.CreateInboxItemParams{ID: dbid.NewV7(), WorkspaceID: util.MustParseUUID(testWorkspaceID), RecipientType: tc.recipientType, RecipientID: util.MustParseUUID(tc.recipientID), IssueID: util.MustParseUUID(issue), Type: "reaction_added", Severity: "info", Title: "Recipient guard", Details: emptyDetails}
+			params := db.CreateInboxItemParams{ID: sql.NullString{String: dbid.NewV7(), Valid: true}, WorkspaceID: util.MustParseUUID(testWorkspaceID), RecipientType: tc.recipientType, RecipientID: util.MustParseUUID(tc.recipientID), IssueID: sql.NullString{String: util.MustParseUUID(issue), Valid: true}, Type: "reaction_added", Severity: "info", Title: "Recipient guard", Details: sql.NullString{String: string(emptyDetails), Valid: len(emptyDetails) > 0}}
 			item, err := queries.CreateInboxItem(context.Background(), params)
 			if tc.allowed {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if item.ID != params.ID || item.RecipientType != tc.recipientType || item.RecipientID != params.RecipientID {
+				if item.ID != params.ID.String || item.RecipientType != tc.recipientType || item.RecipientID != params.RecipientID {
 					t.Fatalf("wrong inserted item: %+v", item)
 				}
 				fx.Exec(t, `DELETE FROM inbox_item WHERE id = $1`, item.ID)
-			} else if !errors.Is(err, pgx.ErrNoRows) {
+			} else if !(errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows)) {
 				t.Fatalf("CreateInboxItem error = %v, want pgx.ErrNoRows", err)
 			}
 			bus := events.New()

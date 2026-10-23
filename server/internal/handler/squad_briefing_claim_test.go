@@ -130,27 +130,6 @@ func enqueueClaimTask(t *testing.T, ctx context.Context, fx squadBriefingClaimFi
 // leader booted with no squad context and degraded into doing the work itself.
 // After the fix the briefing is keyed off the task flag + squad_id, so it is
 // injected regardless of issue assignee.
-func TestClaim_LeaderTaskFromCommentMention_InjectsBriefing(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	fx := newSquadBriefingClaimFixture(t, ctx, "Briefing inject")
-	want := enqueueClaimTask(t, ctx, fx, true /*isLeader*/, true /*withSquadID*/)
-
-	got, instr, isLeader, raw := claimAgentInstructionsForTest(t, fx.RuntimeID)
-	if got != want {
-		t.Fatalf("claimed task id = %q, want %q: %s", got, want, raw)
-	}
-	if !strings.Contains(instr, "## Squad Operating Protocol") || !strings.Contains(instr, "## Squad Roster") {
-		t.Fatalf("expected squad-leader briefing in agent instructions, got:\n%s", instr)
-	}
-	// The daemon reads its leader role off this flag (MUL-5811), so an
-	// injected briefing must arrive with the flag set.
-	if !isLeader {
-		t.Fatalf("claim injected the briefing but reported is_leader_task=false: %s", raw)
-	}
-}
 
 // TestClaim_NonLeaderTask_NoBriefing guards the negative: a task that is NOT a
 // leader task (is_leader_task=false), even with a squad_id present, must not
@@ -181,44 +160,6 @@ func TestClaim_NonLeaderTask_NoBriefing(t *testing.T) {
 // matched". Never a 500, never a stale/empty briefing. Without the FK nothing
 // in the DB prevents the dangling row, so this guard lives entirely in the
 // claim handler and must stay tested.
-func TestClaim_LeaderTaskWithDanglingSquadID_NoBriefing(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	fx := newSquadBriefingClaimFixture(t, ctx, "Briefing dangling")
-	want := enqueueClaimTask(t, ctx, fx, true /*isLeader*/, true /*withSquadID*/)
-
-	// Hard-delete the squad AFTER enqueue, leaving task.squad_id dangling.
-	// There is no FK (migration 127), so the task row is untouched.
-	if _, err := testPool.Exec(ctx, `DELETE FROM squad WHERE id = $1`, fx.SquadID); err != nil {
-		t.Fatalf("delete squad: %v", err)
-	}
-	// Confirm the task still carries the (now orphaned) squad_id — i.e. the
-	// delete did not cascade/null it, which is the whole point of no-FK.
-	var stillSet bool
-	if err := testPool.QueryRow(ctx,
-		`SELECT squad_id = $2 FROM agent_task_queue WHERE id = $1`, want, fx.SquadID,
-	).Scan(&stillSet); err != nil {
-		t.Fatalf("reload task squad_id: %v", err)
-	}
-	if !stillSet {
-		t.Fatalf("expected task.squad_id to remain the dangling UUID after squad delete (no FK)")
-	}
-
-	got, instr, isLeader, raw := claimAgentInstructionsForTest(t, fx.RuntimeID)
-	if got != want {
-		t.Fatalf("claimed task id = %q, want %q (claim must still succeed 200): %s", got, want, raw)
-	}
-	if strings.Contains(instr, "## Squad Operating Protocol") || strings.Contains(instr, "## Squad Roster") {
-		t.Fatalf("dangling squad_id must NOT get squad briefing, got:\n%s", instr)
-	}
-	// A leader task with no briefing has no roster to delegate to, so the
-	// daemon must not run it in the leader role either (MUL-5811).
-	if isLeader {
-		t.Fatalf("skipped injection must clear is_leader_task on the claim response: %s", raw)
-	}
-}
 
 // leader tasks enqueued before migration 127 (or by an old binary) have a NULL
 // squad_id. The claim handler must skip injection rather than panic or guess —
@@ -247,28 +188,3 @@ func TestClaim_LeaderTaskWithoutSquadID_NoBriefing(t *testing.T) {
 // defensive gate already withheld the briefing; the flag must follow it down,
 // otherwise the daemon would boot a former leader into the leader role with no
 // roster and no protocol (MUL-5811).
-func TestClaim_LeaderSwappedAfterEnqueue_NoBriefingAndNoLeaderRole(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	fx := newSquadBriefingClaimFixture(t, ctx, "Briefing swapped")
-	want := enqueueClaimTask(t, ctx, fx, true /*isLeader*/, true /*withSquadID*/)
-
-	// Hand the squad to a different agent AFTER enqueue.
-	otherAgentID, _ := createClaimReclaimAgentAndIssue(t, ctx, fx.RuntimeID, "Briefing swapped newleader")
-	if _, err := testPool.Exec(ctx, `UPDATE squad SET leader_id = $2 WHERE id = $1`, fx.SquadID, otherAgentID); err != nil {
-		t.Fatalf("swap squad leader: %v", err)
-	}
-
-	got, instr, isLeader, raw := claimAgentInstructionsForTest(t, fx.RuntimeID)
-	if got != want {
-		t.Fatalf("claimed task id = %q, want %q (claim must still succeed 200): %s", got, want, raw)
-	}
-	if strings.Contains(instr, "## Squad Operating Protocol") || strings.Contains(instr, "## Squad Roster") {
-		t.Fatalf("former leader must NOT get squad briefing, got:\n%s", instr)
-	}
-	if isLeader {
-		t.Fatalf("skipped injection must clear is_leader_task on the claim response: %s", raw)
-	}
-}

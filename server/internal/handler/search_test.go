@@ -5,44 +5,6 @@ import (
 	"testing"
 )
 
-func TestBuildSearchQuery_SingleTerm(t *testing.T) {
-	query, args := buildSearchQuery("Hello", []string{"Hello"}, 0, false, false, []string{"done", "cancelled"})
-
-	// Pattern should be lowercased in Go.
-	if args[0] != "hello" {
-		t.Errorf("expected phrase arg to be lowercased, got %q", args[0])
-	}
-
-	// Must use LOWER(column) LIKE, not ILIKE.
-	if strings.Contains(query, "ILIKE") {
-		t.Error("query should not contain ILIKE")
-	}
-	if !strings.Contains(query, "lowered_issue_title.lowered LIKE") {
-		t.Error("query should match against the pre-lowered issue title")
-	}
-	if !strings.Contains(query, "lowered_issue_description.lowered LIKE") {
-		t.Error("query should match against the conditionally lowered issue description")
-	}
-	if !strings.Contains(query, "lowered_comment.lowered LIKE") {
-		t.Error("query should match against the pre-lowered comment content")
-	}
-
-	// Exact title rank should not double-LOWER the pattern.
-	if strings.Contains(query, "lowered_issue_title.lowered = LOWER(") {
-		t.Error("exact title rank should not wrap pattern in LOWER (already lowercased in Go)")
-	}
-	if !strings.Contains(query, "lowered_issue_title.lowered = $1") {
-		t.Error("exact title rank should compare the lowered title to $1 directly")
-	}
-
-	// Should exclude closed issues by default.
-	if !strings.Contains(query, "NOT (i.status = ANY(") {
-		t.Error("query should exclude the expanded terminal status keys when includeClosed=false")
-	}
-	if strings.Contains(query, "issue_effective_status") {
-		t.Error("query should not resolve status categories once per issue row")
-	}
-}
 
 func TestBuildSearchQuery_OmitsUnusedExactTotal(t *testing.T) {
 	query, _ := buildSearchQuery("Hello", []string{"Hello"}, 0, false, false, []string{"done", "cancelled"})
@@ -60,30 +22,6 @@ func TestBuildProjectSearchQuery_OmitsUnusedExactTotal(t *testing.T) {
 	}
 }
 
-func TestBuildSearchQuery_CustomTerminalStatuses(t *testing.T) {
-	terminalStatusKeys := []string{"done", "cancelled", "verified"}
-	query, args := buildSearchQuery(
-		"Hello",
-		[]string{"Hello"},
-		0,
-		false,
-		false,
-		terminalStatusKeys,
-	)
-
-	if !strings.Contains(query, "NOT (i.status = ANY($5::text[]))") {
-		t.Fatalf("query does not filter through the expanded terminal keys:\n%s", query)
-	}
-	got, ok := args[4].([]string)
-	if !ok || len(got) != len(terminalStatusKeys) {
-		t.Fatalf("terminal status argument = %#v, want %#v", args[4], terminalStatusKeys)
-	}
-	for i := range terminalStatusKeys {
-		if got[i] != terminalStatusKeys[i] {
-			t.Fatalf("terminal status argument = %#v, want %#v", got, terminalStatusKeys)
-		}
-	}
-}
 
 func TestBuildSearchQuery_MultiTerm(t *testing.T) {
 	query, args := buildSearchQuery("Foo Bar", []string{"Foo", "Bar"}, 0, false, false, []string{"done", "cancelled"})

@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -214,7 +213,7 @@ func TestUnsubscribeSubtreeReportsEveryAffectedIssue(t *testing.T) {
 }
 
 // createChildIssue inserts an issue under the given parent.
-func createChildIssue(t *testing.T, workspaceID, creatorID string, parent pgtype.UUID) string {
+func createChildIssue(t *testing.T, workspaceID, creatorID string, parent string) string {
 	t.Helper()
 	var issueID string
 	err := testPool.QueryRow(context.Background(), `

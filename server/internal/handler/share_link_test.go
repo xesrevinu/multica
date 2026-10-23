@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,12 +12,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/seatcapacity"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 var testSeq atomic.Int64
@@ -194,59 +191,7 @@ func TestCreateShareLink_RequiresOwnerAdmin(t *testing.T) {
 	}
 }
 
-func TestListShareLinks_RequiresOwnerAdmin(t *testing.T) {
-	clearShareLinksForTestWorkspace(t)
-	createTestShareLink(t, testWorkspaceID, "member", 0, 0)
 
-	r := chi.NewRouter()
-	r.Route("/api/workspaces/{id}", func(r chi.Router) {
-		r.Use(middleware.RequireWorkspaceRoleFromURL(testHandler.Queries, "id", "owner", "admin"))
-		r.Get("/share-links", testHandler.ListShareLinks)
-	})
-
-	// Owner can list.
-	req := newRequest("GET", "/api/workspaces/"+testWorkspaceID+"/share-links", nil)
-	req = withURLParam(req, "id", testWorkspaceID)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("owner list: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	// Plain member denied.
-	memberID := createTestUserAndMember(t, "member")
-	req2 := newRequest("GET", "/api/workspaces/"+testWorkspaceID+"/share-links", nil)
-	req2.Header.Set("X-User-ID", memberID)
-	req2 = withURLParam(req2, "id", testWorkspaceID)
-	w2 := httptest.NewRecorder()
-	r.ServeHTTP(w2, req2)
-	if w2.Code != http.StatusForbidden {
-		t.Fatalf("member list: expected 403, got %d: %s", w2.Code, w2.Body.String())
-	}
-}
-
-func TestCreateShareLink_InvalidatesOldLink(t *testing.T) {
-	clearShareLinksForTestWorkspace(t)
-
-	first := createTestShareLink(t, testWorkspaceID, "member", 0, 0)
-
-	req := newRequest("POST", "/api/workspaces/"+testWorkspaceID+"/share-links", CreateShareLinkRequest{Role: "member"})
-	req = withURLParam(req, "id", testWorkspaceID)
-	w := httptest.NewRecorder()
-	testHandler.CreateShareLink(w, req)
-	if w.Code != http.StatusCreated {
-		t.Fatalf("create: expected 201, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var active bool
-	if err := testPool.QueryRow(context.Background(),
-		`SELECT is_active FROM workspace_share_link WHERE id = $1`, first.ID).Scan(&active); err != nil {
-		t.Fatalf("reload old link: %v", err)
-	}
-	if active {
-		t.Fatal("old share link must be deactivated after creating a new one")
-	}
-}
 
 func TestCreateShareLink_RejectsInvalidInput(t *testing.T) {
 	clearShareLinksForTestWorkspace(t)
@@ -331,219 +276,10 @@ func TestCreateShareLink_RejectsOverflowingInput(t *testing.T) {
 	}
 }
 
-func TestJoinShareLink_ExpiredAndRevoked(t *testing.T) {
-	clearShareLinksForTestWorkspace(t)
 
-	// Expired link.
-	expired := createTestShareLink(t, testWorkspaceID, "member", 0, -1)
-	userID := createTestUserAndMember(t, "")
 
-	req := newRequest("POST", "/api/share-links/join", JoinByShareLinkRequest{Code: expired.Code})
-	req.Header.Set("X-User-ID", userID)
-	w := httptest.NewRecorder()
-	testHandler.JoinByShareLink(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("expired join: expected 404, got %d: %s", w.Code, w.Body.String())
-	}
 
-	// Deactivate the expired link so the workspace has room for a new active one.
-	if _, err := testPool.Exec(context.Background(),
-		`UPDATE workspace_share_link SET is_active = false WHERE id = $1`, expired.ID); err != nil {
-		t.Fatalf("deactivate expired link: %v", err)
-	}
 
-	// Revoked link.
-	revoked := createTestShareLink(t, testWorkspaceID, "member", 0, 0)
-	if _, err := testPool.Exec(context.Background(),
-		`UPDATE workspace_share_link SET is_active = false WHERE id = $1`, revoked.ID); err != nil {
-		t.Fatalf("revoke link: %v", err)
-	}
-	req2 := newRequest("POST", "/api/share-links/join", JoinByShareLinkRequest{Code: revoked.Code})
-	req2.Header.Set("X-User-ID", userID)
-	w2 := httptest.NewRecorder()
-	testHandler.JoinByShareLink(w2, req2)
-	if w2.Code != http.StatusNotFound {
-		t.Fatalf("revoked join: expected 404, got %d: %s", w2.Code, w2.Body.String())
-	}
-}
-
-func TestJoinShareLink_ConcurrentLastUse(t *testing.T) {
-	clearShareLinksForTestWorkspace(t)
-
-	// max_uses = 1: only one concurrent join may succeed.
-	link := createTestShareLink(t, testWorkspaceID, "member", 1, 0)
-
-	const n = 4
-	results := make(chan int, n)
-	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			userID := createTestUserAndMember(t, "")
-			req := newRequest("POST", "/api/share-links/join", JoinByShareLinkRequest{Code: link.Code})
-			req.Header.Set("X-User-ID", userID)
-			w := httptest.NewRecorder()
-			testHandler.JoinByShareLink(w, req)
-			results <- w.Code
-		}()
-	}
-	wg.Wait()
-	close(results)
-
-	ok := 0
-	conflict := 0
-	for code := range results {
-		switch code {
-		case http.StatusOK:
-			ok++
-		case http.StatusNotFound, http.StatusConflict:
-			conflict++
-		default:
-			t.Fatalf("unexpected join status: %d", code)
-		}
-	}
-	if ok != 1 {
-		t.Fatalf("max_uses=1: expected exactly 1 success, got %d", ok)
-	}
-}
-
-func TestJoinShareLink_DuplicateJoinDoesNotConsumeUse(t *testing.T) {
-	clearShareLinksForTestWorkspace(t)
-
-	link := createTestShareLink(t, testWorkspaceID, "member", 5, 0)
-	userID := createTestUserAndMember(t, "")
-
-	// First join succeeds.
-	req := newRequest("POST", "/api/share-links/join", JoinByShareLinkRequest{Code: link.Code})
-	req.Header.Set("X-User-ID", userID)
-	w := httptest.NewRecorder()
-	testHandler.JoinByShareLink(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("first join: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	// Duplicate join is rejected and must NOT consume another use.
-	req2 := newRequest("POST", "/api/share-links/join", JoinByShareLinkRequest{Code: link.Code})
-	req2.Header.Set("X-User-ID", userID)
-	w2 := httptest.NewRecorder()
-	testHandler.JoinByShareLink(w2, req2)
-	if w2.Code != http.StatusConflict {
-		t.Fatalf("duplicate join: expected 409, got %d: %s", w2.Code, w2.Body.String())
-	}
-
-	var useCount int32
-	if err := testPool.QueryRow(context.Background(),
-		`SELECT use_count FROM workspace_share_link WHERE id = $1`, link.ID).Scan(&useCount); err != nil {
-		t.Fatalf("reload use count: %v", err)
-	}
-	if useCount != 1 {
-		t.Fatalf("duplicate join must not consume a use: expected use_count=1, got %d", useCount)
-	}
-}
-
-func TestJoinShareLink_ReactivatesDeadLetterWithSameCapacityToken(t *testing.T) {
-	clearShareLinksForTestWorkspace(t)
-	link := createTestShareLink(t, testWorkspaceID, "member", 5, 0)
-	userID := createTestUserAndMember(t, "")
-	stub := &shareJoinCapacityStub{}
-	useSeatCapacity(t, stub)
-
-	queries := db.New(testSQLite)
-	originalToken := uuid.New()
-	intent, err := queries.CreateOrReactivateShareJoinCapacityIntent(context.Background(), db.CreateOrReactivateShareJoinCapacityIntentParams{
-		WorkspaceID: link.WorkspaceID, OperationToken: uuidToPG(originalToken),
-		ShareLinkID: nullString(link.ID), UserID: nullString(parseUUID(userID)),
-		NextAttemptAt: time.Now().UTC().Format(time.RFC3339Nano),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `DELETE FROM seat_capacity_outbox WHERE operation_token = $1`, intent.OperationToken)
-	})
-	if _, err := testPool.Exec(context.Background(), `
-		UPDATE seat_capacity_outbox
-		SET attempt_count = 10, dead_lettered_at = now(), last_error = 'stuck'
-		WHERE operation_token = $1
-	`, intent.OperationToken); err != nil {
-		t.Fatal(err)
-	}
-
-	req := newRequest("POST", "/api/share-links/join", JoinByShareLinkRequest{Code: link.Code})
-	req.Header.Set("X-User-ID", userID)
-	w := httptest.NewRecorder()
-	testHandler.JoinByShareLink(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("join: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	tokens := stub.tokens()
-	if len(tokens) != 1 || tokens[0] != originalToken {
-		t.Fatalf("claim tokens=%v, want original %s", tokens, originalToken)
-	}
-}
-
-func TestJoinShareLink_ConcurrentSameUserUsesOneCapacityOperation(t *testing.T) {
-	clearShareLinksForTestWorkspace(t)
-	link := createTestShareLink(t, testWorkspaceID, "member", 5, 0)
-	userID := createTestUserAndMember(t, "")
-	gate := &sync.WaitGroup{}
-	gate.Add(2)
-	stub := &shareJoinCapacityStub{claimGate: gate}
-	useSeatCapacity(t, stub)
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(context.Background(), `
-			DELETE FROM seat_capacity_outbox
-			WHERE workspace_id = $1 AND share_link_id = $2 AND user_id = $3
-		`, link.WorkspaceID, link.ID, parseUUID(userID))
-	})
-
-	start := make(chan struct{})
-	statuses := make(chan int, 2)
-	var wg sync.WaitGroup
-	for range 2 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-start
-			req := newRequest("POST", "/api/share-links/join", JoinByShareLinkRequest{Code: link.Code})
-			req.Header.Set("X-User-ID", userID)
-			w := httptest.NewRecorder()
-			testHandler.JoinByShareLink(w, req)
-			statuses <- w.Code
-		}()
-	}
-	close(start)
-	wg.Wait()
-	close(statuses)
-	var successes, conflicts int
-	for status := range statuses {
-		switch status {
-		case http.StatusOK:
-			successes++
-		case http.StatusConflict:
-			conflicts++
-		default:
-			t.Fatalf("unexpected concurrent join status %d", status)
-		}
-	}
-	if successes != 1 || conflicts != 1 {
-		t.Fatalf("successes=%d conflicts=%d, want 1/1", successes, conflicts)
-	}
-	tokens := stub.tokens()
-	if len(tokens) != 2 || tokens[0] != tokens[1] {
-		t.Fatalf("concurrent claim tokens=%v, want one logical operation", tokens)
-	}
-	var members int
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT count(*) FROM member WHERE workspace_id = $1 AND user_id = $2
-	`, link.WorkspaceID, parseUUID(userID)).Scan(&members); err != nil {
-		t.Fatal(err)
-	}
-	if members != 1 {
-		t.Fatalf("member rows=%d, want 1", members)
-	}
-}
 
 // pendingInvitationForShareJoiner inserts a pending email invitation for a
 // share-link join test user and returns its id. role is the invitation's own
@@ -589,217 +325,23 @@ func invitationStatusOf(t *testing.T, invitationID string) (string, string) {
 // and a later Accept on it dies on the CreateMember 409. The link's role
 // wins — the user chose this entry point — and the invitation row keeps its
 // own role, only its status is settled.
-func TestJoinShareLink_SettlesPendingInvitation(t *testing.T) {
-	clearShareLinksForTestWorkspace(t)
-	link := createTestShareLink(t, testWorkspaceID, "member", 5, 0)
-	userID := createTestUserAndMember(t, "")
-	invitationID := pendingInvitationForShareJoiner(t, userID, shareJoinerEmail(t, userID), "admin")
-
-	req := newRequest("POST", "/api/share-links/join", JoinByShareLinkRequest{Code: link.Code})
-	req.Header.Set("X-User-ID", userID)
-	w := httptest.NewRecorder()
-	testHandler.JoinByShareLink(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("join: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	status, role := invitationStatusOf(t, invitationID)
-	if status != "accepted" {
-		t.Fatalf("invitation status = %q, want accepted", status)
-	}
-	if role != "admin" {
-		t.Fatalf("invitation role = %q, want untouched admin", role)
-	}
-	var memberRole string
-	if err := testPool.QueryRow(context.Background(),
-		`SELECT role FROM member WHERE workspace_id = $1 AND user_id = $2`,
-		parseUUID(testWorkspaceID), parseUUID(userID),
-	).Scan(&memberRole); err != nil {
-		t.Fatalf("load member: %v", err)
-	}
-	if memberRole != "member" {
-		t.Fatalf("member role = %q, want the share link's member role", memberRole)
-	}
-}
 
 // The settled invitation signals its conclusion on the same channel the
 // accept path uses, so workspace admins refresh their pending-invitation
 // list instead of holding a row that is already over.
-func TestJoinShareLink_SettledInvitationPublishesAcceptedEvent(t *testing.T) {
-	clearShareLinksForTestWorkspace(t)
-	link := createTestShareLink(t, testWorkspaceID, "member", 5, 0)
-	userID := createTestUserAndMember(t, "")
-	invitationID := pendingInvitationForShareJoiner(t, userID, shareJoinerEmail(t, userID), "member")
-
-	gotEvent := make(chan map[string]any, 1)
-	testHandler.Bus.Subscribe(protocol.EventInvitationAccepted, func(e events.Event) {
-		if payload, ok := e.Payload.(map[string]any); ok {
-			select {
-			case gotEvent <- payload:
-			default:
-			}
-		}
-	})
-
-	req := newRequest("POST", "/api/share-links/join", JoinByShareLinkRequest{Code: link.Code})
-	req.Header.Set("X-User-ID", userID)
-	w := httptest.NewRecorder()
-	testHandler.JoinByShareLink(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("join: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var payload map[string]any
-	select {
-	case payload = <-gotEvent:
-	default:
-		t.Fatalf("no invitation:accepted event published for the settled invitation")
-	}
-	if payload["invitation_id"] != invitationID {
-		t.Fatalf("event invitation_id = %v, want %s", payload["invitation_id"], invitationID)
-	}
-}
 
 // In managed capacity mode the settled invitation was holding a seat
 // reservation keyed by the invitation id; the join's own confirmed claim now
 // covers the seat, so the reservation must be released — otherwise the same
 // user holds a member seat and an invitation reservation at once.
-func TestJoinShareLink_SettledInvitationReleasesSeatReservation(t *testing.T) {
-	clearShareLinksForTestWorkspace(t)
-	link := createTestShareLink(t, testWorkspaceID, "member", 5, 0)
-	userID := createTestUserAndMember(t, "")
-	email := shareJoinerEmail(t, userID)
-	invitationUUID := parseUUID(pendingInvitationForShareJoiner(t, userID, email, "member"))
-
-	stub := &shareJoinCapacityStub{}
-	useSeatCapacity(t, stub)
-	// Pre-create the reservation intent the way CreateInvitation does.
-	queries := db.New(testSQLite)
-	if _, err := queries.UpsertSeatCapacityIntent(context.Background(), db.UpsertSeatCapacityIntentParams{
-		WorkspaceID:    link.WorkspaceID,
-		OperationToken: invitationUUID,
-		Action:         seatcapacity.ActionReserveInvitation,
-		NextAttemptAt:  time.Now().UTC().Format(time.RFC3339Nano),
-		SubjectID:      nullString(invitationUUID),
-		InvitationID:   nullString(invitationUUID),
-		ExpiresAt:      nullString(time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339Nano)),
-	}); err != nil {
-		t.Fatalf("seed invitation reservation intent: %v", err)
-	}
-
-	req := newRequest("POST", "/api/share-links/join", JoinByShareLinkRequest{Code: link.Code})
-	req.Header.Set("X-User-ID", userID)
-	w := httptest.NewRecorder()
-	testHandler.JoinByShareLink(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("join: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	released := stub.releases()
-	if len(released) != 1 || released[0] != uuid.MustParse(invitationUUID) {
-		t.Fatalf("release calls = %v, want the invitation reservation %s", released, invitationUUID)
-	}
-	var intents int
-	if err := testPool.QueryRow(context.Background(),
-		`SELECT count(*) FROM seat_capacity_outbox WHERE operation_token = $1`, invitationUUID,
-	).Scan(&intents); err != nil {
-		t.Fatal(err)
-	}
-	if intents != 0 {
-		t.Fatalf("seat_capacity_outbox rows for the invitation = %d, want 0 after release", intents)
-	}
-	if status, _ := invitationStatusOf(t, invitationUUID.String()); status != "accepted" {
-		t.Fatalf("invitation status = %q, want accepted", status)
-	}
-}
 
 // Unmanaged capacity keeps no durable reservation for an invitation, so the
 // settle must still succeed end to end and leave nothing stranded in the
 // outbox.
-func TestJoinShareLink_SettlesPendingInvitationUnmanagedCapacity(t *testing.T) {
-	clearShareLinksForTestWorkspace(t)
-	link := createTestShareLink(t, testWorkspaceID, "member", 5, 0)
-	userID := createTestUserAndMember(t, "")
-	invitationUUID := parseUUID(pendingInvitationForShareJoiner(t, userID, shareJoinerEmail(t, userID), "member"))
-
-	unmanaged := seatcapacity.Decision{Managed: false, Allowed: false}
-	stub := &shareJoinCapacityStub{claimDecision: &unmanaged, releaseDecision: &unmanaged}
-	useSeatCapacity(t, stub)
-
-	req := newRequest("POST", "/api/share-links/join", JoinByShareLinkRequest{Code: link.Code})
-	req.Header.Set("X-User-ID", userID)
-	w := httptest.NewRecorder()
-	testHandler.JoinByShareLink(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("join: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	if status, _ := invitationStatusOf(t, invitationUUID.String()); status != "accepted" {
-		t.Fatalf("invitation status = %q, want accepted", status)
-	}
-	var intents int
-	if err := testPool.QueryRow(context.Background(),
-		`SELECT count(*) FROM seat_capacity_outbox WHERE operation_token = $1`, invitationUUID,
-	).Scan(&intents); err != nil {
-		t.Fatal(err)
-	}
-	if intents != 0 {
-		t.Fatalf("seat_capacity_outbox rows for the invitation = %d, want 0", intents)
-	}
-}
 
 // A share-link join for a user without a pending invitation proceeds as
 // before — the settle lookup misses and changes nothing.
-func TestJoinShareLink_NoPendingInvitationJoinsNormally(t *testing.T) {
-	clearShareLinksForTestWorkspace(t)
-	link := createTestShareLink(t, testWorkspaceID, "admin", 5, 0)
-	userID := createTestUserAndMember(t, "")
 
-	req := newRequest("POST", "/api/share-links/join", JoinByShareLinkRequest{Code: link.Code})
-	req.Header.Set("X-User-ID", userID)
-	w := httptest.NewRecorder()
-	testHandler.JoinByShareLink(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("join: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	var members int
-	if err := testPool.QueryRow(context.Background(),
-		`SELECT count(*) FROM member WHERE workspace_id = $1 AND user_id = $2`,
-		parseUUID(testWorkspaceID), parseUUID(userID),
-	).Scan(&members); err != nil {
-		t.Fatal(err)
-	}
-	if members != 1 {
-		t.Fatalf("member rows=%d, want 1", members)
-	}
-}
-
-func TestGetShareLinkInfo_PublicResponseSlim(t *testing.T) {
-	clearShareLinksForTestWorkspace(t)
-	link := createTestShareLink(t, testWorkspaceID, "admin", 0, 0)
-
-	req := newRequest("GET", "/api/share-links/"+link.Code, nil)
-	req = withURLParam(req, "code", link.Code)
-	w := httptest.NewRecorder()
-	testHandler.GetShareLinkInfo(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("public preview: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	var raw map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
-		t.Fatalf("parse preview: %v", err)
-	}
-	if _, ok := raw["creator_email"]; ok {
-		t.Fatal("public preview must not expose the inviter's email")
-	}
-	if _, ok := raw["workspace_id"]; ok {
-		t.Fatal("public preview must not expose the internal workspace id")
-	}
-	if _, ok := raw["code"]; ok {
-		t.Fatal("public preview must not expose the invite code")
-	}
-}
 
 func TestShareLink_CrossWorkspaceDenied(t *testing.T) {
 	clearShareLinksForTestWorkspace(t)

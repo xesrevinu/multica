@@ -2,49 +2,29 @@ package scheduler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/multica-ai/multica/server/internal/testutil"
 )
 
-// integrationPool returns a pool against the configured DATABASE_URL,
-// or skips the test if the database is not reachable. Mirrors the
-// pattern used by server/cmd/server/integration_test.go and
-// internal/handler/handler_test.go (see those files' TestMain).
-func integrationPool(t *testing.T) *pgxpool.Pool {
+func integrationPool(t *testing.T) *sql.DB {
 	t.Helper()
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		dbURL = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
-	}
-	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dbURL)
-	if err != nil {
-		t.Skipf("scheduler integration tests require Postgres: %v", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		t.Skipf("scheduler integration tests require Postgres: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	return pool
+	return testutil.OpenTestDB(t)
 }
 
-func cleanupExecutions(t *testing.T, pool *pgxpool.Pool, jobName string) {
+func cleanupExecutions(t *testing.T, pool *sql.DB, jobName string) {
 	t.Helper()
-	if _, err := pool.Exec(context.Background(),
+	if _, err := pool.ExecContext(context.Background(),
 		`DELETE FROM sys_cron_executions WHERE job_name = $1`, jobName); err != nil {
 		t.Fatalf("clean executions: %v", err)
 	}
 }
 
-// uniqueJobName isolates concurrent CI runs so each test has its own
-// job-name partition in sys_cron_executions.
 func uniqueJobName(t *testing.T, prefix string) string {
 	t.Helper()
 	return fmt.Sprintf("%s_%s", prefix, uuid.NewString()[:8])
@@ -69,15 +49,6 @@ func newTestJobSpec(name string) *JobSpec {
 	}
 }
 
-// TestStaleStealTerminalUpdateIgnored covers RFC §14:
-//
-//	"stale steal | winner heartbeat stops, stale_after expires, another
-//	 runner steal lease; old lease terminal update doesn't take effect."
-//
-// We claim a plan, simulate a stuck handler by setting stale_after into
-// the past, steal it as a second runner, then verify that the FIRST
-// runner's terminal SUCCESS write is rejected by the lease_token guard
-// — the row stays in the second runner's RUNNING state.
 func TestStaleStealTerminalUpdateIgnored(t *testing.T) {
 	pool := integrationPool(t)
 	job := newTestJobSpec(uniqueJobName(t, "stale_steal"))
@@ -100,12 +71,12 @@ func TestStaleStealTerminalUpdateIgnored(t *testing.T) {
 	}
 
 	// Step 2: simulate a stuck handler — stale_after moved to the past.
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		UPDATE sys_cron_executions
-		   SET stale_after  = now() - INTERVAL '1 minute',
-		       heartbeat_at = now() - INTERVAL '5 minute'
+		   SET stale_after  = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 minute'),
+		       heartbeat_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-5 minute')
 		 WHERE id = $1
-	`, original.ID); err != nil {
+	`, original.ID.String()); err != nil {
 		t.Fatalf("force stale: %v", err)
 	}
 
@@ -134,8 +105,7 @@ func TestStaleStealTerminalUpdateIgnored(t *testing.T) {
 	}
 
 	// Step 4: the original runner returns and tries to write SUCCESS
-	// with its OLD lease_token. The guard must reject the update so
-	// the row stays in runner-B's RUNNING state.
+	// with its OLD lease_token.
 	doneTime, _ := dbNow(ctx, pool)
 	err = finishSuccess(ctx, pool, original.ID, original.LeaseToken,
 		doneTime, 1234, HandlerResult{RowsAffected: 7})
@@ -146,11 +116,11 @@ func TestStaleStealTerminalUpdateIgnored(t *testing.T) {
 	// Step 5: verify the row is still RUNNING under runner-B.
 	var status, runner string
 	var attempt int
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		SELECT status, runner_id, attempt
 		  FROM sys_cron_executions
 		 WHERE id = $1
-	`, original.ID).Scan(&status, &runner, &attempt); err != nil {
+	`, original.ID.String()).Scan(&status, &runner, &attempt); err != nil {
 		t.Fatalf("scan post-steal row: %v", err)
 	}
 	if status != "RUNNING" {
@@ -163,19 +133,18 @@ func TestStaleStealTerminalUpdateIgnored(t *testing.T) {
 		t.Fatalf("expected attempt=2 (B's fresh attempt), got %d", attempt)
 	}
 
-	// Step 6: runner B finishes successfully with its own token — that
-	// must be accepted.
+	// Step 6: runner B finishes successfully with its own token.
 	if err := finishSuccess(ctx, pool, stolen.ID, stolen.LeaseToken,
 		doneTime, 4321, HandlerResult{RowsAffected: 11}); err != nil {
 		t.Fatalf("legitimate finishSuccess from runner-B: %v", err)
 	}
 	var finalStatus string
 	var finalRows int64
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		SELECT status, rows_affected
 		  FROM sys_cron_executions
 		 WHERE id = $1
-	`, original.ID).Scan(&finalStatus, &finalRows); err != nil {
+	`, original.ID.String()).Scan(&finalStatus, &finalRows); err != nil {
 		t.Fatalf("scan final row: %v", err)
 	}
 	if finalStatus != "SUCCESS" {

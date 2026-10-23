@@ -5,12 +5,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"database/sql"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/slack-go/slack"
 
 	"github.com/multica-ai/multica/server/internal/events"
@@ -24,16 +23,8 @@ import (
 // This regression follows one archive through the real bus subscriber and Slack
 // SDK, replacing only Slack's HTTP endpoint with a local server.
 func TestTypingIndicator_ArchiveRemovesSlackReaction(t *testing.T) {
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
+	pool := testutil.OpenTestDB(t)
 	f := testutil.New(pool, "", "")
 	suffix := fmt.Sprint(time.Now().UnixNano())
 	f.UserID = f.User(t, "Archive reaction test", "archive-reaction-"+suffix+"@example.test")
@@ -93,7 +84,7 @@ func TestTypingIndicator_ArchiveRemovesSlackReaction(t *testing.T) {
 
 	// ArchiveAgent commits before the handler calls CancelTasksForArchivedAgent.
 	if _, err := q.ArchiveAgent(ctx, db.ArchiveAgentParams{
-		ID: util.MustParseUUID(agentID), ArchivedBy: util.MustParseUUID(f.UserID),
+		ID: util.MustParseUUID(agentID), ArchivedBy: sql.NullString{String: util.MustParseUUID(f.UserID), Valid: true},
 	}); err != nil {
 		t.Fatal(err)
 	}

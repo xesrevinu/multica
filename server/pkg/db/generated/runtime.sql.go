@@ -1173,31 +1173,36 @@ type ReassignTasksToRuntimeParams struct {
 }
 
 type ReassignTasksToRuntimeRow struct {
-	FenceOk         interface{} `json:"fence_ok"`
-	ReassignedTasks int64       `json:"reassigned_tasks"`
+	FenceOk         bool  `json:"fence_ok"`
+	ReassignedTasks int64 `json:"reassigned_tasks"`
 }
 
-// Fenced against workspace teardown: owner-row fence (migration 284)
-// locks the owners' workspace rows in the writer's own transaction and returns
-// false once they are gone, so this statement writes no row instead of stranding
-// a task in a workspace that has just been deleted (MUL-5999).
-// Re-points every queued/running/completed task referencing old_runtime_id.
-// Required before deleting the old runtime row because agent_task_queue has
-// an ON DELETE CASCADE FK that would otherwise drop historical tasks.
-//
-// Returns the fence verdict separately from the row count on purpose. "0 rows"
-// is ambiguous - it means either "the old runtime had no tasks" or "the fence
-// refused" - and a caller that cannot tell them apart would go on to delete the
-// old runtime, letting that same ON DELETE CASCADE drop the very history this
-// statement exists to preserve. FenceOk = false must abort the merge.
-// SQLite has no lock_task_owner_rows; the fence is "the new runtime row exists".
-// Order: ReassignTasksToRuntime, then ReassignTasksToRuntime_Step2. This
-// statement reports fence_ok and how many tasks Step2 will move.
+// Order: ReassignTasksToRuntime, then ReassignTasksToRuntime_Step2.
 func (q *Queries) ReassignTasksToRuntime(ctx context.Context, arg ReassignTasksToRuntimeParams) (ReassignTasksToRuntimeRow, error) {
 	row := q.db.QueryRowContext(ctx, reassignTasksToRuntime, arg.NewRuntimeID, arg.OldRuntimeID)
+	var fenceOk int64
 	var i ReassignTasksToRuntimeRow
-	err := row.Scan(&i.FenceOk, &i.ReassignedTasks)
-	return i, err
+	err := row.Scan(&fenceOk, &i.ReassignedTasks)
+	if err != nil {
+		return i, err
+	}
+	i.FenceOk = fenceOk != 0
+	if i.FenceOk {
+		var newRT sql.NullString
+		switch v := arg.NewRuntimeID.(type) {
+		case string:
+			newRT = sql.NullString{String: v, Valid: v != ""}
+		case sql.NullString:
+			newRT = v
+		}
+		if err := q.ReassignTasksToRuntime_Step2(ctx, ReassignTasksToRuntime_Step2Params{
+			NewRuntimeID: newRT,
+			OldRuntimeID: arg.OldRuntimeID,
+		}); err != nil {
+			return i, err
+		}
+	}
+	return i, nil
 }
 
 const reassignTasksToRuntime_Step2 = `-- name: ReassignTasksToRuntime_Step2 :exec
@@ -1653,7 +1658,7 @@ DO UPDATE SET
     owner_id = COALESCE(EXCLUDED.owner_id, agent_runtime.owner_id),
     last_seen_at = now(),
     updated_at = now()
-RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, profile_id, custom_name, (xmax = 0) AS inserted
+RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, profile_id, custom_name, 1 AS inserted
 `
 
 type UpsertAgentRuntimeParams struct {
@@ -1697,6 +1702,11 @@ type UpsertAgentRuntimeRow struct {
 // spelled out so Postgres selects that partial index, not the custom-runtime
 // one on (workspace_id, daemon_id, profile_id).
 func (q *Queries) UpsertAgentRuntime(ctx context.Context, arg UpsertAgentRuntimeParams) (UpsertAgentRuntimeRow, error) {
+	var existing int64
+	existed := q.db.QueryRowContext(ctx, `SELECT 1 FROM agent_runtime WHERE workspace_id = ?1 AND daemon_id IS ?2 AND provider = ?3 AND profile_id IS NULL`,
+		arg.WorkspaceID, arg.DaemonID, arg.Provider,
+	).Scan(&existing) == nil
+
 	row := q.db.QueryRowContext(ctx, upsertAgentRuntime,
 		arg.WorkspaceID,
 		arg.DaemonID,
@@ -1710,7 +1720,6 @@ func (q *Queries) UpsertAgentRuntime(ctx context.Context, arg UpsertAgentRuntime
 	)
 	var i UpsertAgentRuntimeRow
 	err := row.Scan(
-		&i.Column1,
 		&i.ID,
 		&i.WorkspaceID,
 		&i.DaemonID,
@@ -1728,7 +1737,13 @@ func (q *Queries) UpsertAgentRuntime(ctx context.Context, arg UpsertAgentRuntime
 		&i.Visibility,
 		&i.ProfileID,
 		&i.CustomName,
+		&i.Column1,
 	)
+	if existed {
+		i.Column1 = int64(0)
+	} else {
+		i.Column1 = int64(1)
+	}
 	return i, err
 }
 
@@ -1757,7 +1772,7 @@ DO UPDATE SET
     owner_id = COALESCE(EXCLUDED.owner_id, agent_runtime.owner_id),
     last_seen_at = now(),
     updated_at = now()
-RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, profile_id, custom_name, (xmax = 0) AS inserted
+RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id, visibility, profile_id, custom_name, 1 AS inserted
 `
 
 type UpsertAgentRuntimeWithProfileParams struct {
@@ -1802,6 +1817,11 @@ type UpsertAgentRuntimeWithProfileRow struct {
 // identity so ResolveBackend applies its descriptor; profile_id preserves
 // custom-profile provenance. (xmax = 0) AS inserted mirrors UpsertAgentRuntime.
 func (q *Queries) UpsertAgentRuntimeWithProfile(ctx context.Context, arg UpsertAgentRuntimeWithProfileParams) (UpsertAgentRuntimeWithProfileRow, error) {
+	var existing int64
+	existed := q.db.QueryRowContext(ctx, `SELECT 1 FROM agent_runtime WHERE workspace_id = ?1 AND daemon_id IS ?2 AND profile_id = ?3 AND profile_id IS NOT NULL`,
+		arg.WorkspaceID, arg.DaemonID, arg.ProfileID,
+	).Scan(&existing) == nil
+
 	row := q.db.QueryRowContext(ctx, upsertAgentRuntimeWithProfile,
 		arg.WorkspaceID,
 		arg.DaemonID,
@@ -1816,7 +1836,6 @@ func (q *Queries) UpsertAgentRuntimeWithProfile(ctx context.Context, arg UpsertA
 	)
 	var i UpsertAgentRuntimeWithProfileRow
 	err := row.Scan(
-		&i.Column1,
 		&i.ID,
 		&i.WorkspaceID,
 		&i.DaemonID,
@@ -1834,6 +1853,12 @@ func (q *Queries) UpsertAgentRuntimeWithProfile(ctx context.Context, arg UpsertA
 		&i.Visibility,
 		&i.ProfileID,
 		&i.CustomName,
+		&i.Column1,
 	)
+	if existed {
+		i.Column1 = int64(0)
+	} else {
+		i.Column1 = int64(1)
+	}
 	return i, err
 }

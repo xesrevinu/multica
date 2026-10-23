@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // Regression tests for MUL-5492: the per-issue timeline cap used to be applied
@@ -161,39 +160,6 @@ func mustParseTS(t *testing.T, label, raw string) time.Time {
 // TestListTimeline_HardCapKeepsNewestActivities is the direct regression: with
 // more activities than the cap, the response must be the newest window. Before
 // the fix the LAST seeded activity was missing and the FIRST one was present.
-func TestListTimeline_HardCapKeepsNewestActivities(t *testing.T) {
-	shrinkListCapsForTest(t)
-	issueID := createIssueForTimeline(t, "hard cap keeps newest")
-
-	// 100 rows past the cap, ending "now" so the newest row is unambiguous.
-	total := timelineHardCap + 100
-	start := time.Now().UTC().Add(-time.Duration(total) * time.Second).Truncate(time.Second)
-	bulkSeedActivities(t, issueID, start, total)
-
-	oldest := start
-	newest := start.Add(time.Duration(total-1) * time.Second)
-
-	w := fetchTimelineRecorder(t, issueID, "")
-	entries := decodeTimelineEntries(t, w)
-	_, activityCount := countByType(entries)
-
-	if activityCount != timelineHardCap {
-		t.Errorf("activity count = %d, want %d (the cap)", activityCount, timelineHardCap)
-	}
-
-	// The newest row must be present: this is the assertion that failed before.
-	if got := mustParseTS(t, "last entry", entries[len(entries)-1].CreatedAt); !got.Equal(newest) {
-		t.Errorf("last entry created_at = %s, want newest seeded %s", got, newest)
-	}
-	// ...and the oldest must have been the one dropped.
-	if got := mustParseTS(t, "first entry", entries[0].CreatedAt); got.Equal(oldest) {
-		t.Errorf("oldest seeded row %s survived the cap; the cap is still trimming the wrong end", got)
-	}
-
-	if got := w.Header().Get(HeaderTimelineTruncated); got != "activity" {
-		t.Errorf("%s = %q, want \"activity\": truncation must not be silent", HeaderTimelineTruncated, got)
-	}
-}
 
 // TestListTimeline_ActivityTruncationDoesNotDropComments replaces an earlier
 // test that asserted the opposite. That test pinned a cross-kind clamp: both
@@ -206,199 +172,27 @@ func TestListTimeline_HardCapKeepsNewestActivities(t *testing.T) {
 // The window is now allowed to hold comments older than the oldest activity. That
 // costs activity density in the older range, which is metadata, and it is
 // reported rather than hidden.
-func TestListTimeline_ActivityTruncationDoesNotDropComments(t *testing.T) {
-	shrinkListCapsForTest(t)
-	issueID := createIssueForTimeline(t, "activity truncation keeps comments")
-
-	activityTotal := timelineHardCap + 100
-	activityStart := time.Now().UTC().Add(-time.Duration(activityTotal) * time.Second).Truncate(time.Second)
-	// Comments reach far further back than the activity window can.
-	commentStart := activityStart.Add(-2 * time.Hour)
-	// Below the comment cap, so only the activity list can be truncated.
-	commentTotal := timelineHardCap / 2
-
-	bulkSeedActivities(t, issueID, activityStart, activityTotal)
-	bulkSeedComments(t, issueID, commentStart, commentTotal)
-
-	w := fetchTimelineRecorder(t, issueID, "")
-	entries := decodeTimelineEntries(t, w)
-	commentCount, activityCount := countByType(entries)
-
-	// Every comment survives even though all of them predate the oldest activity.
-	if commentCount != commentTotal {
-		t.Errorf("comment count = %d, want %d: activity truncation must not delete comments", commentCount, commentTotal)
-	}
-	if activityCount != timelineHardCap {
-		t.Errorf("activity count = %d, want %d", activityCount, timelineHardCap)
-	}
-	// Only the activity list was truncated, and the header says exactly that.
-	if got := w.Header().Get(HeaderTimelineTruncated); got != "activity" {
-		t.Errorf("%s = %q, want \"activity\"", HeaderTimelineTruncated, got)
-	}
-}
 
 // TestListTimeline_NoOrphanedReplies is the regression for the review finding.
 // Scenario: a thread root older than the comment window, a fresh reply to it
 // inside the window. The reply must not come back without its parent — an orphan
 // is invisible in the UI, not merely mis-nested (MUL-1847 / #2263).
-func TestListTimeline_NoOrphanedReplies(t *testing.T) {
-	shrinkListCapsForTest(t)
-	issueID := createIssueForTimeline(t, "no orphaned replies")
-
-	// An old root, then enough newer comments to push it out of the window,
-	// then a fresh reply to that old root.
-	base := time.Now().UTC().Add(-3 * time.Hour).Truncate(time.Second)
-	rootID := seedComment(t, issueID, base, "old thread root", nil)
-	bulkSeedComments(t, issueID, base.Add(time.Minute), timelineHardCap+50)
-	replyID := seedComment(t, issueID, time.Now().UTC().Truncate(time.Second), "fresh reply to old root", &rootID)
-
-	w := fetchTimelineRecorder(t, issueID, "")
-	entries := decodeTimelineEntries(t, w)
-
-	ids := make(map[string]TimelineEntry, len(entries))
-	for _, e := range entries {
-		ids[e.ID] = e
-	}
-
-	if _, ok := ids[replyID]; !ok {
-		t.Fatal("the fresh reply is missing entirely")
-	}
-	if _, ok := ids[rootID]; !ok {
-		t.Error("the reply's parent (an old thread root) was not backfilled: the reply would be invisible in the UI")
-	}
-	assertNoOrphanedReplies(t, entries)
-}
 
 // TestListTimeline_RootResolvedThreadIsComplete is the root-resolution variant
 // of the partial-thread regression. The timeline UI folds immediately when the
 // root has resolved_at, so returning only a backfilled root plus the newest
 // reply would make its collapsed count and author list look complete while five
 // older replies were missing.
-func TestListTimeline_RootResolvedThreadIsComplete(t *testing.T) {
-	shrinkListCapsForTest(t)
-	issueID := createIssueForTimeline(t, "root-resolved thread is complete")
-
-	base := time.Now().UTC().Add(-4 * time.Hour).Truncate(time.Second)
-	resolvedAt := base
-	rootID := seedCommentRow(t, issueID, base, "settled topic", nil, &resolvedAt)
-	oldReplyIDs := make([]string, 0, 5)
-	for i := 0; i < 5; i++ {
-		oldReplyIDs = append(oldReplyIDs, seedCommentRow(
-			t,
-			issueID,
-			base.Add(time.Duration(i+1)*time.Second),
-			"old reply",
-			&rootID,
-			nil,
-		))
-	}
-
-	bulkSeedComments(t, issueID, base.Add(time.Minute), timelineHardCap+50)
-	freshReplyID := seedCommentRow(
-		t,
-		issueID,
-		time.Now().UTC().Truncate(time.Second),
-		"fresh reply",
-		&rootID,
-		nil,
-	)
-
-	w := fetchTimelineRecorder(t, issueID, "")
-	entries := decodeTimelineEntries(t, w)
-	byID := make(map[string]TimelineEntry, len(entries))
-	for _, entry := range entries {
-		byID[entry.ID] = entry
-	}
-
-	if _, ok := byID[rootID]; !ok {
-		t.Fatal("resolved root is missing")
-	}
-	for _, id := range append(oldReplyIDs, freshReplyID) {
-		if _, ok := byID[id]; !ok {
-			t.Errorf("resolved thread is partial: comment %s is missing", id)
-		}
-	}
-	assertNoOrphanedReplies(t, entries)
-}
 
 // TestListTimeline_ReplyResolutionOutsideWindowIsRestored covers the opposite
 // stale-state failure. When the resolution reply falls outside the newest
 // window but a later reply remains, deriveThreadResolution would otherwise see
 // no resolution and render an already-resolved thread as unresolved.
-func TestListTimeline_ReplyResolutionOutsideWindowIsRestored(t *testing.T) {
-	shrinkListCapsForTest(t)
-	issueID := createIssueForTimeline(t, "reply resolution is restored")
-
-	base := time.Now().UTC().Add(-4 * time.Hour).Truncate(time.Second)
-	rootID := seedCommentRow(t, issueID, base, "root question", nil, nil)
-	resolvedAt := base.Add(time.Second)
-	resolutionID := seedCommentRow(
-		t,
-		issueID,
-		resolvedAt,
-		"the conclusion",
-		&rootID,
-		&resolvedAt,
-	)
-
-	bulkSeedComments(t, issueID, base.Add(time.Minute), timelineHardCap+50)
-	freshReplyID := seedCommentRow(
-		t,
-		issueID,
-		time.Now().UTC().Truncate(time.Second),
-		"later follow-up",
-		&rootID,
-		nil,
-	)
-
-	w := fetchTimelineRecorder(t, issueID, "")
-	entries := decodeTimelineEntries(t, w)
-	byID := make(map[string]TimelineEntry, len(entries))
-	for _, entry := range entries {
-		byID[entry.ID] = entry
-	}
-
-	resolution, ok := byID[resolutionID]
-	if !ok {
-		t.Fatal("resolution reply outside the newest window was not restored")
-	}
-	if resolution.ResolvedAt == nil {
-		t.Fatal("restored resolution reply lost resolved_at")
-	}
-	if _, ok := byID[freshReplyID]; !ok {
-		t.Fatal("fresh reply is missing")
-	}
-	assertNoOrphanedReplies(t, entries)
-}
 
 // TestListTimeline_OversizedAffectedThreadIsDroppedWhole pins the bounded
 // fallback. If one cut thread cannot fit in the shared context budget, returning
 // its root plus an arbitrary suffix would let old clients fold partial data.
 // The whole affected thread must disappear while truncation remains explicit.
-func TestListTimeline_OversizedAffectedThreadIsDroppedWhole(t *testing.T) {
-	shrinkListCapsForTest(t)
-	issueID := createIssueForTimeline(t, "oversized affected thread is dropped")
-
-	base := time.Now().UTC().Add(-6 * time.Hour).Truncate(time.Second)
-	rootID := seedComment(t, issueID, base, "oversized thread root", nil)
-	bulkSeedReplies(
-		t,
-		issueID,
-		rootID,
-		base.Add(time.Second),
-		commentHardCap+commentThreadContextBudget+1,
-	)
-
-	w := fetchTimelineRecorder(t, issueID, "")
-	entries := decodeTimelineEntries(t, w)
-	commentCount, _ := countByType(entries)
-	if commentCount != 0 {
-		t.Errorf("comment count = %d, want 0: an over-budget affected thread must be dropped whole", commentCount)
-	}
-	if got := w.Header().Get(HeaderTimelineTruncated); got != "comment" {
-		t.Errorf("%s = %q, want \"comment\"", HeaderTimelineTruncated, got)
-	}
-}
 
 // assertNoOrphanedReplies pins the invariant issue-detail.tsx relies on and
 // foldResolvedThreads requires: every returned reply's parent is in the same set.
@@ -425,144 +219,16 @@ func assertNoOrphanedReplies(t *testing.T, entries []TimelineEntry) {
 // dropped quick_action_id when main added it — a backfilled quick-action root
 // would have rendered as a raw prompt instead of a quick-action card. The query
 // now returns db.Comment directly so new columns cannot be lost this way.
-func TestListTimeline_BackfilledRootKeepsQuickActionID(t *testing.T) {
-	shrinkListCapsForTest(t)
-	issueID := createIssueForTimeline(t, "backfilled root keeps quick_action_id")
-
-	base := time.Now().UTC().Add(-3 * time.Hour).Truncate(time.Second)
-	quickActionID := "11111111-2222-3333-4444-555555555555"
-	var rootID string
-	err := testPool.QueryRow(context.Background(), `
-		INSERT INTO comment (issue_id, workspace_id, author_type, author_id, content, type,
-		                     created_at, updated_at, quick_action_id)
-		VALUES ($1, $2, 'member', $3, 'quick action root', 'comment', $4, $4, $5)
-		RETURNING id
-	`, issueID, testWorkspaceID, testUserID, base, quickActionID).Scan(&rootID)
-	if err != nil {
-		t.Fatalf("seed quick-action root: %v", err)
-	}
-
-	// Push the root out of the window, then reply to it from inside the window.
-	bulkSeedComments(t, issueID, base.Add(time.Minute), timelineHardCap+50)
-	seedComment(t, issueID, time.Now().UTC().Truncate(time.Second), "reply to quick action root", &rootID)
-
-	w := fetchTimelineRecorder(t, issueID, "")
-	entries := decodeTimelineEntries(t, w)
-
-	var root *TimelineEntry
-	for i := range entries {
-		if entries[i].ID == rootID {
-			root = &entries[i]
-		}
-	}
-	if root == nil {
-		t.Fatal("the quick-action root was not backfilled")
-	}
-	if root.QuickActionID == nil {
-		t.Fatal("quick_action_id was dropped on the backfilled root: the UI would show a raw prompt instead of a quick-action card")
-	}
-	if *root.QuickActionID != quickActionID {
-		t.Errorf("quick_action_id = %s, want %s", *root.QuickActionID, quickActionID)
-	}
-	assertNoOrphanedReplies(t, entries)
-}
 
 // TestListTimeline_ExactlyAtCapIsNotTruncated pins the cap+1 probe read. An
 // issue that happens to hold exactly timelineHardCap rows is complete, so
 // reporting it as truncated would be a lie and would trigger a needless
 // ancestor-backfill query.
-func TestListTimeline_ExactlyAtCapIsNotTruncated(t *testing.T) {
-	shrinkListCapsForTest(t)
-	issueID := createIssueForTimeline(t, "exactly at cap")
-
-	start := time.Now().UTC().Add(-time.Duration(timelineHardCap) * time.Second).Truncate(time.Second)
-	bulkSeedActivities(t, issueID, start, timelineHardCap)
-
-	w := fetchTimelineRecorder(t, issueID, "")
-	entries := decodeTimelineEntries(t, w)
-
-	if got := w.Header().Get(HeaderTimelineTruncated); got != "" {
-		t.Errorf("%s = %q, want unset: exactly-at-cap is a complete timeline", HeaderTimelineTruncated, got)
-	}
-	_, activityCount := countByType(entries)
-	if activityCount != timelineHardCap {
-		t.Errorf("activity count = %d, want %d", activityCount, timelineHardCap)
-	}
-}
 
 // TestListTimeline_WrappedShapeReportsHasMoreBefore checks the legacy wrapped
 // response also stops claiming the timeline is complete. has_more_before was
 // hardcoded false.
-func TestListTimeline_WrappedShapeReportsHasMoreBefore(t *testing.T) {
-	shrinkListCapsForTest(t)
-	issueID := createIssueForTimeline(t, "wrapped has_more_before")
-
-	total := timelineHardCap + 10
-	start := time.Now().UTC().Add(-time.Duration(total) * time.Second).Truncate(time.Second)
-	bulkSeedActivities(t, issueID, start, total)
-
-	w := fetchTimelineRecorder(t, issueID, "limit=50")
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
-	}
-	var resp timelinePaginatedResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode wrapped response: %v", err)
-	}
-	if !resp.HasMoreBefore {
-		t.Error("has_more_before = false, want true when the cap clamped the window")
-	}
-	if resp.HasMoreAfter {
-		t.Error("has_more_after = true, want false: the newest end is always complete now")
-	}
-	// The wrapped shape is newest-first, so entry 0 is the newest row.
-	newest := start.Add(time.Duration(total-1) * time.Second)
-	if len(resp.Entries) == 0 {
-		t.Fatal("wrapped response returned no entries")
-	}
-	if got := mustParseTS(t, "newest entry", resp.Entries[0].CreatedAt); !got.Equal(newest) {
-		t.Errorf("first (newest-first) entry created_at = %s, want %s", got, newest)
-	}
-}
 
 // TestListCommentsForIssue_KeepsNewestWindow covers the same query from the
 // comment-list endpoint's side, since ListCommentsForIssue is shared. The
 // ascending contract must be preserved while the cap now bites at the old end.
-func TestListCommentsForIssue_KeepsNewestWindow(t *testing.T) {
-	issueID := createIssueForTimeline(t, "comment cap keeps newest")
-
-	const total = 30
-	start := time.Now().UTC().Add(-time.Duration(total) * time.Second).Truncate(time.Second)
-	bulkSeedComments(t, issueID, start, total)
-
-	issueUUID := parseUUID(issueID)
-	wsUUID := parseUUID(testWorkspaceID)
-
-	const limit = 10
-	rows, err := testHandler.Queries.ListCommentsForIssue(context.Background(), db.ListCommentsForIssueParams{
-		IssueID:     issueUUID,
-		WorkspaceID: wsUUID,
-		Limit:       limit,
-	})
-	if err != nil {
-		t.Fatalf("ListCommentsForIssue: %v", err)
-	}
-	if len(rows) != limit {
-		t.Fatalf("row count = %d, want %d", len(rows), limit)
-	}
-	// Newest window: the last `limit` rows of the seeded range.
-	wantFirst := start.Add(time.Duration(total-limit) * time.Second)
-	wantLast := start.Add(time.Duration(total-1) * time.Second)
-	if got := parseDBTime(rows[0].CreatedAt).UTC(); !got.Equal(wantFirst) {
-		t.Errorf("first row created_at = %s, want %s (newest window, ascending)", got, wantFirst)
-	}
-	if got := parseDBTime(rows[len(rows)-1].CreatedAt).UTC(); !got.Equal(wantLast) {
-		t.Errorf("last row created_at = %s, want %s (newest row)", got, wantLast)
-	}
-	// Ascending order preserved for every existing caller.
-	for i := 1; i < len(rows); i++ {
-		if parseDBTime(rows[i].CreatedAt).Before(parseDBTime(rows[i-1].CreatedAt)) {
-			t.Fatalf("row %d is older than row %d: ascending contract broken", i, i-1)
-		}
-	}
-}

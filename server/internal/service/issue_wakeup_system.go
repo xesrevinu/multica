@@ -403,13 +403,10 @@ func (s *IssueWakeupService) dispatchSystem(ctx context.Context, prev db.IssueWa
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, "SET LOCAL lock_timeout = '50ms'"); err != nil {
-		return err
-	}
 	q := s.Tasks.Queries.WithTx(tx)
 	if target.Agent.ID != "" {
 		var fenced bool
-		if err = tx.QueryRowContext(ctx, "SELECT lock_task_owner_rows($1,$2,$3)", target.Agent.ID, prev.IssueID, target.Agent.RuntimeID).Scan(&fenced); err != nil {
+		if fenced, err = lockTaskOwnerRows(ctx, tx, target.Agent.ID, prev.IssueID, target.Agent.RuntimeID); err != nil {
 			return err
 		}
 		if !fenced {
@@ -464,8 +461,8 @@ func (s *IssueWakeupService) dispatchSystem(ctx context.Context, prev db.IssueWa
 		}
 		return tx.Commit()
 	}
-	var now time.Time
-	if err = tx.QueryRowContext(ctx, "SELECT now()").Scan(&now); err != nil {
+	now, err := txNow(ctx, tx)
+	if err != nil {
 		return err
 	}
 	_, causes, err := consumeConditionHints(ctx, tx, w.ID)

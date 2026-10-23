@@ -5,8 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 	"github.com/slack-go/slack"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
@@ -32,8 +31,12 @@ func (f *fakeHistoryQueries) GetChannelInstallation(context.Context, db.GetChann
 	return f.inst, f.instErr
 }
 
-func (f *fakeHistoryQueries) ListChannelOutboundMessageIDsForContext(context.Context, db.ListChannelOutboundMessageIDsForContextParams) ([]string, error) {
-	return f.messageIDs, f.messageIDsErr
+func (f *fakeHistoryQueries) ListChannelOutboundMessageIDsForContext(context.Context, db.ListChannelOutboundMessageIDsForContextParams) ([]interface{}, error) {
+	out := make([]interface{}, len(f.messageIDs))
+	for i, id := range f.messageIDs {
+		out[i] = id
+	}
+	return out, f.messageIDsErr
 }
 
 func (f *fakeHistoryQueries) ListChannelOutboundMessagesByIDs(context.Context, db.ListChannelOutboundMessagesByIDsParams) ([]db.ChannelOutboundMessage, error) {
@@ -88,10 +91,10 @@ func groupBinding(threadRoot string) db.ChannelChatSessionBinding {
 		InstallationID: uid(2),
 		ChannelChatID:  "C1:" + threadRoot,
 		ChatType:       string(channel.ChatTypeGroup),
-		Config:         []byte(`{"channel_id":"C1"}`),
+		Config:         `{"channel_id":"C1"}`,
 	}
 	if threadRoot != "" {
-		b.LastThreadID = pgtype.Text{String: threadRoot, Valid: true}
+		b.LastThreadID = sql.NullString{String: threadRoot, Valid: true}
 	}
 	return b
 }
@@ -102,7 +105,7 @@ func dmBinding() db.ChannelChatSessionBinding {
 		InstallationID: uid(2),
 		ChannelChatID:  "D1",
 		ChatType:       string(channel.ChatTypeP2P),
-		Config:         []byte(`{"channel_id":"D1"}`),
+		Config:         `{"channel_id":"D1"}`,
 	}
 }
 
@@ -339,7 +342,7 @@ func TestThreadDMUsesHistory(t *testing.T) {
 }
 
 func TestChannelOverviewNoBinding(t *testing.T) {
-	q := &fakeHistoryQueries{bindingErr: pgx.ErrNoRows}
+	q := &fakeHistoryQueries{bindingErr: sql.ErrNoRows}
 	h := newTestHistory(q, &fakeHistoryClient{})
 	if _, err := h.ChannelOverview(context.Background(), uid(9), channel.HistoryOptions{}); !errors.Is(err, ErrNoSlackSession) {
 		t.Fatalf("err = %v, want ErrNoSlackSession", err)
@@ -540,7 +543,7 @@ func TestHistoryTargetDerivesRoot(t *testing.T) {
 	if ch, root := historyTarget(groupBinding("50.0")); ch != "C1" || root != "50.0" {
 		t.Errorf("from last_thread_id: got %q/%q, want C1/50.0", ch, root)
 	}
-	keyOnly := db.ChannelChatSessionBinding{ChannelChatID: "C9:77.7", Config: []byte(`{"channel_id":"C9"}`)}
+	keyOnly := db.ChannelChatSessionBinding{ChannelChatID: "C9:77.7", Config: `{"channel_id":"C9"}`}
 	if ch, root := historyTarget(keyOnly); ch != "C9" || root != "77.7" {
 		t.Errorf("from key suffix: got %q/%q, want C9/77.7", ch, root)
 	}

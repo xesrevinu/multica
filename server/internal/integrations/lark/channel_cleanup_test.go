@@ -4,8 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
 
+	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -45,7 +46,7 @@ const (
 // seedFullInstallation inserts one active installation plus the full spread of
 // dependents (member link, chat-session binding, pending binding token, inbound
 // audit) so a cleanup path can be shown to sweep all of them.
-func seedFullInstallation(t *testing.T, ctx context.Context, pool *pgxpool.Pool, ws, agent, app, chatSess, tokenHash, auditEvent string) string {
+func seedFullInstallation(t *testing.T, ctx context.Context, pool *testutil.Pool, ws, agent, app, chatSess, tokenHash, auditEvent string) string {
 	t.Helper()
 	var id string
 	if err := pool.QueryRow(ctx, `
@@ -75,7 +76,7 @@ VALUES ($1, 'feishu', 'im.message.receive_v1', $2, 'test')`, id, auditEvent)
 	return id
 }
 
-func ccCount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, q string, args ...any) int {
+func ccCount(t *testing.T, ctx context.Context, pool *testutil.Pool, q string, args ...any) int {
 	t.Helper()
 	var n int
 	if err := pool.QueryRow(ctx, q, args...).Scan(&n); err != nil {
@@ -88,7 +89,7 @@ func ccCount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, q string, ar
 // On these HARD-delete paths (workspace delete / runtime teardown) the inbound-
 // audit row is PURGED, not detached: channel_inbound_audit has no workspace_id and
 // no reaper, so a detached (NULL) row would be permanently unattributable.
-func assertInstallationSwept(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id, chatSess, auditEvent string) {
+func assertInstallationSwept(t *testing.T, ctx context.Context, pool *testutil.Pool, id, chatSess, auditEvent string) {
 	t.Helper()
 	if n := ccCount(t, ctx, pool, `SELECT count(*) FROM channel_installation WHERE id = $1`, id); n != 0 {
 		t.Fatalf("installation not swept: %d rows remain (its bot's app_id slot stays occupied)", n)
@@ -113,7 +114,7 @@ func assertInstallationSwept(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	}
 }
 
-func assertInstallationIntact(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id, chatSess, auditEvent string) {
+func assertInstallationIntact(t *testing.T, ctx context.Context, pool *testutil.Pool, id, chatSess, auditEvent string) {
 	t.Helper()
 	if n := ccCount(t, ctx, pool, `SELECT count(*) FROM channel_installation WHERE id = $1`, id); n != 1 {
 		t.Fatalf("a live-owner installation was swept: %d rows (want 1)", n)
@@ -172,7 +173,7 @@ VALUES ($1, $2, 'cc live agent', 'local', $3)`, ccAgentLive, ccWS, ccRuntime)
 	systemID := seedFullInstallation(t, ctx, pool, ccWS, ccAgentArch, ccAppArchive, ccChatArch, ccTokenArch, ccAuditArch)
 	liveID := seedFullInstallation(t, ctx, pool, ccWS, ccAgentLive, ccAppLive, ccChatLive, ccTokenLive, ccAuditLive)
 
-	if err := q.DeleteChannelInstallationsBySystemRuntimeAgents(ctx, util.MustParseUUID(ccRuntime)); err != nil {
+	if err := q.DeleteChannelInstallationsBySystemRuntimeAgents(ctx, sql.NullString{String: util.MustParseUUID(ccRuntime), Valid: true}); err != nil {
 		t.Fatalf("DeleteChannelInstallationsBySystemRuntimeAgents: %v", err)
 	}
 

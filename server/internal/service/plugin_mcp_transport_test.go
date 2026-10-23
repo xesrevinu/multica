@@ -113,17 +113,19 @@ func TestApprovedMCPHooksKeepDistinctContributionKeys(t *testing.T) {
 	first.Transport.URL = "https://tools.example.com/first"
 	second.Transport.URL = "https://tools.example.com/second"
 	manifest.Contributes.Hooks = []plugincontract.Hook{first, second}
-	installation.Manifest, err = string(json.Marshal(manifest))
+	manifestBytes, err := json.Marshal(manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	installation.McpApprovals, err = json.Marshal(PluginMCPApprovals{
+	installation.Manifest = string(manifestBytes)
+	approvalsBytes, err := json.Marshal(PluginMCPApprovals{
 		first.Key:  {Tools: []remotemcp.Tool{{Name: "search", SchemaDigest: "sha256:aaa"}}},
 		second.Key: {Tools: []remotemcp.Tool{{Name: "search", SchemaDigest: "sha256:bbb"}}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	installation.McpApprovals = string(approvalsBytes)
 	connections := mcpConnectionsFor(installation)
 	if len(connections) != 2 {
 		t.Fatalf("got %d connections, want both approved hooks", len(connections))

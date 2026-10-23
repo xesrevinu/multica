@@ -1,26 +1,28 @@
 package metrics
 
 import (
-	"context"
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	_ "modernc.org/sqlite"
 )
 
 func TestDBCollectorExposesPoolStats(t *testing.T) {
-	pool, err := pgxpool.New(context.Background(), "postgres://multica:multica@127.0.0.1:1/multica?sslmode=disable&pool_max_conns=13")
+	pool, err := sql.Open("sqlite", "file::memory:")
 	if err != nil {
 		t.Fatalf("create pool: %v", err)
 	}
 	defer pool.Close()
-	replicaPool, err := pgxpool.New(context.Background(), "postgres://multica:multica@127.0.0.1:2/multica?sslmode=disable&pool_max_conns=7")
+	pool.SetMaxOpenConns(13)
+	replicaPool, err := sql.Open("sqlite", "file::memory:")
 	if err != nil {
 		t.Fatalf("create replica pool: %v", err)
 	}
 	defer replicaPool.Close()
+	replicaPool.SetMaxOpenConns(7)
 
 	registry := NewRegistry(RegistryOptions{Pool: pool, ReplicaPool: replicaPool})
 	rec := httptest.NewRecorder()

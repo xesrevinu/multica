@@ -1102,10 +1102,18 @@ func (h *Handler) SetIssueWorkflowHandoff(w http.ResponseWriter, r *http.Request
 		writeErrorCode(w, http.StatusBadRequest, "invalid_handoff", err.Error())
 		return
 	}
+	_ = tx.Rollback()
 	if status, msg := h.validateHandoffHandlers(ctx, r, workspaceID, []issueworkflow.Step{step}, def.Steps); status != 0 {
 		writeErrorCode(w, status, "invalid_handoff", msg)
 		return
 	}
+	tx, err = h.TxStarter.BeginTx(ctx, nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save handoff")
+		return
+	}
+	defer tx.Rollback()
+	qtx = h.Queries.WithTx(tx)
 	for i, s := range def.Steps {
 		if s.StatusKey == step.StatusKey {
 			def.Steps[i] = step
@@ -1143,7 +1151,7 @@ func (h *Handler) SetIssueWorkflowHandoff(w http.ResponseWriter, r *http.Request
 // saveHandoffOnProjectCopy finishes SetIssueWorkflowHandoff for a copy:
 // steps already carry the new handoff. The caller holds the exclusive catalog
 // lock in tx.
-func (h *Handler) saveHandoffOnProjectCopy(w http.ResponseWriter, r *http.Request, qtx *db.Queries, tx *sql.Tx, member db.Member, workspaceID string, source db.IssueWorkflow, steps []byte, projectID string) {
+func (h *Handler) saveHandoffOnProjectCopy(w http.ResponseWriter, r *http.Request, qtx *db.Queries, tx handlerTx, member db.Member, workspaceID string, source db.IssueWorkflow, steps []byte, projectID string) {
 	ctx := r.Context()
 	if source.IsDefault != 0 {
 		writeErrorCode(w, http.StatusBadRequest, "invalid_handoff", "the Default workflow cannot be copied for one project")

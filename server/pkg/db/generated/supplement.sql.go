@@ -155,7 +155,6 @@ func (q *Queries) BindCommentTaskSupplement(ctx context.Context, arg BindComment
 	)
 	var i BindCommentTaskSupplementRow
 	err := row.Scan(
-		&i.RuntimeID,
 		&i.TaskID,
 		&i.WorkspaceID,
 		&i.IssueID,
@@ -168,6 +167,7 @@ func (q *Queries) BindCommentTaskSupplement(ctx context.Context, arg BindComment
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeliveredAt,
+		&i.RuntimeID,
 	)
 	return i, err
 }
@@ -260,11 +260,12 @@ RETURNING id, issue_id, author_type, author_id, content, type, created_at, updat
 `
 
 type CreateTaskSupplementParams struct {
-	WorkspaceID string         `json:"workspace_id"`
-	AuthorID    string         `json:"author_id"`
-	Content     string         `json:"content"`
-	TaskID      string         `json:"task_id"`
-	IssueID     sql.NullString `json:"issue_id"`
+	WorkspaceID     string         `json:"workspace_id"`
+	AuthorID        string         `json:"author_id"`
+	Content         string         `json:"content"`
+	TaskID          string         `json:"task_id"`
+	IssueID         sql.NullString `json:"issue_id"`
+	ClientRequestID string         `json:"client_request_id"`
 }
 
 type CreateTaskSupplementRow struct {
@@ -310,11 +311,6 @@ func (q *Queries) CreateTaskSupplement(ctx context.Context, arg CreateTaskSupple
 	)
 	var i CreateTaskSupplementRow
 	err := row.Scan(
-		&i.Coalesce,
-		&i.Column2,
-		&i.Column3,
-		&i.Column4,
-		&i.Column5,
 		&i.ID,
 		&i.IssueID,
 		&i.AuthorType,
@@ -335,8 +331,34 @@ func (q *Queries) CreateTaskSupplement(ctx context.Context, arg CreateTaskSupple
 		&i.RecoverySettledAt,
 		&i.DeletedAt,
 		&i.SuppressedAgentIds,
+		&i.Coalesce,
+		&i.Column2,
+		&i.Column3,
+		&i.Column4,
+		&i.Column5,
 	)
-	return i, err
+	if err != nil {
+		return i, err
+	}
+	if _, err := q.db.ExecContext(ctx, `INSERT INTO task_supplement (
+    task_id, workspace_id, issue_id, comment_id, author_id, client_request_id, status
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending')`,
+		arg.TaskID, arg.WorkspaceID, i.IssueID, i.ID, arg.AuthorID, arg.ClientRequestID,
+	); err != nil {
+		_, _ = q.db.ExecContext(ctx, `DELETE FROM comment WHERE id = ?1`, i.ID)
+		return i, err
+	}
+	var issueRev int64
+	if err := q.db.QueryRowContext(ctx, `UPDATE issue
+SET updated_at = now(),
+    revision = revision + 1,
+    last_activity_at = GREATEST(COALESCE(last_activity_at, updated_at), now())
+WHERE id = ?1 AND workspace_id = ?2
+RETURNING revision`, i.IssueID, arg.WorkspaceID).Scan(&issueRev); err != nil && err != sql.ErrNoRows {
+		return i, err
+	}
+	i.Coalesce = issueRev
+	return i, nil
 }
 
 const createTaskSupplement_Step2 = `-- name: CreateTaskSupplement_Step2 :exec

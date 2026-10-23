@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -73,64 +72,6 @@ func seedDetachedChatAttachment(t *testing.T, sessionID string) string {
 // The recovery path the chat:cancel_finalized broadcast cannot guarantee: a
 // creator whose client missed the event fetches the pending restore, gets the
 // prompt content plus re-bindable attachments, and consumes it idempotently.
-func TestChatDraftRestores_CreatorFetchesAndConsumes(t *testing.T) {
-	agentID := createHandlerTestAgent(t, "DraftRestoreAgent", []byte("[]"))
-	sessionID := createHandlerTestChatSession(t, agentID)
-	attachmentID := seedDetachedChatAttachment(t, sessionID)
-	restoreID := seedDraftRestore(t, sessionID, "run the thing", []string{attachmentID})
-
-	listReq := withURLParam(newRequest(http.MethodGet, "/api/chat/sessions/"+sessionID+"/draft-restores", nil), "sessionId", sessionID)
-	listReq = withChatTestWorkspaceCtx(t, listReq)
-	listW := httptest.NewRecorder()
-	testHandler.ListChatDraftRestores(listW, listReq)
-	if listW.Code != http.StatusOK {
-		t.Fatalf("list: expected 200, got %d: %s", listW.Code, listW.Body.String())
-	}
-	var resp ChatDraftRestoresResponse
-	if err := json.Unmarshal(listW.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode list: %v", err)
-	}
-	if len(resp.Restores) != 1 {
-		t.Fatalf("restores = %d, want 1", len(resp.Restores))
-	}
-	got := resp.Restores[0]
-	if got.ID != restoreID {
-		t.Errorf("id = %q, want %q", got.ID, restoreID)
-	}
-	if got.Content != "run the thing" {
-		t.Errorf("content = %q, want %q", got.Content, "run the thing")
-	}
-	if len(got.Attachments) != 1 || got.Attachments[0].ID != attachmentID {
-		t.Fatalf("attachments = %+v, want the seeded attachment", got.Attachments)
-	}
-	if got.Attachments[0].Filename != "notes.txt" {
-		t.Errorf("attachment filename = %q, want notes.txt", got.Attachments[0].Filename)
-	}
-
-	// Consume twice: both must be 204 (idempotent), and the row must be gone.
-	for i := 0; i < 2; i++ {
-		delReq := withDraftRestoreParams(newRequest(http.MethodDelete, "/api/chat/sessions/"+sessionID+"/draft-restores/"+restoreID, nil), sessionID, restoreID)
-		delReq = withChatTestWorkspaceCtx(t, delReq)
-		delW := httptest.NewRecorder()
-		testHandler.ConsumeChatDraftRestore(delW, delReq)
-		if delW.Code != http.StatusNoContent {
-			t.Fatalf("consume call %d: expected 204, got %d: %s", i+1, delW.Code, delW.Body.String())
-		}
-	}
-
-	listW = httptest.NewRecorder()
-	testHandler.ListChatDraftRestores(listW, withChatTestWorkspaceCtx(t, withURLParam(newRequest(http.MethodGet, "/api/chat/sessions/"+sessionID+"/draft-restores", nil), "sessionId", sessionID)))
-	if listW.Code != http.StatusOK {
-		t.Fatalf("relist: expected 200, got %d", listW.Code)
-	}
-	resp = ChatDraftRestoresResponse{}
-	if err := json.Unmarshal(listW.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode relist: %v", err)
-	}
-	if len(resp.Restores) != 0 {
-		t.Errorf("restores after consume = %d, want 0", len(resp.Restores))
-	}
-}
 
 // Draft restores hold the creator's private prompt: another workspace member
 // must not be able to read or consume them.

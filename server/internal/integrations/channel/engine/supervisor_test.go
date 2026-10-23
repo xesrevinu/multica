@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -11,8 +12,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 )
@@ -61,7 +60,7 @@ func (f *fakeStore) ListActiveInstallations(ctx context.Context) ([]Installation
 	return out, nil
 }
 
-func (f *fakeStore) ListHeldWSLeases(_ context.Context, ids []pgtype.UUID) (map[string]struct{}, error) {
+func (f *fakeStore) ListHeldWSLeases(_ context.Context, ids []string) (map[string]struct{}, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.listHeldErr != nil {
@@ -144,14 +143,14 @@ func (f *fakeStore) ReleaseWSLease(ctx context.Context, arg ReleaseLeaseParams) 
 	return nil
 }
 
-func (f *fakeStore) presetLease(id pgtype.UUID, token string, expires time.Time) {
+func (f *fakeStore) presetLease(id string, token string, expires time.Time) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.leaseOwner[uuidString(id)] = token
 	f.leaseExpiresAt[uuidString(id)] = expires
 }
 
-func (f *fakeStore) leaseHolder(id pgtype.UUID) (string, bool) {
+func (f *fakeStore) leaseHolder(id string) (string, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	owner, ok := f.leaseOwner[uuidString(id)]
@@ -162,7 +161,7 @@ type contextCapturingContendedLeaseStore struct {
 	acquireCtx chan context.Context
 }
 
-func (s *contextCapturingContendedLeaseStore) ListHeldWSLeases(_ context.Context, _ []pgtype.UUID) (map[string]struct{}, error) {
+func (s *contextCapturingContendedLeaseStore) ListHeldWSLeases(_ context.Context, _ []string) (map[string]struct{}, error) {
 	return map[string]struct{}{}, nil
 }
 
@@ -249,13 +248,9 @@ func fakeRegistry(fc *fakeChannel, builds *int32, buildErr error) *channel.Regis
 	return reg
 }
 
-func uuidFromString(t *testing.T, s string) pgtype.UUID {
+func uuidFromString(t *testing.T, s string) string {
 	t.Helper()
-	var u pgtype.UUID
-	if err := u.Scan(s); err != nil {
-		t.Fatalf("scan uuid %q: %v", s, err)
-	}
-	return u
+	return s
 }
 
 func discardLogger() *slog.Logger {
@@ -305,8 +300,8 @@ func waitFor(timeout time.Duration, cond func() bool) bool {
 	return cond()
 }
 
-func activeInst(id pgtype.UUID, fingerprint string) Installation {
-	return Installation{ID: id, ChannelType: channel.TypeFeishu, Fingerprint: fingerprint, Config: []byte(`{}`)}
+func activeInst(id string, fingerprint string) Installation {
+	return Installation{ID: id, ChannelType: channel.TypeFeishu, Fingerprint: fingerprint, Config: json.RawMessage(`{}`)}
 }
 
 func TestSupervisorAcquiresLeaseAndConnects(t *testing.T) {
@@ -352,7 +347,7 @@ func TestSupervisorSkipsUnregisteredChannelType(t *testing.T) {
 	slackID := uuidFromString(t, "2b222222-2222-2222-2222-222222222222")
 	q.installations = []Installation{
 		activeInst(feishuID, "fp1"),
-		{ID: slackID, ChannelType: channel.Type("slack"), Fingerprint: "fp2", Config: []byte(`{}`)},
+		{ID: slackID, ChannelType: channel.Type("slack"), Fingerprint: "fp2", Config: json.RawMessage(`{}`)},
 	}
 
 	fc := &fakeChannel{typ: channel.TypeFeishu}

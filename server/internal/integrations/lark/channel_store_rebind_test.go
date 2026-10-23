@@ -6,10 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
 
+	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -51,7 +50,7 @@ const (
 // not the revoked/same-agent/other-workspace fences, would decide every case.
 // rbAgentArch is archived (a live-but-reversible owner). Idempotent; the matching
 // teardown drops the workspaces, which cascades to the runtime and agents.
-func seedRebindOwners(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+func seedRebindOwners(t *testing.T, ctx context.Context, pool *testutil.Pool) {
 	t.Helper()
 	exec := func(q string, args ...any) {
 		if _, err := pool.Exec(ctx, q, args...); err != nil {
@@ -77,7 +76,7 @@ VALUES ($1, $2, $3, 'local', $4, now()) ON CONFLICT (id) DO NOTHING`, rbAgentArc
 // cleanRebindOwners drops the seeded workspaces; the FK ON DELETE CASCADE takes
 // the runtime and agents with them. channel_installation has no such FK — the
 // bug under test — so those rows are cleaned by app_id separately.
-func cleanRebindOwners(ctx context.Context, pool *pgxpool.Pool) {
+func cleanRebindOwners(ctx context.Context, pool *testutil.Pool) {
 	_, _ = pool.Exec(ctx, `DELETE FROM workspace WHERE id = ANY($1)`, []string{rbWS, rbWS2})
 }
 
@@ -106,7 +105,7 @@ func TestChannelStore_ReclaimDeadRevokedFences(t *testing.T) {
 	t.Cleanup(clean)
 
 	// insert an installation and return its id.
-	insert := func(app, ws, agent, status string) pgtype.UUID {
+	insert := func(app, ws, agent, status string) string {
 		var id string
 		if err := pool.QueryRow(ctx, `
 INSERT INTO channel_installation (workspace_id, agent_id, channel_type, config, installer_user_id, status)
@@ -117,12 +116,12 @@ RETURNING id
 		}
 		return util.MustParseUUID(id)
 	}
-	exists := func(id pgtype.UUID) bool {
+	exists := func(id string) bool {
 		_, err := store.GetLarkInstallation(ctx, id)
 		if err == nil {
 			return true
 		}
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return false
 		}
 		t.Fatalf("GetLarkInstallation: %v", err)
@@ -213,7 +212,7 @@ func TestChannelStore_ReinstallReactivationSemantics(t *testing.T) {
 	t.Cleanup(func() { cleanRebindOwners(ctx, pool) })
 	t.Cleanup(clean)
 
-	insertRevoked := func(app, agent string) pgtype.UUID {
+	insertRevoked := func(app, agent string) string {
 		var id string
 		if err := pool.QueryRow(ctx, `
 INSERT INTO channel_installation (workspace_id, agent_id, channel_type, config, installer_user_id, status)
@@ -226,7 +225,7 @@ RETURNING id
 	}
 	// Attach a member binding + chat-session binding to an installation, the way
 	// a real workspace accumulates them while the bot is connected.
-	attachBindings := func(installID pgtype.UUID) {
+	attachBindings := func(installID string) {
 		if _, err := pool.Exec(ctx, `
 INSERT INTO channel_user_binding (workspace_id, multica_user_id, installation_id, channel_type, channel_user_id)
 VALUES ($1, $2, $3, 'feishu', 'ou_rb_user')
@@ -240,7 +239,7 @@ VALUES ($1, $2, 'feishu', 'oc_rb_chat', 'p2p')
 			t.Fatalf("insert chat-session binding: %v", err)
 		}
 	}
-	countBindingsOn := func(installID pgtype.UUID) (users, chats int) {
+	countBindingsOn := func(installID string) (users, chats int) {
 		if err := pool.QueryRow(ctx, `SELECT count(*) FROM channel_user_binding WHERE installation_id = $1`, installID).Scan(&users); err != nil {
 			t.Fatalf("count user bindings: %v", err)
 		}
@@ -306,7 +305,7 @@ VALUES ($1, $2, 'feishu', 'oc_rb_chat', 'p2p')
 			t.Fatalf("new installation status=%q, want active", inst.Status)
 		}
 		// The old revoked row is gone (its unique app_id slot is freed for B).
-		if _, err := store.GetLarkInstallation(ctx, oldID); !errors.Is(err, pgx.ErrNoRows) {
+		if _, err := store.GetLarkInstallation(ctx, oldID); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("old agent's revoked row still present after rebind: err=%v", err)
 		}
 	})
@@ -477,8 +476,8 @@ VALUES ($1, 'feishu', 'im.message.receive_v1', $2, 'revoked_installation')`, idS
 	if err != nil {
 		t.Fatalf("begin txReconnect: %v", err)
 	}
-	defer txReconnect.Rollback(ctx)
-	if _, err := txReconnect.Exec(ctx, `UPDATE channel_installation SET status = 'active' WHERE id = $1`, idStr); err != nil {
+	defer txReconnect.Rollback()
+	if _, err := txReconnect.ExecContext(ctx, `UPDATE channel_installation SET status = 'active' WHERE id = $1`, idStr); err != nil {
 		t.Fatalf("reactivate in txReconnect: %v", err)
 	}
 
@@ -491,17 +490,17 @@ VALUES ($1, 'feishu', 'im.message.receive_v1', $2, 'revoked_installation')`, idS
 			done <- err
 			return
 		}
-		defer txRebind.Rollback(ctx)
+		defer txRebind.Rollback()
 		if err := store.WithTx(txRebind).ReclaimDeadInstallationByAppID(ctx, util.MustParseUUID(rbWS), util.MustParseUUID(rbAgentB), app); err != nil {
 			done <- err
 			return
 		}
-		done <- txRebind.Commit(ctx)
+		done <- txRebind.Commit()
 	}()
 
 	// Let txRebind reach and block on the guarded delete, then let A win the race.
 	time.Sleep(300 * time.Millisecond)
-	if err := txReconnect.Commit(ctx); err != nil {
+	if err := txReconnect.Commit(); err != nil {
 		t.Fatalf("commit txReconnect: %v", err)
 	}
 	select {
@@ -559,7 +558,7 @@ func TestChannelStore_ReclaimDeadReclaimsOrphansRefusesLiveOwners(t *testing.T) 
 	t.Cleanup(func() { cleanRebindOwners(ctx, pool) })
 	t.Cleanup(clean)
 
-	insert := func(app, ws, agent, status string) pgtype.UUID {
+	insert := func(app, ws, agent, status string) string {
 		var id string
 		if err := pool.QueryRow(ctx, `
 INSERT INTO channel_installation (workspace_id, agent_id, channel_type, config, installer_user_id, status)
@@ -570,12 +569,12 @@ RETURNING id
 		}
 		return util.MustParseUUID(id)
 	}
-	exists := func(id pgtype.UUID) bool {
+	exists := func(id string) bool {
 		_, err := store.GetLarkInstallation(ctx, id)
 		if err == nil {
 			return true
 		}
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return false
 		}
 		t.Fatalf("GetLarkInstallation: %v", err)

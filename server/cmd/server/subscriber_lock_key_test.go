@@ -33,12 +33,10 @@ func TestLockSubscriberWrites_KeyedOnUUIDValueNotSpelling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin holder: %v", err)
 	}
-	defer holder.Rollback(context.Background())
+	defer holder.Rollback()
 
-	if err := queries.WithTx(holder).LockSubscriberWrites(ctx, db.LockSubscriberWritesParams{
-		WorkspaceID: util.MustParseUUID(testWorkspaceID),
-		UserID:      util.MustParseUUID(testUserID),
-	}); err != nil {
+	_ = util.MustParseUUID(testWorkspaceID)
+	if err := queries.WithTx(holder).LockSubscriberWrites(ctx); err != nil {
 		t.Fatalf("holder lock: %v", err)
 	}
 
@@ -57,14 +55,8 @@ func TestLockSubscriberWrites_KeyedOnUUIDValueNotSpelling(t *testing.T) {
 			blocked <- err
 			return
 		}
-		defer waiter.Rollback(context.Background())
-		blocked <- queries.WithTx(waiter).LockSubscriberWrites(
-			context.Background(),
-			db.LockSubscriberWritesParams{
-				WorkspaceID: util.MustParseUUID(upperWorkspace),
-				UserID:      util.MustParseUUID(upperUser),
-			},
-		)
+		defer waiter.Rollback()
+		blocked <- queries.WithTx(waiter).LockSubscriberWrites(context.Background())
 	}()
 
 	select {
@@ -76,7 +68,7 @@ func TestLockSubscriberWrites_KeyedOnUUIDValueNotSpelling(t *testing.T) {
 		// Correctly blocked.
 	}
 
-	if err := holder.Commit(context.Background()); err != nil {
+	if err := holder.Commit(); err != nil {
 		t.Fatalf("commit holder: %v", err)
 	}
 	select {

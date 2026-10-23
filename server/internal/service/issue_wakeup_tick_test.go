@@ -31,7 +31,7 @@ func idleConditionRules(t *testing.T, f principalFixture, s *IssueWakeupService,
 		f.Cleanup(t, "DELETE FROM issue_wakeup_receipt WHERE wakeup_id IN (SELECT id FROM issue_wakeup WHERE issue_id=$1)", idleIssue)
 		f.Cleanup(t, "DELETE FROM activity_log WHERE issue_id=$1", idleIssue)
 		seed := wakeCreate(t, f, s, idleIssue, WakeupInput{AgentID: agent, Kind: "event", Instruction: "never",
-			Condition: nullString(string(condition(t, map[string]any{"type": "issue_field", "field": "status", "value": "blocked"})))})
+			Condition: condition(t, map[string]any{"type": "issue_field", "field": "status", "value": "blocked"})})
 		cloneWakeup(t, f, seed.ID, min(perIssue, n-made)-1, false)
 	}
 	f.Exec(t, "UPDATE issue_wakeup SET next_fire_at=now()-interval '1 second', updated_at=now()-interval '1 hour' WHERE workspace_id=$1 AND instruction='never'", f.WorkspaceID)
@@ -60,7 +60,7 @@ func TestWakeupTickFiresStatusHintBehindManyDueChecks(t *testing.T) {
 	idleConditionRules(t, f, s, reviewer, 2*wakeupTickBatch+30)
 
 	w := wakeCreate(t, f, s, issue, WakeupInput{AgentID: reviewer, Kind: "event", Instruction: "Review it",
-		Condition: nullString(string(condition(t, map[string]any{"type": "issue_field", "field": "status", "value": "in_review"})))})
+		Condition: condition(t, map[string]any{"type": "issue_field", "field": "status", "value": "in_review"})})
 	// Not due by time and last in scan order: only its hint can reach it.
 	f.Exec(t, "UPDATE issue_wakeup SET next_fire_at=now()+interval '1 hour', updated_at=now() WHERE id=$1", w.ID)
 

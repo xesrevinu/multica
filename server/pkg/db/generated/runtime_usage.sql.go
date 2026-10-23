@@ -154,7 +154,7 @@ FROM task_usage_hourly
 WHERE runtime_id = ?1
   AND bucket_hour >= ?3
 GROUP BY CASE WHEN ?2 IS NOT NULL THEN date(bucket_hour) END, LOWER(provider), model
-ORDER BY CASE WHEN sqlc.arg('tz') IS NOT NULL THEN date(bucket_hour) END DESC, LOWER(provider), model
+ORDER BY CASE WHEN ?2 IS NOT NULL THEN date(bucket_hour) END DESC, LOWER(provider), model
 `
 
 type ListRuntimeUsageParams struct {

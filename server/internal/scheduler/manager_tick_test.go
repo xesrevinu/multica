@@ -50,7 +50,7 @@ func TestManagerTickClosesAbandonedRunning(t *testing.T) {
 			oldPlan := FloorPlan(now, job.Cadence).Add(-job.Cadence)
 			oldRunner := "ghost-runner"
 			oldLease := uuid.New()
-			if _, err := pool.Exec(ctx, `
+			if _, err := pool.ExecContext(ctx, `
 				INSERT INTO sys_cron_executions (
 					job_name, scope_kind, scope_id, plan_time,
 					status, attempt, max_attempts,
@@ -61,12 +61,12 @@ func TestManagerTickClosesAbandonedRunning(t *testing.T) {
 					$1, 'global', 'global', $2,
 					'RUNNING', 1, $3,
 					$4, $5,
-					now() - INTERVAL '10 minutes',
-					now() - INTERVAL '5 minutes',
-					now() - INTERVAL '10 minutes',
-					now() - INTERVAL '10 minutes'
+					strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-10 minutes'),
+					strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-5 minutes'),
+					strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-10 minutes'),
+					strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-10 minutes')
 				)
-			`, job.Name, oldPlan, job.MaxAttempts, oldRunner, oldLease); err != nil {
+			`, job.Name, formatDBTime(oldPlan), job.MaxAttempts, oldRunner, oldLease.String()); err != nil {
 				t.Fatalf("seed stale RUNNING row: %v", err)
 			}
 
@@ -80,11 +80,11 @@ func TestManagerTickClosesAbandonedRunning(t *testing.T) {
 
 			// Assert the old row is now FAILED with stale_timeout.
 			var oldStatus, oldErr string
-			if err := pool.QueryRow(ctx, `
+			if err := pool.QueryRowContext(ctx, `
 				SELECT status, COALESCE(error_code, '')
 				  FROM sys_cron_executions
 				 WHERE job_name = $1 AND plan_time = $2
-			`, job.Name, oldPlan).Scan(&oldStatus, &oldErr); err != nil {
+			`, job.Name, formatDBTime(oldPlan)).Scan(&oldStatus, &oldErr); err != nil {
 				t.Fatalf("scan old row: %v", err)
 			}
 			if oldStatus != "FAILED" {
@@ -98,11 +98,11 @@ func TestManagerTickClosesAbandonedRunning(t *testing.T) {
 			// by this Manager.
 			currentPlan := FloorPlan(now, job.Cadence)
 			var curStatus, curRunner string
-			if err := pool.QueryRow(ctx, `
+			if err := pool.QueryRowContext(ctx, `
 				SELECT status, runner_id
 				  FROM sys_cron_executions
 				 WHERE job_name = $1 AND plan_time = $2
-			`, job.Name, currentPlan).Scan(&curStatus, &curRunner); err != nil {
+			`, job.Name, formatDBTime(currentPlan)).Scan(&curStatus, &curRunner); err != nil {
 				t.Fatalf("scan current row: %v", err)
 			}
 			if curStatus != "SUCCESS" {
@@ -145,7 +145,7 @@ func TestManagerHandlerPanicWritesFailed(t *testing.T) {
 	}
 
 	var status, errCode, errMsg string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		SELECT status, COALESCE(error_code, ''), COALESCE(error_msg, '')
 		  FROM sys_cron_executions
 		 WHERE job_name = $1

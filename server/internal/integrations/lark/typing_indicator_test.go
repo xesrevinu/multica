@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
+	"github.com/google/uuid"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -96,7 +96,7 @@ type noListerClient struct{ APIClient }
 
 type fakeTypingQueries struct {
 	ledgerMu     sync.Mutex
-	ledger       map[pgtype.UUID]db.ChannelTypingReaction
+	ledger       map[string]db.ChannelTypingReaction
 	active       func(context.Context, db.IsChannelMessageTypingActiveParams) (bool, error)
 	binding      ChatSessionBinding
 	installation Installation
@@ -111,10 +111,10 @@ func (f *fakeTypingQueries) IsChannelMessageTypingActive(ctx context.Context, ar
 	return true, nil
 }
 
-func (f *fakeTypingQueries) GetLarkChatSessionBindingBySession(context.Context, pgtype.UUID) (ChatSessionBinding, error) {
+func (f *fakeTypingQueries) GetLarkChatSessionBindingBySession(context.Context, string) (ChatSessionBinding, error) {
 	return f.binding, f.bindingErr
 }
-func (f *fakeTypingQueries) GetLarkInstallation(context.Context, pgtype.UUID) (Installation, error) {
+func (f *fakeTypingQueries) GetLarkInstallation(context.Context, string) (Installation, error) {
 	return f.installation, f.installErr
 }
 
@@ -130,7 +130,7 @@ func TestTypingIndicatorAddRecordsState(t *testing.T) {
 	mgr := NewTypingIndicatorManager(api, fakeTypingCreds{secret: "shh"}, queries, newDiscardLogger())
 
 	inst := Installation{AppID: "cli_test", Region: "feishu"}
-	session := pgtype.UUID{Bytes: [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}, Valid: true}
+	session := uuid.UUID{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}.String()
 
 	mgr.Add(context.Background(), inst, session, "msg-1", "", session)
 
@@ -155,7 +155,7 @@ func TestTypingIndicatorAddSkipsOnEmptyMessageID(t *testing.T) {
 	mgr := NewTypingIndicatorManager(api, fakeTypingCreds{secret: "shh"}, &fakeTypingQueries{}, newDiscardLogger())
 
 	inst := Installation{AppID: "cli_test", Region: "feishu"}
-	session := pgtype.UUID{Bytes: [16]byte{1}, Valid: true}
+	session := uuid.UUID{1}.String()
 
 	mgr.Add(context.Background(), inst, session, "", "", session)
 
@@ -169,7 +169,7 @@ func TestTypingIndicatorAddSkipsOldMessages(t *testing.T) {
 	mgr := NewTypingIndicatorManager(api, fakeTypingCreds{secret: "shh"}, &fakeTypingQueries{}, newDiscardLogger())
 
 	inst := Installation{AppID: "cli_test", Region: "feishu"}
-	session := pgtype.UUID{Bytes: [16]byte{1}, Valid: true}
+	session := uuid.UUID{1}.String()
 
 	oldTime := time.Now().Add(-3 * time.Minute).UnixMilli()
 	mgr.Add(context.Background(), inst, session, "msg-old", strconv.FormatInt(oldTime, 10), session)
@@ -184,7 +184,7 @@ func TestTypingIndicatorAddLogsOnAPIError(t *testing.T) {
 	mgr := NewTypingIndicatorManager(api, fakeTypingCreds{secret: "shh"}, &fakeTypingQueries{}, newDiscardLogger())
 
 	inst := Installation{AppID: "cli_test", Region: "feishu"}
-	session := pgtype.UUID{Bytes: [16]byte{1}, Valid: true}
+	session := uuid.UUID{1}.String()
 
 	mgr.Add(context.Background(), inst, session, "msg-1", "", session)
 
@@ -205,10 +205,10 @@ func TestTypingIndicatorReconcileDeletesReactions(t *testing.T) {
 	api := &fakeTypingAPIClient{addReturn: "reaction-abc"}
 	queries := &fakeTypingQueries{
 		binding: ChatSessionBinding{
-			InstallationID: pgtype.UUID{Bytes: [16]byte{9, 9, 9, 9}, Valid: true},
+			InstallationID: uuid.UUID{9, 9, 9, 9}.String(),
 		},
 		installation: Installation{
-			ID:     pgtype.UUID{Bytes: [16]byte{9, 9, 9, 9}, Valid: true},
+			ID:     uuid.UUID{9, 9, 9, 9}.String(),
 			AppID:  "cli_test",
 			Region: "feishu",
 		},
@@ -216,7 +216,7 @@ func TestTypingIndicatorReconcileDeletesReactions(t *testing.T) {
 	mgr := NewTypingIndicatorManager(api, fakeTypingCreds{secret: "shh"}, queries, newDiscardLogger())
 
 	inst := Installation{AppID: "cli_test", Region: "feishu"}
-	session := pgtype.UUID{Bytes: [16]byte{1, 2, 3, 4}, Valid: true}
+	session := uuid.UUID{1, 2, 3, 4}.String()
 
 	mgr.Add(context.Background(), inst, session, "msg-1", "", session)
 	if len(api.addCalled) != 1 {
@@ -245,17 +245,17 @@ func TestTypingIndicatorReconcileNoOpWhenEmpty(t *testing.T) {
 	api := &fakeTypingAPIClient{}
 	queries := &fakeTypingQueries{
 		binding: ChatSessionBinding{
-			InstallationID: pgtype.UUID{Bytes: [16]byte{9}, Valid: true},
+			InstallationID: uuid.UUID{9}.String(),
 		},
 		installation: Installation{
-			ID:     pgtype.UUID{Bytes: [16]byte{9}, Valid: true},
+			ID:     uuid.UUID{9}.String(),
 			AppID:  "cli_test",
 			Region: "feishu",
 		},
 	}
 	mgr := NewTypingIndicatorManager(api, fakeTypingCreds{secret: "shh"}, queries, newDiscardLogger())
 
-	session := pgtype.UUID{Bytes: [16]byte{1, 2, 3, 4}, Valid: true}
+	session := uuid.UUID{1, 2, 3, 4}.String()
 	mgr.Reconcile(context.Background(), session)
 
 	if len(api.deleteCalled) != 0 {
@@ -267,10 +267,10 @@ func TestTypingIndicatorReconcileLogsOnDeleteError(t *testing.T) {
 	api := &fakeTypingAPIClient{addReturn: "reaction-xyz", deleteErr: errors.New("delete failed")}
 	queries := &fakeTypingQueries{
 		binding: ChatSessionBinding{
-			InstallationID: pgtype.UUID{Bytes: [16]byte{9}, Valid: true},
+			InstallationID: uuid.UUID{9}.String(),
 		},
 		installation: Installation{
-			ID:     pgtype.UUID{Bytes: [16]byte{9}, Valid: true},
+			ID:     uuid.UUID{9}.String(),
 			AppID:  "cli_test",
 			Region: "feishu",
 		},
@@ -278,7 +278,7 @@ func TestTypingIndicatorReconcileLogsOnDeleteError(t *testing.T) {
 	mgr := NewTypingIndicatorManager(api, fakeTypingCreds{secret: "shh"}, queries, newDiscardLogger())
 
 	inst := Installation{AppID: "cli_test", Region: "feishu"}
-	session := pgtype.UUID{Bytes: [16]byte{1, 2, 3, 4}, Valid: true}
+	session := uuid.UUID{1, 2, 3, 4}.String()
 
 	mgr.Add(context.Background(), inst, session, "msg-1", "", session)
 	mgr.Reconcile(context.Background(), session)
@@ -292,10 +292,10 @@ func TestTypingIndicatorMultipleMessagesPerSession(t *testing.T) {
 	api := &fakeTypingAPIClient{addReturn: "reaction-n"}
 	queries := &fakeTypingQueries{
 		binding: ChatSessionBinding{
-			InstallationID: pgtype.UUID{Bytes: [16]byte{9}, Valid: true},
+			InstallationID: uuid.UUID{9}.String(),
 		},
 		installation: Installation{
-			ID:     pgtype.UUID{Bytes: [16]byte{9}, Valid: true},
+			ID:     uuid.UUID{9}.String(),
 			AppID:  "cli_test",
 			Region: "feishu",
 		},
@@ -303,7 +303,7 @@ func TestTypingIndicatorMultipleMessagesPerSession(t *testing.T) {
 	mgr := NewTypingIndicatorManager(api, fakeTypingCreds{secret: "shh"}, queries, newDiscardLogger())
 
 	inst := Installation{AppID: "cli_test", Region: "feishu"}
-	session := pgtype.UUID{Bytes: [16]byte{1, 2, 3, 4}, Valid: true}
+	session := uuid.UUID{1, 2, 3, 4}.String()
 
 	mgr.Add(context.Background(), inst, session, "msg-a", "", session)
 	mgr.Add(context.Background(), inst, session, "msg-b", "", session)
@@ -323,10 +323,10 @@ func TestTypingIndicatorConcurrentAddAndClear(t *testing.T) {
 	api := &fakeTypingAPIClient{addReturn: "reaction-concurrent"}
 	queries := &fakeTypingQueries{
 		binding: ChatSessionBinding{
-			InstallationID: pgtype.UUID{Bytes: [16]byte{9}, Valid: true},
+			InstallationID: uuid.UUID{9}.String(),
 		},
 		installation: Installation{
-			ID:     pgtype.UUID{Bytes: [16]byte{9}, Valid: true},
+			ID:     uuid.UUID{9}.String(),
 			AppID:  "cli_test",
 			Region: "feishu",
 		},
@@ -334,7 +334,7 @@ func TestTypingIndicatorConcurrentAddAndClear(t *testing.T) {
 	mgr := NewTypingIndicatorManager(api, fakeTypingCreds{secret: "shh"}, queries, newDiscardLogger())
 
 	inst := Installation{AppID: "cli_test", Region: "feishu"}
-	session := pgtype.UUID{Bytes: [16]byte{1, 2, 3, 4}, Valid: true}
+	session := uuid.UUID{1, 2, 3, 4}.String()
 
 	done := make(chan struct{})
 	go func() {
@@ -363,11 +363,11 @@ func TestTypingIndicatorReconcilesAfterTheInstallationIsDeleted(t *testing.T) {
 	mgr := NewTypingIndicatorManager(api, fakeTypingCreds{secret: "shh"}, queries, newDiscardLogger())
 
 	inst := Installation{
-		ID:     pgtype.UUID{Bytes: [16]byte{9}, Valid: true},
+		ID:     uuid.UUID{9}.String(),
 		AppID:  "cli_test",
 		Region: "feishu",
 	}
-	session := pgtype.UUID{Bytes: [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}, Valid: true}
+	session := uuid.UUID{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}.String()
 
 	mgr.Add(context.Background(), inst, session, "msg-1", "", session)
 	if len(api.addCalled) != 1 {
@@ -375,7 +375,7 @@ func TestTypingIndicatorReconcilesAfterTheInstallationIsDeleted(t *testing.T) {
 	}
 
 	// The teardown transaction has committed.
-	queries.installErr = pgx.ErrNoRows
+	queries.installErr = sql.ErrNoRows
 
 	mgr.Reconcile(context.Background(), session)
 
@@ -395,11 +395,11 @@ func TestTypingIndicatorDoesNotFallBackOnATransientLookupFailure(t *testing.T) {
 	mgr := NewTypingIndicatorManager(api, fakeTypingCreds{secret: "shh"}, queries, newDiscardLogger())
 
 	inst := Installation{
-		ID:     pgtype.UUID{Bytes: [16]byte{9}, Valid: true},
+		ID:     uuid.UUID{9}.String(),
 		AppID:  "cli_test",
 		Region: "feishu",
 	}
-	session := pgtype.UUID{Bytes: [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}, Valid: true}
+	session := uuid.UUID{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}.String()
 
 	mgr.Add(context.Background(), inst, session, "msg-1", "", session)
 	queries.installErr = errors.New("connection reset")

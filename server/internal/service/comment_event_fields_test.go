@@ -12,7 +12,7 @@ func commentAt(created time.Time) db.Comment {
 		AuthorType: "system",
 		Content:    "task failed",
 		Type:       "system",
-		CreatedAt:  nullTime(created, true).String,
+		CreatedAt:  created.Format(time.RFC3339),
 	}
 }
 

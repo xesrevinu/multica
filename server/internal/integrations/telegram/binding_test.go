@@ -5,7 +5,6 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func TestRandomBindingTokenIsUniqueAndURLSafe(t *testing.T) {
@@ -39,7 +38,7 @@ func TestHashBindingTokenIsDeterministicAndDoesNotRetainRawValue(t *testing.T) {
 
 func TestRedeemAndBindRequiresTransactionStarter(t *testing.T) {
 	service := &BindingTokenService{}
-	_, err := service.RedeemAndBind(context.Background(), "token", pgtype.UUID{})
+	_, err := service.RedeemAndBind(context.Background(), "token", "")
 	if err == nil || err.Error() != "telegram: BindingTokenService missing TxStarter" {
 		t.Fatalf("error = %v", err)
 	}

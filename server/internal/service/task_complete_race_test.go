@@ -69,11 +69,11 @@ func (m *mockDBTX) QueryContext(_ context.Context, _ string, _ ...interface{}) (
 
 func (m *mockDBTX) QueryRowContext(_ context.Context, query string, _ ...interface{}) *sql.Row {
 	// CompleteAgentTask and FailAgentTask SQL contain "SET status ="
-	if strings.Contains(query, "SET status =") {
+	if !strings.Contains(query, "name: GetAgentTask") {
 		return errQueryRow()
 	}
 	// GetAgentTask — return the existing task
-	return errQueryRow()
+	return mockQueryRow([][]any{structToRow(m.task)}, nil)
 }
 
 func testUUID(b byte) string {

@@ -67,15 +67,34 @@ type AttachLabelToIssueParams struct {
 }
 
 type AttachLabelToIssueRow struct {
-	Changed       int64       `json:"changed"`
-	IssueRevision interface{} `json:"issue_revision"`
+	Changed       bool  `json:"changed"`
+	IssueRevision int64 `json:"issue_revision"`
 }
 
 func (q *Queries) AttachLabelToIssue(ctx context.Context, arg AttachLabelToIssueParams) (AttachLabelToIssueRow, error) {
 	row := q.db.QueryRowContext(ctx, attachLabelToIssue, arg.IssueID, arg.LabelID, arg.WorkspaceID)
+	var changed int64
+	var revIface interface{}
+	err := row.Scan(&changed, &revIface)
+	if err == sql.ErrNoRows {
+		return AttachLabelToIssueRow{}, nil
+	}
+	if err != nil {
+		return AttachLabelToIssueRow{}, err
+	}
 	var i AttachLabelToIssueRow
-	err := row.Scan(&i.Changed, &i.IssueRevision)
-	return i, err
+	i.Changed = changed != 0
+	if i.Changed {
+		if err := q.db.QueryRowContext(ctx, `UPDATE issue
+SET revision = revision + 1,
+    last_activity_at = GREATEST(COALESCE(last_activity_at, updated_at), now())
+WHERE issue.id = ?1
+  AND issue.workspace_id = ?2
+RETURNING revision`, arg.IssueID, arg.WorkspaceID).Scan(&i.IssueRevision); err != nil && err != sql.ErrNoRows {
+			return AttachLabelToIssueRow{}, err
+		}
+	}
+	return i, nil
 }
 
 const attachLabelToIssueOnCreate = `-- name: AttachLabelToIssueOnCreate :exec
@@ -107,8 +126,18 @@ type AttachLabelToIssueOnCreateParams struct {
 }
 
 func (q *Queries) AttachLabelToIssueOnCreate(ctx context.Context, arg AttachLabelToIssueOnCreateParams) error {
-	_, err := q.db.ExecContext(ctx, attachLabelToIssueOnCreate, arg.IssueID, arg.LabelID, arg.WorkspaceID)
-	return err
+	res, err := q.db.ExecContext(ctx, attachLabelToIssueOnCreate, arg.IssueID, arg.LabelID, arg.WorkspaceID)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err == nil && n > 0 {
+		_, err = q.db.ExecContext(ctx, `UPDATE issue
+SET last_activity_at = GREATEST(COALESCE(last_activity_at, updated_at), now())
+WHERE issue.id = ?1
+  AND issue.workspace_id = ?2`, arg.IssueID, arg.WorkspaceID)
+		return err
+	}
+	return nil
 }
 
 const attachLabelToIssueOnCreate_Step2 = `-- name: AttachLabelToIssueOnCreate_Step2 :exec
@@ -349,15 +378,34 @@ type DetachLabelFromIssueParams struct {
 }
 
 type DetachLabelFromIssueRow struct {
-	Changed       int64 `json:"changed"`
+	Changed       bool  `json:"changed"`
 	IssueRevision int64 `json:"issue_revision"`
 }
 
 func (q *Queries) DetachLabelFromIssue(ctx context.Context, arg DetachLabelFromIssueParams) (DetachLabelFromIssueRow, error) {
 	row := q.db.QueryRowContext(ctx, detachLabelFromIssue, arg.IssueID, arg.LabelID, arg.WorkspaceID)
+	var changed int64
+	var rev int64
+	err := row.Scan(&changed, &rev)
+	if err == sql.ErrNoRows {
+		return DetachLabelFromIssueRow{}, nil
+	}
+	if err != nil {
+		return DetachLabelFromIssueRow{}, err
+	}
 	var i DetachLabelFromIssueRow
-	err := row.Scan(&i.Changed, &i.IssueRevision)
-	return i, err
+	i.Changed = changed != 0
+	if i.Changed {
+		if err := q.db.QueryRowContext(ctx, `UPDATE issue
+SET revision = revision + 1,
+    last_activity_at = GREATEST(COALESCE(last_activity_at, updated_at), now())
+WHERE issue.id = ?1
+  AND issue.workspace_id = ?2
+RETURNING revision`, arg.IssueID, arg.WorkspaceID).Scan(&i.IssueRevision); err != nil && err != sql.ErrNoRows {
+			return DetachLabelFromIssueRow{}, err
+		}
+	}
+	return i, nil
 }
 
 const detachLabelFromIssue_Step2 = `-- name: DetachLabelFromIssue_Step2 :exec

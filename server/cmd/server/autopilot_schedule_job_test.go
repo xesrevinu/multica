@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/scheduler"
 	"github.com/multica-ai/multica/server/internal/service"
@@ -39,12 +39,12 @@ func setupAutopilotScheduleJob(t *testing.T, cron string) (db.AutopilotTrigger, 
 	ap, err := queries.CreateAutopilot(ctx, db.CreateAutopilotParams{
 		WorkspaceID:        parseUUID(testWorkspaceID),
 		Title:              "Schedule dispatch fixture",
-		Description:        pgtype.Text{String: "schedule dispatch test", Valid: true},
+		Description:        sql.NullString{String: "schedule dispatch test", Valid: true},
 		AssigneeType:       "agent",
 		AssigneeID:         parseUUID(agentID),
 		Status:             "active",
 		ExecutionMode:      "run_only",
-		IssueTitleTemplate: pgtype.Text{},
+		IssueTitleTemplate: sql.NullString{},
 		CreatedByType:      "member",
 		CreatedByID:        parseUUID(testUserID),
 	})
@@ -55,13 +55,13 @@ func setupAutopilotScheduleJob(t *testing.T, cron string) (db.AutopilotTrigger, 
 	trigger, err := queries.CreateAutopilotTrigger(ctx, db.CreateAutopilotTriggerParams{
 		AutopilotID:    ap.ID,
 		Kind:           "schedule",
-		Enabled:        true,
-		CronExpression: pgtype.Text{String: cron, Valid: true},
-		Timezone:       pgtype.Text{String: "UTC", Valid: true},
+		Enabled:        1,
+		CronExpression: sql.NullString{String: cron, Valid: true},
+		Timezone:       sql.NullString{String: "UTC", Valid: true},
 		// MUL-6951: the scheduler dispatches as this human; without it the run
 		// has no principal and fails closed.
-		CreatedByType: pgtype.Text{String: "member", Valid: true},
-		CreatedByID:   ap.CreatedByID,
+		CreatedByType: sql.NullString{String: "member", Valid: true},
+		CreatedByID:   sql.NullString{String: ap.CreatedByID, Valid: ap.CreatedByID != ""},
 	})
 	if err != nil {
 		t.Fatalf("CreateAutopilotTrigger: %v", err)
@@ -88,10 +88,10 @@ func setupAutopilotScheduleJob(t *testing.T, cron string) (db.AutopilotTrigger, 
 		_, _ = testPool.Exec(bg, `DELETE FROM autopilot WHERE id = $1`, ap.ID)
 	})
 
-	mgr := scheduler.NewManager(testPool, scheduler.Options{
+	mgr := scheduler.NewManager(testPool.DB, scheduler.Options{
 		RunnerID: "autopilot-job-test",
 	})
-	if err := mgr.Register(scheduler.AutopilotScheduleDispatchJob(testPool, queries, autopilotSvc)); err != nil {
+	if err := mgr.Register(scheduler.AutopilotScheduleDispatchJob(testPool.DB, queries, autopilotSvc)); err != nil {
 		t.Fatalf("register autopilot_schedule_dispatch job: %v", err)
 	}
 
@@ -251,7 +251,7 @@ func TestAutopilotScheduleJobCrashRecovery(t *testing.T) {
 	// The first-tick run carries planned_at + a real task linkage —
 	// that's the "complete" snapshot the retry must reuse, not
 	// duplicate.
-	var firstRunID pgtype.UUID
+	var firstRunID string
 	var firstRunTaskValid bool
 	if err := testPool.QueryRow(ctx, `
 		SELECT id, task_id IS NOT NULL FROM autopilot_run WHERE trigger_id = $1
@@ -322,9 +322,9 @@ func TestAutopilotScheduleJobCrashRecovery(t *testing.T) {
 		t.Fatalf("list run rows: %v", err)
 	}
 	defer rows.Close()
-	var seenIDs []pgtype.UUID
+	var seenIDs []string
 	for rows.Next() {
-		var id pgtype.UUID
+		var id string
 		if err := rows.Scan(&id); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
@@ -353,12 +353,12 @@ func TestAutopilotScheduleJobTwoRunnersSingleWinner(t *testing.T) {
 
 	trigger, _, _ := setupAutopilotScheduleJob(t, "*/1 * * * *")
 
-	mgrA := scheduler.NewManager(testPool, scheduler.Options{RunnerID: "runner-A"})
-	mgrB := scheduler.NewManager(testPool, scheduler.Options{RunnerID: "runner-B"})
-	if err := mgrA.Register(scheduler.AutopilotScheduleDispatchJob(testPool, queries, autopilotSvc)); err != nil {
+	mgrA := scheduler.NewManager(testPool.DB, scheduler.Options{RunnerID: "runner-A"})
+	mgrB := scheduler.NewManager(testPool.DB, scheduler.Options{RunnerID: "runner-B"})
+	if err := mgrA.Register(scheduler.AutopilotScheduleDispatchJob(testPool.DB, queries, autopilotSvc)); err != nil {
 		t.Fatalf("register A: %v", err)
 	}
-	if err := mgrB.Register(scheduler.AutopilotScheduleDispatchJob(testPool, queries, autopilotSvc)); err != nil {
+	if err := mgrB.Register(scheduler.AutopilotScheduleDispatchJob(testPool.DB, queries, autopilotSvc)); err != nil {
 		t.Fatalf("register B: %v", err)
 	}
 
@@ -493,12 +493,12 @@ func TestAutopilotScheduleJobPausedAutopilotSkipsAtHandler(t *testing.T) {
 	// "paused after scope-list" race the in-handler guard exists for.
 	if _, err := queries.UpdateAutopilot(ctx, db.UpdateAutopilotParams{
 		ID:     trigger.AutopilotID,
-		Status: pgtype.Text{String: "paused", Valid: true},
+		Status: sql.NullString{String: "paused", Valid: true},
 	}); err != nil {
 		t.Fatalf("pause autopilot: %v", err)
 	}
 
-	job := scheduler.AutopilotScheduleDispatchJob(testPool, queries, autopilotSvc)
+	job := scheduler.AutopilotScheduleDispatchJob(testPool.DB, queries, autopilotSvc)
 
 	// Drive the handler directly. plan_time is arbitrary — what we
 	// are asserting is that the handler re-reads autopilot.status
@@ -619,12 +619,12 @@ func seedColdStartTrigger(t *testing.T, cron string) (db.AutopilotTrigger, *db.Q
 	ap, err := queries.CreateAutopilot(ctx, db.CreateAutopilotParams{
 		WorkspaceID:        parseUUID(testWorkspaceID),
 		Title:              "Cold-start regression",
-		Description:        pgtype.Text{String: "deterministic cold-start", Valid: true},
+		Description:        sql.NullString{String: "deterministic cold-start", Valid: true},
 		AssigneeType:       "agent",
 		AssigneeID:         parseUUID(agentID),
 		Status:             "active",
 		ExecutionMode:      "run_only",
-		IssueTitleTemplate: pgtype.Text{},
+		IssueTitleTemplate: sql.NullString{},
 		CreatedByType:      "member",
 		CreatedByID:        parseUUID(testUserID),
 	})
@@ -641,13 +641,13 @@ func seedColdStartTrigger(t *testing.T, cron string) (db.AutopilotTrigger, *db.Q
 	trigger, err := queries.CreateAutopilotTrigger(ctx, db.CreateAutopilotTriggerParams{
 		AutopilotID:    ap.ID,
 		Kind:           "schedule",
-		Enabled:        true,
-		CronExpression: pgtype.Text{String: cron, Valid: true},
-		Timezone:       pgtype.Text{String: "UTC", Valid: true},
+		Enabled:        1,
+		CronExpression: sql.NullString{String: cron, Valid: true},
+		Timezone:       sql.NullString{String: "UTC", Valid: true},
 		// MUL-6951: the scheduler dispatches as this human; without it the run
 		// has no principal and fails closed.
-		CreatedByType: pgtype.Text{String: "member", Valid: true},
-		CreatedByID:   ap.CreatedByID,
+		CreatedByType: sql.NullString{String: "member", Valid: true},
+		CreatedByID:   sql.NullString{String: ap.CreatedByID, Valid: ap.CreatedByID != ""},
 	})
 	if err != nil {
 		t.Fatalf("CreateAutopilotTrigger: %v", err)
@@ -702,7 +702,7 @@ func TestAutopilotScheduleJobColdStartHonorsLastFiredAt(t *testing.T) {
 	// closure returned here. Populate the cache by running the scope
 	// provider once — the provider does not consult `now`, so the
 	// value passed here is ignored.
-	job := scheduler.AutopilotScheduleDispatchJob(testPool, queries, autopilotSvc)
+	job := scheduler.AutopilotScheduleDispatchJob(testPool.DB, queries, autopilotSvc)
 	if _, err := job.Scopes(ctx, pinnedNow); err != nil {
 		t.Fatalf("populate scope cache: %v", err)
 	}
@@ -757,7 +757,7 @@ func TestAutopilotScheduleJobColdStartBrandNewTriggerStillFires(t *testing.T) {
 		t.Fatalf("seed deterministic timestamps: %v", err)
 	}
 
-	job := scheduler.AutopilotScheduleDispatchJob(testPool, queries, autopilotSvc)
+	job := scheduler.AutopilotScheduleDispatchJob(testPool.DB, queries, autopilotSvc)
 	if _, err := job.Scopes(ctx, pinnedNow); err != nil {
 		t.Fatalf("populate scope cache: %v", err)
 	}
@@ -800,7 +800,7 @@ func TestAutopilotScheduleJobColdStartSkipsStaleMissedOccurrence(t *testing.T) {
 		t.Fatalf("seed deterministic timestamps: %v", err)
 	}
 
-	job := scheduler.AutopilotScheduleDispatchJob(testPool, queries, autopilotSvc)
+	job := scheduler.AutopilotScheduleDispatchJob(testPool.DB, queries, autopilotSvc)
 	if _, err := job.Scopes(ctx, pinnedNow); err != nil {
 		t.Fatalf("populate scope cache: %v", err)
 	}

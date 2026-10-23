@@ -6,8 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 	"github.com/multica-ai/multica/server/internal/events"
 	dbfx "github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -73,9 +72,9 @@ func TestTypingCrossProcessLateAddAfterTerminalSweepDB(t *testing.T) {
 			q.installation = f.inst
 			q.binding.ChatSessionID = f.sessionID
 			q.binding.InstallationID = f.inst.ID
-			q.binding.LastMessageID = pgtype.Text{String: "late-trigger", Valid: true}
+			q.binding.LastMessageID = sql.NullString{String: "late-trigger", Valid: true}
 			if deleted {
-				q.deliveryErr = pgx.ErrNoRows
+				q.deliveryErr = sql.ErrNoRows
 			}
 			api := &crossProcessReactionAPI{fakeTypingAPIClient: &fakeTypingAPIClient{}, started: make(chan struct{}), release: make(chan struct{}), remote: map[string][]MessageReaction{"late-trigger": {{ReactionID: "human-typing", OperatorType: "user", EmojiType: typingEmoji}}}}
 			managerA := NewTypingIndicatorManager(api, fakeTypingCreds{secret: "shh"}, f.store, newDiscardLogger())

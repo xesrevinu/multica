@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/handler"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
@@ -36,9 +35,9 @@ func firstFixtureAgent(t *testing.T) (agentID, runtimeID string) {
 // human by that human's own action, standing in for the run an agent is
 // executing when it files an issue. An invalid originator models an
 // unattributed chain.
-func createAgentTaskWithOriginator(t *testing.T, agentID, runtimeID string, originator pgtype.UUID) pgtype.UUID {
+func createAgentTaskWithOriginator(t *testing.T, agentID, runtimeID string, originator string) string {
 	t.Helper()
-	return createAgentTaskInChain(t, agentID, runtimeID, originator, "direct_human", pgtype.UUID{})
+	return createAgentTaskInChain(t, agentID, runtimeID, originator, "direct_human", "")
 }
 
 // createAgentTaskInChain is the same insert with the attribution lineage spelled
@@ -46,7 +45,7 @@ func createAgentTaskWithOriginator(t *testing.T, agentID, runtimeID string, orig
 // was copied from on a delegation hop. Both matter to the delegated rule since
 // MUL-7051 — the originator alone no longer says whether a human asked for the
 // work, only that the run carries one.
-func createAgentTaskInChain(t *testing.T, agentID, runtimeID string, originator pgtype.UUID, source string, delegatedFrom pgtype.UUID) pgtype.UUID {
+func createAgentTaskInChain(t *testing.T, agentID, runtimeID string, originator string, source string, delegatedFrom string) string {
 	t.Helper()
 	return util.MustParseUUID(workspaceFixture(t).Task(t, agentID, testutil.Cols{
 		"runtime_id":             runtimeID,
@@ -68,7 +67,7 @@ func workspaceFixture(t *testing.T) *testutil.Fixture {
 // createAgentOriginIssue inserts an issue whose creator is an agent and whose
 // provenance points at originTask — the exact row shape the ordinary agent
 // `issue create` path produces (MUL-4305).
-func createAgentOriginIssue(t *testing.T, agentID, originType string, originTask pgtype.UUID, parent pgtype.UUID) string {
+func createAgentOriginIssue(t *testing.T, agentID, originType string, originTask string, parent string) string {
 	t.Helper()
 	ctx := context.Background()
 	var issueID string
@@ -160,7 +159,7 @@ func TestDelegatedSubscribe_QuickCreateKeepsDirectReason(t *testing.T) {
 
 	agentID, runtimeID := firstFixtureAgent(t)
 	task := createAgentTaskWithOriginator(t, agentID, runtimeID, util.MustParseUUID(testUserID))
-	issueID := createAgentOriginIssue(t, agentID, "quick_create", task, pgtype.UUID{})
+	issueID := createAgentOriginIssue(t, agentID, "quick_create", task, "")
 
 	publishAgentIssueCreated(bus, issueID, agentID)
 
@@ -177,8 +176,8 @@ func TestDelegatedSubscribe_UnattributedOriginSubscribesNobody(t *testing.T) {
 	registerSubscriberListeners(bus, testPool)
 
 	agentID, runtimeID := firstFixtureAgent(t)
-	task := createAgentTaskWithOriginator(t, agentID, runtimeID, pgtype.UUID{})
-	issueID := createAgentOriginIssue(t, agentID, "agent_create", task, pgtype.UUID{})
+	task := createAgentTaskWithOriginator(t, agentID, runtimeID, "")
+	issueID := createAgentOriginIssue(t, agentID, "agent_create", task, "")
 
 	publishAgentIssueCreated(bus, issueID, agentID)
 
@@ -200,8 +199,8 @@ func TestDelegatedSubscribe_ArmedTriggerRunSubscribesNobody(t *testing.T) {
 	registerSubscriberListeners(bus, testPool)
 
 	agentID, runtimeID := firstFixtureAgent(t)
-	task := createAgentTaskInChain(t, agentID, runtimeID, util.MustParseUUID(testUserID), "trigger_owner", pgtype.UUID{})
-	issueID := createAgentOriginIssue(t, agentID, "agent_create", task, pgtype.UUID{})
+	task := createAgentTaskInChain(t, agentID, runtimeID, util.MustParseUUID(testUserID), "trigger_owner", "")
+	issueID := createAgentOriginIssue(t, agentID, "agent_create", task, "")
 
 	publishAgentIssueCreated(bus, issueID, agentID)
 
@@ -238,9 +237,9 @@ func TestDelegatedSubscribe_ChainRootDecidesBelowTheFirstHop(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// The originator is copied, not chained, so it is the SAME member on
 			// both runs either way (MUL-4302 §3.2).
-			root := createAgentTaskInChain(t, agentID, runtimeID, human, tc.root, pgtype.UUID{})
+			root := createAgentTaskInChain(t, agentID, runtimeID, human, tc.root, "")
 			hop := createAgentTaskInChain(t, agentID, runtimeID, human, "delegation", root)
-			issueID := createAgentOriginIssue(t, agentID, "agent_create", hop, pgtype.UUID{})
+			issueID := createAgentOriginIssue(t, agentID, "agent_create", hop, "")
 
 			publishAgentIssueCreated(bus, issueID, agentID)
 
@@ -270,9 +269,9 @@ func TestDelegatedSubscribe_LineageWalkStopsAt32Hops(t *testing.T) {
 	human := util.MustParseUUID(testUserID)
 
 	// hops is the distance from the run that files the issue up to the root.
-	buildChain := func(t *testing.T, hops int) pgtype.UUID {
+	buildChain := func(t *testing.T, hops int) string {
 		t.Helper()
-		run := createAgentTaskInChain(t, agentID, runtimeID, human, "direct_human", pgtype.UUID{})
+		run := createAgentTaskInChain(t, agentID, runtimeID, human, "direct_human", "")
 		for i := 0; i < hops; i++ {
 			run = createAgentTaskInChain(t, agentID, runtimeID, human, "delegation", run)
 		}
@@ -288,7 +287,7 @@ func TestDelegatedSubscribe_LineageWalkStopsAt32Hops(t *testing.T) {
 		{"one hop past the limit", 33, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			issueID := createAgentOriginIssue(t, agentID, "agent_create", buildChain(t, tc.hops), pgtype.UUID{})
+			issueID := createAgentOriginIssue(t, agentID, "agent_create", buildChain(t, tc.hops), "")
 
 			publishAgentIssueCreated(bus, issueID, agentID)
 
@@ -334,22 +333,22 @@ func TestDelegatedSubscribe_ForeignLineageResolvesNobody(t *testing.T) {
 
 	for _, tc := range []struct {
 		name   string
-		origin func() pgtype.UUID
+		origin func() string
 	}{
 		{
 			name:   "the issue points straight at a foreign run",
-			origin: func() pgtype.UUID { return foreignRoot },
+			origin: func() string { return foreignRoot },
 		},
 		{
 			name: "a local run claims a foreign parent",
-			origin: func() pgtype.UUID {
+			origin: func() string {
 				return createAgentTaskInChain(t, agentID, runtimeID,
 					util.MustParseUUID(testUserID), "delegation", foreignRoot)
 			},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			issueID := createAgentOriginIssue(t, agentID, "agent_create", tc.origin(), pgtype.UUID{})
+			issueID := createAgentOriginIssue(t, agentID, "agent_create", tc.origin(), "")
 
 			publishAgentIssueCreated(bus, issueID, agentID)
 

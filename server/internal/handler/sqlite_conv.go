@@ -187,32 +187,20 @@ func ifaceDate(v interface{}) string {
 }
 
 // toPGUUID / fromPGUUID adapt handler strings to packages that still speak pgtype.
-func toPGUUID(s string) pgtype.UUID {
-	if s == "" {
-		return pgtype.UUID{}
-	}
-	u, err := uuid.Parse(s)
-	if err != nil {
-		return pgtype.UUID{}
-	}
-	return pgtype.UUID{Bytes: u, Valid: true}
+func toPGUUID(s string) string {
+	return s
 }
 
-func fromPGUUID(u pgtype.UUID) string {
-	if !u.Valid {
-		return ""
-	}
-	return uuid.UUID(u.Bytes).String()
+func fromPGUUID(u any) string {
+	return ifaceString(u)
 }
 
-func toPGUUIDs(ids []string) []pgtype.UUID {
+func toPGUUIDs(ids []string) []string {
 	if ids == nil {
 		return nil
 	}
-	out := make([]pgtype.UUID, len(ids))
-	for i, id := range ids {
-		out[i] = toPGUUID(id)
-	}
+	out := make([]string, len(ids))
+	copy(out, ids)
 	return out
 }
 
@@ -288,4 +276,43 @@ func toPGTimeNull(s sql.NullString) pgtype.Timestamptz {
 		return pgtype.Timestamptz{}
 	}
 	return toPGTime(s.String)
+}
+
+func nullSeconds(v any) sql.NullString {
+	switch x := v.(type) {
+	case int:
+		return sql.NullString{String: strconv.Itoa(x), Valid: true}
+	case int32:
+		return sql.NullString{String: strconv.FormatInt(int64(x), 10), Valid: true}
+	case int64:
+		return sql.NullString{String: strconv.FormatInt(x, 10), Valid: true}
+	case float64:
+		return sql.NullString{String: strconv.FormatFloat(x, 'f', -1, 64), Valid: true}
+	case string:
+		return nullString(x)
+	default:
+		return sql.NullString{}
+	}
+}
+
+func decodeStringSlice(raw string) []string {
+	return ifaceStringSlice(raw)
+}
+
+func encodeStringSlice(vals []string) string {
+	if vals == nil {
+		return "[]"
+	}
+	b, err := json.Marshal(vals)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
+func ifaceBool(v interface{}) bool {
+	if b, ok := v.(bool); ok {
+		return b
+	}
+	return ifaceInt64(v) != 0
 }

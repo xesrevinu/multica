@@ -1,45 +1,24 @@
 package telegram
 
 import (
-	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/multica-ai/multica/server/internal/testutil"
 )
 
-// testPool backs every test that exercises reply-delivery ownership.
-//
-// Those tests run the real queries rather than a hand-written stand-in on
-// purpose. The first version of this feature shipped with an in-memory fake of
-// the ownership table, and the fake quietly disagreed with the SQL about one
-// column — enough for the whole suite to pass while the final answer never
-// reached Telegram. A fake of a state machine is a second implementation of
-// it, and the two drift.
-//
-// Without a database the suite exits green rather than red, the same contract
-// the other DB-backed packages here follow.
-var testPool *pgxpool.Pool
+var testPool *sql.DB
 
 func TestMain(m *testing.M) {
-	ctx := context.Background()
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		dbURL = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
-	}
-	pool, err := pgxpool.New(ctx, dbURL)
+	pool, err := testutil.OpenTestPool()
 	if err != nil {
-		fmt.Printf("Skipping telegram delivery tests: could not connect: %v\n", err)
-		os.Exit(m.Run())
-	}
-	if err := pool.Ping(ctx); err != nil {
-		fmt.Printf("Skipping telegram delivery tests: database not reachable: %v\n", err)
-		pool.Close()
+		fmt.Printf("Skipping telegram delivery tests: could not open test db: %v\n", err)
 		os.Exit(m.Run())
 	}
 	testPool = pool
 	code := m.Run()
-	pool.Close()
+	_ = pool.Close()
 	os.Exit(code)
 }

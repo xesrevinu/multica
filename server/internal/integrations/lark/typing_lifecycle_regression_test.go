@@ -7,8 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 	"github.com/multica-ai/multica/server/internal/events"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -41,9 +40,9 @@ func TestPatcherTerminalEventDuringTypingAdd(t *testing.T) {
 		t.Run(eventType, func(t *testing.T) {
 			p, q, _ := newTestPatcher(t)
 			q.taskChannelIngested = true
-			q.binding.LastMessageID = pgtype.Text{String: "trigger", Valid: true}
+			q.binding.LastMessageID = sql.NullString{String: "trigger", Valid: true}
 			taskID := uuidFromString(t, "ee777777-ee77-ee77-ee77-eeeeeeeeeeee")
-			q.task = db.AgentTaskQueue{ChatInputTaskID: taskID}
+			q.task = db.AgentTaskQueue{ChatInputTaskID: sql.NullString{String: taskID, Valid: true}}
 			api := &blockedTypingAdd{fakeTypingAPIClient: &fakeTypingAPIClient{addReturn: "next-reaction"}, started: make(chan struct{}), release: make(chan struct{})}
 			mgr := NewTypingIndicatorManager(api, fakeTypingCreds{secret: "shh"}, &fakeTypingQueries{installation: q.installation}, newDiscardLogger())
 			p.SetTypingIndicatorManager(mgr)
@@ -107,9 +106,9 @@ func (a *deadlineTypingLister) ListMessageReactions(ctx context.Context, _ ListM
 func TestPatcherSlowSweepCannotConsumeReplyBudget(t *testing.T) {
 	p, q, replies := newTestPatcher(t)
 	taskID := uuidFromString(t, "ee777777-ee77-ee77-ee77-eeeeeeeeeeee")
-	q.task = db.AgentTaskQueue{ChatInputTaskID: taskID}
+	q.task = db.AgentTaskQueue{ChatInputTaskID: sql.NullString{String: taskID, Valid: true}}
 	q.taskChannelIngested = true
-	q.binding.LastMessageID = pgtype.Text{String: "trigger", Valid: true}
+	q.binding.LastMessageID = sql.NullString{String: "trigger", Valid: true}
 	api := &deadlineTypingLister{fakeTypingAPIClient: &fakeTypingAPIClient{}, replies: replies, t: t}
 	p.SetTypingIndicatorManager(NewTypingIndicatorManager(api, fakeTypingCreds{secret: "shh"}, &fakeTypingQueries{installation: q.installation}, newDiscardLogger()))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -134,7 +133,7 @@ func TestPatcherClearsTypingBeforeTerminalGates(t *testing.T) {
 			t.Run(eventType+"/"+gate, func(t *testing.T) {
 				p, q, replies := newTestPatcher(t)
 				taskID := uuidFromString(t, "ee777777-ee77-ee77-ee77-eeeeeeeeeeee")
-				q.task = db.AgentTaskQueue{ChatInputTaskID: taskID}
+				q.task = db.AgentTaskQueue{ChatInputTaskID: sql.NullString{String: taskID, Valid: true}}
 				q.taskChannelIngested = true
 				api := &fakeTypingAPIClient{addReturn: "held-reaction"}
 				mgr := NewTypingIndicatorManager(api, fakeTypingCreds{secret: "shh"}, &fakeTypingQueries{installation: q.installation}, newDiscardLogger())
@@ -143,7 +142,7 @@ func TestPatcherClearsTypingBeforeTerminalGates(t *testing.T) {
 				if gate == "inactive installation" {
 					q.installation.Status = "revoked"
 				} else {
-					q.deliveryErr = pgx.ErrNoRows
+					q.deliveryErr = sql.ErrNoRows
 				}
 				p.handleEvent(events.Event{Type: eventType, TaskID: uuidString(taskID), ChatSessionID: uuidString(q.binding.ChatSessionID), Payload: protocol.ChatDonePayload{Content: "answer"}})
 				if len(api.deleteCalled) != 1 || api.deleteCalled[0].reactionID != "held-reaction" {
@@ -162,7 +161,7 @@ func TestPatcherClearsTypingBeforeTerminalGates(t *testing.T) {
 
 func TestPatcherSessionDeleteSweepsCapturedTargetWithoutLocalState(t *testing.T) {
 	p, q, replies := newTestPatcher(t)
-	q.deliveryErr = pgx.ErrNoRows // Both binding and delivery disappeared at commit.
+	q.deliveryErr = sql.ErrNoRows // Both binding and delivery disappeared at commit.
 	api := &fakeTypingAPIClient{listReturn: []MessageReaction{{ReactionID: "remote-reaction", OperatorType: "app", OperatorID: "cli_test_app", EmojiType: typingEmoji}}}
 	p.SetTypingIndicatorManager(NewTypingIndicatorManager(api, fakeTypingCreds{secret: "shh"}, &fakeTypingQueries{}, newDiscardLogger()))
 	p.handleEvent(events.Event{Type: protocol.EventTaskCancelled, TaskID: "ee777777-ee77-ee77-ee77-eeeeeeeeeeee", ChatSessionID: uuidString(q.binding.ChatSessionID), ChannelReactionTarget: &events.ChannelReactionTarget{ChannelType: channelTypeFeishu, InstallationID: uuidString(q.installation.ID), MessageID: "deleted-session-trigger"}})

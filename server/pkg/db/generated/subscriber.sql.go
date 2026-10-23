@@ -524,10 +524,11 @@ SET unsubscribed_at = now(), opt_out_scope = 'subtree'
 WHERE sub.issue_id IN (SELECT node_id FROM subtree)
   AND sub.user_type = ?2 AND sub.user_id = ?3
   AND (sub.unsubscribed_at IS NULL OR sub.issue_id = ?1)
-RETURNING sub.issue_id
+RETURNING issue_id
 `
 
 type UnsubscribeFromIssueSubtreeParams struct {
+	ID       string `json:"id"`
 	IssueID  string `json:"issue_id"`
 	UserType string `json:"user_type"`
 	UserID   string `json:"user_id"`
@@ -551,7 +552,18 @@ type UnsubscribeFromIssueSubtreeParams struct {
 // Step2 upserts the root tombstone. This statement tombstones every subscriber
 // row in the subtree (including that root) and returns the issue ids.
 func (q *Queries) UnsubscribeFromIssueSubtree(ctx context.Context, arg UnsubscribeFromIssueSubtreeParams) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, unsubscribeFromIssueSubtree, arg.IssueID, arg.UserType, arg.UserID)
+	issueID := arg.IssueID
+	if issueID == "" {
+		issueID = arg.ID
+	}
+	if _, err := q.UnsubscribeFromIssueSubtree_Step2(ctx, UnsubscribeFromIssueSubtree_Step2Params{
+		IssueID:  issueID,
+		UserType: arg.UserType,
+		UserID:   arg.UserID,
+	}); err != nil {
+		return nil, err
+	}
+	rows, err := q.db.QueryContext(ctx, unsubscribeFromIssueSubtree, issueID, arg.UserType, arg.UserID)
 	if err != nil {
 		return nil, err
 	}

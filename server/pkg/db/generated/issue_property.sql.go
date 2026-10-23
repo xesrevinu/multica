@@ -23,24 +23,24 @@ func (q *Queries) CountActiveIssueProperties(ctx context.Context, workspaceID st
 }
 
 const countIssuesUsingPropertyOptions = `-- name: CountIssuesUsingPropertyOptions :many
-SELECT json_extract(opt.value, '$') AS option_id, COUNT(i.id) AS usage_count
+SELECT opt.value AS option_id, COUNT(i.id) AS usage_count
 FROM json_each(?1) AS opt
 LEFT JOIN issue i
   ON i.workspace_id = ?2
  AND (
-      json_extract(i.properties, '$.' || ?3) = json_extract(opt.value, '$')
+      json_extract(i.properties, '$.' || ?3) = opt.value
       OR EXISTS (
           SELECT 1
           FROM json_each(
-              CASE WHEN json_type(i.properties, '$.' || sqlc.arg('property_key')) IN ('array', 'object')
+              CASE WHEN json_type(i.properties, '$.' || ?3) IN ('array', 'object')
                    THEN json_extract(i.properties, '$.' || ?3)
                    ELSE '[]' END
           ) AS el
-          WHERE json_extract(el.value, '$') = json_extract(opt.value, '$')
-             OR el.key = json_extract(opt.value, '$')
+          WHERE el.value = opt.value
+             OR el.key = opt.value
       )
  )
-GROUP BY json_extract(opt.value, '$')
+GROUP BY opt.value
 HAVING COUNT(i.id) > 0
 `
 

@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 	"github.com/multica-ai/multica/server/internal/featureflags"
 	"github.com/multica-ai/multica/server/internal/scheduler"
 	"github.com/multica-ai/multica/server/internal/service"
@@ -85,7 +85,7 @@ func TestPluginHookScheduleTwoReplicasRetryWithStableDelivery(t *testing.T) {
 		}
 		grant, err := callbacks.Resolve(body.Callback)
 		if err != nil || grant.Trigger != plugincontract.TriggerSchedule ||
-			grant.Actor.Type != "plugin" || grant.IssueID.Valid {
+			grant.Actor.Type != "plugin" || grant.IssueID != "" {
 			mu.Lock()
 			verificationErr = fmt.Errorf("callback grant mismatch: grant=%+v err=%v", grant, err)
 			mu.Unlock()
@@ -166,11 +166,11 @@ func TestPluginHookScheduleTwoReplicasRetryWithStableDelivery(t *testing.T) {
 	installation, err := queries.CreatePluginInstallation(ctx, db.CreatePluginInstallationParams{
 		WorkspaceID:      parseUUID(testWorkspaceID),
 		PluginKey:        manifest.Key,
-		PackageVersionID: pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		PackageVersionID: uuid.NewString(),
 		Version:          manifest.Version,
-		Manifest:         canonical,
-		GrantedScopes:    grantedScopes,
-		InstalledBy:      parseUUID(testUserID),
+		Manifest:         string(canonical),
+		GrantedScopes:    string(grantedScopes),
+		InstalledBy:      sql.NullString{String: parseUUID(testUserID), Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("create plugin installation: %v", err)
@@ -188,7 +188,7 @@ func TestPluginHookScheduleTwoReplicasRetryWithStableDelivery(t *testing.T) {
 		HookKey:        "scheduled",
 		CronExpression: "*/5 * * * *",
 		Timezone:       "UTC",
-		Enabled:        true,
+		Enabled:        1,
 	})
 	if err != nil {
 		t.Fatalf("create plugin schedule: %v", err)
@@ -211,8 +211,8 @@ func TestPluginHookScheduleTwoReplicasRetryWithStableDelivery(t *testing.T) {
 		_ = queries.DeletePluginInstallation(cleanupCtx, installation.ID)
 	})
 
-	managerA := scheduler.NewManager(testPool, scheduler.Options{RunnerID: "plugin-schedule-a"})
-	managerB := scheduler.NewManager(testPool, scheduler.Options{RunnerID: "plugin-schedule-b"})
+	managerA := scheduler.NewManager(testPool.DB, scheduler.Options{RunnerID: "plugin-schedule-a"})
+	managerB := scheduler.NewManager(testPool.DB, scheduler.Options{RunnerID: "plugin-schedule-b"})
 	for _, manager := range []*scheduler.Manager{managerA, managerB} {
 		if err := manager.Register(scheduler.PluginHookScheduleDispatchJob(queries, plugins)); err != nil {
 			t.Fatalf("register plugin schedule job: %v", err)

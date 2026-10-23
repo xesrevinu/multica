@@ -1138,7 +1138,7 @@ SET status = 'cancelled', completed_at = now(), prepare_lease_expires_at = NULL,
     cancelled_by_type = 'system', cancelled_by_id = NULL, cancelled_by_name = NULL
 WHERE issue_id = ?1 AND agent_id = ?2
   AND status IN ('queued', 'dispatched', 'deferred')
-  AND comment_thread_id IS comment_thread_root_id(?3)
+  AND comment_thread_id IS (CASE WHEN ?3 IS NULL THEN NULL ELSE COALESCE((WITH RECURSIVE ancestors(id, parent_id, issue_id, depth) AS (SELECT c.id, c.parent_id, c.issue_id, 1 FROM comment c WHERE c.id = ?3 UNION ALL SELECT p.id, p.parent_id, p.issue_id, a.depth + 1 FROM ancestors a JOIN comment p ON p.id = a.parent_id AND p.issue_id = a.issue_id WHERE a.depth < 32) SELECT id FROM ancestors ORDER BY depth DESC LIMIT 1), ?3) END)
 RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for, branch_name, durable_work_dir, channel_context_revision, comment_thread_id, cancelled_by_type, cancelled_by_id, cancelled_by_name, issue_snapshot, workflow_step
 `
 
@@ -2298,11 +2298,11 @@ INSERT INTO agent_task_queue (
     coalesced_comment_ids, trigger_summary, force_fresh_session, is_leader_task, handoff_note,
     squad_id, context, originator_user_id, accountable_user_id, runtime_mcp_overlay, runtime_connected_apps,
     originator_source, delegated_from_task_id, rule_version_id, rerun_of_task_id, trigger_evidence_kind, trigger_evidence_ref_id,
-    workflow_step, id
+    workflow_step, comment_thread_id, id
 )
 SELECT
     ?1 AS agent_id, ?2 AS runtime_id, ?3 AS issue_id, 'queued' AS status, ?4 AS priority, ?5 AS trigger_comment_id,
-    COALESCE(?6, '{}') AS coalesced_comment_ids,
+    COALESCE(?6, '[]') AS coalesced_comment_ids,
     ?7 AS trigger_summary,
     COALESCE(?8, FALSE) AS force_fresh_session,
     COALESCE(?9, FALSE) AS is_leader_task,
@@ -2325,6 +2325,7 @@ SELECT
     ?22 AS trigger_evidence_ref_id,
     -- The issue's status as this task is queued: the workflow step it works on (MUL-7420).
     (SELECT i.status FROM issue i WHERE i.id = ?3) AS workflow_step,
+    (CASE WHEN ?5 IS NULL THEN NULL ELSE COALESCE((WITH RECURSIVE ancestors(id, parent_id, issue_id, depth) AS (SELECT c.id, c.parent_id, c.issue_id, 1 FROM comment c WHERE c.id = ?5 UNION ALL SELECT p.id, p.parent_id, p.issue_id, a.depth + 1 FROM ancestors a JOIN comment p ON p.id = a.parent_id AND p.issue_id = a.issue_id WHERE a.depth < 32) SELECT id FROM ancestors ORDER BY depth DESC LIMIT 1), ?5) END) AS comment_thread_id,
     COALESCE(?23, gen_random_uuid()) AS id
 WHERE (?1 IS NULL OR EXISTS (SELECT 1 FROM agent WHERE agent.id = ?1)) AND (?3 IS NULL OR EXISTS (SELECT 1 FROM issue WHERE issue.id = ?3)) AND (?2 IS NULL OR EXISTS (SELECT 1 FROM agent_runtime WHERE agent_runtime.id = ?2))
 RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for, branch_name, durable_work_dir, channel_context_revision, comment_thread_id, cancelled_by_type, cancelled_by_id, cancelled_by_name, issue_snapshot, workflow_step
@@ -2473,11 +2474,11 @@ INSERT INTO agent_task_queue (
     squad_id, context, originator_user_id, accountable_user_id, runtime_mcp_overlay, runtime_connected_apps,
     originator_source, delegated_from_task_id, rule_version_id, rerun_of_task_id,
     trigger_evidence_kind, trigger_evidence_ref_id, fire_at,
-    workflow_step, id
+    workflow_step, comment_thread_id, id
 )
 SELECT
     ?1 AS agent_id, ?2 AS runtime_id, ?3 AS issue_id, 'deferred' AS status, ?4 AS priority, ?5 AS trigger_comment_id,
-    COALESCE(?6, '{}') AS coalesced_comment_ids,
+    COALESCE(?6, '[]') AS coalesced_comment_ids,
     ?7 AS trigger_summary,
     COALESCE(?8, FALSE) AS force_fresh_session,
     COALESCE(?9, FALSE) AS is_leader_task,
@@ -2501,6 +2502,7 @@ SELECT
     ?23 AS fire_at,
     -- The issue's status as this task is queued: the workflow step it works on (MUL-7420).
     (SELECT i.status FROM issue i WHERE i.id = ?3) AS workflow_step,
+    (CASE WHEN ?5 IS NULL THEN NULL ELSE COALESCE((WITH RECURSIVE ancestors(id, parent_id, issue_id, depth) AS (SELECT c.id, c.parent_id, c.issue_id, 1 FROM comment c WHERE c.id = ?5 UNION ALL SELECT p.id, p.parent_id, p.issue_id, a.depth + 1 FROM ancestors a JOIN comment p ON p.id = a.parent_id AND p.issue_id = a.issue_id WHERE a.depth < 32) SELECT id FROM ancestors ORDER BY depth DESC LIMIT 1), ?5) END) AS comment_thread_id,
     COALESCE(?24, gen_random_uuid()) AS id
 WHERE (?1 IS NULL OR EXISTS (SELECT 1 FROM agent WHERE agent.id = ?1)) AND (?3 IS NULL OR EXISTS (SELECT 1 FROM issue WHERE issue.id = ?3)) AND (?2 IS NULL OR EXISTS (SELECT 1 FROM agent_runtime WHERE agent_runtime.id = ?2))
 RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for, branch_name, durable_work_dir, channel_context_revision, comment_thread_id, cancelled_by_type, cancelled_by_id, cancelled_by_name, issue_snapshot, workflow_step
@@ -2885,7 +2887,7 @@ INSERT INTO agent_task_queue (
     originator_source, delegated_from_task_id, rule_version_id,
     trigger_evidence_kind, trigger_evidence_ref_id, retry_of_task_id,
     chat_input_task_id, fire_at,
-    channel_context_revision, handoff_note, workflow_step, id
+    channel_context_revision, handoff_note, workflow_step, comment_thread_id, id
 )
 SELECT
     p.agent_id AS agent_id, p.runtime_id AS runtime_id, p.issue_id AS issue_id, p.chat_session_id AS chat_session_id, p.autopilot_run_id AS autopilot_run_id,
@@ -2911,14 +2913,13 @@ SELECT
     CASE WHEN p.context->>'wakeup_id' IS NOT NULL OR p.workflow_step IS NOT NULL THEN p.handoff_note END AS handoff_note,
     -- A retry continues its parent's work, so it keeps the parent's step (MUL-7420).
     p.workflow_step AS workflow_step,
+    COALESCE(NULLIF(json_extract(p.context, '$.wakeup_id'), ''), p.comment_thread_id) AS comment_thread_id,
     -- Named new_task_id, not id: arg1 above is the PARENT task's id.
     COALESCE(?6, gen_random_uuid()) AS id
 FROM agent_task_queue p
 WHERE p.id = ?1
   AND (p.agent_id IS NULL OR EXISTS (SELECT 1 FROM agent WHERE agent.id = p.agent_id)) AND (p.issue_id IS NULL OR EXISTS (SELECT 1 FROM issue WHERE issue.id = p.issue_id)) AND (p.runtime_id IS NULL OR EXISTS (SELECT 1 FROM agent_runtime WHERE agent_runtime.id = p.runtime_id))
-ON CONFLICT (issue_id, agent_id, (COALESCE(comment_thread_id, '00000000-0000-0000-0000-000000000000'))) WHERE status IN ('queued', 'dispatched')
-       OR (status = 'deferred' AND context->>'channel_issue_media_pending' = 'true')
-DO NOTHING
+ON CONFLICT DO NOTHING
 RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, session_rollout_missing, retired_session_id, quick_actions_disabled, regenerate_quick_actions_for, branch_name, durable_work_dir, channel_context_revision, comment_thread_id, cancelled_by_type, cancelled_by_id, cancelled_by_name, issue_snapshot, workflow_step
 `
 
@@ -4387,7 +4388,7 @@ func (q *Queries) GetAgentTaskStatus(ctx context.Context, id string) (GetAgentTa
 }
 
 const getCommentThreadRootID = `-- name: GetCommentThreadRootID :one
-SELECT comment_thread_root_id(?1) AS id
+SELECT (CASE WHEN ?1 IS NULL THEN NULL ELSE COALESCE((WITH RECURSIVE ancestors(id, parent_id, issue_id, depth) AS (SELECT c.id, c.parent_id, c.issue_id, 1 FROM comment c WHERE c.id = ?1 UNION ALL SELECT p.id, p.parent_id, p.issue_id, a.depth + 1 FROM ancestors a JOIN comment p ON p.id = a.parent_id AND p.issue_id = a.issue_id WHERE a.depth < 32) SELECT id FROM ancestors ORDER BY depth DESC LIMIT 1), ?1) END) AS id
 `
 
 func (q *Queries) GetCommentThreadRootID(ctx context.Context, commentID interface{}) (interface{}, error) {
@@ -4641,7 +4642,7 @@ SELECT
     SUM(CASE WHEN atq.status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
     SUM(CASE WHEN atq.status = 'completed' THEN 1 ELSE 0 END) AS completed_count,
     SUM(CASE WHEN atq.status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_count,
-    COALESCE(SUM((((julianday(atq.completed_at) - julianday(atq.started_at)))*86400) * 1000)
+    COALESCE(SUM(ROUND((unixepoch(atq.completed_at, 'subsec') - unixepoch(atq.started_at, 'subsec')) * 1000))
         FILTER (WHERE atq.completed_at > atq.started_at), 0) AS duration_ms,
     SUM(CASE WHEN atq.completed_at > atq.started_at THEN 1 ELSE 0 END) AS duration_count
 FROM agent_task_queue atq
@@ -4807,7 +4808,7 @@ WHERE issue_id = ?1 AND agent_id = ?2
     status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
     OR (status = 'deferred' AND context->>'channel_issue_media_pending' = 'true')
   )
-  AND comment_thread_id IS comment_thread_root_id(?3)
+  AND comment_thread_id IS (CASE WHEN ?3 IS NULL THEN NULL ELSE COALESCE((WITH RECURSIVE ancestors(id, parent_id, issue_id, depth) AS (SELECT c.id, c.parent_id, c.issue_id, 1 FROM comment c WHERE c.id = ?3 UNION ALL SELECT p.id, p.parent_id, p.issue_id, a.depth + 1 FROM ancestors a JOIN comment p ON p.id = a.parent_id AND p.issue_id = a.issue_id WHERE a.depth < 32) SELECT id FROM ancestors ORDER BY depth DESC LIMIT 1), ?3) END)
 `
 
 type HasActiveTaskForIssueAndAgentInThreadParams struct {
@@ -4928,7 +4929,7 @@ WHERE context->>'wakeup_id' IS NULL AND issue_id = ?1
     COALESCE(?4, '') = ''
     OR context->>'head_sha' = ?4
   )
-  AND comment_thread_id IS comment_thread_root_id(?5)
+  AND comment_thread_id IS (CASE WHEN ?5 IS NULL THEN NULL ELSE COALESCE((WITH RECURSIVE ancestors(id, parent_id, issue_id, depth) AS (SELECT c.id, c.parent_id, c.issue_id, 1 FROM comment c WHERE c.id = ?5 UNION ALL SELECT p.id, p.parent_id, p.issue_id, a.depth + 1 FROM ancestors a JOIN comment p ON p.id = a.parent_id AND p.issue_id = a.issue_id WHERE a.depth < 32) SELECT id FROM ancestors ORDER BY depth DESC LIMIT 1), ?5) END)
 `
 
 type HasPendingTaskForIssueAndAgentExcludingTriggerCommentInThreadParams struct {
@@ -4964,7 +4965,7 @@ WHERE context->>'wakeup_id' IS NULL AND issue_id = ?1 AND agent_id = ?2
     COALESCE(?3, '') = ''
     OR context->>'head_sha' = ?3
   )
-  AND comment_thread_id IS comment_thread_root_id(?4)
+  AND comment_thread_id IS (CASE WHEN ?4 IS NULL THEN NULL ELSE COALESCE((WITH RECURSIVE ancestors(id, parent_id, issue_id, depth) AS (SELECT c.id, c.parent_id, c.issue_id, 1 FROM comment c WHERE c.id = ?4 UNION ALL SELECT p.id, p.parent_id, p.issue_id, a.depth + 1 FROM ancestors a JOIN comment p ON p.id = a.parent_id AND p.issue_id = a.issue_id WHERE a.depth < 32) SELECT id FROM ancestors ORDER BY depth DESC LIMIT 1), ?4) END)
 `
 
 type HasPendingTaskForIssueAndAgentInThreadParams struct {
@@ -5010,14 +5011,14 @@ FROM agent_task_queue
 WHERE issue_id = ?1
   AND agent_id = ?2
   AND (
-      @comment_id IN (SELECT value FROM json_each(delivered_comment_ids))
+      ?4 IN (SELECT value FROM json_each(delivered_comment_ids))
       OR (
           id IS NOT ?3
           AND (
               status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
               OR (status = 'deferred' AND context->>'channel_issue_media_pending' = 'true')
           )
-          AND (trigger_comment_id = ?4 OR @comment_id IN (SELECT value FROM json_each(coalesced_comment_ids)))
+          AND (trigger_comment_id = ?4 OR ?4 IN (SELECT value FROM json_each(coalesced_comment_ids)))
       )
   )
 `
@@ -6624,17 +6625,17 @@ WHERE a.workspace_id = ?1
         AND i.workspace_id = a.workspace_id
         AND (
           (
-            @mine_relation IN ('assigned', 'any')
+            ?3 IN ('assigned', 'any')
             AND i.assignee_type = 'member'
             AND i.assignee_id = ?4
           )
           OR (
-            @mine_relation IN ('created', 'any')
+            ?3 IN ('created', 'any')
             AND i.creator_type = 'member'
             AND i.creator_id = ?4
           )
           OR (
-            @mine_relation IN ('involved', 'any')
+            ?3 IN ('involved', 'any')
             AND (
               (
                 i.assignee_type = 'agent'
@@ -6686,7 +6687,7 @@ WHERE a.workspace_id = ?1
     )
   )
   AND (
-    ?5 IS NULL
+    ?5 IS NULL OR ?5 = ''
     OR EXISTS (
       SELECT 1
       FROM issue child
@@ -7102,7 +7103,7 @@ WHERE id = (
     SELECT t.id FROM agent_task_queue t
     WHERE t.context->>'wakeup_id' IS NULL AND t.issue_id = ?12
       AND t.agent_id = ?13
-      AND t.comment_thread_id IS comment_thread_root_id(?1)
+      AND t.comment_thread_id IS (CASE WHEN ?1 IS NULL THEN NULL ELSE COALESCE((WITH RECURSIVE ancestors(id, parent_id, issue_id, depth) AS (SELECT c.id, c.parent_id, c.issue_id, 1 FROM comment c WHERE c.id = ?1 UNION ALL SELECT p.id, p.parent_id, p.issue_id, a.depth + 1 FROM ancestors a JOIN comment p ON p.id = a.parent_id AND p.issue_id = a.issue_id WHERE a.depth < 32) SELECT id FROM ancestors ORDER BY depth DESC LIMIT 1), ?1) END)
       AND (
           t.status = 'queued'
           OR (t.status = 'deferred' AND t.context->>'channel_issue_media_pending' = 'true')
@@ -7225,13 +7226,13 @@ WHERE id = (
     SELECT t.id FROM agent_task_queue t
     WHERE t.context->>'wakeup_id' IS NULL AND t.issue_id = ?3
       AND t.agent_id = ?4
-      AND t.comment_thread_id IS comment_thread_root_id(?1)
+      AND t.comment_thread_id IS (CASE WHEN ?1 IS NULL THEN NULL ELSE COALESCE((WITH RECURSIVE ancestors(id, parent_id, issue_id, depth) AS (SELECT c.id, c.parent_id, c.issue_id, 1 FROM comment c WHERE c.id = ?1 UNION ALL SELECT p.id, p.parent_id, p.issue_id, a.depth + 1 FROM ancestors a JOIN comment p ON p.id = a.parent_id AND p.issue_id = a.issue_id WHERE a.depth < 32) SELECT id FROM ancestors ORDER BY depth DESC LIMIT 1), ?1) END)
       AND (
           t.status = 'queued'
           OR (t.status = 'deferred' AND t.context->>'channel_issue_media_pending' = 'true')
       )
       AND t.trigger_comment_id IS NOT ?1
-      AND NOT (@comment_id IN (SELECT value FROM json_each(t.coalesced_comment_ids)))
+      AND NOT (?1 IN (SELECT value FROM json_each(t.coalesced_comment_ids)))
     ORDER BY t.created_at DESC
     LIMIT 1
 )
@@ -8190,7 +8191,7 @@ WHERE id = (
     SELECT t.id FROM agent_task_queue t
     WHERE t.context->>'wakeup_id' IS NULL AND t.issue_id = ?2
       AND t.agent_id = ?3
-      AND t.comment_thread_id IS comment_thread_root_id(?1)
+      AND t.comment_thread_id IS (CASE WHEN ?1 IS NULL THEN NULL ELSE COALESCE((WITH RECURSIVE ancestors(id, parent_id, issue_id, depth) AS (SELECT c.id, c.parent_id, c.issue_id, 1 FROM comment c WHERE c.id = ?1 UNION ALL SELECT p.id, p.parent_id, p.issue_id, a.depth + 1 FROM ancestors a JOIN comment p ON p.id = a.parent_id AND p.issue_id = a.issue_id WHERE a.depth < 32) SELECT id FROM ancestors ORDER BY depth DESC LIMIT 1), ?1) END)
       AND t.status IN ('dispatched', 'running', 'waiting_local_directory')
       AND (
           COALESCE(?4, '') = ''
@@ -8258,7 +8259,7 @@ UPDATE agent_task_queue
 SET status = 'queued',
     dispatched_at = NULL,
     prepare_lease_expires_at = NULL,
-    delivered_comment_ids = '{}'
+    delivered_comment_ids = '[]'
 WHERE id = ?1
   AND runtime_id = ?2
   AND status = 'dispatched'

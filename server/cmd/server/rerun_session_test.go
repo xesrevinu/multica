@@ -5,8 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/realtime"
@@ -24,12 +23,12 @@ import (
 // against a database missing this PR's new column, the exclusion tests
 // reported PASS on a SQLSTATE 42703. Requiring pgx.ErrNoRows specifically is
 // what makes a passing test mean "the filter worked".
-func requireSessionExcluded(t *testing.T, sessionID pgtype.Text, err error) {
+func requireSessionExcluded(t *testing.T, sessionID sql.NullString, err error) {
 	t.Helper()
 	if err == nil {
 		t.Fatalf("expected the session to be excluded, but the lookup returned %q", sessionID.String)
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("lookup failed for an unrelated reason, so this test proves nothing: %v", err)
 	}
 }
@@ -110,8 +109,8 @@ func TestGetLastTaskSessionExcludesPoisonedFailures(t *testing.T) {
 
 	queries := db.New(testPool)
 	prior, err := queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
-		AgentID: pgtype.UUID{Bytes: parseUUIDBytes(agentID), Valid: true},
-		IssueID: pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		AgentID: parseUUID(agentID),
+		IssueID: sql.NullString{String: parseUUID(issueID), Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("GetLastTaskSession failed: %v", err)
@@ -163,8 +162,8 @@ func TestGetLastTaskSessionFallsBackWhenLatestSessionBlanked(t *testing.T) {
 
 	queries := db.New(testPool)
 	prior, err := queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
-		AgentID: pgtype.UUID{Bytes: parseUUIDBytes(agentID), Valid: true},
-		IssueID: pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		AgentID: parseUUID(agentID),
+		IssueID: sql.NullString{String: parseUUID(issueID), Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("GetLastTaskSession failed: %v", err)
@@ -205,8 +204,8 @@ func TestGetLastTaskSessionExcludesEmptyHistoryMessage(t *testing.T) {
 
 	queries := db.New(testPool)
 	prior, err := queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
-		AgentID: pgtype.UUID{Bytes: parseUUIDBytes(agentID), Valid: true},
-		IssueID: pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		AgentID: parseUUID(agentID),
+		IssueID: sql.NullString{String: parseUUID(issueID), Valid: true},
 	})
 	requireSessionExcluded(t, prior.SessionID, err)
 }
@@ -235,8 +234,8 @@ func TestGetLastTaskSessionKeepsToolEmptinessError(t *testing.T) {
 
 	queries := db.New(testPool)
 	prior, err := queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
-		AgentID: pgtype.UUID{Bytes: parseUUIDBytes(agentID), Valid: true},
-		IssueID: pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		AgentID: parseUUID(agentID),
+		IssueID: sql.NullString{String: parseUUID(issueID), Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("GetLastTaskSession failed: %v", err)
@@ -274,8 +273,8 @@ func TestGetLastTaskSessionExcludesAuthResolutionFailure(t *testing.T) {
 
 	queries := db.New(testPool)
 	prior, err := queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
-		AgentID: pgtype.UUID{Bytes: parseUUIDBytes(agentID), Valid: true},
-		IssueID: pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		AgentID: parseUUID(agentID),
+		IssueID: sql.NullString{String: parseUUID(issueID), Valid: true},
 	})
 	requireSessionExcluded(t, prior.SessionID, err)
 }
@@ -305,8 +304,8 @@ func TestGetLastTaskSessionKeepsSessionOnAuthAdjacentError(t *testing.T) {
 
 	queries := db.New(testPool)
 	prior, err := queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
-		AgentID: pgtype.UUID{Bytes: parseUUIDBytes(agentID), Valid: true},
-		IssueID: pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		AgentID: parseUUID(agentID),
+		IssueID: sql.NullString{String: parseUUID(issueID), Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("GetLastTaskSession failed: %v", err)
@@ -359,11 +358,11 @@ func TestCompletedTaskRolloutMissingWithholdsAndDisclosesGap(t *testing.T) {
 
 	// The real terminal write withholds the session and flags the row atomically.
 	done, err := queries.CompleteAgentTask(ctx, db.CompleteAgentTaskParams{
-		ID:                    pgtype.UUID{Bytes: parseUUIDBytes(newerTaskID), Valid: true},
-		Result:                []byte(`{"output":"done"}`),
-		SessionID:             pgtype.Text{String: "NEW-ROLLOUT-MISSING", Valid: true},
-		WorkDir:               pgtype.Text{String: "/tmp/newer", Valid: true},
-		SessionRolloutMissing: true,
+		ID:                    parseUUID(newerTaskID),
+		Result:                sql.NullString{String: `{"output":"done"}`, Valid: true},
+		SessionID:             sql.NullString{String: "NEW-ROLLOUT-MISSING", Valid: true},
+		WorkDir:               sql.NullString{String: "/tmp/newer", Valid: true},
+		SessionRolloutMissing: 1,
 	})
 	if err != nil {
 		t.Fatalf("CompleteAgentTask: %v", err)
@@ -373,14 +372,14 @@ func TestCompletedTaskRolloutMissingWithholdsAndDisclosesGap(t *testing.T) {
 	if done.SessionID.Valid {
 		t.Fatalf("expected withheld session_id to be NULL, got %q", done.SessionID.String)
 	}
-	if !done.SessionRolloutMissing {
+	if done.SessionRolloutMissing == 0 {
 		t.Fatal("expected session_rollout_missing to be set on the terminal row")
 	}
 
 	// (1) The bad session is NOT handed out — resume falls back to the older good one.
 	prior, err := queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
-		AgentID: pgtype.UUID{Bytes: parseUUIDBytes(agentID), Valid: true},
-		IssueID: pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		AgentID: parseUUID(agentID),
+		IssueID: sql.NullString{String: parseUUID(issueID), Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("GetLastTaskSession failed: %v", err)
@@ -391,13 +390,13 @@ func TestCompletedTaskRolloutMissingWithholdsAndDisclosesGap(t *testing.T) {
 
 	// (2) The gap is disclosed — the resume is NOT silently claimed as complete.
 	missing, err := queries.GetLatestTaskRolloutMissing(ctx, db.GetLatestTaskRolloutMissingParams{
-		AgentID: pgtype.UUID{Bytes: parseUUIDBytes(agentID), Valid: true},
-		IssueID: pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		AgentID: parseUUID(agentID),
+		IssueID: sql.NullString{String: parseUUID(issueID), Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("GetLatestTaskRolloutMissing failed: %v", err)
 	}
-	if !missing {
+	if missing == 0 {
 		t.Fatal("expected the continuity gap to be flagged so the next claim discloses it")
 	}
 }
@@ -434,12 +433,12 @@ func TestFailedTaskRolloutMissingForcesNullOverMidFlightPin(t *testing.T) {
 	// The daemon withheld it: FailTask sends an empty session_id (Valid:false)
 	// AND session_rollout_missing=true. The CASE must win over the COALESCE.
 	failed, err := queries.FailAgentTask(ctx, db.FailAgentTaskParams{
-		ID:                    pgtype.UUID{Bytes: parseUUIDBytes(taskID), Valid: true},
-		Error:                 pgtype.Text{String: "runtime went offline", Valid: true},
-		FailureReason:         pgtype.Text{String: "timeout", Valid: true},
-		SessionID:             pgtype.Text{Valid: false},
-		WorkDir:               pgtype.Text{Valid: false},
-		SessionRolloutMissing: true,
+		ID:                    parseUUID(taskID),
+		Error:                 sql.NullString{String: "runtime went offline", Valid: true},
+		FailureReason:         sql.NullString{String: "timeout", Valid: true},
+		SessionID:             sql.NullString{Valid: false},
+		WorkDir:               sql.NullString{Valid: false},
+		SessionRolloutMissing: 1,
 	})
 	if err != nil {
 		t.Fatalf("FailAgentTask: %v", err)
@@ -447,7 +446,7 @@ func TestFailedTaskRolloutMissingForcesNullOverMidFlightPin(t *testing.T) {
 	if failed.SessionID.Valid {
 		t.Fatalf("expected the mid-flight pin to be forced NULL, got %q", failed.SessionID.String)
 	}
-	if !failed.SessionRolloutMissing {
+	if failed.SessionRolloutMissing == 0 {
 		t.Fatal("expected session_rollout_missing to be set on the failed row")
 	}
 }
@@ -473,8 +472,8 @@ func TestGetLastTaskSessionFallbackPoisonedClassifier(t *testing.T) {
 
 	queries := db.New(testPool)
 	prior, err := queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
-		AgentID: pgtype.UUID{Bytes: parseUUIDBytes(agentID), Valid: true},
-		IssueID: pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		AgentID: parseUUID(agentID),
+		IssueID: sql.NullString{String: parseUUID(issueID), Valid: true},
 	})
 	requireSessionExcluded(t, prior.SessionID, err)
 }
@@ -504,8 +503,8 @@ func TestGetLastTaskSessionExcludesAPIInvalidRequest(t *testing.T) {
 
 	queries := db.New(testPool)
 	prior, err := queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
-		AgentID: pgtype.UUID{Bytes: parseUUIDBytes(agentID), Valid: true},
-		IssueID: pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		AgentID: parseUUID(agentID),
+		IssueID: sql.NullString{String: parseUUID(issueID), Valid: true},
 	})
 	requireSessionExcluded(t, prior.SessionID, err)
 }
@@ -541,8 +540,8 @@ func TestGetLastTaskSessionExcludesCodexSemanticInactivity(t *testing.T) {
 
 	queries := db.New(testPool)
 	prior, err := queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
-		AgentID: pgtype.UUID{Bytes: parseUUIDBytes(agentID), Valid: true},
-		IssueID: pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		AgentID: parseUUID(agentID),
+		IssueID: sql.NullString{String: parseUUID(issueID), Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("GetLastTaskSession failed: %v", err)
@@ -577,7 +576,7 @@ func TestCreateRetryTaskFreshensCodexSemanticInactivity(t *testing.T) {
 	}
 
 	queries := db.New(testPool)
-	child, err := queries.CreateRetryTask(ctx, db.CreateRetryTaskParams{ID: pgtype.UUID{Bytes: parseUUIDBytes(parentID), Valid: true}})
+	child, err := queries.CreateRetryTask(ctx, db.CreateRetryTaskParams{ID: parseUUID(parentID)})
 	if err != nil {
 		t.Fatalf("CreateRetryTask failed: %v", err)
 	}
@@ -589,7 +588,7 @@ func TestCreateRetryTaskFreshensCodexSemanticInactivity(t *testing.T) {
 	if !child.WorkDir.Valid || child.WorkDir.String != "/tmp/codex-stuck" {
 		t.Fatalf("expected retry child to inherit parent work_dir /tmp/codex-stuck, got %+v", child.WorkDir)
 	}
-	if !child.ForceFreshSession {
+	if child.ForceFreshSession == 0 {
 		t.Fatal("expected retry child to force a fresh session")
 	}
 	if child.Attempt != 2 {
@@ -622,7 +621,7 @@ func TestCreateRetryTaskKeepsOrdinaryTimeoutSession(t *testing.T) {
 	}
 
 	queries := db.New(testPool)
-	child, err := queries.CreateRetryTask(ctx, db.CreateRetryTaskParams{ID: pgtype.UUID{Bytes: parseUUIDBytes(parentID), Valid: true}})
+	child, err := queries.CreateRetryTask(ctx, db.CreateRetryTaskParams{ID: parseUUID(parentID)})
 	if err != nil {
 		t.Fatalf("CreateRetryTask failed: %v", err)
 	}
@@ -632,7 +631,7 @@ func TestCreateRetryTaskKeepsOrdinaryTimeoutSession(t *testing.T) {
 	if !child.WorkDir.Valid || child.WorkDir.String != "/tmp/ordinary-timeout" {
 		t.Fatalf("expected retry child to inherit work_dir, got %+v", child.WorkDir)
 	}
-	if child.ForceFreshSession {
+	if child.ForceFreshSession != 0 {
 		t.Fatal("expected ordinary timeout retry child to keep resume enabled")
 	}
 	if child.Attempt != 2 {
@@ -688,8 +687,8 @@ func TestGetLastTaskSessionExcludesLegacyAPI400(t *testing.T) {
 
 	queries := db.New(testPool)
 	prior, err := queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
-		AgentID: pgtype.UUID{Bytes: parseUUIDBytes(agentID), Valid: true},
-		IssueID: pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		AgentID: parseUUID(agentID),
+		IssueID: sql.NullString{String: parseUUID(issueID), Valid: true},
 	})
 	requireSessionExcluded(t, prior.SessionID, err)
 }
@@ -719,8 +718,8 @@ func TestGetLastTaskSessionKeepsBenignAgentErrorWithSession(t *testing.T) {
 
 	queries := db.New(testPool)
 	prior, err := queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
-		AgentID: pgtype.UUID{Bytes: parseUUIDBytes(agentID), Valid: true},
-		IssueID: pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		AgentID: parseUUID(agentID),
+		IssueID: sql.NullString{String: parseUUID(issueID), Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("GetLastTaskSession failed: %v", err)
@@ -749,14 +748,14 @@ func TestRerunIssueSetsForceFreshSession(t *testing.T) {
 	bus := events.New()
 	taskService := service.NewTaskService(queries, nil, hub, bus)
 
-	task, err := taskService.RerunIssue(ctx, pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true}, pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, nil)
+	task, err := taskService.RerunIssue(ctx, parseUUID(issueID), "", "", "", nil)
 	if err != nil {
 		t.Fatalf("RerunIssue failed: %v", err)
 	}
 	if task == nil {
 		t.Fatal("RerunIssue returned nil task")
 	}
-	if !task.ForceFreshSession {
+	if task.ForceFreshSession == 0 {
 		t.Fatal("expected manual rerun to set force_fresh_session=true")
 	}
 }
@@ -821,10 +820,10 @@ func TestRerunIssueTargetsSourceTaskAgent(t *testing.T) {
 
 	task, err := taskService.RerunIssue(
 		ctx,
-		pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
-		pgtype.UUID{Bytes: parseUUIDBytes(sourceTaskID), Valid: true},
-		pgtype.UUID{},
-		pgtype.UUID{},
+		parseUUID(issueID),
+		parseUUID(sourceTaskID),
+		"",
+		"",
 		nil,
 	)
 	if err != nil {
@@ -839,7 +838,7 @@ func TestRerunIssueTargetsSourceTaskAgent(t *testing.T) {
 		t.Fatalf("rerun targeted wrong agent: got %s, want %s (issue assignee is %s — must not be picked)",
 			gotAgent, secondaryAgentID, primaryAgentID)
 	}
-	if !task.ForceFreshSession {
+	if task.ForceFreshSession == 0 {
 		t.Fatal("expected per-row rerun to also set force_fresh_session=true")
 	}
 }
@@ -894,10 +893,10 @@ func TestRerunIssueRejectsCrossIssueTask(t *testing.T) {
 
 	_, err := taskService.RerunIssue(
 		ctx,
-		pgtype.UUID{Bytes: parseUUIDBytes(issueAID), Valid: true},
-		pgtype.UUID{Bytes: parseUUIDBytes(crossTaskID), Valid: true},
-		pgtype.UUID{},
-		pgtype.UUID{},
+		parseUUID(issueAID),
+		parseUUID(crossTaskID),
+		"",
+		"",
 		nil,
 	)
 	if err == nil {
@@ -959,10 +958,10 @@ func TestRerunIssueInheritsTriggerCommentFromSourceTask(t *testing.T) {
 
 	task, err := taskService.RerunIssue(
 		ctx,
-		pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
-		pgtype.UUID{Bytes: parseUUIDBytes(sourceTaskID), Valid: true},
-		pgtype.UUID{},
-		pgtype.UUID{},
+		parseUUID(issueID),
+		parseUUID(sourceTaskID),
+		"",
+		"",
 		nil,
 	)
 	if err != nil {
@@ -974,7 +973,7 @@ func TestRerunIssueInheritsTriggerCommentFromSourceTask(t *testing.T) {
 	if !task.TriggerCommentID.Valid {
 		t.Fatal("expected per-row rerun to inherit trigger_comment_id from source task, got NULL")
 	}
-	if got := util.UUIDToString(task.TriggerCommentID); got != triggerCommentID {
+	if got := task.TriggerCommentID.String; got != triggerCommentID {
 		t.Fatalf("trigger_comment_id mismatch: got %s, want %s", got, triggerCommentID)
 	}
 }
@@ -998,7 +997,7 @@ func TestEnqueueTaskForIssueDoesNotForceFreshSession(t *testing.T) {
 	bus := events.New()
 	taskService := service.NewTaskService(queries, nil, hub, bus)
 
-	issue, err := queries.GetIssue(ctx, pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true})
+	issue, err := queries.GetIssue(ctx, parseUUID(issueID))
 	if err != nil {
 		t.Fatalf("load issue: %v", err)
 	}
@@ -1006,7 +1005,7 @@ func TestEnqueueTaskForIssueDoesNotForceFreshSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnqueueTaskForIssue failed: %v", err)
 	}
-	if task.ForceFreshSession {
+	if task.ForceFreshSession != 0 {
 		t.Fatal("expected normal enqueue to leave force_fresh_session=false")
 	}
 }
@@ -1049,8 +1048,8 @@ func TestGetLastTaskSessionExcludesPoisonedOriginSession(t *testing.T) {
 
 	queries := db.New(testPool)
 	prior, err := queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
-		AgentID: pgtype.UUID{Bytes: parseUUIDBytes(agentID), Valid: true},
-		IssueID: pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		AgentID: parseUUID(agentID),
+		IssueID: sql.NullString{String: parseUUID(issueID), Valid: true},
 	})
 	requireSessionExcluded(t, prior.SessionID, err)
 }
@@ -1091,8 +1090,8 @@ func TestGetLastTaskSessionFallsBackToHealthyDistinctSession(t *testing.T) {
 
 	queries := db.New(testPool)
 	prior, err := queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
-		AgentID: pgtype.UUID{Bytes: parseUUIDBytes(agentID), Valid: true},
-		IssueID: pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		AgentID: parseUUID(agentID),
+		IssueID: sql.NullString{String: parseUUID(issueID), Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("GetLastTaskSession failed: %v", err)
@@ -1126,8 +1125,8 @@ func TestGetLastTaskSessionExcludesKiroOversizedImageByText(t *testing.T) {
 
 	queries := db.New(testPool)
 	prior, err := queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
-		AgentID: pgtype.UUID{Bytes: parseUUIDBytes(agentID), Valid: true},
-		IssueID: pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		AgentID: parseUUID(agentID),
+		IssueID: sql.NullString{String: parseUUID(issueID), Valid: true},
 	})
 	requireSessionExcluded(t, prior.SessionID, err)
 }
@@ -1162,8 +1161,8 @@ func TestGetLastTaskSessionRestoresRecoveredSession(t *testing.T) {
 
 	queries := db.New(testPool)
 	prior, err := queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
-		AgentID: pgtype.UUID{Bytes: parseUUIDBytes(agentID), Valid: true},
-		IssueID: pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		AgentID: parseUUID(agentID),
+		IssueID: sql.NullString{String: parseUUID(issueID), Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("GetLastTaskSession failed: %v", err)
@@ -1200,8 +1199,8 @@ func TestGetLastTaskSessionKeepsDimensionPhraseWithoutImageMarker(t *testing.T) 
 
 	queries := db.New(testPool)
 	prior, err := queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
-		AgentID: pgtype.UUID{Bytes: parseUUIDBytes(agentID), Valid: true},
-		IssueID: pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		AgentID: parseUUID(agentID),
+		IssueID: sql.NullString{String: parseUUID(issueID), Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("GetLastTaskSession failed: %v", err)
@@ -1257,8 +1256,8 @@ func TestGetLastTaskSessionExcludesOverflowedResumeFromOlderCompletedRow(t *test
 
 	queries := db.New(testPool)
 	prior, err := queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
-		AgentID: pgtype.UUID{Bytes: parseUUIDBytes(agentID), Valid: true},
-		IssueID: pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		AgentID: parseUUID(agentID),
+		IssueID: sql.NullString{String: parseUUID(issueID), Valid: true},
 	})
 	requireSessionExcluded(t, prior.SessionID, err)
 }
@@ -1301,8 +1300,8 @@ func TestGetLastTaskSessionResumesAgainAfterOverflowRecovery(t *testing.T) {
 
 	queries := db.New(testPool)
 	prior, err := queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
-		AgentID: pgtype.UUID{Bytes: parseUUIDBytes(agentID), Valid: true},
-		IssueID: pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		AgentID: parseUUID(agentID),
+		IssueID: sql.NullString{String: parseUUID(issueID), Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("GetLastTaskSession failed: %v", err)
@@ -1341,8 +1340,8 @@ func TestGetLastTaskSessionExcludesOverflowRetiredSession(t *testing.T) {
 
 	queries := db.New(testPool)
 	prior, err := queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
-		AgentID: pgtype.UUID{Bytes: parseUUIDBytes(agentID), Valid: true},
-		IssueID: pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		AgentID: parseUUID(agentID),
+		IssueID: sql.NullString{String: parseUUID(issueID), Valid: true},
 	})
 	requireSessionExcluded(t, prior.SessionID, err)
 }

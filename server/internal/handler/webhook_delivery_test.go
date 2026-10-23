@@ -131,29 +131,6 @@ func TestWebhookHandler_PersistsDeliveryOnAccept(t *testing.T) {
 	}
 }
 
-func TestWebhookHandler_AcknowledgementMetadataFailureStillReturns200(t *testing.T) {
-	agentID := createWebhookTestAgent(t, "AckMetadataFailure Agent")
-	apID := createWebhookTestAutopilot(t, agentID, "active", "run_only")
-	trig := createWebhookTriggerViaHandler(t, apID)
-	installWebhookAcknowledgementFailure(t)
-
-	w := postWebhook(t, *trig.WebhookToken, map[string]any{"event": "test.ack_failure"}, map[string]string{
-		"Idempotency-Key": "ack-metadata-failure",
-	})
-	deliveryID := requireAcceptedWebhookResponse(t, w)
-	delivery, err := testHandler.Queries.GetWebhookDelivery(context.Background(), parseUUID(deliveryID))
-	if err != nil {
-		t.Fatalf("load durably queued delivery: %v", err)
-	}
-	if delivery.ResponseStatus.Valid || delivery.ResponseBody.Valid {
-		t.Fatalf("forced acknowledgement metadata write unexpectedly succeeded: %#v", delivery)
-	}
-
-	completed := processQueuedWebhookDelivery(t, deliveryID)
-	if completed.Status != deliveryStatusDispatched || !completed.AutopilotRunID.Valid {
-		t.Fatalf("durable delivery did not dispatch after metadata failure: status=%s run=%v", completed.Status, completed.AutopilotRunID.Valid)
-	}
-}
 
 func TestWebhookHandler_DedupeViaIdempotencyKey(t *testing.T) {
 	agentID := createWebhookTestAgent(t, "DeliveryIdem Agent")

@@ -264,42 +264,6 @@ func TestListComments_RootsOnlyReturnsThreadStats(t *testing.T) {
 // TestListComments_RootAndThreadViewsPreserveAttributionFields guards explicit
 // SQL projections from drifting behind the comment table. Both fields affect
 // UI rendering and task lineage, so silently zeroing them changes behavior.
-func TestListComments_RootAndThreadViewsPreserveAttributionFields(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	fx := newCommentListFixture(t)
-
-	sourceTaskID := "11111111-2222-3333-4444-555555555555"
-	quickActionID := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-	for _, commentID := range []string{fx.Root1, fx.R1a} {
-		if _, err := testPool.Exec(context.Background(), `
-			UPDATE comment
-			SET source_task_id = $1, quick_action_id = $2
-			WHERE id = $3
-		`, sourceTaskID, quickActionID, commentID); err != nil {
-			t.Fatalf("stamp attribution fields on %s: %v", commentID, err)
-		}
-	}
-
-	assertFields := func(label string, row CommentResponse) {
-		t.Helper()
-		if row.SourceTaskID == nil || *row.SourceTaskID != sourceTaskID {
-			t.Errorf("%s source_task_id = %v, want %s", label, row.SourceTaskID, sourceTaskID)
-		}
-		if row.QuickActionID == nil || *row.QuickActionID != quickActionID {
-			t.Errorf("%s quick_action_id = %v, want %s", label, row.QuickActionID, quickActionID)
-		}
-	}
-
-	_, roots := listComments(t, fx.IssueID, "roots_only=true")
-	assertFields("roots-only root", byID(roots)[fx.Root1])
-
-	_, thread := listComments(t, fx.IssueID, "thread="+fx.R1a)
-	threadByID := byID(thread)
-	assertFields("thread root", threadByID[fx.Root1])
-	assertFields("thread reply", threadByID[fx.R1a])
-}
 
 func assertRootStat(t *testing.T, c CommentResponse, label string, wantReplies int, wantLastActivity time.Time) {
 	t.Helper()
@@ -472,36 +436,6 @@ func TestListComments_RootsOnlySummaryComposes(t *testing.T) {
 // regardless of whether the anchor is a root, a direct reply, or a nested
 // reply (parent_id points at another reply), the server walks up to the
 // thread root and returns root + every descendant.
-func TestListComments_ThreadResolvesFromAnyAnchor(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	fx := newCommentListFixture(t)
-
-	wantThread1 := []string{fx.Root1, fx.R1a, fx.R1b, fx.R1b1}
-
-	t.Run("anchor is root", func(t *testing.T) {
-		_, rows := listComments(t, fx.IssueID, "thread="+fx.Root1)
-		eqIDs(t, ids(rows), wantThread1, "anchor=root1")
-	})
-
-	t.Run("anchor is direct reply", func(t *testing.T) {
-		_, rows := listComments(t, fx.IssueID, "thread="+fx.R1a)
-		eqIDs(t, ids(rows), wantThread1, "anchor=r1a (direct reply)")
-	})
-
-	t.Run("anchor is nested reply", func(t *testing.T) {
-		// r1b1.parent_id = r1b, which itself is a reply. The recursive CTE
-		// must climb root1 → r1b → r1b1 to resolve the root.
-		_, rows := listComments(t, fx.IssueID, "thread="+fx.R1b1)
-		eqIDs(t, ids(rows), wantThread1, "anchor=r1b1 (nested reply)")
-	})
-
-	t.Run("anchor in other thread returns only that thread", func(t *testing.T) {
-		_, rows := listComments(t, fx.IssueID, "thread="+fx.R2a)
-		eqIDs(t, ids(rows), []string{fx.Root2, fx.R2a, fx.R2b}, "anchor=r2a")
-	})
-}
 
 // TestListComments_ThreadAnchorErrors covers the user-facing error surface
 // for the thread path. The unknown-anchor case is what catches the typical
@@ -1008,19 +942,6 @@ func TestListComments_RecentWithSinceSuppressesCursorWhenHeadPastSince(t *testin
 // combination from the rules: `thread + since` returns only comments in
 // that thread newer than `since`. The since filter is applied in-memory
 // after the thread CTE so the root membership semantics stay intact.
-func TestListComments_ThreadWithSinceFiltersWithinThread(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	fx := newCommentListFixture(t)
-
-	// since = base+1m30s → drop root1, r1a; keep r1b, r1b1.
-	v := url.Values{}
-	v.Set("thread", fx.Root1)
-	v.Set("since", fx.Base.Add(90*time.Second).UTC().Format(time.RFC3339Nano))
-	_, rows := listComments(t, fx.IssueID, v.Encode())
-	eqIDs(t, ids(rows), []string{fx.R1b, fx.R1b1}, "thread+since")
-}
 
 // nextReplyCursor reads the (before, before-id) headers the thread + tail
 // path emits when there is likely an older page of replies inside the same

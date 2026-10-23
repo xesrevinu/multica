@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -15,16 +15,16 @@ import (
 // creator. Since MUL-6951 an automatic dispatch resolves the human it acts as from
 // this row — and admits the assignee agent as that human — so a dispatch with no
 // trigger has no principal and fails closed.
-func seedAutopilotScheduleTrigger(t *testing.T, queries *db.Queries, ap db.Autopilot) pgtype.UUID {
+func seedAutopilotScheduleTrigger(t *testing.T, queries *db.Queries, ap db.Autopilot) string {
 	t.Helper()
 	trig, err := queries.CreateAutopilotTrigger(context.Background(), db.CreateAutopilotTriggerParams{
 		AutopilotID:    ap.ID,
 		Kind:           "schedule",
-		Enabled:        true,
-		CronExpression: pgtype.Text{String: "*/5 * * * *", Valid: true},
-		Timezone:       pgtype.Text{String: "UTC", Valid: true},
-		CreatedByType:  pgtype.Text{String: "member", Valid: ap.CreatedByType == "member"},
-		CreatedByID:    ap.CreatedByID,
+		Enabled:        1,
+		CronExpression: sql.NullString{String: "*/5 * * * *", Valid: true},
+		Timezone:       sql.NullString{String: "UTC", Valid: true},
+		CreatedByType:  sql.NullString{String: "member", Valid: ap.CreatedByType == "member"},
+		CreatedByID:    sql.NullString{String: ap.CreatedByID, Valid: ap.CreatedByID != ""},
 	})
 	if err != nil {
 		t.Fatalf("seed schedule trigger: %v", err)
@@ -82,12 +82,12 @@ func TestAutopilotRunOnlyTaskTerminalEventsUpdateRun(t *testing.T) {
 			ap, err := queries.CreateAutopilot(ctx, db.CreateAutopilotParams{
 				WorkspaceID:        parseUUID(testWorkspaceID),
 				Title:              "Run-only listener " + tc.name,
-				Description:        pgtype.Text{String: "Run listener regression test", Valid: true},
+				Description:        sql.NullString{String: "Run listener regression test", Valid: true},
 				AssigneeType:       "agent",
 				AssigneeID:         parseUUID(agentID),
 				Status:             "active",
 				ExecutionMode:      "run_only",
-				IssueTitleTemplate: pgtype.Text{},
+				IssueTitleTemplate: sql.NullString{},
 				CreatedByType:      "member",
 				CreatedByID:        parseUUID(testUserID),
 			})
@@ -114,7 +114,7 @@ func TestAutopilotRunOnlyTaskTerminalEventsUpdateRun(t *testing.T) {
 			); err != nil {
 				t.Fatalf("mark task dispatched: %v", err)
 			}
-			task, err := queries.StartAgentTask(ctx, run.TaskID)
+			task, err := queries.StartAgentTask(ctx, run.TaskID.String)
 			if err != nil {
 				t.Fatalf("StartAgentTask: %v", err)
 			}
@@ -128,8 +128,8 @@ func TestAutopilotRunOnlyTaskTerminalEventsUpdateRun(t *testing.T) {
 			if updatedRun.Status != tc.wantStatus {
 				t.Fatalf("expected run status %q, got %q", tc.wantStatus, updatedRun.Status)
 			}
-			if tc.wantResult != "" && !strings.Contains(string(updatedRun.Result), tc.wantResult) {
-				t.Fatalf("expected run result to contain %q, got %s", tc.wantResult, string(updatedRun.Result))
+			if tc.wantResult != "" && !strings.Contains(updatedRun.Result.String, tc.wantResult) {
+				t.Fatalf("expected run result to contain %q, got %s", tc.wantResult, updatedRun.Result.String)
 			}
 			if tc.wantReason != "" {
 				if !updatedRun.FailureReason.Valid {
@@ -151,7 +151,7 @@ type linkedIssueAutopilotFixture struct {
 	taskSvc *service.TaskService
 	queries *db.Queries
 	run     *db.AutopilotRun
-	taskID  pgtype.UUID
+	taskID  string
 }
 
 // dispatchCreateIssueAutopilot creates an active create_issue autopilot,
@@ -177,12 +177,12 @@ func dispatchCreateIssueAutopilot(t *testing.T, title string) linkedIssueAutopil
 	ap, err := queries.CreateAutopilot(ctx, db.CreateAutopilotParams{
 		WorkspaceID:        parseUUID(testWorkspaceID),
 		Title:              title,
-		Description:        pgtype.Text{String: "VEN-661 / VEN-662 regression test", Valid: true},
+		Description:        sql.NullString{String: "VEN-661 / VEN-662 regression test", Valid: true},
 		AssigneeType:       "agent",
 		AssigneeID:         parseUUID(agentID),
 		Status:             "active",
 		ExecutionMode:      "create_issue",
-		IssueTitleTemplate: pgtype.Text{String: "Linked issue", Valid: true},
+		IssueTitleTemplate: sql.NullString{String: "Linked issue", Valid: true},
 		CreatedByType:      "member",
 		CreatedByID:        parseUUID(testUserID),
 	})
@@ -227,7 +227,7 @@ func dispatchCreateIssueAutopilot(t *testing.T, title string) linkedIssueAutopil
 // budget and transitions it to running, mirroring the daemon claim → start
 // flow so FailTask sees a realistic row (and so the auto-retry budget is
 // whatever the test wants).
-func runTaskWithBudget(t *testing.T, queries *db.Queries, taskID pgtype.UUID, maxAttempts int) {
+func runTaskWithBudget(t *testing.T, queries *db.Queries, taskID string, maxAttempts int) {
 	t.Helper()
 	if _, err := testPool.Exec(context.Background(),
 		`UPDATE agent_task_queue SET status = 'dispatched', dispatched_at = now(), max_attempts = $2 WHERE id = $1`,
@@ -313,6 +313,7 @@ func TestAutopilotCreateIssueTaskRetryPendingKeepsRunOpen(t *testing.T) {
 	}
 
 	hasActive, err := f.queries.HasActiveTaskForIssue(ctx, f.run.IssueID)
+	_ = hasActive
 	if err != nil {
 		t.Fatalf("HasActiveTaskForIssue: %v", err)
 	}
@@ -374,12 +375,12 @@ func TestAutopilotDispatchSkipsWhenRuntimeOffline(t *testing.T) {
 	ap, err := queries.CreateAutopilot(ctx, db.CreateAutopilotParams{
 		WorkspaceID:        parseUUID(testWorkspaceID),
 		Title:              "Offline-runtime autopilot",
-		Description:        pgtype.Text{String: "MUL-1899 admission test", Valid: true},
+		Description:        sql.NullString{String: "MUL-1899 admission test", Valid: true},
 		AssigneeType:       "agent",
 		AssigneeID:         parseUUID(agentID),
 		Status:             "active",
 		ExecutionMode:      "run_only",
-		IssueTitleTemplate: pgtype.Text{},
+		IssueTitleTemplate: sql.NullString{},
 		CreatedByType:      "member",
 		CreatedByID:        parseUUID(testUserID),
 	})
@@ -463,12 +464,12 @@ func TestAutopilotCreateIssueDispatchCreatesIssueWhenRuntimeOffline(t *testing.T
 	ap, err := queries.CreateAutopilot(ctx, db.CreateAutopilotParams{
 		WorkspaceID:        parseUUID(testWorkspaceID),
 		Title:              "Offline create-issue autopilot",
-		Description:        pgtype.Text{String: "WS-1325 regression test", Valid: true},
+		Description:        sql.NullString{String: "WS-1325 regression test", Valid: true},
 		AssigneeType:       "agent",
 		AssigneeID:         parseUUID(agentID),
 		Status:             "active",
 		ExecutionMode:      "create_issue",
-		IssueTitleTemplate: pgtype.Text{String: "Tracked issue", Valid: true},
+		IssueTitleTemplate: sql.NullString{String: "Tracked issue", Valid: true},
 		CreatedByType:      "member",
 		CreatedByID:        parseUUID(testUserID),
 	})
@@ -511,7 +512,7 @@ func TestAutopilotCreateIssueDispatchCreatesIssueWhenRuntimeOffline(t *testing.T
 	if tasks[0].AgentID != parseUUID(agentID) {
 		t.Fatalf("task agent mismatch: got %v want %v", tasks[0].AgentID, parseUUID(agentID))
 	}
-	if tasks[0].RuntimeID != parseUUID(runtimeID) {
+	if tasks[0].RuntimeID.String != parseUUID(runtimeID) {
 		t.Fatalf("task runtime mismatch: got %v want %v", tasks[0].RuntimeID, parseUUID(runtimeID))
 	}
 }
@@ -575,12 +576,12 @@ func TestManualTriggerDoesNotErrorOnPostAdmissionSkip(t *testing.T) {
 	ap, err := queries.CreateAutopilot(ctx, db.CreateAutopilotParams{
 		WorkspaceID:        parseUUID(testWorkspaceID),
 		Title:              "Manual-trigger skip autopilot",
-		Description:        pgtype.Text{String: "PR #2888 review fix #2", Valid: true},
+		Description:        sql.NullString{String: "PR #2888 review fix #2", Valid: true},
 		AssigneeType:       "agent",
 		AssigneeID:         parseUUID(agentID),
 		Status:             "active",
 		ExecutionMode:      "run_only",
-		IssueTitleTemplate: pgtype.Text{},
+		IssueTitleTemplate: sql.NullString{},
 		CreatedByType:      "member",
 		CreatedByID:        parseUUID(testUserID),
 	})

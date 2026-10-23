@@ -10,8 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/service"
@@ -40,7 +39,7 @@ func (f *fakeIdentity) ResolveSender(_ context.Context, _ ResolvedInstallation, 
 
 type fakeDedup struct {
 	mu         sync.Mutex
-	token      pgtype.UUID
+	token      string
 	claimErr   error
 	respectCtx bool
 	releaseErr error
@@ -49,22 +48,22 @@ type fakeDedup struct {
 	claimCalls int
 }
 
-func (f *fakeDedup) Claim(_ context.Context, _ pgtype.UUID, _ string) (pgtype.UUID, error) {
+func (f *fakeDedup) Claim(_ context.Context, _ string, _ string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.claimCalls++
 	if f.claimErr != nil {
-		return pgtype.UUID{}, f.claimErr
+		return "", f.claimErr
 	}
 	return f.token, nil
 }
-func (f *fakeDedup) Mark(_ context.Context, _ pgtype.UUID, _ string, _ pgtype.UUID) error {
+func (f *fakeDedup) Mark(_ context.Context, _ string, _ string, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.markCalls++
 	return nil
 }
-func (f *fakeDedup) Release(ctx context.Context, _ pgtype.UUID, _ string, _ pgtype.UUID) error {
+func (f *fakeDedup) Release(ctx context.Context, _ string, _ string, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.respectCtx && ctx.Err() != nil {
@@ -84,7 +83,7 @@ func (f *fakeDedup) releaseError() error {
 
 type fakeBinder struct {
 	mu           sync.Mutex
-	ensureID     pgtype.UUID
+	ensureID     string
 	ensureErr    error
 	appendResult AppendResult
 	parseIssue   bool
@@ -104,7 +103,7 @@ type fakeBinder struct {
 	startErrs    []error
 }
 
-func (f *fakeBinder) EnsureSession(_ context.Context, p EnsureSessionParams) (pgtype.UUID, error) {
+func (f *fakeBinder) EnsureSession(_ context.Context, p EnsureSessionParams) (string, error) {
 	f.ensureCalls++
 	f.lastEnsure = p
 	if f.ensureHook != nil {
@@ -133,7 +132,7 @@ func (f *fakeBinder) StartSession(ctx context.Context, p StartSessionParams) (St
 		SessionID: f.ensureID, BindingID: uid(80), RouteRevision: 2, Append: res,
 	}, err
 }
-func (f *fakeBinder) MarkPendingFresh(_ context.Context, _ pgtype.UUID, _ string) error {
+func (f *fakeBinder) MarkPendingFresh(_ context.Context, _ string, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.pendingFresh++
@@ -184,7 +183,7 @@ type fakeAuditor struct {
 	drops []DropReason
 }
 
-func (f *fakeAuditor) RecordDrop(_ context.Context, _ pgtype.UUID, _ channel.InboundMessage, reason DropReason) error {
+func (f *fakeAuditor) RecordDrop(_ context.Context, _ string, _ channel.InboundMessage, reason DropReason) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.drops = append(f.drops, reason)
@@ -218,20 +217,20 @@ func (f *fakeReplier) calls() []Result {
 type fakeTyping struct {
 	settledScope TypingSettlement
 	sequence     []string
-	messageID    pgtype.UUID
+	messageID    string
 	mu           sync.Mutex
 	count        int
 	settled      int
 }
 
-func (f *fakeTyping) OnIngested(_ context.Context, _ ResolvedInstallation, _ channel.InboundMessage, _ pgtype.UUID, chatMessageID pgtype.UUID) {
+func (f *fakeTyping) OnIngested(_ context.Context, _ ResolvedInstallation, _ channel.InboundMessage, _ string, chatMessageID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.count++
 	f.messageID = chatMessageID
 	f.sequence = append(f.sequence, "ingested")
 }
-func (f *fakeTyping) OnSettled(_ context.Context, _ pgtype.UUID, scope TypingSettlement) {
+func (f *fakeTyping) OnSettled(_ context.Context, _ string, scope TypingSettlement) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.settled++
@@ -249,7 +248,7 @@ type fakeMedia struct {
 	started       chan struct{}
 	release       <-chan struct{}
 	resolve       func(context.Context, channel.InboundMessage) channel.InboundMessage
-	lastMessageID pgtype.UUID
+	lastMessageID string
 }
 
 func (f *fakeMedia) HasMedia(_ channel.InboundMessage) bool {
@@ -258,13 +257,13 @@ func (f *fakeMedia) HasMedia(_ channel.InboundMessage) bool {
 	return !f.noMedia
 }
 
-func (f *fakeMedia) resolvedMessageID() pgtype.UUID {
+func (f *fakeMedia) resolvedMessageID() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.lastMessageID
 }
 
-func (f *fakeMedia) ResolveMedia(ctx context.Context, _ ResolvedInstallation, _ ResolvedIdentity, _ pgtype.UUID, chatMessageID pgtype.UUID, msg channel.InboundMessage) channel.InboundMessage {
+func (f *fakeMedia) ResolveMedia(ctx context.Context, _ ResolvedInstallation, _ ResolvedIdentity, _ string, chatMessageID string, msg channel.InboundMessage) channel.InboundMessage {
 	f.mu.Lock()
 	f.count++
 	f.lastMessageID = chatMessageID
@@ -323,7 +322,7 @@ func (f *fakeIssues) Create(_ context.Context, p service.IssueCreateParams, o se
 	return f.result, f.err
 }
 
-func (f *fakeIssues) PublishAttachmentsChanged(context.Context, db.Issue, pgtype.UUID) {
+func (f *fakeIssues) PublishAttachmentsChanged(context.Context, db.Issue, string) {
 	f.attachmentsChanged.Add(1)
 }
 
@@ -334,27 +333,27 @@ type fakeTasks struct {
 	called              bool
 	callCount           int
 	promotions          int
-	issueTaskPromotions []pgtype.UUID
+	issueTaskPromotions []string
 	forceFresh          bool
 	forceFreshArgs      []bool
-	initiator           pgtype.UUID
-	initiators          []pgtype.UUID
+	initiator           string
+	initiators          []string
 	contextRevisions    []int64
-	bindingIDs          []pgtype.UUID
+	bindingIDs          []string
 	routeRevisions      []int64
 	err                 error
 	prepared            bool
 	prepareErr          error
 }
 
-func (f *fakeTasks) PromoteChannelChatTasksIfMediaReady(_ context.Context, _ pgtype.UUID) error {
+func (f *fakeTasks) PromoteChannelChatTasksIfMediaReady(_ context.Context, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.promotions++
 	return nil
 }
 
-func (f *fakeTasks) PromoteDeferredChannelIssueTask(_ context.Context, taskID pgtype.UUID) error {
+func (f *fakeTasks) PromoteDeferredChannelIssueTask(_ context.Context, taskID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.issueTaskPromotions = append(f.issueTaskPromotions, taskID)
@@ -364,14 +363,14 @@ func (f *fakeTasks) PromoteDeferredChannelIssueTask(_ context.Context, taskID pg
 // MemberMayInvokeAgent answers the invoke gate. Defaults to allowing, which is
 // what every test written before the gate existed assumes; a test that drives
 // the refusal sets denyInvoke or invokeErr.
-func (f *fakeTasks) MemberMayInvokeAgent(context.Context, pgtype.UUID, pgtype.UUID) (bool, error) {
+func (f *fakeTasks) MemberMayInvokeAgent(context.Context, string, string) (bool, error) {
 	if f.invokeErr != nil {
 		return false, f.invokeErr
 	}
 	return !f.denyInvoke, nil
 }
 
-func (f *fakeTasks) EnqueueChannelChatTask(_ context.Context, _ db.ChatSession, initiator pgtype.UUID, forceFresh bool, contextRevision int64, bindingID pgtype.UUID, routeRevision int64) (db.AgentTaskQueue, error) {
+func (f *fakeTasks) EnqueueChannelChatTask(_ context.Context, _ db.ChatSession, initiator string, forceFresh bool, contextRevision int64, bindingID string, routeRevision int64) (db.AgentTaskQueue, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.called = true
@@ -385,15 +384,15 @@ func (f *fakeTasks) EnqueueChannelChatTask(_ context.Context, _ db.ChatSession, 
 	f.routeRevisions = append(f.routeRevisions, routeRevision)
 	return db.AgentTaskQueue{ID: uid(81)}, f.err
 }
-func (f *fakeTasks) PrepareChatTaskEnqueue(context.Context, pgtype.UUID, pgtype.UUID) (service.PreparedChatTaskEnqueue, error) {
+func (f *fakeTasks) PrepareChatTaskEnqueue(context.Context, string, string) (service.PreparedChatTaskEnqueue, error) {
 	f.mu.Lock()
 	f.prepared = true
 	err := f.prepareErr
 	f.mu.Unlock()
 	return service.PreparedChatTaskEnqueue{}, err
 }
-func (f *fakeTasks) EnqueuePreparedChannelChatTaskInTx(ctx context.Context, _ pgx.Tx, session db.ChatSession, initiator pgtype.UUID, forceFresh bool, contextRevision int64, _ service.PreparedChatTaskEnqueue) (db.AgentTaskQueue, error) {
-	return f.EnqueueChannelChatTask(ctx, session, initiator, forceFresh, contextRevision, pgtype.UUID{}, 0)
+func (f *fakeTasks) EnqueuePreparedChannelChatTaskInTx(ctx context.Context, _ *sql.Tx, session db.ChatSession, initiator string, forceFresh bool, contextRevision int64, _ service.PreparedChatTaskEnqueue) (db.AgentTaskQueue, error) {
+	return f.EnqueueChannelChatTask(ctx, session, initiator, forceFresh, contextRevision, "", 0)
 }
 func (f *fakeTasks) FinalizeChatTaskEnqueue(context.Context, db.AgentTaskQueue) {}
 func (f *fakeTasks) wasPrepared() bool {
@@ -419,21 +418,21 @@ func (f *fakeTasks) promotionCalls() int {
 	defer f.mu.Unlock()
 	return f.promotions
 }
-func (f *fakeTasks) initiatorArg() pgtype.UUID {
+func (f *fakeTasks) initiatorArg() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.initiator
 }
-func (f *fakeTasks) initiatorArgs() []pgtype.UUID {
+func (f *fakeTasks) initiatorArgs() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]pgtype.UUID(nil), f.initiators...)
+	return append([]string(nil), f.initiators...)
 }
 
-func (f *fakeTasks) routeArgs() ([]pgtype.UUID, []int64) {
+func (f *fakeTasks) routeArgs() ([]string, []int64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]pgtype.UUID(nil), f.bindingIDs...), append([]int64(nil), f.routeRevisions...)
+	return append([]string(nil), f.bindingIDs...), append([]int64(nil), f.routeRevisions...)
 }
 
 type fakeReader struct {
@@ -454,21 +453,21 @@ func (f *fakeChannelChatLifecycle) ChannelChatStarted(event ChannelChatStartedEv
 	defer f.mu.Unlock()
 	f.started = append(f.started, event)
 }
-func (f *fakeChannelChatLifecycle) ChannelChatTitleInitialized(_ pgtype.UUID, _ pgtype.UUID, _ pgtype.UUID, title string) {
+func (f *fakeChannelChatLifecycle) ChannelChatTitleInitialized(_ string, _ string, _ string, title string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.initializedTitles = append(f.initializedTitles, title)
 }
-func (f *fakeChannelChatLifecycle) GenerateChannelChatTitle(_ pgtype.UUID, _ pgtype.UUID, _ pgtype.UUID, _ string, source string) {
+func (f *fakeChannelChatLifecycle) GenerateChannelChatTitle(_ string, _ string, _ string, _ string, source string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.generatedSourceTexts = append(f.generatedSourceTexts, source)
 }
 
-func (f *fakeReader) GetChatSession(_ context.Context, _ pgtype.UUID) (db.ChatSession, error) {
+func (f *fakeReader) GetChatSession(_ context.Context, _ string) (db.ChatSession, error) {
 	return f.session, f.sessErr
 }
-func (f *fakeReader) GetWorkspace(_ context.Context, _ pgtype.UUID) (db.Workspace, error) {
+func (f *fakeReader) GetWorkspace(_ context.Context, _ string) (db.Workspace, error) {
 	return f.ws, nil
 }
 
@@ -808,7 +807,7 @@ func TestRouter_Ingested_InTxMark_FinalizeNone(t *testing.T) {
 	if !waitFor(time.Second, func() bool { return len(h.binder.boundMedia().MediaRefs) == 1 }) {
 		t.Fatalf("resolved media not bound after append: %+v", h.binder.boundMedia().MediaRefs)
 	}
-	if got := h.binder.boundMedia(); got.IssueID.Valid || got.Body != "hello" {
+	if got := h.binder.boundMedia(); got.IssueID != "" || got.Body != "hello" {
 		t.Fatalf("plain chat media target/body = issue:%v body:%q", got.IssueID, got.Body)
 	}
 }
@@ -1016,8 +1015,8 @@ func TestRouter_ContextGenerationsUseIndependentBatchWindows(t *testing.T) {
 	sessionID := h.binder.ensureID
 	initiator := h.ident.id.UserID
 
-	h.router.scheduleRunWithFresh(h.router.sets[channel.TypeFeishu], h.inst.inst, msg, sessionID, initiator, pgtype.UUID{}, 1, false, 1, pgtype.UUID{})
-	h.router.scheduleRunWithFresh(h.router.sets[channel.TypeFeishu], h.inst.inst, msg, sessionID, initiator, pgtype.UUID{}, 1, false, 2, pgtype.UUID{})
+	h.router.scheduleRunWithFresh(h.router.sets[channel.TypeFeishu], h.inst.inst, msg, sessionID, initiator, "", 1, false, 1, "")
+	h.router.scheduleRunWithFresh(h.router.sets[channel.TypeFeishu], h.inst.inst, msg, sessionID, initiator, "", 1, false, 2, "")
 	if got := h.router.batcher.pendingCount(); got != 2 {
 		t.Fatalf("pending generation windows = %d, want 2", got)
 	}
@@ -1099,7 +1098,7 @@ func TestRouter_RecoveryDoesNotDelayLiveOlderGeneration(t *testing.T) {
 	h.router.batcher = newTestBatcher(timers)
 	msg := p2pMessage(t)
 	h.router.scheduleRunWithFresh(h.router.sets[channel.TypeFeishu], h.inst.inst, msg,
-		h.binder.ensureID, h.ident.id.UserID, pgtype.UUID{}, 1, false, 1, pgtype.UUID{},
+		h.binder.ensureID, h.ident.id.UserID, "", 1, false, 1, "",
 	)
 
 	h.binder.appendResult.ContextRevision = 2
@@ -1232,7 +1231,7 @@ func TestRouter_IssueCommand_ActiveDuplicateIsTerminalProductOutcome(t *testing.
 	}) {
 		t.Fatalf("duplicate result was not delivered to replier: %+v", h.replier.calls())
 	}
-	if !waitFor(time.Second, func() bool { return h.binder.boundMedia().MessageID.Valid }) {
+	if !waitFor(time.Second, func() bool { return h.binder.boundMedia().MessageID != "" }) {
 		t.Fatalf("duplicate media was not finalized: %+v", h.binder.boundMedia())
 	}
 	if h.media.calls() != 0 {
@@ -1241,7 +1240,7 @@ func TestRouter_IssueCommand_ActiveDuplicateIsTerminalProductOutcome(t *testing.
 	if got := h.binder.boundMedia().MediaRefs; len(got) != 0 {
 		t.Fatalf("duplicate media unexpectedly persisted refs: %+v", got)
 	}
-	if got := h.binder.boundMedia().IssueID; got.Valid {
+	if got := h.binder.boundMedia().IssueID; got != "" {
 		t.Fatalf("duplicate media unexpectedly targeted existing issue %v", got)
 	}
 	if h.issues.attachmentsChanged.Load() != 0 {
@@ -1307,7 +1306,7 @@ func TestRouter_IssueCommand_ActiveDuplicateFinalizesWithoutWaitingForSessionMed
 	if h.media.calls() != 1 {
 		t.Fatalf("duplicate finalization invoked media resolver, calls=%d", h.media.calls())
 	}
-	if got := h.binder.boundMedia(); len(got.MediaRefs) != 0 || got.IssueID.Valid {
+	if got := h.binder.boundMedia(); len(got.MediaRefs) != 0 || got.IssueID != "" {
 		t.Fatalf("duplicate finalization persisted media or targeted the issue: %+v", got)
 	}
 
@@ -1331,9 +1330,9 @@ func TestRouter_MediaFinalizationExpiredDeadlineDoesNotLogResolutionFailure(t *t
 		p2pMessage(t),
 		h.binder.ensureID,
 		db.Issue{},
-		pgtype.Text{},
+		sql.NullString{},
 		"",
-		pgtype.UUID{},
+		"",
 		false,
 		time.Now().Add(-time.Second),
 	)

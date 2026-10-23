@@ -8,6 +8,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 )
 
 const createTaskMessage = `-- name: CreateTaskMessage :one
@@ -71,7 +72,7 @@ SELECT
     NULLIF(json_extract(m.value, '$.input'), '') AS input,
     NULLIF(json_extract(m.value, '$.output'), '') AS output,
     COALESCE(NULLIF(json_extract(m.value, '$.created_at'), ''), now()) AS created_at,
-    NULLIF(json_extract(m.value, '$.output_truncated'), '') AS output_truncated,
+    CASE json_extract(m.value, '$.output_truncated') WHEN 'true' THEN 1 WHEN '1' THEN 1 WHEN 1 THEN 1 WHEN 'false' THEN 0 WHEN '0' THEN 0 WHEN 0 THEN 0 ELSE NULL END AS output_truncated,
     NULLIF(json_extract(m.value, '$.call_id'), '') AS call_id
 FROM json_each(?2) AS m
 ORDER BY json_extract(m.value, '$.seq') ASC
@@ -79,8 +80,18 @@ RETURNING id, task_id, seq, type, tool, content, input, output, created_at, outp
 `
 
 type CreateTaskMessagesParams struct {
-	TaskID   string      `json:"task_id"`
-	Messages interface{} `json:"messages"`
+	TaskID            string      `json:"task_id"`
+	Messages          interface{} `json:"messages"`
+	Ids               []string    `json:"ids"`
+	Seqs              []int32     `json:"seqs"`
+	Types             []string    `json:"types"`
+	Tools             []string    `json:"tools"`
+	CallIds           []string    `json:"call_ids"`
+	Contents          []string    `json:"contents"`
+	Inputs            []string    `json:"inputs"`
+	Outputs           []string    `json:"outputs"`
+	CreatedAts        []string    `json:"created_ats"`
+	OutputTruncations []string    `json:"output_truncations"`
 }
 
 // Batch variant of CreateTaskMessage: persists a whole daemon-reported batch in
@@ -133,7 +144,41 @@ type CreateTaskMessagesParams struct {
 //
 // Empty string means NULL, matching the single-row insert.
 func (q *Queries) CreateTaskMessages(ctx context.Context, arg CreateTaskMessagesParams) ([]TaskMessage, error) {
-	rows, err := q.db.QueryContext(ctx, createTaskMessages, arg.TaskID, arg.Messages)
+	messages := arg.Messages
+	if messages == nil && len(arg.Ids) > 0 {
+		type batchRow struct {
+			ID              string `json:"id"`
+			Seq             int32  `json:"seq"`
+			Type            string `json:"type"`
+			Tool            string `json:"tool"`
+			CallID          string `json:"call_id"`
+			Content         string `json:"content"`
+			Input           string `json:"input"`
+			Output          string `json:"output"`
+			CreatedAt       string `json:"created_at"`
+			OutputTruncated string `json:"output_truncated"`
+		}
+		batch := make([]batchRow, len(arg.Ids))
+		for i := range arg.Ids {
+			r := batchRow{ID: arg.Ids[i]}
+			if i < len(arg.Seqs) { r.Seq = arg.Seqs[i] }
+			if i < len(arg.Types) { r.Type = arg.Types[i] }
+			if i < len(arg.Tools) { r.Tool = arg.Tools[i] }
+			if i < len(arg.CallIds) { r.CallID = arg.CallIds[i] }
+			if i < len(arg.Contents) { r.Content = arg.Contents[i] }
+			if i < len(arg.Inputs) { r.Input = arg.Inputs[i] }
+			if i < len(arg.Outputs) { r.Output = arg.Outputs[i] }
+			if i < len(arg.CreatedAts) { r.CreatedAt = arg.CreatedAts[i] }
+			if i < len(arg.OutputTruncations) { r.OutputTruncated = arg.OutputTruncations[i] }
+			batch[i] = r
+		}
+		b, err := json.Marshal(batch)
+		if err != nil {
+			return nil, err
+		}
+		messages = string(b)
+	}
+	rows, err := q.db.QueryContext(ctx, createTaskMessages, arg.TaskID, messages)
 	if err != nil {
 		return nil, err
 	}

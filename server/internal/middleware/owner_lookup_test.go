@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -62,7 +61,7 @@ func TestOwnerLookupFor_ExistingUser(t *testing.T) {
 
 	userID := seedOwnerLookupUser(t, queries)
 	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, userID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM "user" WHERE id = $1`, userID)
 	})
 
 	lookup := ownerLookupFor(queries)
@@ -147,6 +146,6 @@ func TestOwnerLookupFor_DBError(t *testing.T) {
 // fixtures only need the canonical hyphenated form.
 //
 //nolint:unused // referenced via seedOwnerLookupUser indirectly.
-func uuidToStringForOwnerLookup(u pgtype.UUID) string {
+func uuidToStringForOwnerLookup(u string) string {
 	return uuidToString(u)
 }

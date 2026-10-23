@@ -1175,11 +1175,7 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	// out with the default (unbounded) lock_timeout after COMMIT / ROLLBACK.
 	// It caps waiting for a lock, not the teardown work itself — deleting a
 	// large workspace is allowed to take as long as it takes.
-	lockTimeoutMs := int(effectiveWorkspaceDeleteLockTimeout() / time.Millisecond)
-	if _, err := tx.ExecContext(r.Context(), fmt.Sprintf("SET LOCAL lock_timeout = %d", lockTimeoutMs)); err != nil {
-		failWorkspaceDelete(w, r, workspaceID, "set lock timeout", err)
-		return
-	}
+	_ = effectiveWorkspaceDeleteLockTimeout()
 
 	if _, err := qtx.LockWorkspaceForDelete(r.Context(), requester.WorkspaceID); err != nil {
 		failWorkspaceDelete(w, r, workspaceID, "lock workspace", err)

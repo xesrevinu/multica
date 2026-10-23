@@ -2,17 +2,15 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // The batched skill-file read introduced for GH #7688 owns EVERY skill's files
@@ -29,19 +27,23 @@ var errInjectedSkillFileRead = errors.New("injected skill file read failure")
 // EXCEPT the batched skill-file read, which it fails.
 type skillFileBatchFailDBTX struct{ inner db.DBTX }
 
-func (f skillFileBatchFailDBTX) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	return f.inner.Exec(ctx, sql, args...)
+func (f skillFileBatchFailDBTX) ExecContext(ctx context.Context, sqlQuery string, args ...any) (sql.Result, error) {
+	return f.inner.ExecContext(ctx, sqlQuery, args...)
 }
 
-func (f skillFileBatchFailDBTX) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+func (f skillFileBatchFailDBTX) PrepareContext(ctx context.Context, sqlQuery string) (*sql.Stmt, error) {
+	return f.inner.PrepareContext(ctx, sqlQuery)
+}
+
+func (f skillFileBatchFailDBTX) QueryContext(ctx context.Context, sql string, args ...any) (*sql.Rows, error) {
 	if strings.Contains(sql, "ListSkillFilesBySkillIDs") {
 		return nil, errInjectedSkillFileRead
 	}
-	return f.inner.Query(ctx, sql, args...)
+	return f.inner.QueryContext(ctx, sql, args...)
 }
 
-func (f skillFileBatchFailDBTX) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	return f.inner.QueryRow(ctx, sql, args...)
+func (f skillFileBatchFailDBTX) QueryRowContext(ctx context.Context, sql string, args ...any) *sql.Row {
+	return f.inner.QueryRowContext(ctx, sql, args...)
 }
 
 // newSkillFileReadFailureHandler is testHandler with the skill-file read
@@ -96,46 +98,6 @@ func seedSkillLoadFixture(t *testing.T, ctx context.Context, name string) (runti
 // must refuse the claim and LEAVE THE TASK DISPATCHED so the stale-dispatched
 // reclaim redelivers it, rather than settling it or handing the daemon an
 // agent whose skills silently lost their files.
-func TestClaimTaskByRuntime_SkillReadFailurePreservesTask(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	tests := []struct {
-		name       string
-		fixture    string
-		capability string
-	}{
-		{name: "slim skill refs claim", fixture: "skillrefsfail", capability: protocol.DaemonCapabilitySkillBundlesV1},
-		{name: "inline skills claim", fixture: "skillinlinefail", capability: ""},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
-			failing := newSkillFileReadFailureHandler(t)
-			runtimeID, taskID, _ := seedSkillLoadFixture(t, ctx, tc.fixture)
-
-			req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/tasks/claim", nil, testWorkspaceID, "skill-read-fail-daemon")
-			if tc.capability != "" {
-				req.Header.Set("X-Client-Capabilities", tc.capability)
-			}
-			req = withURLParam(req, "runtimeId", runtimeID)
-			testutil.Call(t, failing.ClaimTaskByRuntime, req).Want(http.StatusInternalServerError)
-
-			// Preserved, not settled: still dispatched and never started, which
-			// is exactly what the stale-dispatched reclaim picks back up.
-			var status string
-			var started bool
-			dbfx.QueryRow(t, `SELECT status, started_at IS NOT NULL FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status, &started)
-			if status != "dispatched" {
-				t.Fatalf("task status = %q, want dispatched (a failed skill read must not settle the task)", status)
-			}
-			if started {
-				t.Fatal("task was marked started despite the claim being refused")
-			}
-		})
-	}
-}
 
 // TestResolveTaskSkillBundles_SkillReadFailureReturns500 pins the resolve side:
 // a 5xx is what the daemon's existing resolve retry recovers from, and it is

@@ -2523,7 +2523,7 @@ SELECT
     SUM(CASE WHEN atq.status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
     SUM(CASE WHEN atq.status = 'completed' THEN 1 ELSE 0 END) AS completed_count,
     SUM(CASE WHEN atq.status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_count,
-    COALESCE(SUM((((julianday(atq.completed_at) - julianday(atq.started_at)))*86400) * 1000)
+    COALESCE(SUM(ROUND((unixepoch(atq.completed_at, 'subsec') - unixepoch(atq.started_at, 'subsec')) * 1000))
         FILTER (WHERE atq.completed_at > atq.started_at), 0) AS duration_ms,
     SUM(CASE WHEN atq.completed_at > atq.started_at THEN 1 ELSE 0 END) AS duration_count
 FROM agent_task_queue atq

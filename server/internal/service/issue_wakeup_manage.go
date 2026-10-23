@@ -20,7 +20,7 @@ const maxWakeupCheckinRunes = 500
 // checks that member may manage the rule: its creator or a workspace admin.
 func lockManagedWakeup(ctx context.Context, tx *sql.Tx, q *db.Queries, issueID, id, member string) (db.Issue, db.IssueWakeup, error) {
 	var workspace string
-	if err := tx.QueryRowContext(ctx, "SELECT w.id FROM workspace w JOIN issue i ON i.workspace_id=w.id WHERE i.id=$1 FOR KEY SHARE OF w", issueID).Scan(&workspace); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT w.id FROM workspace w JOIN issue i ON i.workspace_id=w.id WHERE i.id=$1", issueID).Scan(&workspace); err != nil {
 		return db.Issue{}, db.IssueWakeup{}, err
 	}
 	issue, err := q.LockWakeupIssue(ctx, issueID)
@@ -81,8 +81,8 @@ func (s *IssueWakeupService) Trigger(ctx context.Context, issueID, id, member st
 	if err = s.authorize(ctx, q, w.WorkspaceID, member, agent); err != nil {
 		return err
 	}
-	var now time.Time
-	if err = tx.QueryRowContext(ctx, "SELECT now()").Scan(&now); err != nil {
+	now, err := txNow(ctx, tx)
+	if err != nil {
 		return err
 	}
 	key := "manual:" + util.UUIDToString(newV7())
@@ -150,7 +150,7 @@ func (s *IssueWakeupService) CheckIn(ctx context.Context, issueID, id, taskID st
 	q := s.Tasks.Queries.WithTx(tx)
 	var status, wakeupID string
 	var taskIssue, taskAgent string
-	err = tx.QueryRowContext(ctx, "SELECT status,issue_id,agent_id,COALESCE(context->>'wakeup_id','') FROM agent_task_queue WHERE id=$1 FOR UPDATE", taskID).Scan(&status, &taskIssue, &taskAgent, &wakeupID)
+	err = tx.QueryRowContext(ctx, "SELECT status,issue_id,agent_id,COALESCE(context->>'wakeup_id','') FROM agent_task_queue WHERE id=$1", taskID).Scan(&status, &taskIssue, &taskAgent, &wakeupID)
 	if err != nil {
 		return ErrWakeupForbidden
 	}
@@ -167,12 +167,12 @@ func (s *IssueWakeupService) CheckIn(ctx context.Context, issueID, id, taskID st
 	if w.Kind != "every" && w.Kind != "cron" {
 		return fmt.Errorf("%w: check-ins are for scheduled checks; post a comment instead", ErrWakeupInput)
 	}
-	var now time.Time
-	if err = tx.QueryRowContext(ctx, "SELECT now()").Scan(&now); err != nil {
+	now, err := txNow(ctx, tx)
+	if err != nil {
 		return err
 	}
 	checkin, _ := json.Marshal(map[string]any{"note": note, "at": now.UTC().Format(time.RFC3339)})
-	if _, err = tx.ExecContext(ctx, "UPDATE agent_task_queue SET context=COALESCE(context,'{}'::jsonb)||jsonb_build_object('wakeup_checkin',$2::jsonb) WHERE id=$1", taskID, checkin); err != nil {
+	if _, err = tx.ExecContext(ctx, "UPDATE agent_task_queue SET context=json_set(COALESCE(context,'{}'),'$.wakeup_checkin',json($2)) WHERE id=$1", taskID, string(checkin)); err != nil {
 		return err
 	}
 	activity, err := recordWakeupActivity(ctx, q, w, wakeupActivityCheckin, "agent", taskAgent, map[string]any{"note": note, "task_id": util.UUIDToString(taskID)})

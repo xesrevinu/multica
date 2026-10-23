@@ -83,8 +83,8 @@ func TestNotification_MalformedMemberMentionPreservesValidRecipients(t *testing.
 				t.Fatalf("unexpected mention inbox item: %+v", items[0])
 			}
 			var details map[string]string
-			if err := json.Unmarshal(items[0].Details, &details); err != nil || details["comment_id"] != commentID {
-				t.Fatalf("mention details = %s, error = %v; want comment_id %s", items[0].Details, err, commentID)
+			if err := json.Unmarshal([]byte(items[0].Details.String), &details); err != nil || details["comment_id"] != commentID {
+				t.Fatalf("mention details = %s, error = %v; want comment_id %s", items[0].Details.String, err, commentID)
 			}
 			if count := fx.Count(t, `SELECT count(*) FROM inbox_item WHERE issue_id = $1`, issueID); count != 1 {
 				t.Fatalf("issue has %d inbox items, want only the valid, unmuted recipient", count)

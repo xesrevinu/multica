@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -254,20 +255,13 @@ func (h *Handler) RequireLocalSearchIndex(next http.Handler) http.Handler {
 // runSearchIndexRead runs fn in a read-only REPEATABLE READ transaction, so the
 // snapshot returned by pg_current_snapshot() is exactly the one fn reads under.
 func (h *Handler) runSearchIndexRead(ctx context.Context, fn func(q *db.Queries) error) error {
-	tx, err := h.TxStarter.BeginTx(ctx, nil)
+	qctx, cancel := context.WithTimeout(ctx, searchIndexStatementLimit)
+	defer cancel()
+	tx, err := h.TxStarter.BeginTx(qctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return fmt.Errorf("begin search index tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	// Must be the first statement: the isolation level cannot change once the
-	// transaction has taken its snapshot.
-	if _, err := tx.ExecContext(ctx, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"); err != nil {
-		return fmt.Errorf("set search index isolation: %w", err)
-	}
-	timeoutMs := int(searchIndexStatementLimit / time.Millisecond)
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf("SET LOCAL statement_timeout = %d", timeoutMs)); err != nil {
-		return fmt.Errorf("set search index statement_timeout: %w", err)
-	}
 	if err := fn(h.Queries.WithTx(tx)); err != nil {
 		return err
 	}

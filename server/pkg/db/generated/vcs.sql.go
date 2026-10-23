@@ -26,6 +26,15 @@ type DeleteVCSConnectionParams struct {
 // Order: DeleteVCSConnection_Step2, DeleteVCSConnection_Step3,
 // DeleteVCSConnection_Step4, then DeleteVCSConnection.
 func (q *Queries) DeleteVCSConnection(ctx context.Context, arg DeleteVCSConnectionParams) error {
+	if err := q.DeleteVCSConnection_Step2(ctx, DeleteVCSConnection_Step2Params{ConnectionID: arg.ID, WorkspaceID: arg.WorkspaceID}); err != nil {
+		return err
+	}
+	if err := q.DeleteVCSConnection_Step3(ctx, DeleteVCSConnection_Step3Params{ConnectionID: arg.ID, WorkspaceID: arg.WorkspaceID}); err != nil {
+		return err
+	}
+	if err := q.DeleteVCSConnection_Step4(ctx, DeleteVCSConnection_Step4Params{ConnectionID: arg.ID, WorkspaceID: arg.WorkspaceID}); err != nil {
+		return err
+	}
 	_, err := q.db.ExecContext(ctx, deleteVCSConnection, arg.ID, arg.WorkspaceID)
 	return err
 }

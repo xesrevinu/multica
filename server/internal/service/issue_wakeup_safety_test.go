@@ -32,7 +32,7 @@ func TestWakeupMaxFiresPausesAfterTheCap(t *testing.T) {
 		t.Fatalf("capped rule started %d runs, want 2", n)
 	}
 	if (w.Enabled != 0) || w.PausedReason.String != wakeupPausedMaxFires || w.DisabledAt.Valid {
-		t.Fatalf("rule after cap: enabled=%t reason=%q disabled_at=%v", w.Enabled, w.PausedReason.String, w.DisabledAt)
+		t.Fatalf("rule after cap: enabled=%t reason=%q disabled_at=%v", (w.Enabled != 0), w.PausedReason.String, w.DisabledAt)
 	}
 	if n := f.Count(t, "SELECT count(*) FROM activity_log WHERE issue_id=$1 AND action='wakeup_paused' AND details->>'reason'='max_fires'", issue); n != 1 {
 		t.Fatalf("pause timeline entries = %d, want 1", n)
@@ -43,7 +43,7 @@ func TestWakeupMaxFiresPausesAfterTheCap(t *testing.T) {
 		t.Fatal(err)
 	}
 	if (w.Enabled == 0) || w.FireCount != 0 || w.PausedReason.Valid {
-		t.Fatalf("re-enabled rule = enabled %t count %d reason %v", w.Enabled, w.FireCount, w.PausedReason)
+		t.Fatalf("re-enabled rule = enabled %t count %d reason %v", (w.Enabled != 0), w.FireCount, w.PausedReason)
 	}
 }
 
@@ -61,7 +61,7 @@ func TestWakeupBurstPausesTheRule(t *testing.T) {
 		t.Fatalf("burst still queued %d runs", n)
 	}
 	if (got.Enabled != 0) || got.PausedReason.String != wakeupPausedRate || !got.DisabledAt.Valid {
-		t.Fatalf("rule after burst: enabled=%t reason=%q disabled_at=%v", got.Enabled, got.PausedReason.String, got.DisabledAt)
+		t.Fatalf("rule after burst: enabled=%t reason=%q disabled_at=%v", (got.Enabled != 0), got.PausedReason.String, got.DisabledAt)
 	}
 	if n := f.Count(t, "SELECT count(*) FROM issue_wakeup_receipt WHERE wakeup_id=$1 AND processed_at IS NULL", w.ID); n != 0 {
 		t.Fatalf("paused rule kept %d pending inputs", n)
@@ -100,7 +100,7 @@ func TestWakeupLoopBetweenRulesPausesTheRule(t *testing.T) {
 	f.Comment(t, util.UUIDToString(issue), "round one", testutil.Cols{"author_type": "agent", "author_id": reviewer, "source_task_id": once})
 	got := wakeTick(t, f, s, a.ID)
 	if (got.Enabled == 0) || wakeRuns(t, f, a.ID) != 1 {
-		t.Fatalf("first round was blocked: enabled=%t runs=%d", got.Enabled, wakeRuns(t, f, a.ID))
+		t.Fatalf("first round was blocked: enabled=%t runs=%d", (got.Enabled != 0), wakeRuns(t, f, a.ID))
 	}
 	var stored struct {
 		Chain []string `json:"wakeup_chain"`
@@ -119,7 +119,7 @@ func TestWakeupLoopBetweenRulesPausesTheRule(t *testing.T) {
 	f.Comment(t, util.UUIDToString(issue), "round two", testutil.Cols{"author_type": "agent", "author_id": reviewer, "source_task_id": again})
 	got = wakeTick(t, f, s, a.ID)
 	if (got.Enabled != 0) || got.PausedReason.String != wakeupPausedLoop || wakeRuns(t, f, a.ID) != 1 {
-		t.Fatalf("loop not stopped: enabled=%t reason=%q runs=%d", got.Enabled, got.PausedReason.String, wakeRuns(t, f, a.ID))
+		t.Fatalf("loop not stopped: enabled=%t reason=%q runs=%d", (got.Enabled != 0), got.PausedReason.String, wakeRuns(t, f, a.ID))
 	}
 	// A person's comment starts a fresh chain once the rule is back on.
 	got, err = s.Enable(context.Background(), issue, parseTestUUID(t, f.UserID), "", a.ID, WakeupEnableInput{Revision: got.Revision})
@@ -128,7 +128,7 @@ func TestWakeupLoopBetweenRulesPausesTheRule(t *testing.T) {
 	}
 	f.Comment(t, util.UUIDToString(issue), "from a person")
 	if got = wakeTick(t, f, s, a.ID); (got.Enabled == 0) || wakeRuns(t, f, a.ID) != 2 {
-		t.Fatalf("member comment after re-enable: enabled=%t runs=%d", got.Enabled, wakeRuns(t, f, a.ID))
+		t.Fatalf("member comment after re-enable: enabled=%t runs=%d", (got.Enabled != 0), wakeRuns(t, f, a.ID))
 	}
 }
 
@@ -161,7 +161,7 @@ func TestWakeupTriggerDeleteAndCheckIn(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !HasWakeupCheckin(task) {
-		t.Fatalf("check-in not stored: %s", task.Context)
+		t.Fatalf("check-in not stored: %s", task.Context.String)
 	}
 	if n := f.Count(t, "SELECT count(*) FROM activity_log WHERE issue_id=$1 AND action='wakeup_checkin' AND details->>'note'='Progress 38%, 0 failures'", issue); n != 1 {
 		t.Fatalf("check-in timeline entries = %d, want 1", n)

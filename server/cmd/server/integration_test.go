@@ -15,18 +15,19 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/multica-ai/multica/server/internal/testutil"
 
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/events"
+	"github.com/multica-ai/multica/server/internal/migrations"
 	"github.com/multica-ai/multica/server/internal/realtime"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 var (
 	testServer      *httptest.Server
-	testPool        *pgxpool.Pool
+	testPool        *testutil.Pool
 	testToken       string
 	testUserID      string
 	testWorkspaceID string
@@ -43,21 +44,12 @@ const (
 
 func TestMain(m *testing.M) {
 	ctx := context.Background()
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		dbURL = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
-	}
-
-	pool, err := pgxpool.New(ctx, dbURL)
+	rawPool, err := testutil.OpenTestPool()
 	if err != nil {
-		fmt.Printf("Skipping integration tests: could not connect to database: %v\n", err)
-		os.Exit(0)
+		fmt.Printf("Failed to open test SQLite database: %v\n", err)
+		os.Exit(1)
 	}
-	if err := pool.Ping(ctx); err != nil {
-		fmt.Printf("Skipping integration tests: database not reachable: %v\n", err)
-		pool.Close()
-		os.Exit(0)
-	}
+	pool := testutil.WrapPool(rawPool)
 
 	testPool = pool
 	testUserID, testWorkspaceID, err = setupIntegrationTestFixture(ctx, pool)
@@ -74,7 +66,7 @@ func TestMain(m *testing.M) {
 	registerListeners(bus, hub)
 	// Same wiring as main.go: HTTP writes through the test server log activity.
 	registerActivityListeners(bus, db.New(pool))
-	router := NewRouter(pool, hub, bus, analytics.NoopClient{})
+	router := NewRouter(pool.DB, hub, bus, analytics.NoopClient{})
 	testServer = httptest.NewServer(router)
 
 	// Generate a JWT token directly for the test user
@@ -99,9 +91,14 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func setupIntegrationTestFixture(ctx context.Context, pool *pgxpool.Pool) (string, string, error) {
+func setupIntegrationTestFixture(ctx context.Context, pool *testutil.Pool) (string, string, error) {
 	if err := cleanupIntegrationTestFixture(ctx, pool); err != nil {
 		return "", "", err
+	}
+	if versions, err := migrations.AllVersions(); err == nil {
+		for _, v := range versions {
+			_, _ = pool.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT (version) DO NOTHING`, v)
+		}
 	}
 
 	var userID string
@@ -157,7 +154,7 @@ func setupIntegrationTestFixture(ctx context.Context, pool *pgxpool.Pool) (strin
 	return userID, workspaceID, nil
 }
 
-func cleanupIntegrationTestFixture(ctx context.Context, pool *pgxpool.Pool) error {
+func cleanupIntegrationTestFixture(ctx context.Context, pool *testutil.Pool) error {
 	if _, err := pool.Exec(ctx, `DELETE FROM workspace WHERE slug = $1`, integrationTestWorkspaceSlug); err != nil {
 		return err
 	}
@@ -873,14 +870,12 @@ func seedArchivedFixtureIssue(t *testing.T, title string) string {
 	t.Helper()
 	ctx := context.Background()
 	var issueID string
+	if _, err := testPool.Exec(ctx, `UPDATE workspace SET issue_counter = issue_counter + 1 WHERE id = $1`, testWorkspaceID); err != nil {
+		t.Fatalf("failed to bump issue_counter: %v", err)
+	}
 	if err := testPool.QueryRow(ctx, `
-		WITH bumped AS (
-			UPDATE workspace SET issue_counter = issue_counter + 1
-			WHERE id = $1
-			RETURNING issue_counter
-		)
 		INSERT INTO issue (workspace_id, title, creator_type, creator_id, number)
-		SELECT $1, $2, 'member', $3, bumped.issue_counter FROM bumped
+		SELECT $1, $2, 'member', $3, issue_counter FROM workspace WHERE id = $1
 		RETURNING id
 	`, testWorkspaceID, title, testUserID).Scan(&issueID); err != nil {
 		t.Fatalf("failed to seed issue: %v", err)

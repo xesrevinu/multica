@@ -9,8 +9,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
+	"github.com/google/uuid"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -119,7 +119,7 @@ type stubReplierQueries struct {
 	err   error
 }
 
-func (s stubReplierQueries) GetAgent(ctx context.Context, id pgtype.UUID) (db.Agent, error) {
+func (s stubReplierQueries) GetAgent(ctx context.Context, id string) (db.Agent, error) {
 	if s.err != nil {
 		return db.Agent{}, s.err
 	}
@@ -131,7 +131,7 @@ type fakeBindingMinter struct {
 	err error
 }
 
-func (f fakeBindingMinter) Mint(ctx context.Context, workspaceID, installationID pgtype.UUID, openID OpenID) (BindingToken, error) {
+func (f fakeBindingMinter) Mint(ctx context.Context, workspaceID, installationID string, openID OpenID) (BindingToken, error) {
 	if f.err != nil {
 		return BindingToken{}, f.err
 	}
@@ -888,17 +888,13 @@ func TestLarkOutcomeReplierNoticeNoFallbackOnAmbiguous(t *testing.T) {
 	}
 }
 
-func mustUUID(s string) pgtype.UUID {
-	var u pgtype.UUID
-	if err := u.Scan(s); err != nil {
-		panic(err)
-	}
-	return u
+func mustUUID(s string) string {
+	return uuid.MustParse(s).String()
 }
 
 // silence the unused import warnings for the dependencies we keep
 // reaching for via reflection in future test cases.
-var _ = pgx.ErrNoRows
+var _ = sql.ErrNoRows
 
 // TestLarkOutcomeReplierRepliesNativelyInOrdinaryGroup is the outcome
 // replier's half of #8234: the /issue confirmation now attaches to the

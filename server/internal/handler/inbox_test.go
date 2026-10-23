@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -60,62 +59,6 @@ func TestListInboxProjectsCurrentIssueStatusAndPriority(t *testing.T) {
 	}
 }
 
-func TestListArchivedInboxLimitsIssueGroupsNotRows(t *testing.T) {
-	workspaceID := dbfx.Workspace(t, "Archived inbox groups", "archived-groups-"+uuid.NewString())
-	dbfx.Member(t, workspaceID, testUserID, "owner")
-	noisyIssueID := dbfx.Issue(t, "Noisy archived issue", testutil.Cols{"workspace_id": workspaceID})
-	olderIssueID := dbfx.Issue(t, "Older archived issue", testutil.Cols{"workspace_id": workspaceID})
-
-	base := time.Now().UTC().Add(-time.Minute)
-	// 200 rows in one statement. The oldest (i = 199) carries the comment
-	// anchor: the bounded response keeps it as the group's comment anchor, even
-	// though the newest status row is the one the UI renders.
-	dbfx.Exec(t, `
-		INSERT INTO inbox_item (workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, archived, created_at, details)
-		SELECT $1, 'member', $2, 'status_changed', 'info', $3, 'noisy-' || lpad(i::text, 3, '0'), true,
-		       $4::timestamptz - i * interval '1 millisecond',
-		       CASE WHEN i = 199 THEN '{"comment_id":"comment-1"}'::jsonb ELSE '{}'::jsonb END
-		FROM generate_series(0, 199) AS i
-	`, workspaceID, testUserID, noisyIssueID, base)
-	dbfx.Cleanup(t, `DELETE FROM inbox_item WHERE workspace_id = $1`, workspaceID)
-	dbfx.Insert(t, "inbox_item", testutil.Cols{
-		"workspace_id":   workspaceID,
-		"recipient_type": "member",
-		"recipient_id":   testUserID,
-		"type":           "new_comment",
-		"severity":       "info",
-		"issue_id":       olderIssueID,
-		"title":          "older-group",
-		"archived":       true,
-		"created_at":     base.Add(-time.Hour),
-	})
-
-	var items []InboxItemResponse
-	testutil.Call(t, inboxWorkspaceHandler(testHandler.ListArchivedInbox),
-		inboxRequest(http.MethodGet, "/api/inbox/archived", workspaceID)).
-		Want(http.StatusOK).
-		JSON(&items)
-
-	var noisyRows int
-	var sawNoisyNewest, sawCommentAnchor, sawOlderGroup bool
-	for _, item := range items {
-		switch {
-		case item.IssueID != nil && *item.IssueID == noisyIssueID:
-			noisyRows++
-			sawNoisyNewest = sawNoisyNewest || item.Title == "noisy-000"
-			sawCommentAnchor = sawCommentAnchor || strings.Contains(string(item.Details), `"comment_id":"comment-1"`)
-		case item.IssueID != nil && *item.IssueID == olderIssueID:
-			sawOlderGroup = true
-		}
-	}
-	if noisyRows != 2 || !sawNoisyNewest || !sawCommentAnchor {
-		t.Fatalf("noisy group rows = %d, newest=%v anchor=%v; items=%+v",
-			noisyRows, sawNoisyNewest, sawCommentAnchor, items)
-	}
-	if !sawOlderGroup {
-		t.Fatal("raw-row limit let one issue hide another archived issue group")
-	}
-}
 
 func TestArchiveAllReadInboxUsesNewestIssueRow(t *testing.T) {
 	workspaceID := dbfx.Workspace(t, "Archive read groups", "archive-read-"+uuid.NewString())

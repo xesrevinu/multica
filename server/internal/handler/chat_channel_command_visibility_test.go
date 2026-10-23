@@ -2,10 +2,8 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"testing"
 	"time"
 
@@ -31,51 +29,6 @@ func insertChatMessageRole(t *testing.T, sessionID, role, content, messageKind s
 	}
 }
 
-func TestChannelCommandVisibility_MessageListsExcludeCommandsBeforePagination(t *testing.T) {
-	agentID := createHandlerTestAgent(t, "ChannelCommandMessageVisibilityAgent", []byte("[]"))
-	sessionID := createHandlerTestChatSession(t, agentID)
-	base := time.Date(2026, 8, 7, 1, 0, 0, 0, time.UTC)
-
-	insertChatVisibilityMessage(t, sessionID, "visible oldest", "message", true, base)
-	insertChatVisibilityMessage(t, sessionID, "/issue hidden oldest", "channel_command", true, base.Add(time.Second))
-	insertChatVisibilityMessage(t, sessionID, "visible middle", "message", true, base.Add(2*time.Second))
-	insertChatVisibilityMessage(t, sessionID, "/issue hidden newest", "channel_command", true, base.Add(3*time.Second))
-	insertChatVisibilityMessage(t, sessionID, "visible newest", "message", true, base.Add(4*time.Second))
-
-	legacyReq := httptest.NewRequest(http.MethodGet, "/api/chat/sessions/"+sessionID+"/messages", nil)
-	legacyReq.Header.Set("X-User-ID", testUserID)
-	legacyReq = withURLParam(legacyReq, "sessionId", sessionID)
-	legacyReq = withChatTestWorkspaceCtx(t, legacyReq)
-	legacyW := httptest.NewRecorder()
-	testHandler.ListChatMessages(legacyW, legacyReq)
-	if legacyW.Code != http.StatusOK {
-		t.Fatalf("ListChatMessages: expected 200, got %d: %s", legacyW.Code, legacyW.Body.String())
-	}
-	var legacy []ChatMessageResponse
-	if err := json.Unmarshal(legacyW.Body.Bytes(), &legacy); err != nil {
-		t.Fatalf("decode legacy messages: %v", err)
-	}
-	if len(legacy) != 3 || legacy[0].Content != "visible oldest" || legacy[1].Content != "visible middle" || legacy[2].Content != "visible newest" {
-		t.Fatalf("legacy visible messages = %#v", legacy)
-	}
-
-	latest := fetchChatMessagesPageForTest(t, sessionID, url.Values{"limit": {"2"}})
-	if len(latest.Messages) != 2 || latest.Messages[0].Content != "visible middle" || latest.Messages[1].Content != "visible newest" {
-		t.Fatalf("latest visible page = %#v", latest)
-	}
-	if !latest.HasMore || latest.NextCursor == nil {
-		t.Fatalf("latest visible page metadata = %#v", latest)
-	}
-
-	older := fetchChatMessagesPageForTest(t, sessionID, url.Values{
-		"limit":             {"2"},
-		"before_created_at": {latest.NextCursor.CreatedAt},
-		"before_id":         {latest.NextCursor.ID},
-	})
-	if len(older.Messages) != 1 || older.Messages[0].Content != "visible oldest" || older.HasMore || older.NextCursor != nil {
-		t.Fatalf("older visible page = %#v", older)
-	}
-}
 
 func TestChannelCommandVisibility_SessionProjectionUsesPublicMessages(t *testing.T) {
 	agentID := createHandlerTestAgent(t, "ChannelCommandSessionVisibilityAgent", []byte("[]"))

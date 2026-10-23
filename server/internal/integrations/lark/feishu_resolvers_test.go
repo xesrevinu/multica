@@ -5,19 +5,18 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
+	"github.com/google/uuid"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-func binderUUID(b byte) pgtype.UUID {
-	var u pgtype.UUID
-	u.Bytes[0] = b
-	u.Valid = true
-	return u
+func binderUUID(b byte) string {
+	var u uuid.UUID
+	u[0] = b
+	return u.String()
 }
 
 // fakeChatSession records the inputs the Feishu binder maps onto the shared
@@ -34,12 +33,12 @@ func (f *fakeChatSession) StartSession(_ context.Context, in engine.StartSession
 	return engine.StartSessionResult{SessionID: binderUUID(43)}, nil
 }
 
-func (f *fakeChatSession) EnsureSession(_ context.Context, in engine.EnsureSessionInput) (pgtype.UUID, error) {
+func (f *fakeChatSession) EnsureSession(_ context.Context, in engine.EnsureSessionInput) (string, error) {
 	f.ensureIn = in
 	return binderUUID(42), nil
 }
 
-func (f *fakeChatSession) MarkPendingFresh(context.Context, pgtype.UUID, string) error { return nil }
+func (f *fakeChatSession) MarkPendingFresh(context.Context, string, string) error { return nil }
 
 func (f *fakeChatSession) AppendUserMessage(_ context.Context, in engine.AppendInput) (engine.AppendResult, error) {
 	f.appendIn = in
@@ -108,7 +107,7 @@ func TestFeishuSessionBinder_TopicMessageIsolatesByThread(t *testing.T) {
 func TestFeishuSessionBinder_StartSessionMapping(t *testing.T) {
 	f := &fakeChatSession{}
 	b := &feishuSessionBinder{session: f}
-	beforeCommit := func(context.Context, pgx.Tx, db.ChatSession) error { return nil }
+	beforeCommit := func(context.Context, *sql.Tx, db.ChatSession) error { return nil }
 
 	result, err := b.StartSession(context.Background(), engine.StartSessionParams{
 		Installation: engine.ResolvedInstallation{ID: binderUUID(1), WorkspaceID: binderUUID(2), AgentID: binderUUID(3)},

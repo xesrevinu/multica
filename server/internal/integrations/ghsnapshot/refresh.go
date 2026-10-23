@@ -72,7 +72,8 @@ type Manager struct {
 	active   map[address]bool // queued OR in-flight → coalesce (single in-flight per PR)
 	inFlight map[address]bool
 	trailing map[address]bool // one event that arrived while active; replay once after the current fetch
-	attempts map[address]int  // chase attempts for the current undecided window
+	attempts   map[address]int  // chase attempts for the current undecided window
+	sweepAfter address
 	// Secondary rate limits are scoped to the installation whose token incurred
 	// them. One customer must never pause every other installation.
 	rateUntil map[int64]time.Time
@@ -490,13 +491,32 @@ func (m *Manager) sweepLoop(ctx context.Context) {
 // undecided PR whose base branch changes without a pull_request webhook, and
 // for any webhook that was dropped during a deploy.
 func (m *Manager) sweepOnce(ctx context.Context) {
+	m.mu.Lock()
+	after := m.sweepAfter
+	m.mu.Unlock()
+
 	rows, err := m.queries.ListStaleUndecidedGitHubPRs(ctx, db.ListStaleUndecidedGitHubPRsParams{
-		OlderThan: tsFromTime(m.now().Add(-m.sweepTTL)),
-		MaxRows:   int64(m.sweepMaxRows),
+		OlderThan:           tsFromTime(m.now().Add(-m.sweepTTL)),
+		AfterInstallationID: after.InstallationID,
+		AfterRepoOwner:      after.Owner,
+		AfterRepoName:       after.Repo,
+		AfterPrNumber:       int64(after.Number),
+		MaxRows:             int64(m.sweepMaxRows),
 	})
 	if err != nil {
 		slog.Warn("ghsnapshot: sweep query failed", "err", err.Error())
 		return
+	}
+	if len(rows) > 0 {
+		last := rows[len(rows)-1]
+		m.mu.Lock()
+		m.sweepAfter = address{
+			InstallationID: last.InstallationID,
+			Owner:          last.RepoOwner,
+			Repo:           last.RepoName,
+			Number:         int32(last.PrNumber),
+		}
+		m.mu.Unlock()
 	}
 	for _, r := range rows {
 		m.Enqueue(r.InstallationID, r.RepoOwner, r.RepoName, int32(r.PrNumber))

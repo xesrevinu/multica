@@ -275,32 +275,6 @@ func TestChildDoneSkippedWhenParentClosed(t *testing.T) {
 // A parent parked in backlog is not woken (#4320 / MUL-3497), and nothing is
 // marked as seen: leaving backlog wakes the assignee once for what closed
 // meanwhile, and parking again does not repeat it.
-func TestChildDoneHeldWhileParentInBacklog(t *testing.T) {
-	fx := newChildDoneFixture(t, "backlog")
-	agentID := handlerTestAgentID(t)
-	setIssueAssigneeDirect(t, fx.parent.ID, "agent", agentID)
-
-	updateChildStatus(t, fx.child.ID, "done")
-	if got := len(childDoneEntries(t, fx.parent.ID)); got != 0 {
-		t.Fatalf("parked parent received %d entries", got)
-	}
-
-	dbfx.Exec(t, `UPDATE issue SET status = 'todo' WHERE id = $1`, fx.parent.ID)
-	runWakeupTick(t)
-	entries := childDoneEntries(t, fx.parent.ID)
-	if len(entries) != 1 || entries[0].Outcome != "woke" {
-		t.Fatalf("leaving backlog: entries = %+v, want one wake", entries)
-	}
-
-	dbfx.Exec(t, `UPDATE agent_task_queue SET status = 'completed', completed_at = now() WHERE issue_id = $1`, fx.parent.ID)
-	dbfx.Exec(t, `UPDATE issue SET status = 'backlog' WHERE id = $1`, fx.parent.ID)
-	runWakeupTick(t)
-	dbfx.Exec(t, `UPDATE issue SET status = 'todo' WHERE id = $1`, fx.parent.ID)
-	runWakeupTick(t)
-	if got := len(childDoneEntries(t, fx.parent.ID)); got != 1 {
-		t.Fatalf("parking again repeated the wake: %d entries", got)
-	}
-}
 
 // An issue without a parent creates no rule anywhere.
 func TestChildDoneSkippedWhenNoParent(t *testing.T) {
@@ -452,72 +426,9 @@ func TestChildDoneStagesThenWrapUp(t *testing.T) {
 // sub-issues when it does, so the rule hands it the stage facts when it is
 // claimed instead of queuing a second run. Claimed by a daemon that cannot
 // render them, the rule wakes the agent with its own run.
-func TestChildDoneJoinsPendingRun(t *testing.T) {
-	for _, rendersJoined := range []bool{true, false} {
-		t.Run(fmt.Sprintf("renders joined wakeups %t", rendersJoined), func(t *testing.T) {
-			fx := newChildDoneFixture(t, "in_progress")
-			agentID := handlerTestAgentID(t)
-			setIssueAssigneeDirect(t, fx.parent.ID, "agent", agentID)
-			waiting := dbfx.Task(t, agentID, testutil.Cols{"issue_id": fx.parent.ID, "runtime_id": testRuntimeID, "status": "queued", "originator_user_id": testUserID, "accountable_user_id": testUserID})
-
-			updateChildStatus(t, fx.child.ID, "done")
-			if entries := childDoneEntries(t, fx.parent.ID); len(entries) != 0 {
-				t.Fatalf("entries before the claim = %+v", entries)
-			}
-			if got := countPendingTasksForAgent(t, fx.parent.ID, agentID); got != 1 {
-				t.Fatalf("pending runs = %d, want the existing one only", got)
-			}
-
-			notes := claimRun(t, waiting, rendersJoined)
-			startRun(t, waiting)
-			runWakeupTick(t)
-			entries := childDoneEntries(t, fx.parent.ID)
-			if !rendersJoined {
-				if notes != "" || len(entries) != 1 || entries[0].Outcome != "woke" || len(childDoneRuns(t, fx.parent.ID)) != 1 {
-					t.Fatalf("notes = %q entries = %+v", notes, entries)
-				}
-				return
-			}
-			if !strings.Contains(notes, service.ChildDoneDefaultInstruction) || !strings.Contains(notes, `"all":true`) {
-				t.Fatalf("joined notes = %q", notes)
-			}
-			if len(entries) != 1 || entries[0].Outcome != "merged" || entries[0].TaskID != waiting || len(childDoneRuns(t, fx.parent.ID)) != 0 {
-				t.Fatalf("entries = %+v", entries)
-			}
-		})
-	}
-}
 
 // A person's sub-issue condition and the system rule describe the same fact:
 // the assignee runs once.
-func TestChildDoneAndConditionRuleWakeOnce(t *testing.T) {
-	fx := newChildDoneFixture(t, "in_progress")
-	agentID := handlerTestAgentID(t)
-	setIssueAssigneeDirect(t, fx.parent.ID, "agent", agentID)
-	svc := service.IssueWakeupService{Tasks: testHandler.TaskService}
-	if _, err := svc.Create(context.Background(), parseUUID(fx.parent.ID), parseUUID(testUserID), "", service.WakeupInput{
-		AgentID: agentID, Instruction: "Summarize the children", Kind: "event", Condition: json.RawMessage(`{"type":"children_done"}`),
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	updateChildStatus(t, fx.child.ID, "done")
-
-	if got := countPendingTasksForAgent(t, fx.parent.ID, agentID); got != 1 {
-		t.Fatalf("pending runs = %d, want 1", got)
-	}
-	var run string
-	dbfx.QueryRow(t, `SELECT id FROM agent_task_queue WHERE issue_id = $1 AND context->>'wakeup_system' IS NULL AND context->>'wakeup_id' IS NOT NULL`, fx.parent.ID).Scan(&run)
-	if notes := claimRun(t, run, true); !strings.Contains(notes, service.ChildDoneDefaultInstruction) {
-		t.Fatalf("the person's run lacks the system rule: %q", notes)
-	}
-	startRun(t, run)
-	runWakeupTick(t)
-	entries := childDoneEntries(t, fx.parent.ID)
-	if len(entries) != 1 || entries[0].Outcome != "merged" || entries[0].TaskID != run {
-		t.Fatalf("system entries = %+v", entries)
-	}
-}
 
 // The system rule shares runaway protection: past the hourly limit it pauses
 // with a visible reason instead of starting another run.

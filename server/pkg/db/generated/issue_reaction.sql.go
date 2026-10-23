@@ -7,6 +7,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 )
 
 const addIssueReaction = `-- name: AddIssueReaction :one
@@ -55,7 +56,30 @@ func (q *Queries) AddIssueReaction(ctx context.Context, arg AddIssueReactionPara
 		&i.CreatedAt,
 		&i.IssueRevision,
 	)
-	return i, err
+	if err == sql.ErrNoRows {
+		err = q.db.QueryRowContext(ctx, `SELECT id, issue_id, workspace_id, actor_type, actor_id, emoji, created_at, 0 AS issue_revision
+FROM issue_reaction
+WHERE issue_id = ?1 AND actor_type = ?2 AND actor_id = ?3 AND emoji = ?4`,
+			arg.IssueID, arg.ActorType, arg.ActorID, arg.Emoji,
+		).Scan(
+			&i.ID,
+			&i.IssueID,
+			&i.WorkspaceID,
+			&i.ActorType,
+			&i.ActorID,
+			&i.Emoji,
+			&i.CreatedAt,
+			&i.IssueRevision,
+		)
+		return i, err
+	}
+	if err != nil {
+		return i, err
+	}
+	if err := q.db.QueryRowContext(ctx, `UPDATE issue SET revision = revision + 1 WHERE id = ?1 RETURNING revision`, arg.IssueID).Scan(&i.IssueRevision); err != nil && err != sql.ErrNoRows {
+		return i, err
+	}
+	return i, nil
 }
 
 const addIssueReaction_Step2 = `-- name: AddIssueReaction_Step2 :exec
@@ -124,7 +148,7 @@ type RemoveIssueReactionParams struct {
 }
 
 type RemoveIssueReactionRow struct {
-	Changed       int64 `json:"changed"`
+	Changed       bool  `json:"changed"`
 	IssueRevision int64 `json:"issue_revision"`
 }
 
@@ -135,9 +159,23 @@ func (q *Queries) RemoveIssueReaction(ctx context.Context, arg RemoveIssueReacti
 		arg.ActorID,
 		arg.Emoji,
 	)
+	var changed int64
+	var rev int64
+	err := row.Scan(&changed, &rev)
+	if err == sql.ErrNoRows {
+		return RemoveIssueReactionRow{}, nil
+	}
+	if err != nil {
+		return RemoveIssueReactionRow{}, err
+	}
 	var i RemoveIssueReactionRow
-	err := row.Scan(&i.Changed, &i.IssueRevision)
-	return i, err
+	i.Changed = changed != 0
+	if i.Changed {
+		if err := q.db.QueryRowContext(ctx, `UPDATE issue SET revision = revision + 1 WHERE id = ?1 RETURNING revision`, arg.IssueID).Scan(&i.IssueRevision); err != nil && err != sql.ErrNoRows {
+			return RemoveIssueReactionRow{}, err
+		}
+	}
+	return i, nil
 }
 
 const removeIssueReaction_Step2 = `-- name: RemoveIssueReaction_Step2 :exec

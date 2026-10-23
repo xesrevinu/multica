@@ -90,7 +90,7 @@ SELECT m.user_id, m.workspace_id
 FROM member m
 JOIN (
     -- JSON shape: user_ids and workspace_ids are JSON string arrays zipped by index.
-    SELECT json_extract(u.value, '$') AS user_id, json_extract(w.value, '$') AS workspace_id
+    SELECT u.value AS user_id, w.value AS workspace_id
     FROM json_each(?1) AS u
     JOIN json_each(?2) AS w ON u.key = w.key
 ) AS requested

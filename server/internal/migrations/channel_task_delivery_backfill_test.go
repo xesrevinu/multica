@@ -14,7 +14,7 @@ import (
 
 func TestChatOriginHookBackfillsOnlyFirstPartySessionsInShortPages(t *testing.T) {
 	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
+	if !strings.HasPrefix(dbURL, "postgres") {
 		t.Skip("integration test requires Postgres at DATABASE_URL")
 	}
 
@@ -149,7 +149,7 @@ func TestChatOriginHookBackfillsOnlyFirstPartySessionsInShortPages(t *testing.T)
 
 func TestChannelTaskDeliveryBackfillSnapshotsOnlyTasksWithLiveRoutingData(t *testing.T) {
 	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
+	if !strings.HasPrefix(dbURL, "postgres") {
 		t.Skip("integration test requires Postgres at DATABASE_URL")
 	}
 
@@ -272,7 +272,7 @@ func TestChannelTaskDeliveryBackfillSnapshotsOnlyTasksWithLiveRoutingData(t *tes
 
 func TestChannelTaskDeliveryPrimaryKeyReusesConcurrentIndex(t *testing.T) {
 	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
+	if !strings.HasPrefix(dbURL, "postgres") {
 		t.Skip("integration test requires Postgres at DATABASE_URL")
 	}
 

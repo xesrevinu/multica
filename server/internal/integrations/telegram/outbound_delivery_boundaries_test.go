@@ -2,7 +2,6 @@ package telegram
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -11,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -33,7 +32,7 @@ type review8545Queries struct {
 	routing *fakeTelegramOutboundQueries
 }
 
-func (q *review8545Queries) GetChannelTaskDelivery(ctx context.Context, id pgtype.UUID) (db.ChannelTaskDelivery, error) {
+func (q *review8545Queries) GetChannelTaskDelivery(ctx context.Context, id string) (db.ChannelTaskDelivery, error) {
 	return q.routing.GetChannelTaskDelivery(ctx, id)
 }
 
@@ -45,10 +44,8 @@ func (q *review8545Queries) ListAttachmentsByChatMessage(ctx context.Context, p 
 	return q.routing.ListAttachmentsByChatMessage(ctx, p)
 }
 
-func review8545ID() pgtype.UUID {
-	id := pgtype.UUID{Valid: true}
-	_, _ = rand.Read(id.Bytes[:])
-	return id
+func review8545ID() string {
+	return uuid.NewString()
 }
 
 func review8545Setup(t *testing.T, bot *auditBot) (*Outbound, *review8545Queries, *auditClock, events.Event) {
@@ -352,7 +349,7 @@ type review8545FailTurnLookup struct {
 	fail atomic.Bool
 }
 
-func (q *review8545FailTurnLookup) GetChannelReplyTurn(ctx context.Context, id pgtype.UUID) (db.GetChannelReplyTurnRow, error) {
+func (q *review8545FailTurnLookup) GetChannelReplyTurn(ctx context.Context, id string) (db.GetChannelReplyTurnRow, error) {
 	if q.fail.Load() {
 		return db.GetChannelReplyTurnRow{}, errors.New("injected lineage lookup failure")
 	}

@@ -43,35 +43,23 @@ func (StatusCategory) Preflight(ctx context.Context, tx *sql.Tx) error {
 		return fmt.Errorf("migration 478 is not applied")
 	}
 	var compatible bool
-	if err := tx.QueryRowContext(ctx, `SELECT bool_and(issue_status_category(old_value)=new_value)
+	if err := tx.QueryRowContext(ctx, `SELECT min(issue_status_category(column1)=column2)
  FROM (VALUES ('backlog','unstarted'),('todo','unstarted'),('in_progress','started'),
  ('in_review','started'),('blocked','started'),('cancelled','closed'),
- ('unstarted','unstarted'),('started','started'),('done','done'),('closed','closed')) v(old_value,new_value)`).Scan(&compatible); err != nil {
+ ('unstarted','unstarted'),('started','started'),('done','done'),('closed','closed'))`).Scan(&compatible); err != nil {
 		return err
 	}
 	if !compatible {
 		return fmt.Errorf("category mapping does not match processor version 1")
 	}
-	// Read actual CHECK definitions as well as the ledger: a recorded migration
-	// alone cannot prove that the compatibility schema is still installed.
-	for _, name := range []string{"issue_status_category_check", "issue_status_system_is_canonical"} {
-		var expression string
-		if err := tx.QueryRowContext(ctx, `SELECT pg_get_expr(conbin,conrelid) FROM pg_constraint
-  WHERE conrelid='issue_status'::regclass AND conname=$1 AND contype='c'`, name).Scan(&expression); err != nil {
-			return err
-		}
-		for _, value := range []string{"backlog", "todo", "in_progress", "in_review", "blocked", "cancelled", "unstarted", "started", "done", "closed"} {
-			if !strings.Contains(expression, "'"+value+"'") {
-				return fmt.Errorf("compatibility CHECK %s lacks %s", name, value)
-			}
-		}
-	}
-	var effective string
-	if err := tx.QueryRowContext(ctx, "SELECT pg_get_functiondef('issue_effective_status(uuid,text)'::regprocedure)").Scan(&effective); err != nil {
+	var ddl string
+	if err := tx.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type='table' AND name='issue_status'`).Scan(&ddl); err != nil {
 		return err
 	}
-	if !strings.Contains(effective, "WHEN 'cancelled'") || !strings.Contains(effective, "WHEN 'closed'") {
-		return fmt.Errorf("issue_effective_status does not recognize both terminal spellings")
+	for _, value := range []string{"backlog", "todo", "in_progress", "in_review", "blocked", "cancelled", "unstarted", "started", "done", "closed"} {
+		if !strings.Contains(ddl, "'"+value+"'") {
+			return fmt.Errorf("compatibility CHECK issue_status_category_check lacks %s", value)
+		}
 	}
 	return nil
 }
@@ -116,10 +104,10 @@ func (StatusCategory) Step(ctx context.Context, tx *sql.Tx, j Job) (json.RawMess
 	}
 	// Do not filter on category before LIMIT: even a mostly migrated table scans
 	// only one indexed page per request. Advance over examined, not updated, IDs.
-	query := "SELECT id::text,key,category,is_system,archived_at IS NOT NULL FROM issue_status"
+	query := "SELECT id,key,category,is_system,archived_at IS NOT NULL FROM issue_status"
 	args := []any{j.Options.BatchSize}
 	if cp.AfterID != "" {
-		query += " WHERE id > $2::uuid"
+		query += " WHERE id > $2"
 		args = append(args, cp.AfterID)
 	}
 	// Qualify the UUID column: an unqualified ORDER BY id would resolve to the
@@ -176,8 +164,9 @@ func (StatusCategory) Step(ctx context.Context, tx *sql.Tx, j Job) (json.RawMess
 	}
 	if len(ids) > 0 {
 		if cp.Phase == "scan" && !j.DryRun {
+			idsJSON, _ := json.Marshal(ids)
 			tag, e := tx.ExecContext(ctx, `UPDATE issue_status SET category=issue_status_category(category)
-   WHERE id=ANY($1::uuid[]) AND category IN ('backlog','todo','in_progress','in_review','blocked','cancelled')`, ids)
+   WHERE id IN (SELECT value FROM json_each($1)) AND category IN ('backlog','todo','in_progress','in_review','blocked','cancelled')`, string(idsJSON))
 			if e != nil {
 				return nil, nil, nil, false, e
 			}

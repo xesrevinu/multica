@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
@@ -20,7 +19,7 @@ type fakeTelegramBindingMinter struct {
 	raw   string
 }
 
-func (f *fakeTelegramBindingMinter) Mint(context.Context, pgtype.UUID, pgtype.UUID, string) (BindingToken, error) {
+func (f *fakeTelegramBindingMinter) Mint(context.Context, string, string, string) (BindingToken, error) {
 	f.calls++
 	return BindingToken{Raw: f.raw}, nil
 }
@@ -48,7 +47,7 @@ func TestReplyNeedsBindingDoesNotMintBearerLinkInGroup(t *testing.T) {
 	inst := engine.ResolvedInstallation{
 		ID:          telegramTestUUID(1),
 		WorkspaceID: telegramTestUUID(2),
-		Platform:    db.ChannelInstallation{Config: []byte(`{"bot_token_encrypted":"MTIzOnNlY3JldA=="}`)},
+		Platform:    db.ChannelInstallation{Config: `{"bot_token_encrypted":"MTIzOnNlY3JldA=="}`},
 	}
 	msg := channel.InboundMessage{Source: channel.Source{
 		ChatID: "42", ChatType: channel.ChatTypeGroup, SenderID: "telegram-user",
@@ -88,7 +87,7 @@ func TestReplyNeedsBindingInPrivateChatMintsQuotedLink(t *testing.T) {
 	})
 	inst := engine.ResolvedInstallation{
 		ID: telegramTestUUID(1), WorkspaceID: telegramTestUUID(2),
-		Platform: db.ChannelInstallation{Config: []byte(`{"bot_token_encrypted":"MTIzOnNlY3JldA=="}`)},
+		Platform: db.ChannelInstallation{Config: `{"bot_token_encrypted":"MTIzOnNlY3JldA=="}`},
 	}
 	msg := channel.InboundMessage{
 		MessageID: "42:7",
@@ -118,7 +117,7 @@ func TestReplyCoversCommandAndIssueOutcomes(t *testing.T) {
 	defer srv.Close()
 
 	r := NewOutboundReplier(OutboundReplierConfig{APIBase: srv.URL, HTTPClient: srv.Client(), Logger: testLogger()})
-	inst := engine.ResolvedInstallation{Platform: db.ChannelInstallation{Config: []byte(`{"bot_token_encrypted":"MTIzOnNlY3JldA=="}`)}}
+	inst := engine.ResolvedInstallation{Platform: db.ChannelInstallation{Config: `{"bot_token_encrypted":"MTIzOnNlY3JldA=="}`}}
 	msg := channel.InboundMessage{
 		MessageID: "42:19", Text: "/issue title", AddressedToBot: true,
 		Source: channel.Source{ChatID: "42", ChatType: channel.ChatTypeP2P, ThreadID: "8"},

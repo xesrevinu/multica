@@ -3,18 +3,18 @@ package attribution
 import (
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
+	"fmt"
 )
 
 // uid builds a valid, deterministic pgtype.UUID from a single seed byte so the
 // tests can assert on identity without importing the util package.
-func uid(seed byte) pgtype.UUID {
-	var u pgtype.UUID
-	for i := range u.Bytes {
-		u.Bytes[i] = seed
+func uid(seed byte) sql.NullString {
+	return sql.NullString{
+		String: fmt.Sprintf("%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+			seed, seed, seed, seed, seed, seed, seed, seed, seed, seed, seed, seed, seed, seed, seed, seed),
+		Valid: true,
 	}
-	u.Valid = true
-	return u
 }
 
 var (
@@ -333,12 +333,12 @@ func TestAccountableMirrorsOriginatorInvariant(t *testing.T) {
 		ClassifyDirect(DirectFacts{IssueID: issue, CreatorType: "agent", OriginType: "quick_create", OriginTaskID: originTk, OriginOriginator: human}),
 		ClassifyDirect(DirectFacts{IssueID: issue, CreatorType: "agent"}),
 		DirectHumanRun(human, EvidenceComment, comment),
-		DirectHumanRun(pgtype.UUID{}, "", pgtype.UUID{}),
+		DirectHumanRun(sql.NullString{}, "", sql.NullString{}),
 		Unattributed(EvidenceAutopilotRun, srcTask),
 		RuleOwner(human, ruleVer, EvidenceAutopilotRun, srcTask),         // divergent: accountable set, originator NULL
-		RuleOwner(pgtype.UUID{}, ruleVer, EvidenceAutopilotRun, srcTask), // no publisher → unattributed
+		RuleOwner(sql.NullString{}, ruleVer, EvidenceAutopilotRun, srcTask), // no publisher → unattributed
 		TriggerOwner(human, EvidenceAutopilotRun, srcTask),               // originator = trigger owner (MUL-6951)
-		TriggerOwner(pgtype.UUID{}, EvidenceAutopilotRun, srcTask),       // no owner → unattributed
+		TriggerOwner(sql.NullString{}, EvidenceAutopilotRun, srcTask),       // no owner → unattributed
 	}
 	for i, r := range results {
 		// One-way invariant: a valid originator must equal accountable.
@@ -365,7 +365,7 @@ func TestDirectHumanRun(t *testing.T) {
 		t.Errorf("evidence should be carried through")
 	}
 
-	unresolved := DirectHumanRun(pgtype.UUID{}, "", pgtype.UUID{})
+	unresolved := DirectHumanRun(sql.NullString{}, "", sql.NullString{})
 	if unresolved.Source != SourceUnattributed {
 		t.Errorf("invalid user must degrade to unattributed, got %q", unresolved.Source)
 	}
@@ -396,7 +396,7 @@ func TestRuleOwner(t *testing.T) {
 	}
 
 	// No publisher (system-published / unresolved) must not fabricate a human.
-	none := RuleOwner(pgtype.UUID{}, ruleVer, EvidenceAutopilotRun, issue)
+	none := RuleOwner(sql.NullString{}, ruleVer, EvidenceAutopilotRun, issue)
 	if none.Source != SourceUnattributed {
 		t.Errorf("missing publisher must degrade to unattributed, got %q", none.Source)
 	}
@@ -428,7 +428,7 @@ func TestTriggerOwner(t *testing.T) {
 
 	// No creator (unrecoverable) must not fabricate a human — degrades to
 	// unattributed so the caller can fall back to rule_owner.
-	none := TriggerOwner(pgtype.UUID{}, EvidenceAutopilotRun, issue)
+	none := TriggerOwner(sql.NullString{}, EvidenceAutopilotRun, issue)
 	if none.Source != SourceUnattributed {
 		t.Errorf("missing creator must degrade to unattributed, got %q", none.Source)
 	}
@@ -462,7 +462,7 @@ func TestOwnerFallback(t *testing.T) {
 	}
 
 	// Invalid owner → stays unattributed, never fabricates a human.
-	noOwner := OwnerFallback(Unattributed(EvidenceIssueAssignment, issue), pgtype.UUID{})
+	noOwner := OwnerFallback(Unattributed(EvidenceIssueAssignment, issue), sql.NullString{})
 	if noOwner.Source != SourceUnattributed || noOwner.AccountableUserID.Valid {
 		t.Errorf("invalid owner must leave the result unattributed with no human, got %+v", noOwner)
 	}

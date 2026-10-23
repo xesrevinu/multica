@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
@@ -432,14 +432,13 @@ func (f *fakeBotFiles) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func mediaResolverFixture(t *testing.T, media ...inboundMedia) (engine.ResolvedInstallation, pgtype.UUID, channel.InboundMessage) {
+func mediaResolverFixture(t *testing.T, media ...inboundMedia) (engine.ResolvedInstallation, string, channel.InboundMessage) {
 	t.Helper()
 	cfg, _ := json.Marshal(installConfig{AppID: "999", BotTokenEncrypted: base64.StdEncoding.EncodeToString([]byte("123:secret"))})
-	var ws, instID, chatMessageID pgtype.UUID
-	ws.Bytes[0], instID.Bytes[0], chatMessageID.Bytes[0] = 0xAB, 0xCD, 0xEF
-	ws.Valid, instID.Valid, chatMessageID.Valid = true, true, true
+	var ws, instID, chatMessageID uuid.UUID
+	ws[0], instID[0], chatMessageID[0] = 0xAB, 0xCD, 0xEF
 	raw, _ := json.Marshal(telegramRawEvent{BotID: "999", EventType: "message", Media: media})
-	inst := engine.ResolvedInstallation{ID: instID, WorkspaceID: ws, Platform: db.ChannelInstallation{Config: cfg}}
+	inst := engine.ResolvedInstallation{ID: instID.String(), WorkspaceID: ws.String(), Platform: db.ChannelInstallation{Config: string(cfg)}}
 	text := "hello"
 	if len(media) > 0 {
 		text = ""
@@ -447,7 +446,7 @@ func mediaResolverFixture(t *testing.T, media ...inboundMedia) (engine.ResolvedI
 			text += m.Placeholder + "\n"
 		}
 	}
-	return inst, chatMessageID, channel.InboundMessage{MessageID: "42:7", Source: channel.Source{ChatID: "42"}, Type: channel.MsgTypeText, Text: text, Raw: raw}
+	return inst, chatMessageID.String(), channel.InboundMessage{MessageID: "42:7", Source: channel.Source{ChatID: "42"}, Type: channel.MsgTypeText, Text: text, Raw: raw}
 }
 
 func TestMediaResolverHasMedia(t *testing.T) {
@@ -468,7 +467,7 @@ func TestMediaResolverIngestsPhoto(t *testing.T) {
 	r := NewMediaResolver(nil, store, ledger, srv.URL, srv.Client(), testLogger())
 	inst, chatMessageID, msg := mediaResolverFixture(t, inboundMedia{Kind: channel.MsgTypeImage, FileID: "p1", FileUniqueID: "u1", MimeType: "image/jpeg", Placeholder: "[Image]", PlaceholderIndex: 1})
 
-	got := r.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, pgtype.UUID{}, chatMessageID, msg)
+	got := r.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, "", chatMessageID, msg)
 	if len(got.MediaRefs) != 1 {
 		t.Fatalf("media refs = %+v", got.MediaRefs)
 	}
@@ -502,7 +501,7 @@ func TestMediaResolverKeepsSenderFilenameWithoutDeclaredType(t *testing.T) {
 	r := NewMediaResolver(nil, store, &fakeMediaLedger{}, srv.URL, srv.Client(), testLogger())
 	inst, chatMessageID, msg := mediaResolverFixture(t, inboundMedia{Kind: channel.MsgTypeFile, FileID: "d1", FileName: "../report", Placeholder: "[File: report]"})
 
-	got := r.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, pgtype.UUID{}, chatMessageID, msg)
+	got := r.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, "", chatMessageID, msg)
 	if len(got.MediaRefs) != 1 {
 		t.Fatalf("media refs = %+v", got.MediaRefs)
 	}
@@ -545,7 +544,7 @@ func TestMediaResolverRefusesFailuresWithoutTouchingStorage(t *testing.T) {
 			store, ledger := newFakeObjectStore(nil), &fakeMediaLedger{refuse: tc.refuseLedger}
 			r := NewMediaResolver(nil, store, ledger, srv.URL, srv.Client(), testLogger())
 			inst, chatMessageID, msg := mediaResolverFixture(t, tc.media)
-			got := r.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, pgtype.UUID{}, chatMessageID, msg)
+			got := r.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, "", chatMessageID, msg)
 			if len(got.MediaRefs) != 0 || got.Text != msg.Text {
 				t.Fatalf("message must come back unchanged: %+v", got)
 			}
@@ -579,7 +578,7 @@ func TestMediaResolverIngestsQuotedAndOwnFiles(t *testing.T) {
 		inboundMedia{Kind: channel.MsgTypeImage, FileID: "own", FileUniqueID: "same", MimeType: "image/jpeg", Placeholder: "[Image]", PlaceholderIndex: 1},
 	)
 
-	got := r.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, pgtype.UUID{}, chatMessageID, msg)
+	got := r.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, "", chatMessageID, msg)
 	if len(got.MediaRefs) != 2 || got.MediaRefs[0].InlineIndex != 0 || got.MediaRefs[1].InlineIndex != 1 {
 		t.Fatalf("media refs = %+v", got.MediaRefs)
 	}
@@ -603,7 +602,7 @@ func TestMediaResolverKeepsTheFilesThatFetchedAndNotifiesOnce(t *testing.T) {
 		inboundMedia{Kind: channel.MsgTypeImage, FileID: "own", Placeholder: "[Image]", PlaceholderIndex: 0},
 	)
 
-	got := r.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, pgtype.UUID{}, chatMessageID, msg)
+	got := r.ResolveMedia(context.Background(), inst, engine.ResolvedIdentity{}, "", chatMessageID, msg)
 	if len(got.MediaRefs) != 1 || got.MediaRefs[0].InlinePlaceholder != "[Image]" || got.MediaRefs[0].InlineIndex != 0 {
 		t.Fatalf("media refs = %+v, want only the photo", got.MediaRefs)
 	}

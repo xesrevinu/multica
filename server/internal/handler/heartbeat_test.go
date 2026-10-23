@@ -120,11 +120,7 @@ func loadRuntime(t *testing.T, runtimeID string) db.AgentRuntime {
 }
 
 func pgUUID(s string) (string, error) {
-	var u string
-	if err := u.Scan(s); err != nil {
-		return u, err
-	}
-	return u, nil
+	return s, nil
 }
 
 func TestRecordHeartbeatLeaseThrottlesDBScheduling(t *testing.T) {

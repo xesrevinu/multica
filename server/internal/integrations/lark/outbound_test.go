@@ -9,8 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 	"github.com/multica-ai/multica/server/internal/events"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -42,23 +41,23 @@ type fakePatcherQueries struct {
 	tasksByID map[string]db.AgentTaskQueue
 }
 
-func (f *fakePatcherQueries) GetAgentTask(ctx context.Context, id pgtype.UUID) (db.AgentTaskQueue, error) {
+func (f *fakePatcherQueries) GetAgentTask(ctx context.Context, id string) (db.AgentTaskQueue, error) {
 	if task, ok := f.tasksByID[uuidString(id)]; ok {
 		return task, f.taskErr
 	}
 	return f.task, f.taskErr
 }
-func (f *fakePatcherQueries) TaskHasChannelIngestedMessages(ctx context.Context, taskID pgtype.UUID) (bool, error) {
+func (f *fakePatcherQueries) TaskHasChannelIngestedMessages(ctx context.Context, taskID sql.NullString) (bool, error) {
 	return f.taskChannelIngested, nil
 }
-func (f *fakePatcherQueries) GetChannelTaskDelivery(_ context.Context, taskID pgtype.UUID) (db.ChannelTaskDelivery, error) {
+func (f *fakePatcherQueries) GetChannelTaskDelivery(_ context.Context, taskID string) (db.ChannelTaskDelivery, error) {
 	if f.bindingErr != nil {
 		return db.ChannelTaskDelivery{}, f.bindingErr
 	}
 	if delivery, ok := f.deliveriesByTask[uuidString(taskID)]; ok {
 		return delivery, f.deliveryErr
 	}
-	if f.delivery.ChannelType == "" && f.binding.InstallationID.Valid {
+	if f.delivery.ChannelType == "" && f.binding.InstallationID != "" {
 		return db.ChannelTaskDelivery{
 			BindingID: f.binding.ID, InstallationID: f.binding.InstallationID,
 			ChannelType: channelTypeFeishu, ChannelChatID: f.binding.ChannelChatID,
@@ -70,19 +69,19 @@ func (f *fakePatcherQueries) GetChannelTaskDelivery(_ context.Context, taskID pg
 	}
 	return f.delivery, f.deliveryErr
 }
-func (f *fakePatcherQueries) GetChatSession(ctx context.Context, id pgtype.UUID) (db.ChatSession, error) {
+func (f *fakePatcherQueries) GetChatSession(ctx context.Context, id string) (db.ChatSession, error) {
 	return db.ChatSession{}, nil
 }
-func (f *fakePatcherQueries) GetAgent(ctx context.Context, id pgtype.UUID) (db.Agent, error) {
+func (f *fakePatcherQueries) GetAgent(ctx context.Context, id string) (db.Agent, error) {
 	return f.agent, f.agentErr
 }
-func (f *fakePatcherQueries) GetLarkInstallation(ctx context.Context, id pgtype.UUID) (Installation, error) {
+func (f *fakePatcherQueries) GetLarkInstallation(ctx context.Context, id string) (Installation, error) {
 	return f.installation, f.installationErr
 }
-func (f *fakePatcherQueries) GetLarkChatSessionBindingBySession(ctx context.Context, sessID pgtype.UUID) (ChatSessionBinding, error) {
+func (f *fakePatcherQueries) GetLarkChatSessionBindingBySession(ctx context.Context, sessID string) (ChatSessionBinding, error) {
 	return f.binding, f.bindingErr
 }
-func (f *fakePatcherQueries) GetLarkOutboundCardByTask(ctx context.Context, taskID pgtype.UUID) (OutboundCardMessage, error) {
+func (f *fakePatcherQueries) GetLarkOutboundCardByTask(ctx context.Context, taskID string) (OutboundCardMessage, error) {
 	return f.card, f.cardErr
 }
 func (f *fakePatcherQueries) CreateLarkOutboundCardMessage(ctx context.Context, arg CreateOutboundCardMessageParams) (OutboundCardMessage, error) {
@@ -215,7 +214,7 @@ func newTestPatcher(t *testing.T) (*Patcher, *fakePatcherQueries, *fakeAPIClient
 			AgentID:            uuidFromString(t, "aaaa1111-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
 		},
 		agent:   db.Agent{Name: "TestAgent"},
-		cardErr: pgx.ErrNoRows,
+		cardErr: sql.ErrNoRows,
 	}
 	api := &fakeAPIClient{sendReturn: "lark_card_msg_1", textSendReturn: "lark_text_msg_1"}
 	p := NewPatcher(q, fakeCredentials{secret: "shh"}, api, PatcherConfig{
@@ -237,7 +236,7 @@ func newTestPatcher(t *testing.T) (*Patcher, *fakePatcherQueries, *fakeAPIClient
 func TestPatcherSendsSealedChannelTaskReply(t *testing.T) {
 	p, q, api := newTestPatcher(t)
 	taskID := uuidFromString(t, "ee555555-ee55-ee55-ee55-eeeeeeeeeeee")
-	q.task = db.AgentTaskQueue{ChatInputTaskID: taskID}
+	q.task = db.AgentTaskQueue{ChatInputTaskID: sql.NullString{String: taskID, Valid: true}}
 	q.taskChannelIngested = true
 
 	p.handleEvent(events.Event{
@@ -393,7 +392,7 @@ func TestPatcherDropsEmptyChatReply(t *testing.T) {
 
 func TestPatcherSkipsWhenNoChatSessionBinding(t *testing.T) {
 	p, q, api := newTestPatcher(t)
-	q.bindingErr = pgx.ErrNoRows
+	q.bindingErr = sql.ErrNoRows
 
 	p.handleEvent(events.Event{
 		Type:          protocol.EventChatDone,
@@ -439,7 +438,7 @@ func TestPatcherSkipsDirectChatTaskOnBoundSession(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			p, q, api := newTestPatcher(t)
 			taskID := uuidFromString(t, "ee999999-ee99-ee99-ee99-eeeeeeeeeeee")
-			q.task = db.AgentTaskQueue{ChatInputTaskID: taskID}
+			q.task = db.AgentTaskQueue{ChatInputTaskID: sql.NullString{String: taskID, Valid: true}}
 
 			p.handleEvent(events.Event{
 				Type:          tt.eventType,
@@ -608,8 +607,8 @@ func TestDefaultRendererConfigCarriesUpdateMulti(t *testing.T) {
 // reply_in_thread=true, so it lands inside the 话题 instead of the group.
 func TestPatcherRepliesInThreadWhenTriggerWasInThread(t *testing.T) {
 	p, q, api := newTestPatcher(t)
-	q.binding.LastMessageID = pgtype.Text{String: "om_trigger", Valid: true}
-	q.binding.LastThreadID = pgtype.Text{String: "omt_topic", Valid: true}
+	q.binding.LastMessageID = sql.NullString{String: "om_trigger", Valid: true}
+	q.binding.LastThreadID = sql.NullString{String: "omt_topic", Valid: true}
 	taskID := uuidFromString(t, "ee666666-ee66-ee66-ee66-eeeeeeeeeeee")
 
 	p.handleEvent(events.Event{
@@ -637,10 +636,10 @@ func TestPatcherRepliesInThreadWhenTriggerWasInThread(t *testing.T) {
 func TestPatcherTopicSessionSendsToRealChatID(t *testing.T) {
 	p, q, api := newTestPatcher(t)
 	q.binding.ChannelChatID = "oc_test_chat:omt_topic1"
-	q.binding.Config = []byte(`{"chat_id":"oc_test_chat"}`)
+	q.binding.Config = `{"chat_id":"oc_test_chat"}`
 	q.binding.ChatType = "group"
-	q.binding.LastMessageID = pgtype.Text{String: "om_trigger", Valid: true}
-	q.binding.LastThreadID = pgtype.Text{String: "omt_topic1", Valid: true}
+	q.binding.LastMessageID = sql.NullString{String: "om_trigger", Valid: true}
+	q.binding.LastThreadID = sql.NullString{String: "omt_topic1", Valid: true}
 	taskID := uuidFromString(t, "eeaaaaaa-eeaa-eeaa-eeaa-eeeeeeeeeeee")
 
 	p.handleEvent(events.Event{
@@ -669,7 +668,7 @@ func TestPatcherTopicSessionSendsToRealChatID(t *testing.T) {
 // config — the send target must stay the key itself.
 func TestPatcherLegacyBindingFallsBackToKey(t *testing.T) {
 	p, q, api := newTestPatcher(t)
-	q.binding.Config = []byte(`{}`)
+	q.binding.Config = `{}`
 	taskID := uuidFromString(t, "eebbbbbb-eebb-eebb-eebb-eeeeeeeeeeee")
 
 	p.handleEvent(events.Event{
@@ -697,7 +696,7 @@ func TestPatcherLegacyBindingFallsBackToKey(t *testing.T) {
 func TestPatcherRepliesNativelyInOrdinaryGroup(t *testing.T) {
 	p, q, api := newTestPatcher(t)
 	q.binding.ChatType = string(ChatTypeGroup)
-	q.binding.LastMessageID = pgtype.Text{String: "om_trigger", Valid: true}
+	q.binding.LastMessageID = sql.NullString{String: "om_trigger", Valid: true}
 	taskID := uuidFromString(t, "ee777777-ee77-ee77-ee77-eeeeeeeeeeee")
 
 	p.handleEvent(events.Event{
@@ -729,8 +728,8 @@ func TestPatcherRepliesNativelyInOrdinaryGroup(t *testing.T) {
 func TestPatcherSendsToChatWithoutTriggerMessage(t *testing.T) {
 	p, q, api := newTestPatcher(t)
 	q.binding.ChatType = string(ChatTypeGroup)
-	q.binding.LastMessageID = pgtype.Text{}
-	q.binding.LastThreadID = pgtype.Text{}
+	q.binding.LastMessageID = sql.NullString{}
+	q.binding.LastThreadID = sql.NullString{}
 	taskID := uuidFromString(t, "ee779999-ee77-ee77-ee77-eeeeeeeeeeee")
 
 	p.handleEvent(events.Event{
@@ -758,8 +757,8 @@ func TestPatcherSendsToChatWithoutTriggerMessage(t *testing.T) {
 // card path also threads when the trigger was in a topic.
 func TestPatcherThreadReplyMarkdownRoutesToThread(t *testing.T) {
 	p, q, api := newTestPatcher(t)
-	q.binding.LastMessageID = pgtype.Text{String: "om_trigger", Valid: true}
-	q.binding.LastThreadID = pgtype.Text{String: "omt_topic", Valid: true}
+	q.binding.LastMessageID = sql.NullString{String: "om_trigger", Valid: true}
+	q.binding.LastThreadID = sql.NullString{String: "omt_topic", Valid: true}
 	taskID := uuidFromString(t, "ee888888-ee88-ee88-ee88-eeeeeeeeeeee")
 
 	p.handleEvent(events.Event{
@@ -788,8 +787,8 @@ func TestPatcherThreadReplyMarkdownRoutesToThread(t *testing.T) {
 func TestPatcherThreadReplyFallsBackToChatLevel(t *testing.T) {
 	p, q, api := newTestPatcher(t)
 	api.threadReplyErr = errThreadReplyClassified
-	q.binding.LastMessageID = pgtype.Text{String: "om_trigger", Valid: true}
-	q.binding.LastThreadID = pgtype.Text{String: "omt_topic", Valid: true}
+	q.binding.LastMessageID = sql.NullString{String: "om_trigger", Valid: true}
+	q.binding.LastThreadID = sql.NullString{String: "omt_topic", Valid: true}
 	taskID := uuidFromString(t, "ee999999-ee99-ee99-ee99-eeeeeeeeeeee")
 
 	p.handleEvent(events.Event{
@@ -819,8 +818,8 @@ func TestPatcherThreadReplyFallsBackToChatLevel(t *testing.T) {
 func TestPatcherThreadReplyDoesNotFallBackOnAmbiguousError(t *testing.T) {
 	p, q, api := newTestPatcher(t)
 	api.threadReplyErr = errThreadReplyTransport
-	q.binding.LastMessageID = pgtype.Text{String: "om_trigger", Valid: true}
-	q.binding.LastThreadID = pgtype.Text{String: "omt_topic", Valid: true}
+	q.binding.LastMessageID = sql.NullString{String: "om_trigger", Valid: true}
+	q.binding.LastThreadID = sql.NullString{String: "omt_topic", Valid: true}
 	taskID := uuidFromString(t, "ee888888-ee88-ee88-ee88-eeeeeeeeeeee")
 
 	p.handleEvent(events.Event{
@@ -872,7 +871,7 @@ func TestPatcherClearsTypingOnTaskCancelled(t *testing.T) {
 	}
 
 	taskID := uuidFromString(t, "ee999999-ee99-ee99-ee99-eeeeeeeeeeee")
-	q.task = db.AgentTaskQueue{ChatInputTaskID: taskID}
+	q.task = db.AgentTaskQueue{ChatInputTaskID: sql.NullString{String: taskID, Valid: true}}
 	q.taskChannelIngested = false
 
 	// The shape a cancel is published with: ids on the envelope
@@ -917,7 +916,7 @@ func TestPatcherClearsTypingAfterSessionDeleteRemovedTheBinding(t *testing.T) {
 	p, q, api := newTestPatcher(t)
 	typingQueries := &fakeTypingQueries{
 		installation: q.installation,
-		bindingErr:   pgx.ErrNoRows,
+		bindingErr:   sql.ErrNoRows,
 	}
 	typingAPI := &fakeTypingAPIClient{addReturn: "reaction-456"}
 	typing := NewTypingIndicatorManager(typingAPI, fakeTypingCreds{secret: "shh"},
@@ -935,10 +934,10 @@ func TestPatcherClearsTypingAfterSessionDeleteRemovedTheBinding(t *testing.T) {
 
 	// The session and its binding are deleted; the cancel is broadcast after.
 	q.binding = ChatSessionBinding{}
-	q.bindingErr = pgx.ErrNoRows
+	q.bindingErr = sql.ErrNoRows
 
 	taskID := uuidFromString(t, "ee888888-ee88-ee88-ee88-eeeeeeeeeeee")
-	q.task = db.AgentTaskQueue{ChatInputTaskID: taskID}
+	q.task = db.AgentTaskQueue{ChatInputTaskID: sql.NullString{String: taskID, Valid: true}}
 	q.taskChannelIngested = true
 	bus.Publish(events.Event{
 		Type:          protocol.EventTaskCancelled,
@@ -978,9 +977,9 @@ func TestPatcherClearsTypingAfterSessionDeleteRemovedTheBinding(t *testing.T) {
 // row froze, so the reply landing is enough to take the badge off.
 func TestPatcherSweepsTypingOnChatDoneAfterRestartEmptiedTheState(t *testing.T) {
 	p, q, api := newTestPatcher(t)
-	q.binding.LastMessageID = pgtype.Text{String: "om_trigger", Valid: true}
+	q.binding.LastMessageID = sql.NullString{String: "om_trigger", Valid: true}
 	taskID := uuidFromString(t, "ee777777-ee77-ee77-ee77-eeeeeeeeeeee")
-	q.task = db.AgentTaskQueue{ChatInputTaskID: taskID}
+	q.task = db.AgentTaskQueue{ChatInputTaskID: sql.NullString{String: taskID, Valid: true}}
 	q.taskChannelIngested = true
 
 	// A fresh manager: no Add ever ran in this process, the map is empty.
@@ -1022,9 +1021,9 @@ func TestPatcherSweepsTypingOnChatDoneAfterRestartEmptiedTheState(t *testing.T) 
 // delivery row's frozen trigger message.
 func TestPatcherSweepsTypingOnTaskCancelledThroughTheDeliveryRow(t *testing.T) {
 	p, q, api := newTestPatcher(t)
-	q.binding.LastMessageID = pgtype.Text{String: "om_trigger", Valid: true}
+	q.binding.LastMessageID = sql.NullString{String: "om_trigger", Valid: true}
 	taskID := uuidFromString(t, "ee666666-ee66-ee66-ee66-eeeeeeeeeeee")
-	q.task = db.AgentTaskQueue{ChatInputTaskID: taskID}
+	q.task = db.AgentTaskQueue{ChatInputTaskID: sql.NullString{String: taskID, Valid: true}}
 	q.taskChannelIngested = false
 
 	typingAPI := &fakeTypingAPIClient{
@@ -1067,7 +1066,7 @@ func TestPatcherSweepsTypingOnTaskCancelledThroughTheDeliveryRow(t *testing.T) {
 func TestPatcherClearsTypingStateWhenTaskIsNotChannelIngested(t *testing.T) {
 	p, q, api := newTestPatcher(t)
 	taskID := uuidFromString(t, "ee555555-ee55-ee55-ee55-eeeeeeeeeeee")
-	q.task = db.AgentTaskQueue{ChatInputTaskID: taskID}
+	q.task = db.AgentTaskQueue{ChatInputTaskID: sql.NullString{String: taskID, Valid: true}}
 	q.taskChannelIngested = false
 
 	typingAPI := &fakeTypingAPIClient{addReturn: "reaction-web-turn"}
@@ -1108,9 +1107,9 @@ func groupPatcherWithSender(t *testing.T, senderOpenID string) (*Patcher, *fakeP
 	t.Helper()
 	p, q, api := newTestPatcher(t)
 	q.binding.ChatType = string(ChatTypeGroup)
-	q.binding.LastMessageID = pgtype.Text{String: "om_trigger", Valid: true}
+	q.binding.LastMessageID = sql.NullString{String: "om_trigger", Valid: true}
 	if senderOpenID != "" {
-		q.binding.LastSenderID = pgtype.Text{String: senderOpenID, Valid: true}
+		q.binding.LastSenderID = sql.NullString{String: senderOpenID, Valid: true}
 	}
 	return p, q, api
 }
@@ -1224,8 +1223,8 @@ func deliveryWithTrigger(binding ChatSessionBinding, messageID, senderOpenID str
 		BindingID: binding.ID, InstallationID: binding.InstallationID,
 		ChannelType: channelTypeFeishu, ChannelChatID: binding.ChannelChatID,
 		ChatType:         binding.ChatType,
-		ChannelMessageID: pgtype.Text{String: messageID, Valid: true},
-		ChannelSenderID:  pgtype.Text{String: senderOpenID, Valid: true},
+		ChannelMessageID: sql.NullString{String: messageID, Valid: true},
+		ChannelSenderID:  sql.NullString{String: senderOpenID, Valid: true},
 		Config:           binding.Config,
 	}
 }
@@ -1245,7 +1244,7 @@ func TestPatcherMentionsEachTaskOwnSender(t *testing.T) {
 	}
 
 	// Bob asked second but his run finishes first.
-	for _, taskID := range []pgtype.UUID{bobTask, aliceTask} {
+	for _, taskID := range []string{bobTask, aliceTask} {
 		p.handleEvent(events.Event{
 			Type:          protocol.EventChatDone,
 			TaskID:        uuidString(taskID),
@@ -1292,7 +1291,7 @@ func TestPatcherMentionsTriggeringAccountNotSiblingIdentity(t *testing.T) {
 	// One member, two bound Feishu accounts on this installation. The task
 	// records only the shared Multica user, so the member alone cannot say
 	// which account spoke.
-	q.task = db.AgentTaskQueue{InitiatorUserID: member}
+	q.task = db.AgentTaskQueue{InitiatorUserID: sql.NullString{String: member, Valid: true}}
 	q.deliveriesByTask = map[string]db.ChannelTaskDelivery{
 		uuidString(taskID): deliveryWithTrigger(q.binding, "om_trigger", "ou_work_account"),
 	}
@@ -1325,11 +1324,11 @@ func TestPatcherSkipsTopicReplyWithoutTrigger(t *testing.T) {
 	p, q, api := newTestPatcher(t)
 	q.binding.ChatType = string(ChatTypeGroup)
 	q.binding.ChannelChatID = "oc_test_chat:omt_topic1"
-	q.binding.Config = []byte(`{"chat_id":"oc_test_chat"}`)
+	q.binding.Config = `{"chat_id":"oc_test_chat"}`
 	// Pre-migration generation: the trigger snapshot is empty, so there is no
 	// message to reply into the topic with.
-	q.binding.LastMessageID = pgtype.Text{}
-	q.binding.LastThreadID = pgtype.Text{}
+	q.binding.LastMessageID = sql.NullString{}
+	q.binding.LastThreadID = sql.NullString{}
 	taskID := uuidFromString(t, "eeccdddd-eecc-eecc-eecc-eeeeeeeeeeee")
 
 	p.handleEvent(events.Event{
@@ -1354,9 +1353,9 @@ func TestPatcherSkipsTopicErrorCardWithoutTrigger(t *testing.T) {
 	p, q, api := newTestPatcher(t)
 	q.binding.ChatType = string(ChatTypeGroup)
 	q.binding.ChannelChatID = "oc_test_chat:omt_topic1"
-	q.binding.Config = []byte(`{"chat_id":"oc_test_chat"}`)
-	q.binding.LastMessageID = pgtype.Text{}
-	q.binding.LastThreadID = pgtype.Text{}
+	q.binding.Config = `{"chat_id":"oc_test_chat"}`
+	q.binding.LastMessageID = sql.NullString{}
+	q.binding.LastThreadID = sql.NullString{}
 	taskID := uuidFromString(t, "eecceeee-eecc-eecc-eecc-eeeeeeeeeeee")
 
 	p.handleEvent(events.Event{
@@ -1381,8 +1380,8 @@ func TestPatcherSkipsTopicErrorCardWithoutTrigger(t *testing.T) {
 func TestPatcherStillRepliesInOrdinaryGroupWithoutTrigger(t *testing.T) {
 	p, q, api := newTestPatcher(t)
 	q.binding.ChatType = string(ChatTypeGroup)
-	q.binding.LastMessageID = pgtype.Text{}
-	q.binding.LastThreadID = pgtype.Text{}
+	q.binding.LastMessageID = sql.NullString{}
+	q.binding.LastThreadID = sql.NullString{}
 	taskID := uuidFromString(t, "eeccffff-eecc-eecc-eecc-eeeeeeeeeeee")
 
 	p.handleEvent(events.Event{

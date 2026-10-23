@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 	"github.com/multica-ai/multica/server/internal/featureflags"
 	"github.com/multica-ai/multica/server/internal/scheduler"
 	"github.com/multica-ai/multica/server/internal/service"
@@ -94,7 +94,7 @@ func TestSchedulePulseExampleManifestDrivesDurableRetry(t *testing.T) {
 			http.Error(w, "callback grant", http.StatusUnauthorized)
 			return
 		}
-		scopeID, err := service.ResolveStorageScope(service.PluginStorageWorkspace, grant.WorkspaceID, pgtype.UUID{})
+		scopeID, err := service.ResolveStorageScope(service.PluginStorageWorkspace, grant.WorkspaceID, "")
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -274,11 +274,11 @@ func TestSchedulePulseExampleManifestDrivesDurableRetry(t *testing.T) {
 	installation, err := queries.CreatePluginInstallation(ctx, db.CreatePluginInstallationParams{
 		WorkspaceID:      parseUUID(testWorkspaceID),
 		PluginKey:        manifest.Key,
-		PackageVersionID: pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		PackageVersionID: uuid.NewString(),
 		Version:          manifest.Version,
-		Manifest:         canonical,
-		GrantedScopes:    grantedScopes,
-		InstalledBy:      parseUUID(testUserID),
+		Manifest:         string(canonical),
+		GrantedScopes:    string(grantedScopes),
+		InstalledBy:      sql.NullString{String: parseUUID(testUserID), Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("create plugin installation: %v", err)
@@ -296,7 +296,7 @@ func TestSchedulePulseExampleManifestDrivesDurableRetry(t *testing.T) {
 		HookKey:        "pulse",
 		CronExpression: "*/5 * * * *",
 		Timezone:       "UTC",
-		Enabled:        true,
+		Enabled:        1,
 	})
 	if err != nil {
 		t.Fatalf("create plugin schedule: %v", err)
@@ -320,8 +320,8 @@ func TestSchedulePulseExampleManifestDrivesDurableRetry(t *testing.T) {
 		_ = queries.DeletePluginInstallation(cleanupCtx, installation.ID)
 	})
 
-	managerA := scheduler.NewManager(testPool, scheduler.Options{RunnerID: "schedule-pulse-a"})
-	managerB := scheduler.NewManager(testPool, scheduler.Options{RunnerID: "schedule-pulse-b"})
+	managerA := scheduler.NewManager(testPool.DB, scheduler.Options{RunnerID: "schedule-pulse-a"})
+	managerB := scheduler.NewManager(testPool.DB, scheduler.Options{RunnerID: "schedule-pulse-b"})
 	for _, manager := range []*scheduler.Manager{managerA, managerB} {
 		if err := manager.Register(scheduler.PluginHookScheduleDispatchJob(queries, plugins)); err != nil {
 			t.Fatalf("register plugin schedule job: %v", err)
@@ -357,7 +357,7 @@ func TestSchedulePulseExampleManifestDrivesDurableRetry(t *testing.T) {
 		t.Fatalf("hook calls=%d, want 2", calls)
 	}
 
-	scopeIDUUID, err := service.ResolveStorageScope(service.PluginStorageWorkspace, installation.WorkspaceID, pgtype.UUID{})
+	scopeIDUUID, err := service.ResolveStorageScope(service.PluginStorageWorkspace, installation.WorkspaceID, "")
 	if err != nil {
 		t.Fatalf("resolve storage scope: %v", err)
 	}

@@ -2,13 +2,13 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"math/rand/v2"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -49,10 +49,10 @@ func TestWorkspaceScopeGuard(t *testing.T) {
 		id := seedComment(t, ctx, issueID)
 		t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM comment WHERE id = $1`, util.UUIDToString(id)) })
 
-		if _, err := queries.DeleteLeafComment(ctx, db.DeleteLeafCommentParams{ID: id, WorkspaceID: wsB}); !errors.Is(err, pgx.ErrNoRows) {
+		if _, err := queries.DeleteLeafComment(ctx, db.DeleteLeafCommentParams{ID: id, WorkspaceID: wsB}); !(errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows)) {
 			t.Fatalf("cross-workspace DeleteLeafComment: expected pgx.ErrNoRows, got %v", err)
 		}
-		if _, err := queries.TombstoneComment(ctx, db.TombstoneCommentParams{ID: id, WorkspaceID: wsB}); !errors.Is(err, pgx.ErrNoRows) {
+		if _, err := queries.TombstoneComment(ctx, db.TombstoneCommentParams{ID: id, WorkspaceID: wsB}); !(errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows)) {
 			t.Fatalf("cross-workspace TombstoneComment: expected pgx.ErrNoRows, got %v", err)
 		}
 		assertRowExists(t, ctx, "comment", id)
@@ -97,7 +97,7 @@ func TestWorkspaceScopeGuard(t *testing.T) {
 			Status:      "in_progress",
 			WorkspaceID: wsB,
 		})
-		if !errors.Is(err, pgx.ErrNoRows) {
+		if !(errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows)) {
 			t.Fatalf("cross-workspace UpdateIssueStatus: expected pgx.ErrNoRows, got %v", err)
 		}
 
@@ -133,7 +133,7 @@ func TestWorkspaceScopeGuard(t *testing.T) {
 
 // ---- seed helpers (resource lives in testWorkspaceID) ----
 
-func seedIssue(t *testing.T, ctx context.Context) pgtype.UUID {
+func seedIssue(t *testing.T, ctx context.Context) string {
 	t.Helper()
 	var s string
 	// number is unique per workspace; pick a high-range random value to
@@ -149,7 +149,7 @@ func seedIssue(t *testing.T, ctx context.Context) pgtype.UUID {
 	return parseUUID(s)
 }
 
-func seedComment(t *testing.T, ctx context.Context, issueID pgtype.UUID) pgtype.UUID {
+func seedComment(t *testing.T, ctx context.Context, issueID string) string {
 	t.Helper()
 	var s string
 	if err := testPool.QueryRow(ctx, `
@@ -162,7 +162,7 @@ func seedComment(t *testing.T, ctx context.Context, issueID pgtype.UUID) pgtype.
 	return parseUUID(s)
 }
 
-func seedProject(t *testing.T, ctx context.Context) pgtype.UUID {
+func seedProject(t *testing.T, ctx context.Context) string {
 	t.Helper()
 	var s string
 	if err := testPool.QueryRow(ctx, `
@@ -175,7 +175,7 @@ func seedProject(t *testing.T, ctx context.Context) pgtype.UUID {
 	return parseUUID(s)
 }
 
-func seedSkill(t *testing.T, ctx context.Context) pgtype.UUID {
+func seedSkill(t *testing.T, ctx context.Context) string {
 	t.Helper()
 	var s string
 	// skill name is UNIQUE per workspace; add a random suffix to avoid colliding
@@ -191,7 +191,7 @@ func seedSkill(t *testing.T, ctx context.Context) pgtype.UUID {
 	return parseUUID(s)
 }
 
-func seedChatSession(t *testing.T, ctx context.Context) pgtype.UUID {
+func seedChatSession(t *testing.T, ctx context.Context) string {
 	t.Helper()
 	var agentID string
 	if err := testPool.QueryRow(ctx, `
@@ -210,7 +210,7 @@ func seedChatSession(t *testing.T, ctx context.Context) pgtype.UUID {
 	return parseUUID(s)
 }
 
-func assertRowExists(t *testing.T, ctx context.Context, table string, id pgtype.UUID) {
+func assertRowExists(t *testing.T, ctx context.Context, table string, id string) {
 	t.Helper()
 	var count int
 	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM `+table+` WHERE id = $1`, util.UUIDToString(id)).Scan(&count); err != nil {
@@ -222,7 +222,7 @@ func assertRowExists(t *testing.T, ctx context.Context, table string, id pgtype.
 }
 
 // randomUUID returns a never-existed workspace UUID for cross-tenant probes.
-func randomUUID(t *testing.T) pgtype.UUID {
+func randomUUID(t *testing.T) string {
 	t.Helper()
 	u, err := uuid.NewRandom()
 	if err != nil {

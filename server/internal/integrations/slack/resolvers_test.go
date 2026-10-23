@@ -139,7 +139,7 @@ func TestInstallationServesTeam(t *testing.T) {
 		{"legacy row without a team is permissive", "", "TANY", true},
 	}
 	for _, c := range cases {
-		if got := installationServesTeam(cfg(c.cfgTeam), c.eventTeam); got != c.want {
+		if got := installationServesTeam(string(cfg(c.cfgTeam)), c.eventTeam); got != c.want {
 			t.Errorf("%s: installationServesTeam(cfg=%q, event=%q) = %v, want %v",
 				c.name, c.cfgTeam, c.eventTeam, got, c.want)
 		}

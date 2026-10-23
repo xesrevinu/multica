@@ -14,7 +14,7 @@ const telegramOriginMigrationTestSchema = "telegram_origin_migration_test"
 
 func TestTelegramOriginMigrationsUpDownAndCatalog(t *testing.T) {
 	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
+	if !strings.HasPrefix(dbURL, "postgres") {
 		t.Skip("integration test requires Postgres at DATABASE_URL")
 	}
 

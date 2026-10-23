@@ -99,9 +99,9 @@ func TestConcurrentClaimsSingleWinner(t *testing.T) {
 
 	// Database-side proof: exactly one row, runner_id matches.
 	var rowCount int
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM sys_cron_executions WHERE job_name = $1 AND plan_time = $2
-	`, job.Name, planTime).Scan(&rowCount); err != nil {
+	`, job.Name, formatDBTime(planTime)).Scan(&rowCount); err != nil {
 		t.Fatalf("count rows: %v", err)
 	}
 	if rowCount != 1 {
@@ -109,9 +109,9 @@ func TestConcurrentClaimsSingleWinner(t *testing.T) {
 	}
 
 	var dbRunner string
-	if err := pool.QueryRow(ctx, `
+	if err := pool.QueryRowContext(ctx, `
 		SELECT runner_id FROM sys_cron_executions WHERE job_name = $1 AND plan_time = $2
-	`, job.Name, planTime).Scan(&dbRunner); err != nil {
+	`, job.Name, formatDBTime(planTime)).Scan(&dbRunner); err != nil {
 		t.Fatalf("scan winner: %v", err)
 	}
 	if dbRunner != winner {

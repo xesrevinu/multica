@@ -16,8 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
+
+	"github.com/google/uuid"
 
 	"github.com/multica-ai/multica/server/internal/events"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -47,16 +48,18 @@ func (f *fakeTelegramOutboundQueries) ListAttachmentsByChatMessage(context.Conte
 	return f.attachments, nil
 }
 
-func (f *fakeTelegramOutboundQueries) GetChannelTaskDelivery(_ context.Context, taskID pgtype.UUID) (db.ChannelTaskDelivery, error) {
+func (f *fakeTelegramOutboundQueries) GetChannelTaskDelivery(_ context.Context, taskID string) (db.ChannelTaskDelivery, error) {
 	if f.deliveryErr != nil {
 		return db.ChannelTaskDelivery{}, f.deliveryErr
 	}
 	if !f.channelOrigin {
-		return db.ChannelTaskDelivery{}, pgx.ErrNoRows
+		return db.ChannelTaskDelivery{}, sql.ErrNoRows
 	}
 	binding := f.binding
-	if mapped, ok := f.bindings[taskID.Bytes]; ok {
-		binding = mapped
+	if parsed, err := uuid.Parse(taskID); err == nil {
+		if mapped, ok := f.bindings[[16]byte(parsed)]; ok {
+			binding = mapped
+		}
 	}
 	return db.ChannelTaskDelivery{
 		TaskID: taskID, BindingID: binding.ID, InstallationID: binding.InstallationID,
@@ -71,11 +74,10 @@ func (f *fakeTelegramOutboundQueries) GetChannelInstallation(context.Context, db
 	return f.installation, nil
 }
 
-func telegramTestUUID(b byte) pgtype.UUID {
-	var id pgtype.UUID
-	id.Bytes[0] = b
-	id.Valid = true
-	return id
+func telegramTestUUID(b byte) string {
+	var id uuid.UUID
+	id[0] = b
+	return id.String()
 }
 
 func telegramTestEvent() events.Event {
@@ -122,8 +124,8 @@ func telegramTestBinding(chatID int64) db.ChannelChatSessionBinding {
 		ID:             telegramTestUUID(byte(chatID)),
 		InstallationID: telegramTestUUID(1),
 		ChannelChatID:  strconv.FormatInt(chatID, 10),
-		Config:         []byte(fmt.Sprintf(`{"chat_id":"%d"}`, chatID)),
-		LastMessageID:  pgtype.Text{String: fmt.Sprintf("%d:17", chatID), Valid: true},
+		Config:         fmt.Sprintf(`{"chat_id":"%d"}`, chatID),
+		LastMessageID:  sql.NullString{String: fmt.Sprintf("%d:17", chatID), Valid: true},
 	}
 }
 
@@ -136,7 +138,7 @@ func newTelegramOutboundQueries(t *testing.T) *fakeTelegramOutboundQueries {
 	// so rows left by an earlier case would collide. Scoped to this
 	// installation rather than the whole table: other packages run alongside
 	// this one against the same database.
-	if _, err := testPool.Exec(context.Background(),
+	if _, err := testPool.ExecContext(context.Background(),
 		`DELETE FROM channel_reply_delivery WHERE installation_id = $1`, telegramTestUUID(1)); err != nil {
 		t.Fatalf("reset channel_reply_delivery: %v", err)
 	}
@@ -146,13 +148,13 @@ func newTelegramOutboundQueries(t *testing.T) *fakeTelegramOutboundQueries {
 			ID:             telegramTestUUID(7),
 			InstallationID: telegramTestUUID(1),
 			ChannelChatID:  "42",
-			Config:         []byte(`{"chat_id":"42"}`),
-			LastMessageID:  pgtype.Text{String: "42:17", Valid: true},
+			Config:         `{"chat_id":"42"}`,
+			LastMessageID:  sql.NullString{String: "42:17", Valid: true},
 		},
 		installation: db.ChannelInstallation{
 			ID:     telegramTestUUID(1),
 			Status: "active",
-			Config: []byte(`{"bot_token_encrypted":"MTIzOnNlY3JldA=="}`),
+			Config: `{"bot_token_encrypted":"MTIzOnNlY3JldA=="}`,
 		},
 	}
 }

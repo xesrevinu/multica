@@ -91,7 +91,7 @@ func TestAgentHookToolsOnlyIncludesDeclaredAgentHooks(t *testing.T) {
 	installation := db.PluginInstallation{
 		ID:      testInstallationID(t),
 		Enabled: 1,
-		Manifest: []byte(`{
+		Manifest: `{
 			"manifest_version": 1,
 			"key": "com.example.mixed",
 			"name": "Mixed",
@@ -105,7 +105,7 @@ func TestAgentHookToolsOnlyIncludesDeclaredAgentHooks(t *testing.T) {
 				{"key": "manual_only", "name": "Manual only", "description": "A person picks this.",
 				 "triggers": ["manual"], "transport": {"type": "http", "url": "https://example.com/m"}}
 			]}
-		}`),
+		}`,
 	}
 
 	manifest, err := ParseInstallationManifest(installation)
@@ -133,7 +133,7 @@ func TestAgentToolDescriptionIsTheManifestText(t *testing.T) {
 	installation := db.PluginInstallation{
 		ID:      testInstallationID(t),
 		Enabled: 1,
-		Manifest: json.RawMessage(`{
+		Manifest: `{
 			"manifest_version": 1,
 			"key": "com.example.sum",
 			"name": "Sum",
@@ -144,7 +144,7 @@ func TestAgentToolDescriptionIsTheManifestText(t *testing.T) {
 			"contributes": {"hooks": [{"key": "summarize", "name": "Summarize",
 			 "description": "` + wanted + `",
 			 "triggers": ["agent"], "transport": {"type": "http", "url": "https://example.com/s"}}]}
-		}`),
+		}`,
 	}
 	manifest, err := ParseInstallationManifest(installation)
 	if err != nil {

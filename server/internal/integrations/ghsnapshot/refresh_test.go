@@ -32,9 +32,13 @@ func (*queryCountingDB) PrepareContext(context.Context, string) (*sql.Stmt, erro
 	return nil, nil
 }
 
-func (d *queryCountingDB) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
+func (d *queryCountingDB) QueryContext(ctx context.Context, _ string, _ ...any) (*sql.Rows, error) {
 	d.queries++
-	return nil, errors.New("query counting stub")
+	memDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		return nil, err
+	}
+	return memDB.QueryContext(ctx, "SELECT 1 WHERE 0")
 }
 
 func (*queryCountingDB) QueryRowContext(context.Context, string, ...any) *sql.Row {

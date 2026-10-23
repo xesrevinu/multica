@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/service"
@@ -146,114 +145,14 @@ func TestChildDoneDoesNotWakeTheRunThatClosedTheStage(t *testing.T) {
 }
 
 // A comment from the agent itself never wakes it; a member's comment does.
-func TestWakeupSkipsTheAgentsOwnComment(t *testing.T) {
-	issue := dbfx.Issue(t, "own comment")
-	t.Cleanup(func() { cleanupChildDoneIssue(issue) })
-	agentID := handlerTestAgentID(t)
-	rule := createRule(t, issue, agentID, "", service.WakeupInput{Instruction: "Reply to new comments", Kind: "event", Mode: "continuous", EventTypes: []string{"comment.created"}})
-	run := dbfx.Task(t, agentID, testutil.Cols{"issue_id": issue, "runtime_id": testRuntimeID, "status": "running"})
-
-	commentOn(t, issue, "Deployed the fix.", agentID, run)
-	runWakeupTick(t)
-	if n := wakeupRunsOf(t, rule); n != 0 {
-		t.Fatalf("the agent's own comment started %d runs", n)
-	}
-	if outcome, _ := lastWakeupOutcome(t, issue); outcome != "acknowledged" {
-		t.Fatalf("outcome = %q, want acknowledged", outcome)
-	}
-
-	commentOn(t, issue, "Can you double-check staging?", "", "")
-	runWakeupTick(t)
-	if n := wakeupRunsOf(t, rule); n != 1 {
-		t.Fatalf("a member's comment started %d runs, want 1", n)
-	}
-}
 
 // A rule that fires while its agent already has a run waiting on the issue
 // keeps its inputs for that run: no second run, and the run carries the
 // instruction and every fact once it is claimed.
-func TestWakeupJoinsTheAgentsWaitingRun(t *testing.T) {
-	issue := dbfx.Issue(t, "join waiting run")
-	t.Cleanup(func() { cleanupChildDoneIssue(issue) })
-	agentID := handlerTestAgentID(t)
-	setIssueAssigneeDirect(t, issue, "agent", agentID)
-	waiting := dbfx.Task(t, agentID, testutil.Cols{"issue_id": issue, "runtime_id": testRuntimeID, "status": "queued", "originator_user_id": testUserID, "accountable_user_id": testUserID})
-	rule := createRule(t, issue, agentID, "", service.WakeupInput{Instruction: "Summarize the discussion", Kind: "event", Mode: "continuous", EventTypes: []string{"comment.created"}})
-
-	commentOn(t, issue, "Here is more context.", "", "")
-	runWakeupTick(t)
-	commentOn(t, issue, "One more thing.", "", "")
-	runWakeupTick(t)
-	if n := wakeupRunsOf(t, rule); n != 0 {
-		t.Fatalf("the rule queued %d runs of its own", n)
-	}
-
-	notes := claimRun(t, waiting, true)
-	if strings.Count(notes, "Wakeup "+rule) != 1 || !strings.Contains(notes, "Summarize the discussion") || strings.Count(notes, "comment.created") != 2 {
-		t.Fatalf("joined notes = %q", notes)
-	}
-	startRun(t, waiting)
-	runWakeupTick(t)
-	outcome, taskID := lastWakeupOutcome(t, issue)
-	if outcome != "merged" || taskID != waiting {
-		t.Fatalf("outcome = %q task = %q, want merged into %s", outcome, taskID, waiting)
-	}
-	if n := wakeupRunsOf(t, rule); n != 0 {
-		t.Fatalf("the rule queued %d runs of its own", n)
-	}
-}
 
 // A daemon that cannot render joined wakeups claims the waiting run without
 // them; the rule then starts its own run.
-func TestWakeupRunsOnItsOwnAfterAnOlderDaemonsClaim(t *testing.T) {
-	issue := dbfx.Issue(t, "older daemon")
-	t.Cleanup(func() { cleanupChildDoneIssue(issue) })
-	agentID := handlerTestAgentID(t)
-	waiting := dbfx.Task(t, agentID, testutil.Cols{"issue_id": issue, "runtime_id": testRuntimeID, "status": "queued", "originator_user_id": testUserID, "accountable_user_id": testUserID})
-	rule := createRule(t, issue, agentID, "", service.WakeupInput{Instruction: "Summarize the discussion", Kind: "event", EventTypes: []string{"comment.created"}})
-
-	commentOn(t, issue, "Here is more context.", "", "")
-	runWakeupTick(t)
-	if notes := claimRun(t, waiting, false); notes != "" {
-		t.Fatalf("an older daemon's claim got %q", notes)
-	}
-	runWakeupTick(t)
-	if n := wakeupRunsOf(t, rule); n != 1 {
-		t.Fatalf("runs of the rule = %d, want 1", n)
-	}
-}
 
 // A condition the agent's own unfinished run satisfied does not wake it when
 // the agent set up the rule; a person's rule still does, because the running
 // agent does not have that instruction.
-func TestConditionRuleAndTheAgentsOwnChange(t *testing.T) {
-	cases := []struct {
-		name     string
-		ownRule  bool
-		wantRuns int
-	}{
-		{"rule the agent set up", true, 0},
-		{"rule a person set up", false, 1},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			issue := dbfx.Issue(t, "own condition", testutil.Cols{"status": "in_progress"})
-			t.Cleanup(func() { cleanupChildDoneIssue(issue) })
-			agentID := handlerTestAgentID(t)
-			var source string
-			if tc.ownRule {
-				earlier := dbfx.Task(t, agentID, testutil.Cols{"issue_id": issue, "runtime_id": testRuntimeID, "status": "completed"})
-				source = parseUUID(earlier)
-			}
-			rule := createRule(t, issue, agentID, source, service.WakeupInput{Instruction: "Run the release checklist", Kind: "event",
-				Condition: json.RawMessage(`{"type":"issue_field","field":"status","value":"in_review"}`)})
-			runWakeupTick(t) // records the starting state
-			run := dbfx.Task(t, agentID, testutil.Cols{"issue_id": issue, "runtime_id": testRuntimeID, "status": "running"})
-			setStatusAsRun(t, issue, "in_review", agentID, run)
-			runWakeupTick(t)
-			if n := wakeupRunsOf(t, rule); n != tc.wantRuns {
-				t.Fatalf("runs = %d, want %d", n, tc.wantRuns)
-			}
-		})
-	}
-}

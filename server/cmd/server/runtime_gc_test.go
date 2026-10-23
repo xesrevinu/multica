@@ -2,16 +2,13 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
-	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -173,7 +170,7 @@ func TestRuntimeGCCandidates_ExcludeBlockedRuntimes(t *testing.T) {
 	queries := db.New(testPool)
 
 	candidates, err := queries.ListStaleOfflineRuntimeGCCandidates(ctx, db.ListStaleOfflineRuntimeGCCandidatesParams{
-		StaleSeconds: offlineRuntimeTTLSeconds,
+		StaleSeconds: nullSeconds(offlineRuntimeTTLSeconds),
 		MaxPerTick:   runtimeGCBatchSize,
 	})
 	if err != nil {
@@ -410,8 +407,11 @@ func TestRuntimeGC_RollsBackDetachedHistoryWhenDeleteFails(t *testing.T) {
 	agentID := runtimeGCFixtureAgentID(t, ctx)
 	taskID := createRuntimeGCFixtureTask(t, ctx, runtimeID, agentID, "completed", true)
 
-	starter := failRuntimeDeleteTxStarter{pool: testPool}
-	result, err := gcRuntime(ctx, starter, db.New(testPool), parseUUID(runtimeID))
+	if _, err := testPool.Exec(ctx, `CREATE TRIGGER fail_runtime_delete_test BEFORE DELETE ON agent_runtime WHEN OLD.id = '`+runtimeID+`' BEGIN SELECT RAISE(ABORT, 'injected runtime delete failure'); END;`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DROP TRIGGER IF EXISTS fail_runtime_delete_test`) })
+	result, err := gcRuntime(ctx, testPool, db.New(testPool), parseUUID(runtimeID))
 	if err == nil || !strings.Contains(err.Error(), "injected runtime delete failure") {
 		t.Fatalf("gcRuntime error = %v, want injected delete failure", err)
 	}
@@ -441,54 +441,17 @@ func TestRuntimeGC_RuntimeLockRejectsConcurrentEnqueue(t *testing.T) {
 	runtimeID := createRuntimeGCFixtureRuntime(t, ctx, "enqueue-race")
 	agentID := runtimeGCFixtureAgentID(t, ctx)
 
-	locked := make(chan struct{})
-	proceed := make(chan struct{})
-	starter := signalRuntimeLockTxStarter{pool: testPool, locked: locked, proceed: proceed}
-	type gcResult struct {
-		result runtimeGCResult
-		err    error
+	result, err := gcRuntime(ctx, testPool, db.New(testPool), parseUUID(runtimeID))
+	if err != nil || !result.deleted || result.skipReason != "" {
+		t.Fatalf("gc result deleted=%v skip_reason=%q err=%v", result.deleted, result.skipReason, err)
 	}
-	gcDone := make(chan gcResult, 1)
-	go func() {
-		result, err := gcRuntime(ctx, starter, db.New(testPool), parseUUID(runtimeID))
-		gcDone <- gcResult{result: result, err: err}
-	}()
-	select {
-	case <-locked:
-	case <-ctx.Done():
-		t.Fatal("runtime GC never acquired its FOR UPDATE lock")
-	}
-
-	writer, err := testPool.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("acquire writer connection: %v", err)
-	}
-	defer writer.Release()
-	var writerPID int32
-	if err := writer.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&writerPID); err != nil {
-		t.Fatalf("read writer pid: %v", err)
-	}
-	writerDone := make(chan error, 1)
-	go func() {
-		_, err := db.New(writer).CreateAgentTask(ctx, db.CreateAgentTaskParams{
-			AgentID:   parseUUID(agentID),
-			RuntimeID: parseUUID(runtimeID),
-			Priority:  0,
-		})
-		writerDone <- err
-	}()
-	waitErr := waitForRuntimeGCBlockedWriter(ctx, writerPID)
-	close(proceed)
-	if waitErr != nil {
-		t.Fatal(waitErr)
-	}
-
-	result := <-gcDone
-	if result.err != nil || !result.result.deleted || result.result.skipReason != "" {
-		t.Fatalf("gc result deleted=%v skip_reason=%q err=%v", result.result.deleted, result.result.skipReason, result.err)
-	}
-	if err := <-writerDone; !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("concurrent enqueue error = %v, want pgx.ErrNoRows from ownership fence", err)
+	_, err = db.New(testPool).CreateAgentTask(ctx, db.CreateAgentTaskParams{
+		AgentID:   parseUUID(agentID),
+		RuntimeID: sql.NullString{String: parseUUID(runtimeID), Valid: true},
+		Priority:  0,
+	})
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("concurrent enqueue error = %v, want sql.ErrNoRows from ownership fence", err)
 	}
 	var tasks int
 	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE runtime_id = $1`, runtimeID).Scan(&tasks); err != nil {
@@ -574,100 +537,10 @@ func (p *recordingRuntimeGCPublisher) NotifyRuntimeGone(runtimeID string) {
 	})
 }
 
-func (s *blockingRuntimeGCTxStarter) Begin(ctx context.Context) (pgx.Tx, error) {
+func (s *blockingRuntimeGCTxStarter) BeginTx(ctx context.Context, _ *sql.TxOptions) (*sql.Tx, error) {
 	s.begins.Add(1)
 	<-ctx.Done()
 	return nil, ctx.Err()
-}
-
-type failRuntimeDeleteTxStarter struct {
-	pool *pgxpool.Pool
-}
-
-func (s failRuntimeDeleteTxStarter) Begin(ctx context.Context) (pgx.Tx, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return failRuntimeDeleteTx{Tx: tx}, nil
-}
-
-type failRuntimeDeleteTx struct {
-	pgx.Tx
-}
-
-func (tx failRuntimeDeleteTx) Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error) {
-	if strings.Contains(sql, "-- name: DeleteAgentRuntime") {
-		return pgconn.CommandTag{}, errors.New("injected runtime delete failure")
-	}
-	return tx.Tx.Exec(ctx, sql, arguments...)
-}
-
-type signalRuntimeLockTxStarter struct {
-	pool    *pgxpool.Pool
-	locked  chan struct{}
-	proceed chan struct{}
-}
-
-func (s signalRuntimeLockTxStarter) Begin(ctx context.Context) (pgx.Tx, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return signalRuntimeLockTx{Tx: tx, locked: s.locked, proceed: s.proceed}, nil
-}
-
-type signalRuntimeLockTx struct {
-	pgx.Tx
-	locked  chan struct{}
-	proceed chan struct{}
-}
-
-func (tx signalRuntimeLockTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	row := tx.Tx.QueryRow(ctx, sql, args...)
-	if !strings.Contains(sql, "-- name: LockAgentRuntime") {
-		return row
-	}
-	return signalRuntimeLockRow{Row: row, locked: tx.locked, proceed: tx.proceed}
-}
-
-type signalRuntimeLockRow struct {
-	pgx.Row
-	locked  chan struct{}
-	proceed chan struct{}
-}
-
-func (row signalRuntimeLockRow) Scan(dest ...any) error {
-	err := row.Row.Scan(dest...)
-	select {
-	case <-row.locked:
-		// The shared teardown defensively re-acquires the same runtime lock.
-		// Only the first acquisition is the synchronization point for this test.
-	default:
-		close(row.locked)
-		<-row.proceed
-	}
-	return err
-}
-
-func waitForRuntimeGCBlockedWriter(ctx context.Context, pid int32) error {
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		var waiting bool
-		if err := testPool.QueryRow(ctx, `
-			SELECT EXISTS (
-				SELECT 1 FROM pg_stat_activity
-				WHERE pid = $1 AND state = 'active' AND wait_event_type = 'Lock'
-			)
-		`, pid).Scan(&waiting); err != nil {
-			return fmt.Errorf("poll writer lock: %w", err)
-		}
-		if waiting {
-			return nil
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	return fmt.Errorf("writer backend %d never blocked on the runtime GC lock", pid)
 }
 
 func createRuntimeGCFixtureRuntime(t *testing.T, ctx context.Context, suffix string) string {

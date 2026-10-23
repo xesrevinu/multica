@@ -479,7 +479,7 @@ func (h *Handler) AttachLabel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := labelsToResponse(labels)
-	if attached.Changed != 0 {
+	if attached.Changed {
 		h.publish(protocol.EventIssueLabelsChanged, uuidToString(issue.WorkspaceID), "member", userID, map[string]any{
 			"issue_id":       uuidToString(issue.ID),
 			"labels":         resp,
@@ -487,7 +487,7 @@ func (h *Handler) AttachLabel(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	payload := map[string]any{"labels": resp}
-	if rev := ifaceInt64(attached.IssueRevision); rev > 0 {
+	if rev := attached.IssueRevision; rev > 0 {
 		payload["issue_revision"] = rev
 	}
 	writeJSON(w, http.StatusOK, payload)
@@ -554,7 +554,7 @@ func (h *Handler) DetachLabel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := labelsToResponse(labels)
-	if detached.Changed != 0 {
+	if detached.Changed {
 		h.publish(protocol.EventIssueLabelsChanged, uuidToString(issue.WorkspaceID), "member", userID, map[string]any{
 			"issue_id":       uuidToString(issue.ID),
 			"labels":         resp,

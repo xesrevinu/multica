@@ -191,7 +191,7 @@ func parseUUIDValueForTest(t *testing.T, value string) string {
 // not in it does not exist, whatever the source URL serves today.
 func TestFindHookReadsTheConsentedManifest(t *testing.T) {
 	installation := db.PluginInstallation{
-		Manifest: []byte(`{
+		Manifest: `{
 			"manifest_version": 1,
 			"key": "com.example.hooks",
 			"name": "Hooks",
@@ -206,7 +206,7 @@ func TestFindHookReadsTheConsentedManifest(t *testing.T) {
 				"triggers": ["manual"],
 				"transport": {"type": "http", "url": "https://example.com/hooks/summarize"}
 			}]}
-		}`),
+		}`,
 	}
 
 	hook, err := FindHook(installation, "summarize")

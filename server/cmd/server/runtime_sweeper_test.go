@@ -295,10 +295,10 @@ func TestSweepStaleTasksBroadcastsWithWorkspaceID(t *testing.T) {
 
 	// Use very short timeouts to trigger the sweep on our test task
 	failedTasks, err := queries.FailStaleTasks(context.Background(), db.FailStaleTasksParams{
-		DispatchTimeoutSecs:       300.0,
-		RunningTimeoutSecs:        1.0, // 1 second — our task is 3 hours old
-		RuntimeStaleSecs:          staleThresholdSeconds,
-		RuntimeReconnectGraceSecs: defaultRuntimeReconnectGrace.Seconds(),
+		DispatchTimeoutSecs:       nullSeconds(300.0),
+		RunningTimeoutSecs:        nullSeconds(1.0), // 1 second — our task is 3 hours old
+		RuntimeStaleSecs:          nullSeconds(staleThresholdSeconds),
+		RuntimeReconnectGraceSecs: nullSeconds(defaultRuntimeReconnectGrace.Seconds()),
 	})
 	if err != nil {
 		t.Fatalf("FailStaleTasks query failed: %v", err)
@@ -310,7 +310,7 @@ func TestSweepStaleTasksBroadcastsWithWorkspaceID(t *testing.T) {
 	// Verify our task was included
 	found := false
 	for _, ft := range failedTasks {
-		if ft.ID.Bytes == parseUUIDBytes(taskID) {
+		if ft.ID == parseUUID(taskID) {
 			found = true
 			break
 		}
@@ -389,10 +389,10 @@ func TestSweepStaleTasksReconcileAgentStatus(t *testing.T) {
 
 	// Fail stale tasks with short timeout
 	failedTasks, err := queries.FailStaleTasks(context.Background(), db.FailStaleTasksParams{
-		DispatchTimeoutSecs:       300.0,
-		RunningTimeoutSecs:        1.0,
-		RuntimeStaleSecs:          staleThresholdSeconds,
-		RuntimeReconnectGraceSecs: defaultRuntimeReconnectGrace.Seconds(),
+		DispatchTimeoutSecs:       nullSeconds(300.0),
+		RunningTimeoutSecs:        nullSeconds(1.0),
+		RuntimeStaleSecs:          nullSeconds(staleThresholdSeconds),
+		RuntimeReconnectGraceSecs: nullSeconds(defaultRuntimeReconnectGrace.Seconds()),
 	})
 	if err != nil {
 		t.Fatalf("FailStaleTasks failed: %v", err)
@@ -452,12 +452,12 @@ func TestSweepDispatchedStaleTask(t *testing.T) {
 
 	// Fail stale tasks — dispatch timeout of 1 second (our task is 10 minutes old)
 	failedTasks, err := queries.FailStaleTasks(context.Background(), db.FailStaleTasksParams{
-		DispatchTimeoutSecs: 1.0,
-		RunningTimeoutSecs:  9000.0,
+		DispatchTimeoutSecs:       nullSeconds(1.0),
+		RunningTimeoutSecs:        nullSeconds(9000.0),
 		// RuntimeStaleSecs only affects the running branch — irrelevant for
 		// this dispatched-timeout test, but wired for API consistency.
-		RuntimeStaleSecs:          staleThresholdSeconds,
-		RuntimeReconnectGraceSecs: defaultRuntimeReconnectGrace.Seconds(),
+		RuntimeStaleSecs:          nullSeconds(staleThresholdSeconds),
+		RuntimeReconnectGraceSecs: nullSeconds(defaultRuntimeReconnectGrace.Seconds()),
 	})
 	if err != nil {
 		t.Fatalf("FailStaleTasks failed: %v", err)
@@ -523,16 +523,16 @@ func TestSweepDispatchedTaskWaitsThroughReconnectGrace(t *testing.T) {
 	setAgentRuntimeOffline(t, agentID, 10*time.Minute)
 
 	failedTasks, err := db.New(testPool).FailStaleTasks(context.Background(), db.FailStaleTasksParams{
-		DispatchTimeoutSecs:       1.0,
-		RunningTimeoutSecs:        9000.0,
-		RuntimeStaleSecs:          staleThresholdSeconds,
-		RuntimeReconnectGraceSecs: defaultRuntimeReconnectGrace.Seconds(),
+		DispatchTimeoutSecs:       nullSeconds(1.0),
+		RunningTimeoutSecs:        nullSeconds(9000.0),
+		RuntimeStaleSecs:          nullSeconds(staleThresholdSeconds),
+		RuntimeReconnectGraceSecs: nullSeconds(defaultRuntimeReconnectGrace.Seconds()),
 	})
 	if err != nil {
 		t.Fatalf("FailStaleTasks failed: %v", err)
 	}
 	for _, task := range failedTasks {
-		if task.ID.Bytes == parseUUIDBytes(taskID) {
+		if task.ID == parseUUID(taskID) {
 			t.Fatal("dispatched task was failed inside reconnect grace")
 		}
 	}
@@ -565,17 +565,17 @@ func TestSweepRunningTaskSkippedWhenRuntimeFresh(t *testing.T) {
 	// alone — but the runtime is proving liveness, so the sweeper must skip it.
 	queries := db.New(testPool)
 	failedTasks, err := queries.FailStaleTasks(context.Background(), db.FailStaleTasksParams{
-		DispatchTimeoutSecs:       300.0,
-		RunningTimeoutSecs:        1.0,
-		RuntimeStaleSecs:          staleThresholdSeconds,
-		RuntimeReconnectGraceSecs: defaultRuntimeReconnectGrace.Seconds(),
+		DispatchTimeoutSecs:       nullSeconds(300.0),
+		RunningTimeoutSecs:        nullSeconds(1.0),
+		RuntimeStaleSecs:          nullSeconds(staleThresholdSeconds),
+		RuntimeReconnectGraceSecs: nullSeconds(defaultRuntimeReconnectGrace.Seconds()),
 	})
 	if err != nil {
 		t.Fatalf("FailStaleTasks failed: %v", err)
 	}
 
 	for _, ft := range failedTasks {
-		if ft.ID.Bytes == parseUUIDBytes(taskID) {
+		if ft.ID == parseUUID(taskID) {
 			t.Fatalf("healthy long-running task on live daemon must NOT be swept — that was the MUL-4107 bug")
 		}
 	}
@@ -601,16 +601,16 @@ func TestSweepRunningTaskWaitsThroughReconnectGrace(t *testing.T) {
 	setAgentRuntimeOffline(t, agentID, 10*time.Minute)
 
 	failedTasks, err := db.New(testPool).FailStaleTasks(context.Background(), db.FailStaleTasksParams{
-		DispatchTimeoutSecs:       300.0,
-		RunningTimeoutSecs:        1.0,
-		RuntimeStaleSecs:          staleThresholdSeconds,
-		RuntimeReconnectGraceSecs: defaultRuntimeReconnectGrace.Seconds(),
+		DispatchTimeoutSecs:       nullSeconds(300.0),
+		RunningTimeoutSecs:        nullSeconds(1.0),
+		RuntimeStaleSecs:          nullSeconds(staleThresholdSeconds),
+		RuntimeReconnectGraceSecs: nullSeconds(defaultRuntimeReconnectGrace.Seconds()),
 	})
 	if err != nil {
 		t.Fatalf("FailStaleTasks failed: %v", err)
 	}
 	for _, task := range failedTasks {
-		if task.ID.Bytes == parseUUIDBytes(taskID) {
+		if task.ID == parseUUID(taskID) {
 			t.Fatal("long-running task was failed inside reconnect grace")
 		}
 	}
@@ -638,10 +638,10 @@ func TestSweepRunningTaskKilledBeyondReconnectGrace(t *testing.T) {
 
 	queries := db.New(testPool)
 	failedTasks, err := queries.FailStaleTasks(context.Background(), db.FailStaleTasksParams{
-		DispatchTimeoutSecs:       300.0,
-		RunningTimeoutSecs:        1.0,
-		RuntimeStaleSecs:          staleThresholdSeconds,
-		RuntimeReconnectGraceSecs: defaultRuntimeReconnectGrace.Seconds(),
+		DispatchTimeoutSecs:       nullSeconds(300.0),
+		RunningTimeoutSecs:        nullSeconds(1.0),
+		RuntimeStaleSecs:          nullSeconds(staleThresholdSeconds),
+		RuntimeReconnectGraceSecs: nullSeconds(defaultRuntimeReconnectGrace.Seconds()),
 	})
 	if err != nil {
 		t.Fatalf("FailStaleTasks failed: %v", err)
@@ -649,7 +649,7 @@ func TestSweepRunningTaskKilledBeyondReconnectGrace(t *testing.T) {
 
 	found := false
 	for _, ft := range failedTasks {
-		if ft.ID.Bytes == parseUUIDBytes(taskID) {
+		if ft.ID == parseUUID(taskID) {
 			found = true
 			break
 		}
@@ -681,14 +681,14 @@ func TestOfflineRuntimeTasksRespectReconnectGrace(t *testing.T) {
 	queries := db.New(testPool)
 
 	failed, err := queries.FailTasksForOfflineRuntimes(ctx, db.FailTasksForOfflineRuntimesParams{
-		ReconnectGraceSecs: defaultRuntimeReconnectGrace.Seconds(),
+		ReconnectGraceSecs: nullSeconds(defaultRuntimeReconnectGrace.Seconds()),
 		MaxPerTick:         offlineTaskFailBatchSize,
 	})
 	if err != nil {
 		t.Fatalf("FailTasksForOfflineRuntimes inside grace: %v", err)
 	}
 	for _, task := range failed {
-		if task.ID.Bytes == parseUUIDBytes(taskID) {
+		if task.ID == parseUUID(taskID) {
 			t.Fatal("running task was failed inside reconnect grace")
 		}
 	}
@@ -702,7 +702,7 @@ func TestOfflineRuntimeTasksRespectReconnectGrace(t *testing.T) {
 	}
 
 	failed, err = queries.FailTasksForOfflineRuntimes(ctx, db.FailTasksForOfflineRuntimesParams{
-		ReconnectGraceSecs: defaultRuntimeReconnectGrace.Seconds(),
+		ReconnectGraceSecs: nullSeconds(defaultRuntimeReconnectGrace.Seconds()),
 		MaxPerTick:         offlineTaskFailBatchSize,
 	})
 	if err != nil {
@@ -710,7 +710,7 @@ func TestOfflineRuntimeTasksRespectReconnectGrace(t *testing.T) {
 	}
 	found := false
 	for _, task := range failed {
-		if task.ID.Bytes == parseUUIDBytes(taskID) {
+		if task.ID == parseUUID(taskID) {
 			found = true
 			if !task.FailureReason.Valid || task.FailureReason.String != "runtime_offline" {
 				t.Fatalf("failure reason = %q, want runtime_offline", task.FailureReason.String)
@@ -759,8 +759,8 @@ func TestRuntimeReconnectRetryHasBoundedTerminalPath(t *testing.T) {
 
 	queries := db.New(testPool)
 	params := db.FailExpiredRuntimeReconnectRetriesParams{
-		ReconnectGraceSecs: defaultRuntimeReconnectGrace.Seconds(),
-		RuntimeStaleSecs:   staleThresholdSeconds,
+		ReconnectGraceSecs: nullSeconds(defaultRuntimeReconnectGrace.Seconds()),
+		RuntimeStaleSecs:          nullSeconds(staleThresholdSeconds),
 		MaxPerTick:         reconnectRetryExpireBatchSize,
 	}
 
@@ -799,7 +799,7 @@ func TestRuntimeReconnectRetryHasBoundedTerminalPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expire retry beyond grace: %v", err)
 	}
-	if len(failed) != 1 || failed[0].ID.Bytes != parseUUIDBytes(retryID) {
+	if len(failed) != 1 || parseUUIDBytes(failed[0].ID) != parseUUIDBytes(retryID) {
 		t.Fatalf("expired retries = %d, want retry %s", len(failed), retryID)
 	}
 	if !failed[0].FailureReason.Valid || failed[0].FailureReason.String != "runtime_reconnect_timeout" {
@@ -891,10 +891,10 @@ func TestSweepResetsInProgressIssueToTodo(t *testing.T) {
 
 	// Fail the stale task (running timeout of 1 second — our task is 3 hours old).
 	failedTasks, err := queries.FailStaleTasks(ctx, db.FailStaleTasksParams{
-		DispatchTimeoutSecs:       300.0,
-		RunningTimeoutSecs:        1.0,
-		RuntimeStaleSecs:          staleThresholdSeconds,
-		RuntimeReconnectGraceSecs: defaultRuntimeReconnectGrace.Seconds(),
+		DispatchTimeoutSecs:       nullSeconds(300.0),
+		RunningTimeoutSecs:        nullSeconds(1.0),
+		RuntimeStaleSecs:          nullSeconds(staleThresholdSeconds),
+		RuntimeReconnectGraceSecs: nullSeconds(defaultRuntimeReconnectGrace.Seconds()),
 	})
 	if err != nil {
 		t.Fatalf("FailStaleTasks failed: %v", err)
@@ -903,7 +903,7 @@ func TestSweepResetsInProgressIssueToTodo(t *testing.T) {
 	// Confirm our task was swept.
 	found := false
 	for _, ft := range failedTasks {
-		if ft.ID.Bytes == parseUUIDBytes(taskID) {
+		if ft.ID == parseUUID(taskID) {
 			found = true
 			break
 		}
@@ -980,10 +980,10 @@ func TestSweepDoesNotResetIssueAlreadyInReview(t *testing.T) {
 	ageOutAgentRuntime(t, agentID, defaultRuntimeReconnectGrace+time.Hour)
 
 	failedTasks, err := queries.FailStaleTasks(ctx, db.FailStaleTasksParams{
-		DispatchTimeoutSecs:       300.0,
-		RunningTimeoutSecs:        1.0,
-		RuntimeStaleSecs:          staleThresholdSeconds,
-		RuntimeReconnectGraceSecs: defaultRuntimeReconnectGrace.Seconds(),
+		DispatchTimeoutSecs:       nullSeconds(300.0),
+		RunningTimeoutSecs:        nullSeconds(1.0),
+		RuntimeStaleSecs:          nullSeconds(staleThresholdSeconds),
+		RuntimeReconnectGraceSecs: nullSeconds(defaultRuntimeReconnectGrace.Seconds()),
 	})
 	if err != nil {
 		t.Fatalf("FailStaleTasks failed: %v", err)
@@ -1035,13 +1035,12 @@ func TestExpireStaleQueuedTasks(t *testing.T) {
 	// Constraint: idx_one_pending_task_per_issue_agent → use distinct issues.
 	mkIssue := func(label string) string {
 		var issueID string
+		if _, err := testPool.Exec(ctx, `UPDATE workspace SET issue_counter = issue_counter + 1 WHERE id = $1`, testWorkspaceID); err != nil {
+			t.Fatalf("failed to bump issue_counter: %v", err)
+		}
 		if err := testPool.QueryRow(ctx, `
-			WITH bumped AS (
-				UPDATE workspace SET issue_counter = issue_counter + 1
-				WHERE id = $1 RETURNING issue_counter
-			)
 			INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, assignee_type, assignee_id, number)
-			SELECT $1, $3, 'todo', 'none', 'member', m.user_id, 'agent', $2, (SELECT issue_counter FROM bumped)
+			SELECT $1, $3, 'todo', 'none', 'member', m.user_id, 'agent', $2, (SELECT issue_counter FROM workspace WHERE id = $1)
 			FROM member m WHERE m.workspace_id = $1 LIMIT 1
 			RETURNING id
 		`, testWorkspaceID, agentID, label).Scan(&issueID); err != nil {
@@ -1097,7 +1096,7 @@ func TestExpireStaleQueuedTasks(t *testing.T) {
 	expiredIDs := func(rows []db.AgentTaskQueue) map[[16]byte]bool {
 		out := map[[16]byte]bool{}
 		for _, row := range rows {
-			out[row.ID.Bytes] = true
+			out[parseUUIDBytes(row.ID)] = true
 		}
 		return out
 	}
@@ -1106,7 +1105,7 @@ func TestExpireStaleQueuedTasks(t *testing.T) {
 	// integration fixture inserts last_seen_at=now()), so none of these rows may
 	// expire, including the 5h-old one. Under the old wall clock it died here.
 	survivors, err := queries.ExpireStaleQueuedTasks(ctx, db.ExpireStaleQueuedTasksParams{
-		ReconnectGraceSecs: graceSecs,
+		ReconnectGraceSecs: nullSeconds(graceSecs),
 		MaxPerTick:         100,
 	})
 	if err != nil {
@@ -1124,7 +1123,7 @@ func TestExpireStaleQueuedTasks(t *testing.T) {
 	// owned is unreachable and must be retired, except the runtime_offline retry.
 	ageOutAgentRuntime(t, agentID, 5*time.Hour)
 	failed, err := queries.ExpireStaleQueuedTasks(ctx, db.ExpireStaleQueuedTasksParams{
-		ReconnectGraceSecs: graceSecs,
+		ReconnectGraceSecs: nullSeconds(graceSecs),
 		MaxPerTick:         100,
 	})
 	if err != nil {
@@ -1201,7 +1200,7 @@ func TestExpireStaleQueuedTasks(t *testing.T) {
 	}
 
 	lateSweep, err := queries.ExpireStaleQueuedTasks(ctx, db.ExpireStaleQueuedTasksParams{
-		ReconnectGraceSecs: graceSecs,
+		ReconnectGraceSecs: nullSeconds(graceSecs),
 		MaxPerTick:         100,
 	})
 	if err != nil {
@@ -1218,7 +1217,7 @@ func TestExpireStaleQueuedTasks(t *testing.T) {
 		t.Fatalf("failed to age the late task: %v", err)
 	}
 	agedSweep, err := queries.ExpireStaleQueuedTasks(ctx, db.ExpireStaleQueuedTasksParams{
-		ReconnectGraceSecs: graceSecs,
+		ReconnectGraceSecs: nullSeconds(graceSecs),
 		MaxPerTick:         100,
 	})
 	if err != nil {
@@ -1260,13 +1259,12 @@ func TestExpireStaleQueuedTasksRespectsBatchLimit(t *testing.T) {
 	})
 	for i := 0; i < 5; i++ {
 		var issueID string
+		if _, err := testPool.Exec(ctx, `UPDATE workspace SET issue_counter = issue_counter + 1 WHERE id = $1`, testWorkspaceID); err != nil {
+			t.Fatalf("failed to bump issue_counter %d: %v", i, err)
+		}
 		if err := testPool.QueryRow(ctx, `
-			WITH bumped AS (
-				UPDATE workspace SET issue_counter = issue_counter + 1
-				WHERE id = $1 RETURNING issue_counter
-			)
 			INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, assignee_type, assignee_id, number)
-			SELECT $1, 'Queued TTL batch test', 'todo', 'none', 'member', m.user_id, 'agent', $2, (SELECT issue_counter FROM bumped)
+			SELECT $1, 'Queued TTL batch test', 'todo', 'none', 'member', m.user_id, 'agent', $2, (SELECT issue_counter FROM workspace WHERE id = $1)
 			FROM member m WHERE m.workspace_id = $1 LIMIT 1
 			RETURNING id
 		`, testWorkspaceID, agentID).Scan(&issueID); err != nil {
@@ -1287,7 +1285,7 @@ func TestExpireStaleQueuedTasksRespectsBatchLimit(t *testing.T) {
 
 	queries := db.New(testPool)
 	failed, err := queries.ExpireStaleQueuedTasks(ctx, db.ExpireStaleQueuedTasksParams{
-		ReconnectGraceSecs: 3600.0,
+		ReconnectGraceSecs: nullSeconds(3600.0),
 		MaxPerTick:         2, // cap below the backlog
 	})
 	if err != nil {

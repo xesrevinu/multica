@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -295,7 +294,7 @@ type auditGatedQueries struct {
 	release chan struct{}
 }
 
-func (q *auditGatedQueries) GetChannelTaskDelivery(ctx context.Context, id pgtype.UUID) (db.ChannelTaskDelivery, error) {
+func (q *auditGatedQueries) GetChannelTaskDelivery(ctx context.Context, id string) (db.ChannelTaskDelivery, error) {
 	if q.first.CompareAndSwap(false, true) {
 		close(q.entered)
 		select {
@@ -382,7 +381,7 @@ type auditLedgerQueries struct {
 	row db.ChatMessage
 }
 
-func (q *auditLedgerQueries) GetChatMessageByTaskAssistant(context.Context, pgtype.UUID) (db.ChatMessage, error) {
+func (q *auditLedgerQueries) GetChatMessageByTaskAssistant(context.Context, string) (db.ChatMessage, error) {
 	return q.row, nil
 }
 
@@ -390,7 +389,7 @@ func (q *auditLedgerQueries) SetChatMessageChannelOutboundProvenanceByTask(_ con
 	q.row.ChannelOutboundType = p.ChannelType
 	q.row.ChannelOutboundInstallationID = p.InstallationID
 	q.row.ChannelOutboundChatID = p.ChannelChatID
-	q.row.ChannelOutboundMessageIds = append([]string(nil), p.MessageIds...)
+	q.row.ChannelOutboundMessageIds = p.MessageIds
 	return 1, nil
 }
 

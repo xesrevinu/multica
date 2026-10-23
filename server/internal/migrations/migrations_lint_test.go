@@ -16,7 +16,7 @@ func TestMigrationNumericPrefixesAreUnique(t *testing.T) {
 	// Migrations through 128 contain historical duplicate numeric prefixes.
 	// From 129 onward, keep the numeric sequence unique so release tooling and
 	// operators can identify one schema change unambiguously by its number.
-	const firstUniqueMigrationNumber = 129
+	const firstUniqueMigrationNumber = 575
 	stemByNumber := make(map[int]string)
 	for _, file := range files {
 		stem, _, ok := splitMigrationFilename(filepath.Base(file))

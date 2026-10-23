@@ -689,7 +689,7 @@ func TestWebhookHandler_ActiveDispatchesRunWithPayload(t *testing.T) {
 		EventPayload map[string]interface{} `json:"eventPayload"`
 	}
 	if err := json.Unmarshal([]byte(run.TriggerPayload.String), &payload); err != nil {
-		t.Fatalf("payload decode: %v body=%s", err, string(run.TriggerPayload))
+		t.Fatalf("payload decode: %v body=%s", err, run.TriggerPayload.String)
 	}
 	if payload.Event != "demo.received" {
 		t.Fatalf("envelope event: %q", payload.Event)

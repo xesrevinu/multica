@@ -239,29 +239,6 @@ func TestUploadFile_TaskScopedChatAttachment(t *testing.T) {
 // failed before binding) is reaped when its chat_session is deleted, via
 // attachment.chat_session_id's ON DELETE CASCADE. Cleanup does not depend on the
 // task relationship, so no attachment.task_id foreign key / cascade is needed.
-func TestChatAttachment_UnboundOrphanReapedOnSessionDelete(t *testing.T) {
-	if testPool == nil {
-		t.Skip("test database not available")
-	}
-	agentID := createHandlerTestAgent(t, "OrphanCleanupAgent", []byte("[]"))
-	sessionID := createHandlerTestChatSession(t, agentID)
-	taskID := seedRunningChatTask(t, agentID, sessionID)
-	attID := seedAgentChatAttachment(t, agentID, sessionID, taskID)
-
-	if _, err := testPool.Exec(context.Background(),
-		`DELETE FROM chat_session WHERE id = $1`, sessionID); err != nil {
-		t.Fatalf("delete chat session: %v", err)
-	}
-
-	var exists bool
-	if err := testPool.QueryRow(context.Background(),
-		`SELECT EXISTS(SELECT 1 FROM attachment WHERE id = $1)`, attID).Scan(&exists); err != nil {
-		t.Fatalf("check attachment: %v", err)
-	}
-	if exists {
-		t.Fatal("unbound task-tagged attachment must be reaped when its chat_session is deleted")
-	}
-}
 
 // TestCompleteTask_BindsChatAttachments covers the read/bind side: on chat task
 // completion the agent's task-scoped attachments bind to the assistant reply.

@@ -24,14 +24,29 @@ type prConditionTx struct {
 	writes    int
 }
 
-func (tx *prConditionTx) QueryContext(_ context.Context, query string, args ...any) (*sql.Rows, error) {
+func (tx *prConditionTx) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	if tx.queryErr != nil {
+		return nil, tx.queryErr
+	}
+	memDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		return nil, err
+	}
 	if strings.Contains(query, "UPDATE issue_wakeup_receipt") {
-		return nil, fmt.Errorf("sqlite rows unsupported in test double")
+		return memDB.QueryContext(ctx, "SELECT '' WHERE 0")
 	}
 	if !strings.Contains(query, "WHERE ipr.issue_id=$1") || len(args) != 1 || args[0] != tx.issue {
 		return nil, fmt.Errorf("unexpected PR scope: %s %v", query, args)
 	}
-	return nil, fmt.Errorf("sqlite rows unsupported in test double")
+	if _, err := memDB.ExecContext(ctx, "CREATE TABLE pr_rows (pr_number INTEGER, state TEXT, head TEXT, checks TEXT)"); err != nil {
+		return nil, err
+	}
+	for _, r := range tx.prs {
+		if _, err := memDB.ExecContext(ctx, "INSERT INTO pr_rows VALUES (?, ?, ?, ?)", r[0], r[1], r[2], r[3]); err != nil {
+			return nil, err
+		}
+	}
+	return memDB.QueryContext(ctx, "SELECT pr_number, state, head, checks FROM pr_rows")
 }
 
 func (tx *prConditionTx) ExecContext(_ context.Context, query string, args ...any) (sql.Result, error) {
@@ -73,7 +88,7 @@ func TestWakeupConditionPREvaluation(t *testing.T) {
 			s := &IssueWakeupService{Tasks: &TaskService{PRSnapshotsEnabled: tc.available}}
 			w := db.IssueWakeup{IssueID: newV7(), Condition: nullString(string(condition(t, map[string]any{"type": "pull_request", "event": tc.event})))}
 			tx := &prConditionTx{issue: w.IssueID, prs: tc.prs}
-			met, fingerprint, observed, err := s.evaluateCondition(context.Background(), tx.Tx, db.New(tx), w)
+			met, fingerprint, observed, err := s.evaluateCondition(context.Background(), tx, db.New(tx), w)
 			if met != tc.wantMet || !errors.Is(err, tc.wantErr) {
 				t.Fatalf("met=%t err=%v; want met=%t err=%v", met, err, tc.wantMet, tc.wantErr)
 			}
@@ -92,11 +107,11 @@ func TestWakeupConditionPRDiagnosticPolling(t *testing.T) {
 	q := db.New(tx)
 	now := time.Now()
 	wantUnavailable := conditionDiagnosticPrefix + errPRSnapshotsUnavailable.Error()
-	if err := s.baselineCondition(ctx, tx.Tx, q, w, now); err != nil || tx.lastError.String != wantUnavailable {
+	if err := s.baselineCondition(ctx, tx, q, w, now); err != nil || tx.lastError.String != wantUnavailable {
 		t.Fatalf("registration must retain diagnostic without rejecting: %v, %+v", err, tx.lastError)
 	}
 	w.LastError = tx.lastError
-	if err := s.baselineCondition(ctx, tx.Tx, q, w, now); err != nil || tx.writes != 1 {
+	if err := s.baselineCondition(ctx, tx, q, w, now); err != nil || tx.writes != 1 {
 		t.Fatalf("unchanged diagnostic must not be rewritten: err=%v writes=%d", err, tx.writes)
 	}
 	s.Tasks.PRSnapshotsEnabled = true
@@ -110,7 +125,7 @@ func TestWakeupConditionPRDiagnosticPolling(t *testing.T) {
 	} {
 		tx.prs = step.prs
 		w.LastError = tx.lastError
-		next, err := s.pollCondition(ctx, tx.Tx, q, w, now)
+		next, err := s.pollCondition(ctx, tx, q, w, now)
 		if err != nil || !next.Valid || !asTime(next).Equal(now.Add(conditionPollInterval)) {
 			t.Fatalf("poll must remain scheduled: next=%+v err=%v", next, err)
 		}
@@ -124,7 +139,7 @@ func TestWakeupConditionPRDiagnosticPolling(t *testing.T) {
 	}
 	// Real query failures still propagate; they are never treated as unmet facts.
 	tx.queryErr = errors.New("database offline")
-	if _, err := s.pollCondition(ctx, tx.Tx, q, w, now); !errors.Is(err, tx.queryErr) {
+	if _, err := s.pollCondition(ctx, tx, q, w, now); !errors.Is(err, tx.queryErr) {
 		t.Fatalf("database error swallowed: %v", err)
 	}
 }

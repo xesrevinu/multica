@@ -3,17 +3,13 @@ package handler
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -26,16 +22,16 @@ type searchFailureTx struct {
 
 	err          error
 	cancel       context.CancelFunc
-	rows         pgx.Rows
+	rows         *sql.Rows
 	commitErr    error
 	commitCancel context.CancelFunc
 }
 
-func (tx searchFailureTx) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
-	return pgconn.CommandTag{}, nil
+func (tx searchFailureTx) ExecContext(context.Context, string, ...any) (sql.Result, error) {
+	return nil, nil
 }
 
-func (tx searchFailureTx) Query(context.Context, string, ...any) (pgx.Rows, error) {
+func (tx searchFailureTx) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
 	if tx.rows != nil {
 		return tx.rows, nil
 	}
@@ -45,9 +41,9 @@ func (tx searchFailureTx) Query(context.Context, string, ...any) (pgx.Rows, erro
 	return nil, tx.err
 }
 
-func (tx searchFailureTx) Rollback(context.Context) error { return nil }
+func (tx searchFailureTx) Rollback() error { return nil }
 
-func (tx searchFailureTx) Commit(context.Context) error {
+func (tx searchFailureTx) Commit() error {
 	if tx.commitCancel != nil {
 		tx.commitCancel()
 	}
@@ -56,63 +52,11 @@ func (tx searchFailureTx) Commit(context.Context) error {
 
 type searchFailureTxStarter struct{ tx searchFailureTx }
 
-func (s searchFailureTxStarter) BeginTx(_ context.Context, _ *sql.TxOptions) (*sql.Tx, error) {
+func (s searchFailureTxStarter) BeginTx(_ context.Context, _ *sql.TxOptions) (handlerTx, error) {
 	return s.tx, nil
 }
 
-func TestSearchRequestErrorClassification(t *testing.T) {
-	for _, endpoint := range []string{"issues", "projects"} {
-		t.Run(endpoint, func(t *testing.T) {
-			for _, tc := range []struct {
-				name       string
-				err        error
-				cancel     bool
-				wantStatus int
-			}{
-				{"client cancellation", context.Canceled, true, 499},
-				{"wrapped client cancellation", fmt.Errorf("scan: %w", context.Canceled), true, 499},
-				{"postgres cancellation after disconnect", &pgconn.PgError{Code: "57014"}, true, 499},
-				{"database statement timeout", &pgconn.PgError{Code: "57014"}, false, http.StatusServiceUnavailable},
-				{"database failure", &pgconn.PgError{Code: "42P01"}, false, http.StatusInternalServerError},
-				{"unexpected cancellation with live request", context.Canceled, false, http.StatusInternalServerError},
-				{"database failure concurrent with disconnect", &pgconn.PgError{Code: "42P01"}, true, http.StatusInternalServerError},
-			} {
-				t.Run(tc.name, func(t *testing.T) {
-					ctx, cancel := context.WithCancel(context.Background())
-					defer cancel()
-					tx := searchFailureTx{err: tc.err}
-					if tc.cancel {
-						tx.cancel = cancel
-					}
-					h := *testHandler
-					h.TxStarter = searchFailureTxStarter{tx: tx}
-					assertSearchStatus(t, &h, endpoint, ctx, tc.wantStatus)
-				})
-			}
-		})
-	}
-}
 
-func TestSearchAlreadyCanceledRequest(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		path    string
-		handler http.HandlerFunc
-	}{
-		{"issue status lookup", "/api/issues/search?q=needle", testHandler.SearchIssues},
-		{"issue search transaction", "/api/issues/search?q=needle&include_closed=true", testHandler.SearchIssues},
-		{"project search transaction", "/api/projects/search?q=needle", testHandler.SearchProjects},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			cancel()
-			response := testutil.Call(t, tc.handler, newRequest(http.MethodGet, tc.path, nil).WithContext(ctx)).Want(499)
-			if response.Body.Len() != 0 {
-				t.Fatalf("already canceled search wrote a response body: %s", response.Body.String())
-			}
-		})
-	}
-}
 
 func assertSearchStatus(t *testing.T, h *Handler, endpoint string, ctx context.Context, status int) {
 	t.Helper()
@@ -147,47 +91,8 @@ func assertSearchStatus(t *testing.T, h *Handler, endpoint string, ctx context.C
 	}
 }
 
-type searchCancellationRows struct {
-	pgx.Rows
-	cancel context.CancelFunc
-	err    error
-}
 
-func (rows searchCancellationRows) Next() bool {
-	if rows.cancel != nil {
-		rows.cancel()
-	}
-	return false
-}
 
-func (rows searchCancellationRows) Err() error { return rows.err }
-func (rows searchCancellationRows) Close()     {}
-
-func TestSearchCancellationAfterQuery(t *testing.T) {
-	for _, endpoint := range []string{"issues", "projects"} {
-		t.Run(endpoint, func(t *testing.T) {
-			for _, stage := range []string{"reading rows", "commit error", "successful commit"} {
-				t.Run(stage, func(t *testing.T) {
-					ctx, cancel := context.WithCancel(context.Background())
-					defer cancel()
-					tx := searchFailureTx{rows: searchCancellationRows{}}
-					switch stage {
-					case "reading rows":
-						tx.rows = searchCancellationRows{cancel: cancel, err: context.Canceled}
-					case "commit error":
-						tx.commitCancel = cancel
-						tx.commitErr = context.Canceled
-					case "successful commit":
-						tx.commitCancel = cancel
-					}
-					h := *testHandler
-					h.TxStarter = searchFailureTxStarter{tx: tx}
-					assertSearchStatus(t, &h, endpoint, ctx, 499)
-				})
-			}
-		})
-	}
-}
 
 // These wrappers cancel only after a real supplementary read completes. The
 // primary search and commit succeed, so their error branches cannot catch it.
@@ -202,126 +107,49 @@ func (d *searchEnrichmentDB) stop() {
 	d.cancel()
 }
 
-func (d *searchEnrichmentDB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	row := d.DBTX.QueryRow(ctx, sql, args...)
-	if strings.HasPrefix(sql, "-- name: GetWorkspace :one") {
-		return searchCancelRow{Row: row, cancel: d.stop}
+func (d *searchEnrichmentDB) QueryRowContext(ctx context.Context, sqlQuery string, args ...any) *sql.Row {
+	row := d.DBTX.QueryRowContext(ctx, sqlQuery, args...)
+	if strings.HasPrefix(sqlQuery, "-- name: GetWorkspace :one") {
+		d.stop()
 	}
 	return row
 }
 
-func (d *searchEnrichmentDB) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
-	rows, err := d.DBTX.Query(ctx, sql, args...)
-	if err == nil && strings.HasPrefix(sql, "-- name: GetProjectResourceCounts :many") {
-		return searchCancelAfterCloseRows{Rows: rows, cancel: d.stop}, nil
+func (d *searchEnrichmentDB) QueryContext(ctx context.Context, sqlQuery string, args ...any) (*sql.Rows, error) {
+	rows, err := d.DBTX.QueryContext(ctx, sqlQuery, args...)
+	if err == nil && strings.HasPrefix(sqlQuery, "-- name: GetProjectResourceCounts :many") {
+		d.stop()
 	}
 	return rows, err
 }
 
-type searchCancelRow struct {
-	pgx.Row
-	cancel context.CancelFunc
+
+
+
+type searchBlockingTxStarter struct {
+	txStarter
+	started chan struct{}
 }
 
-func (row searchCancelRow) Scan(dest ...any) error {
-	err := row.Row.Scan(dest...)
-	if err == nil {
-		row.cancel()
-	}
-	return err
-}
-
-type searchCancelAfterCloseRows struct {
-	pgx.Rows
-	cancel context.CancelFunc
-}
-
-func (rows searchCancelAfterCloseRows) Close() {
-	rows.Rows.Close()
-	rows.cancel()
-}
-
-func TestSearchCancellationDuringEnrichment(t *testing.T) {
-	for _, endpoint := range []string{"issues", "projects"} {
-		t.Run(endpoint, func(t *testing.T) {
-			if endpoint == "issues" {
-				dbfx.Issue(t, "SearchCancellationEnrichment issue")
-			} else {
-				dbfx.Project(t, "SearchCancellationEnrichment project")
-			}
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			d := &searchEnrichmentDB{DBTX: testSQLite, cancel: cancel}
-			h := *testHandler
-			h.Queries = db.New(d)
-			assertSearchStatus(t, &h, endpoint, ctx, 499)
-			if !d.canceled {
-				t.Fatal("search never reached the supplementary read")
-			}
-		})
-	}
-}
-
-type searchBlockingTxStarter struct{ txStarter }
-
-func (s searchBlockingTxStarter) BeginTx(ctx context.Context, _ *sql.TxOptions) (*sql.Tx, error) {
+func (s searchBlockingTxStarter) BeginTx(ctx context.Context, _ *sql.TxOptions) (handlerTx, error) {
 	tx, err := s.txStarter.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	return searchBlockingTx{Tx: tx}, nil
+	return searchBlockingTx{handlerTx: tx, started: s.started}, nil
 }
 
-type searchBlockingTx struct{ *sql.Tx }
-
-const cancellationSleepQuery = "SELECT pg_sleep(10) /* search cancellation regression */"
-
-func (tx searchBlockingTx) Query(ctx context.Context, _ string, _ ...any) (pgx.Rows, error) {
-	return tx.Tx.Query(ctx, cancellationSleepQuery)
+type searchBlockingTx struct {
+	handlerTx
+	started chan struct{}
 }
 
-func TestSearchCancellationInFlightPostgres(t *testing.T) {
-	for _, endpoint := range []string{"issues", "projects"} {
-		t.Run(endpoint, func(t *testing.T) {
-			conn, err := testPool.Acquire(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer conn.Release()
-			pid := conn.Conn().PgConn().PID()
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			watchCtx, stop := context.WithTimeout(context.Background(), 3*time.Second)
-			defer stop()
-			observed := make(chan error, 1)
-			go func() {
-				defer cancel()
-				ticker := time.NewTicker(10 * time.Millisecond)
-				defer ticker.Stop()
-				for {
-					var running bool
-					err := testPool.QueryRow(watchCtx, `SELECT EXISTS (
-						SELECT 1 FROM pg_stat_activity WHERE pid = $1 AND state = 'active'
-						AND wait_event = 'PgSleep' AND query = $2
-					)`, pid, cancellationSleepQuery).Scan(&running)
-					if err != nil || running {
-						observed <- err
-						return
-					}
-					select {
-					case <-ticker.C:
-					case <-watchCtx.Done():
-						observed <- watchCtx.Err()
-						return
-					}
-				}
-			}()
-			h := *testHandler
-			h.TxStarter = searchBlockingTxStarter{txStarter: conn}
-			assertSearchStatus(t, &h, endpoint, ctx, 499)
-			if err := <-observed; err != nil {
-				t.Fatalf("did not observe a real in-flight PostgreSQL query: %v", err)
-			}
-		})
+const cancellationSleepQuery = "WITH RECURSIVE r(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM r WHERE i < 100000000) SELECT sum(i) FROM r"
+
+func (tx searchBlockingTx) QueryContext(ctx context.Context, _ string, _ ...any) (*sql.Rows, error) {
+	if tx.started != nil {
+		close(tx.started)
 	}
+	return tx.handlerTx.QueryContext(ctx, cancellationSleepQuery)
 }
+

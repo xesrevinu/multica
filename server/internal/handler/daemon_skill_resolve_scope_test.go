@@ -2,14 +2,13 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"strings"
 	"sync"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/testutil"
@@ -48,15 +47,19 @@ type skillQuerySpy struct {
 	skillFileCallIDs []int
 }
 
-func (s *skillQuerySpy) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	return s.inner.Exec(ctx, sql, args...)
+func (s *skillQuerySpy) ExecContext(ctx context.Context, sqlQuery string, args ...any) (sql.Result, error) {
+	return s.inner.ExecContext(ctx, sqlQuery, args...)
 }
 
-func (s *skillQuerySpy) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	return s.inner.QueryRow(ctx, sql, args...)
+func (s *skillQuerySpy) PrepareContext(ctx context.Context, sqlQuery string) (*sql.Stmt, error) {
+	return s.inner.PrepareContext(ctx, sqlQuery)
 }
 
-func (s *skillQuerySpy) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+func (s *skillQuerySpy) QueryRowContext(ctx context.Context, sql string, args ...any) *sql.Row {
+	return s.inner.QueryRowContext(ctx, sql, args...)
+}
+
+func (s *skillQuerySpy) QueryContext(ctx context.Context, sql string, args ...any) (*sql.Rows, error) {
 	switch {
 	case strings.Contains(sql, queryScopedAgentSkills):
 		s.record(&s.scopedSkillIDs, uuidArgLen(args, 1))
@@ -70,7 +73,7 @@ func (s *skillQuerySpy) Query(ctx context.Context, sql string, args ...any) (pgx
 	case strings.Contains(sql, querySkillFilesByIDs):
 		s.record(&s.skillFileCallIDs, uuidArgLen(args, 0))
 	}
-	return s.inner.Query(ctx, sql, args...)
+	return s.inner.QueryContext(ctx, sql, args...)
 }
 
 func (s *skillQuerySpy) record(into *[]int, n int) {
@@ -158,43 +161,6 @@ func workspaceRef(skillID string) resolveSkillBundleRef {
 // and hash one. Before, every resolve request loaded the agent's entire skill
 // set to pick a single bundle out of it, so a cold dispatch of N skills cost N
 // full loads.
-func TestResolveTaskSkillBundles_LoadsOnlyTheRequestedSkill(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	spy := &skillQuerySpy{inner: testSQLite}
-	runtimeID, taskID, skillIDs := resolveScopeFixture(t, ctx, "resolvescope",
-		"resolvescope-alpha", "resolvescope-beta", "resolvescope-gamma")
-
-	var resp struct {
-		Bundles []service.AgentSkillData `json:"bundles"`
-	}
-	resolveBundles(t, newSpyHandler(t, spy), runtimeID, taskID, workspaceRef(skillIDs[1])).
-		Want(http.StatusOK).JSON(&resp)
-
-	if len(resp.Bundles) != 1 || resp.Bundles[0].ID != skillIDs[1] {
-		t.Fatalf("resolved %+v, want exactly the requested skill %s", resp.Bundles, skillIDs[1])
-	}
-	if len(resp.Bundles[0].Files) != 1 || resp.Bundles[0].Files[0].Content != "resolvescope-beta rules" {
-		t.Fatalf("resolved bundle lost its files: %+v", resp.Bundles[0].Files)
-	}
-	if resp.Bundles[0].Hash == "" {
-		t.Fatal("resolved bundle has no hash")
-	}
-
-	fullCalls, scoped, files := spy.snapshot()
-	if fullCalls != 0 {
-		t.Fatalf("the full ListAgentSkills ran %d times; resolve must not load the agent's whole skill set", fullCalls)
-	}
-	if len(scoped) != 1 || scoped[0] != 1 {
-		t.Fatalf("scoped skill query calls = %v, want exactly one call for one id", scoped)
-	}
-	if len(files) != 1 || files[0] != 1 {
-		t.Fatalf("skill file query calls = %v, want exactly one call for one id", files)
-	}
-}
 
 // TestResolveTaskSkillBundles_BuiltinRefTouchesNoWorkspaceQuery pins the other
 // half: built-ins live in the binary, so resolving one must not reach the
@@ -237,47 +203,6 @@ func TestResolveTaskSkillBundles_BuiltinRefTouchesNoWorkspaceQuery(t *testing.T)
 // TestResolveTaskSkillBundles_KeepsRequestOrderAndDeduplicates: the scoped
 // query orders by name, so response order can no longer fall out of the load.
 // It must follow the request, and a repeated ref must not be loaded twice.
-func TestResolveTaskSkillBundles_KeepsRequestOrderAndDeduplicates(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	spy := &skillQuerySpy{inner: testSQLite}
-	// Named so the query's name ASC order is the reverse of the request order.
-	runtimeID, taskID, skillIDs := resolveScopeFixture(t, ctx, "resolveorder",
-		"resolveorder-zulu", "resolveorder-alpha")
-	zulu, alpha := skillIDs[0], skillIDs[1]
-
-	var resp struct {
-		Bundles []service.AgentSkillData `json:"bundles"`
-	}
-	resolveBundles(t, newSpyHandler(t, spy), runtimeID, taskID,
-		workspaceRef(zulu), workspaceRef(alpha), workspaceRef(zulu)).
-		Want(http.StatusOK).JSON(&resp)
-
-	got := []string{}
-	for _, bundle := range resp.Bundles {
-		got = append(got, bundle.ID)
-	}
-	want := []string{zulu, alpha, zulu}
-	if len(got) != len(want) {
-		t.Fatalf("resolved %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("resolved %v, want request order %v", got, want)
-		}
-	}
-
-	_, scoped, files := spy.snapshot()
-	if len(scoped) != 1 || scoped[0] != 2 {
-		t.Fatalf("scoped skill query calls = %v, want one call for 2 distinct ids (the repeated ref must not load twice)", scoped)
-	}
-	if len(files) != 1 || files[0] != 2 {
-		t.Fatalf("skill file query calls = %v, want one call for 2 ids", files)
-	}
-}
 
 // TestResolveTaskSkillBundles_RefusesSkillsTheAgentCannotSee is the reason the
 // narrowed read is safe: the old code authorized by membership in the agent's

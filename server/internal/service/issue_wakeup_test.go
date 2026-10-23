@@ -125,7 +125,7 @@ func TestIssueWakeupEventAtomicOnceAndIndependentInputs(t *testing.T) {
 		t.Fatal(e)
 	}
 	if (got.Enabled != 0) || util.UUIDToString(got.LastTaskID.String) != ordinary || got.FireCount != 1 {
-		t.Fatalf("after the run started: enabled=%t last_task=%s fire_count=%d", got.Enabled, util.UUIDToString(got.LastTaskID.String), got.FireCount)
+		t.Fatalf("after the run started: enabled=%t last_task=%s fire_count=%d", (got.Enabled != 0), util.UUIDToString(got.LastTaskID.String), got.FireCount)
 	}
 	if n := wakeRuns(t, f, w.ID); n != 0 {
 		t.Fatalf("the wakeup also queued %d runs of its own", n)
@@ -147,7 +147,7 @@ func TestIssueWakeupStartsItsOwnRunWhenNothingWaits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(task.HandoffNote.String, comment) || task.OriginatorUserID != parseTestUUID(t, f.UserID) {
+	if !strings.Contains(task.HandoffNote.String, comment) || task.OriginatorUserID.String != parseTestUUID(t, f.UserID) {
 		t.Fatal("missing input or principal")
 	}
 }

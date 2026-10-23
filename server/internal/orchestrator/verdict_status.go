@@ -60,7 +60,7 @@ func (s *Service) installationFor(ctx context.Context, sp *Spec, num string) (in
 	var id int64
 	err := s.opt.Pool.QueryRowContext(ctx, `SELECT installation_id FROM github_pull_request
 		WHERE lower(repo_owner)=lower($1) AND lower(repo_name)=lower($2) AND installation_id IS NOT NULL
-		ORDER BY (pr_number::text=$3) DESC, pr_updated_at DESC LIMIT 1`, parts[0], parts[1], num).Scan(&id)
+		ORDER BY (CAST(pr_number AS TEXT)=$3) DESC, pr_updated_at DESC LIMIT 1`, parts[0], parts[1], num).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("no GitHub App installation known for %s (is the App installed on it?): %w", sp.Repo.Slug, err)
 	}

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
+	"database/sql"
 	"github.com/multica-ai/multica/server/internal/testutil"
 )
 
@@ -17,12 +17,12 @@ type issueCountFailureDB struct {
 	failures int
 }
 
-func (db *issueCountFailureDB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	if strings.HasPrefix(sql, "SELECT COUNT(*) FROM issue i WHERE ") {
+func (db *issueCountFailureDB) QueryRowContext(ctx context.Context, sqlStr string, args ...any) *sql.Row {
+	if strings.HasPrefix(sqlStr, "SELECT COUNT(*) FROM issue i WHERE ") {
 		db.failures++
-		return issueCountFailureRow{}
+		return errSQLRow(errors.New("injected COUNT failure: private SQL details"))
 	}
-	return db.dbExecutor.QueryRow(ctx, sql, args...)
+	return db.dbExecutor.QueryRowContext(ctx, sqlStr, args...)
 }
 
 type issueCountFailureRow struct{}

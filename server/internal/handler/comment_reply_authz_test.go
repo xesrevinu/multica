@@ -20,10 +20,10 @@ func TestTaskCoversReplyParent(t *testing.T) {
 
 	task := db.AgentTaskQueue{
 		TriggerCommentID: nullString(util.MustParseUUID(trigger)),
-		CoalescedCommentIds: []string{
+		CoalescedCommentIds: encodeStringSlice([]string{
 			util.MustParseUUID(c1),
 			util.MustParseUUID(c2),
-		},
+		}),
 	}
 
 	cases := []struct {

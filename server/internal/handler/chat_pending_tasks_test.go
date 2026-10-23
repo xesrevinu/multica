@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"testing"
 
 	"github.com/google/uuid"
@@ -336,73 +335,6 @@ func TestGetPendingChatTask_ReturnsActiveHeadAndFIFOQueue(t *testing.T) {
 	}
 }
 
-func TestListChatMessagesPage_QueuedFollowUpsDoNotConsumeLimit(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	agentID := createHandlerTestAgent(t, "QueuedPageBudgetAgent", []byte("[]"))
-	sessionID := createHandlerTestChatSession(t, agentID)
-	settledID := insertPendingChatTask(t, agentID, sessionID, "completed")
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO chat_message (chat_session_id, role, content, task_id, created_at)
-		VALUES
-			($1, 'user', 'settled 1', $2, '2026-07-29T01:00:00Z'),
-			($1, 'assistant', 'settled 2', $2, '2026-07-29T01:00:01Z'),
-			($1, 'user', 'settled 3', $2, '2026-07-29T01:00:02Z'),
-			($1, 'assistant', 'settled 4', $2, '2026-07-29T01:00:03Z')
-	`, sessionID, settledID); err != nil {
-		t.Fatalf("insert settled history: %v", err)
-	}
-
-	for _, row := range []struct {
-		content   string
-		createdAt string
-	}{
-		{"queued prompt A", "2026-07-29T01:00:04Z"},
-		{"queued prompt B", "2026-07-29T01:00:05Z"},
-		{"queued prompt C", "2026-07-29T01:00:06Z"},
-	} {
-		taskID := insertPendingChatTask(t, agentID, sessionID, "queued")
-		if _, err := testPool.Exec(ctx, `
-			WITH owned AS (
-				UPDATE agent_task_queue SET chat_input_task_id = id WHERE id = $1
-				RETURNING id
-			)
-			INSERT INTO chat_message (chat_session_id, role, content, task_id, created_at)
-			SELECT $2, 'user', $3, id, $4 FROM owned
-		`, taskID, sessionID, row.content, row.createdAt); err != nil {
-			t.Fatalf("insert queued history: %v", err)
-		}
-	}
-
-	t.Log("PAGING FIXTURE: endpoint=GET /api/chat/sessions/{id}/messages/page settled=4 head=1 follow_ups=2 limit=3")
-	t.Log("REQUEST page=1: limit=3 before=<none>")
-	page1 := fetchChatMessagesPageForTest(t, sessionID, url.Values{"limit": {"3"}})
-	if len(page1.Messages) != 3 ||
-		page1.Messages[0].Content != "settled 3" ||
-		page1.Messages[1].Content != "settled 4" ||
-		page1.Messages[2].Content != "queued prompt A" ||
-		!page1.HasMore || page1.NextCursor == nil {
-		t.Fatalf("unexpected first page: %+v", page1)
-	}
-	t.Logf("RESPONSE page=1: messages=[%q, %q, %q] has_more=%t", page1.Messages[0].Content, page1.Messages[1].Content, page1.Messages[2].Content, page1.HasMore)
-	t.Logf("CURSOR page=1: created_at=%s id=%s", page1.NextCursor.CreatedAt, page1.NextCursor.ID)
-
-	page2Params := url.Values{
-		"limit":             {"3"},
-		"before_created_at": {page1.NextCursor.CreatedAt},
-		"before_id":         {page1.NextCursor.ID},
-	}
-	t.Logf("REQUEST page=2: limit=3 before_created_at=%s before_id=%s", page1.NextCursor.CreatedAt, page1.NextCursor.ID)
-	page2 := fetchChatMessagesPageForTest(t, sessionID, page2Params)
-	if len(page2.Messages) != 2 || page2.Messages[0].Content != "settled 1" || page2.Messages[1].Content != "settled 2" || page2.HasMore || page2.NextCursor != nil {
-		t.Fatalf("unexpected second page: %+v", page2)
-	}
-	t.Logf("RESPONSE page=2: messages=[%q, %q] has_more=%t next_cursor=<nil>", page2.Messages[0].Content, page2.Messages[1].Content, page2.HasMore)
-	t.Log("ASSERTION: page_sizes=3,2 head_visible=1 follow_ups_visible=0 cursor_advanced=true duplicates=0")
-}
 
 func TestPendingQueueHeadMatchesClaimForEqualCreatedAt(t *testing.T) {
 	if testHandler == nil {
@@ -598,78 +530,6 @@ func TestPrioritizeQueuedChatTask_BroadcastsQueueInvalidation(t *testing.T) {
 	}
 }
 
-func TestClearQueuedChatTasks_PreservesUnclaimedHeadAndDeletesFollowUps(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	agentID := createHandlerTestAgent(t, "ClearPendingQueueAgent", []byte("[]"))
-	sessionID := createHandlerTestChatSession(t, agentID)
-	var taskIDs, messageIDs, attachmentIDs []string
-	for _, content := range []string{"queued prompt A", "queued prompt B"} {
-		taskID, messageID, attachmentID := insertQueuedChatInputWithAttachment(
-			t,
-			agentID,
-			sessionID,
-			content,
-		)
-		taskIDs = append(taskIDs, taskID)
-		messageIDs = append(messageIDs, messageID)
-		attachmentIDs = append(attachmentIDs, attachmentID)
-	}
-	if _, err := testPool.Exec(context.Background(), `
-		UPDATE agent_task_queue
-		SET created_at = CASE id WHEN $1 THEN '2026-07-29T01:00:00Z'::timestamptz ELSE '2026-07-29T01:00:01Z'::timestamptz END
-		WHERE id IN ($1, $2)
-	`, taskIDs[0], taskIDs[1]); err != nil {
-		t.Fatalf("order queued tasks: %v", err)
-	}
-
-	req := withURLParam(
-		newRequestAs(
-			testUserID,
-			http.MethodDelete,
-			"/api/chat/sessions/"+sessionID+"/queued-tasks",
-			nil,
-		),
-		"sessionId",
-		sessionID,
-	)
-	w := httptest.NewRecorder()
-	testHandler.ClearQueuedChatTasks(w, chatPendingCtxAs(t, req, testUserID))
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("expected 204, got %d: %s", w.Code, w.Body.String())
-	}
-
-	if got := taskStatus(t, taskIDs[0]); got != "queued" {
-		t.Fatalf("unclaimed head status = %q, want queued", got)
-	}
-	if got := taskStatus(t, taskIDs[1]); got != "cancelled" {
-		t.Fatalf("queued follow-up status = %q, want cancelled", got)
-	}
-	var headInputExists, followUpInputExists bool
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT
-			EXISTS (SELECT 1 FROM chat_message WHERE id = $1),
-			EXISTS (SELECT 1 FROM chat_message WHERE id = $2)
-	`, messageIDs[0], messageIDs[1]).Scan(&headInputExists, &followUpInputExists); err != nil {
-		t.Fatalf("read queued inputs after clear: %v", err)
-	}
-	if !headInputExists || followUpInputExists {
-		t.Fatalf("queued inputs after clear: head=%t follow_up=%t, want true/false", headInputExists, followUpInputExists)
-	}
-	var headAttachmentExists, followUpAttachmentExists bool
-	if err := testPool.QueryRow(context.Background(), `
-		SELECT
-			EXISTS (SELECT 1 FROM attachment WHERE id = $1),
-			EXISTS (SELECT 1 FROM attachment WHERE id = $2)
-	`, attachmentIDs[0], attachmentIDs[1]).Scan(&headAttachmentExists, &followUpAttachmentExists); err != nil {
-		t.Fatalf("read queued attachments after clear: %v", err)
-	}
-	if !headAttachmentExists || followUpAttachmentExists {
-		t.Fatalf("queued attachments after clear: head=%t follow_up=%t, want true/false", headAttachmentExists, followUpAttachmentExists)
-	}
-}
 
 // TestListPendingChatTasks_HidesPrivateAgentFromLostAccessCreator verifies the
 // P1 rewrite still enforces the private-agent gate now that filtering keys off

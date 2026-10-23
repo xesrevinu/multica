@@ -4,10 +4,10 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"database/sql"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -16,39 +16,27 @@ const testResolverSlug = "middleware-resolver-test"
 // openPool returns a connected pgxpool, or skips the test if the database is
 // unreachable. Mirrors the handler package's fixture approach so tests don't
 // require a DB in environments where one isn't available.
-func openPool(t *testing.T) *pgxpool.Pool {
+func openPool(t *testing.T) *sql.DB {
 	t.Helper()
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		dbURL = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
-	}
-	pool, err := pgxpool.New(context.Background(), dbURL)
-	if err != nil {
-		t.Skipf("skipping: could not connect to database: %v", err)
-	}
-	if err := pool.Ping(context.Background()); err != nil {
-		pool.Close()
-		t.Skipf("skipping: database not reachable: %v", err)
-	}
-	return pool
+	return testutil.OpenTestDB(t)
 }
 
 // setupResolverFixture inserts a workspace with a known slug and returns its
 // UUID. The caller is responsible for calling the returned cleanup func.
-func setupResolverFixture(t *testing.T, pool *pgxpool.Pool) (workspaceID string, cleanup func()) {
+func setupResolverFixture(t *testing.T, pool *sql.DB) (workspaceID string, cleanup func()) {
 	t.Helper()
 	ctx := context.Background()
 	// Pre-cleanup in case a previous run didn't finish.
-	_, _ = pool.Exec(ctx, `DELETE FROM workspace WHERE slug = $1`, testResolverSlug)
+	_, _ = pool.ExecContext(ctx, `DELETE FROM workspace WHERE slug = $1`, testResolverSlug)
 
-	if err := pool.QueryRow(ctx,
-		`INSERT INTO workspace (name, slug, description, issue_prefix) VALUES ($1, $2, '', 'MRT') RETURNING id`,
+	if err := pool.QueryRowContext(ctx,
+		`INSERT INTO workspace (id, name, slug, description, issue_prefix) VALUES (gen_random_uuid(), $1, $2, '', 'MRT') RETURNING id`,
 		"Middleware Resolver Test", testResolverSlug,
 	).Scan(&workspaceID); err != nil {
 		t.Fatalf("insert workspace: %v", err)
 	}
 	return workspaceID, func() {
-		_, _ = pool.Exec(ctx, `DELETE FROM workspace WHERE slug = $1`, testResolverSlug)
+		_, _ = pool.ExecContext(ctx, `DELETE FROM workspace WHERE slug = $1`, testResolverSlug)
 	}
 }
 

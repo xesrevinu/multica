@@ -69,7 +69,7 @@ func isAdmin(r *http.Request) bool {
 
 func (s *Service) resolveProject(r *http.Request, ref string) (string, error) {
 	var id string
-	err := s.opt.Pool.QueryRowContext(r.Context(), `SELECT id::text FROM project WHERE workspace_id=$1 AND (id::text=$2 OR lower(title)=lower($2)) LIMIT 1`, wsID(r), ref).Scan(&id)
+	err := s.opt.Pool.QueryRowContext(r.Context(), `SELECT id FROM project WHERE workspace_id=$1 AND (id=$2 OR lower(title)=lower($2)) LIMIT 1`, wsID(r), ref).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("project %q not found", ref)
 	}
@@ -197,7 +197,7 @@ func (s *Service) hApply(w http.ResponseWriter, r *http.Request) {
 		if ref == "" {
 			ref = sp.Roles.Human
 		}
-		if err := s.opt.Pool.QueryRowContext(r.Context(), `SELECT u.id::text FROM "user" u JOIN member m ON m.user_id=u.id AND m.workspace_id=$1 WHERE u.id::text=$2 OR lower(u.email)=lower($2) OR lower(u.name)=lower($2) LIMIT 1`, wsID(r), ref).Scan(&human); err != nil {
+		if err := s.opt.Pool.QueryRowContext(r.Context(), `SELECT u.id FROM "user" u JOIN member m ON m.user_id=u.id AND m.workspace_id=$1 WHERE u.id=$2 OR lower(u.email)=lower($2) OR lower(u.name)=lower($2) LIMIT 1`, wsID(r), ref).Scan(&human); err != nil {
 			writeErr(w, 422, "invalid_spec", fmt.Sprintf("human %q is not a member of this workspace", ref))
 			return
 		}
@@ -298,7 +298,7 @@ func (s *Service) transitions(r *http.Request, issueID string, limit int) []logE
 	var out []logEntry
 	for rows.Next() {
 		var e logEntry
-		if rows.Scan(&e.ID, &e.Tid, &e.State, &e.Error, &e.Source, &e.Decision, &e.CreatedAt) == nil {
+		if rows.Scan(&e.ID, &e.Tid, &e.State, &e.Error, &e.Source, sqlRawJSON{&e.Decision}, sqlTime{&e.CreatedAt}) == nil {
 			out = append(out, e)
 		}
 	}
@@ -321,7 +321,7 @@ func (s *Service) hShow(w http.ResponseWriter, r *http.Request) {
 		Err  string
 		Wait string
 	}
-	_ = s.opt.Pool.QueryRowContext(r.Context(), `SELECT failures, next_at, last_error, last_wait FROM orchestrator_issue_state WHERE issue_id=$1`, row.ID).Scan(&fail.N, &fail.Next, &fail.Err, &fail.Wait)
+	_ = s.opt.Pool.QueryRowContext(r.Context(), `SELECT failures, next_at, last_error, last_wait FROM orchestrator_issue_state WHERE issue_id=$1`, row.ID).Scan(&fail.N, sqlTimePtr{&fail.Next}, &fail.Err, &fail.Wait)
 	writeJSON(w, 200, map[string]any{
 		"key": row.Key, "title": row.Title, "status": row.Status, "assignee_type": row.AssigneeType, "assignee": row.Assignee,
 		"metadata": row.Meta, "labels": row.Labels, "needs_acceptance": t.Spec.NeedsAcceptance(&row.Issue),
@@ -389,7 +389,7 @@ func (s *Service) hMeta(needStatus, needPhase string, meta map[string]string) ht
 // re-evaluates the issue.
 func (s *Service) writeFlowMeta(w http.ResponseWriter, r *http.Request, row *issueRow, m map[string]string) {
 	sj, _ := json.Marshal(m)
-	if _, err := s.opt.Pool.ExecContext(r.Context(), `UPDATE issue SET metadata = metadata || $2::jsonb, revision=revision+1, updated_at=now() WHERE id=$1`, row.ID, sj); err != nil {
+	if _, err := s.opt.Pool.ExecContext(r.Context(), `UPDATE issue SET metadata = json_patch(COALESCE(metadata, '{}'), $2), revision=revision+1, updated_at=now() WHERE id=$1`, row.ID, string(sj)); err != nil {
 		writeErr(w, 500, "internal", err.Error())
 		return
 	}

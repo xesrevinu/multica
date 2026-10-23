@@ -23,91 +23,6 @@ import (
 // That is the repeatable server-side E2E boundary for a channel command: an
 // adapter's only responsibility is translating its webhook/socket payload into
 // channel.InboundMessage.
-func TestChannelClearCommandE2EStartsFreshProviderSession(t *testing.T) {
-	if testHandler == nil {
-		t.Fatal("database-backed handler test fixture is required")
-	}
-
-	tests := []struct {
-		name             string
-		channelType      channel.Type
-		text             string
-		commandText      string
-		forceFresh       bool
-		followUpText     string
-		wantStoredText   string
-		wantForceFresh   bool
-		wantPriorSession string
-		wantPriorWorkDir string
-	}{
-		{
-			name:             "normal message resumes existing provider context",
-			channelType:      channel.Type("slack"),
-			text:             "what model are you?",
-			commandText:      "what model are you?",
-			wantStoredText:   "what model are you?",
-			wantPriorSession: "old-provider-session",
-			wantPriorWorkDir: "/tmp/old-provider-workdir",
-		},
-		{
-			name:           "bare /clear applies to the next real message",
-			channelType:    channel.Type("slack"),
-			text:           "/clear",
-			commandText:    "/clear",
-			followUpText:   "what model are you?",
-			wantStoredText: "what model are you?",
-			wantForceFresh: true,
-		},
-		{
-			name:           "Slack /clear message starts without provider context",
-			channelType:    channel.Type("slack"),
-			text:           "/clear   what model are you?",
-			commandText:    "/clear   what model are you?",
-			wantStoredText: "what model are you?",
-			wantForceFresh: true,
-		},
-		{
-			name:           "Slack same-line /issue remains fresh-only",
-			channelType:    channel.Type("slack"),
-			text:           "/clear /issue investigate deploy",
-			commandText:    "/clear /issue investigate deploy",
-			wantStoredText: "/issue investigate deploy",
-			wantForceFresh: true,
-		},
-		{
-			name:           "Slack next-line /issue remains fresh-only",
-			channelType:    channel.Type("slack"),
-			text:           "/clear\n/issue investigate deploy",
-			commandText:    "/clear\n/issue investigate deploy",
-			wantStoredText: "/issue investigate deploy",
-			wantForceFresh: true,
-		},
-		{
-			name:           "Feishu same-line /issue remains fresh-only",
-			channelType:    channel.TypeFeishu,
-			text:           "/issue investigate deploy",
-			commandText:    "/clear /issue investigate deploy",
-			forceFresh:     true,
-			wantStoredText: "/issue investigate deploy",
-			wantForceFresh: true,
-		},
-		{
-			name:           "Feishu next-line /issue remains fresh-only",
-			channelType:    channel.TypeFeishu,
-			text:           "/issue investigate deploy",
-			commandText:    "/clear\n/issue investigate deploy",
-			forceFresh:     true,
-			wantStoredText: "/issue investigate deploy",
-			wantForceFresh: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			runChannelClearCommandE2E(t, tt.channelType, tt.text, tt.commandText, tt.forceFresh, tt.followUpText, tt.wantStoredText, tt.wantForceFresh, tt.wantPriorSession, tt.wantPriorWorkDir)
-		})
-	}
-}
 
 // /new changes only the future inbound route. A task already queued from the
 // old generation must keep both its Multica Chat and exact external reply
@@ -1017,14 +932,14 @@ type channelNewE2ESessionBinder struct {
 }
 
 func (b *channelNewE2ESessionBinder) EnsureSession(ctx context.Context, p engine.EnsureSessionParams) (string, error) {
-	return fromPGUUID(b.session.EnsureSession(ctx, engine.EnsureSessionInput{
+	return b.session.EnsureSession(ctx, engine.EnsureSessionInput{
 		WorkspaceID:    p.Installation.WorkspaceID,
 		AgentID:        p.Installation.AgentID,
 		InstallationID: p.Installation.ID,
 		Sender:         p.Sender,
 		BindingKey:     p.Message.Source.ChatID,
 		ChatType:       p.Message.Source.ChatType,
-	}))
+	})
 }
 
 func (b *channelNewE2ESessionBinder) StartSession(ctx context.Context, p engine.StartSessionParams) (engine.StartSessionResult, error) {

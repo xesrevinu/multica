@@ -796,7 +796,7 @@ func TestCreateRetryTask_InheritsIsLeaderTask(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CreateRetryTask: %v", err)
 			}
-			if child.IsLeaderTask != tc.isLeader {
+			if (child.IsLeaderTask != 0) != tc.isLeader {
 				t.Fatalf("child.IsLeaderTask = %v, want %v (parent role must be inherited)", child.IsLeaderTask, tc.isLeader)
 			}
 		})

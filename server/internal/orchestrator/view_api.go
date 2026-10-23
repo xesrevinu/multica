@@ -14,29 +14,30 @@ const activeTaskStatuses = `('queued','dispatched','running','waiting_local_dire
 
 // viewSQL selects one IssueView per issue. $1 = workspace id; callers append
 // their own WHERE clause on alias i.
-const viewSQL = `SELECT i.id::text, w.issue_prefix || '-' || i.number, i.number, i.title, i.status, i.priority,
-	COALESCE(p.id::text,''), COALESCE(p.title,''), COALESCE(i.parent_issue_id::text,''),
-	COALESCE(i.assignee_type,''), COALESCE(i.assignee_id::text,''), COALESCE(ag.name, u.name, ''),
-	COALESCE((SELECT array_agg(l.name ORDER BY l.name) FROM issue_to_label il JOIN issue_label l ON l.id=il.label_id WHERE il.issue_id=i.id), '{}'),
+const viewSQL = `SELECT i.id, w.issue_prefix || '-' || i.number, i.number, i.title, i.status, i.priority,
+	COALESCE(p.id,''), COALESCE(p.title,''), COALESCE(i.parent_issue_id,''),
+	COALESCE(i.assignee_type,''), COALESCE(i.assignee_id,''), COALESCE(ag.name, u.name, ''),
+	COALESCE((SELECT json_group_array(name) FROM (SELECT l.name AS name FROM issue_to_label il JOIN issue_label l ON l.id=il.label_id WHERE il.issue_id=i.id ORDER BY l.name)), '[]'),
 	i.metadata, i.created_at, i.updated_at,
 	COALESCE(ch.total,0), COALESCE(ch.done,0),
-	COALESCE(ar.id::text,''), COALESCE(ar.agent_id::text,''), COALESCE(ar.agent,''), COALESCE(ar.status,''), ar.created_at, ar.started_at,
-	COALESCE(lt.dir,''), COALESCE(lt.branch,''),
+	COALESCE(ar.id,''), COALESCE(ar.agent_id,''), COALESCE(ar_ag.name,''), COALESCE(ar.status,''), ar.created_at, ar.started_at,
+	COALESCE(NULLIF(lt.durable_work_dir,''), lt.work_dir, ''), COALESCE(lt.branch_name,''),
 	COALESCE(pr.pr_number,0), COALESCE(pr.html_url,''), COALESCE(pr.title,''), COALESCE(pr.state,''), COALESCE(pr.branch,''), COALESCE(pr.head_sha,''),
 	COALESCE(pr.additions,0), COALESCE(pr.deletions,0), COALESCE(pr.changed_files,0), COALESCE(pr.checks_rollup_state,''),
-	COALESCE(pr.api_mergeable, pr.mergeable_state, ''), COALESCE(pr.api_merge_state_status,''), COALESCE(pr.repo_owner || '/' || pr.repo_name, '')
+	COALESCE(CASE WHEN pr.api_mergeable = 1 THEN 'true' WHEN pr.api_mergeable = 0 THEN 'false' ELSE NULL END, pr.mergeable_state, ''), COALESCE(pr.api_merge_state_status,''), COALESCE(pr.repo_owner || '/' || pr.repo_name, '')
 FROM issue i
 JOIN workspace w ON w.id=i.workspace_id
 LEFT JOIN project p ON p.id=i.project_id
 LEFT JOIN agent ag ON ag.id=i.assignee_id AND i.assignee_type='agent'
 LEFT JOIN "user" u ON u.id=i.assignee_id AND i.assignee_type='member'
-LEFT JOIN LATERAL (SELECT count(*) AS total, count(*) FILTER (WHERE c.status IN ('done','cancelled')) AS done FROM issue c WHERE c.parent_issue_id=i.id) ch ON true
-LEFT JOIN LATERAL (SELECT t.id, t.agent_id, a.name AS agent, t.status, t.created_at, t.started_at FROM agent_task_queue t JOIN agent a ON a.id=t.agent_id
-	WHERE t.issue_id=i.id AND t.status IN ` + activeTaskStatuses + ` ORDER BY t.created_at DESC LIMIT 1) ar ON true
-LEFT JOIN LATERAL (SELECT COALESCE(NULLIF(t.durable_work_dir,''), t.work_dir) AS dir, t.branch_name AS branch FROM agent_task_queue t
-	WHERE t.issue_id=i.id AND COALESCE(NULLIF(t.durable_work_dir,''), t.work_dir, '') <> '' ORDER BY t.created_at DESC LIMIT 1) lt ON true
-LEFT JOIN LATERAL (SELECT g.* FROM issue_pull_request ip JOIN github_pull_request g ON g.id=ip.pull_request_id
-	WHERE ip.issue_id=i.id ORDER BY (g.state='open') DESC, g.pr_updated_at DESC LIMIT 1) pr ON true
+LEFT JOIN (SELECT parent_issue_id, count(*) AS total, count(*) FILTER (WHERE status IN ('done','cancelled')) AS done FROM issue WHERE parent_issue_id IS NOT NULL GROUP BY parent_issue_id) ch ON ch.parent_issue_id=i.id
+LEFT JOIN agent_task_queue ar ON ar.id = (SELECT t.id FROM agent_task_queue t JOIN agent a ON a.id=t.agent_id
+	WHERE t.issue_id=i.id AND t.status IN ` + activeTaskStatuses + ` ORDER BY t.created_at DESC LIMIT 1)
+LEFT JOIN agent ar_ag ON ar_ag.id = ar.agent_id
+LEFT JOIN agent_task_queue lt ON lt.id = (SELECT t.id FROM agent_task_queue t
+	WHERE t.issue_id=i.id AND COALESCE(NULLIF(t.durable_work_dir,''), t.work_dir, '') <> '' ORDER BY t.created_at DESC LIMIT 1)
+LEFT JOIN github_pull_request pr ON pr.id = (SELECT g.id FROM issue_pull_request ip JOIN github_pull_request g ON g.id=ip.pull_request_id
+	WHERE ip.issue_id=i.id ORDER BY (g.state='open') DESC, g.pr_updated_at DESC LIMIT 1)
 WHERE i.workspace_id=$1 `
 
 type rowScanner interface{ Scan(...any) error }
@@ -49,9 +50,9 @@ func (s *Service) scanView(sc rowScanner, userID string) (*IssueView, error) {
 	var runCreated, runStarted *time.Time
 	pr := &viewPR{}
 	if err := sc.Scan(&v.ID, &v.Key, &v.Number, &v.Title, &v.Status, &v.Priority,
-		&projID, &projTitle, &v.ParentID, &aType, &aID, &aName, &v.Labels, &raw, &v.CreatedAt, &v.UpdatedAt,
+		&projID, &projTitle, &v.ParentID, &aType, &aID, &aName, sqlLabels{&v.Labels}, &raw, sqlTime{&v.CreatedAt}, sqlTime{&v.UpdatedAt},
 		&v.Children.Total, &v.Children.Done,
-		&runID, &runAgentID, &runAgent, &runStatus, &runCreated, &runStarted, &wtDir, &wtBranch,
+		&runID, &runAgentID, &runAgent, &runStatus, sqlTimePtr{&runCreated}, sqlTimePtr{&runStarted}, &wtDir, &wtBranch,
 		&pr.Number, &pr.URL, &pr.Title, &pr.State, &pr.Branch, &pr.HeadSHA, &pr.Additions, &pr.Deletions, &pr.Files,
 		&pr.Checks, &pr.Mergeable, &pr.MergeStat, &pr.Repo); err != nil {
 		return nil, err
@@ -126,7 +127,7 @@ func (s *Service) hIssues(w http.ResponseWriter, r *http.Request) {
 	where := `AND (i.status NOT IN ('done','cancelled') OR i.id IN (SELECT s.id FROM issue s WHERE s.workspace_id=$1 AND s.status IN ('done','cancelled') ORDER BY s.updated_at DESC LIMIT $2))`
 	args := []any{limit}
 	if pid := r.URL.Query().Get("project"); pid != "" {
-		where += ` AND i.project_id::text=$3`
+		where += ` AND i.project_id=$3`
 		args = append(args, pid)
 	}
 	vs, err := s.listViews(r.Context(), wsID(r), r.Header.Get("X-User-ID"), where, args...)
@@ -141,7 +142,7 @@ func (s *Service) hIssues(w http.ResponseWriter, r *http.Request) {
 	q := `SELECT count(*) FROM issue WHERE workspace_id=$1 AND status IN ('done','cancelled')`
 	qargs := []any{wsID(r)}
 	if pid := r.URL.Query().Get("project"); pid != "" {
-		q += ` AND project_id::text=$2`
+		q += ` AND project_id=$2`
 		qargs = append(qargs, pid)
 	}
 	_ = s.opt.Pool.QueryRowContext(r.Context(), q, qargs...).Scan(&settledTotal)
@@ -150,7 +151,7 @@ func (s *Service) hIssues(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) viewByKey(r *http.Request, key string) (*IssueView, error) {
 	vs, err := s.listViews(r.Context(), wsID(r), r.Header.Get("X-User-ID"),
-		`AND (i.id::text=$2 OR upper(w.issue_prefix || '-' || i.number)=upper($2))`, key)
+		`AND (i.id=$2 OR upper(w.issue_prefix || '-' || i.number)=upper($2))`, key)
 	if err != nil || len(vs) == 0 {
 		return nil, err
 	}
@@ -180,12 +181,12 @@ func (s *Service) hIssueTimeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runs := []viewRun{}
-	rows, err := s.opt.Pool.QueryContext(r.Context(), `SELECT t.id::text, t.agent_id::text, COALESCE(a.name,''), t.status, t.created_at, t.started_at, t.completed_at, COALESCE(t.error,'')
+	rows, err := s.opt.Pool.QueryContext(r.Context(), `SELECT t.id, t.agent_id, COALESCE(a.name,''), t.status, t.created_at, t.started_at, t.completed_at, COALESCE(t.error,'')
 		FROM agent_task_queue t LEFT JOIN agent a ON a.id=t.agent_id WHERE t.issue_id=$1 ORDER BY t.created_at LIMIT 300`, v.ID)
 	if err == nil {
 		for rows.Next() {
 			var x viewRun
-			if rows.Scan(&x.TaskID, &x.AgentID, &x.Agent, &x.Status, &x.CreatedAt, &x.StartedAt, &x.EndedAt, &x.Error) == nil {
+			if rows.Scan(&x.TaskID, &x.AgentID, &x.Agent, &x.Status, sqlTime{&x.CreatedAt}, sqlTimePtr{&x.StartedAt}, sqlTimePtr{&x.EndedAt}, &x.Error) == nil {
 				x.Error = short(x.Error, 400)
 				runs = append(runs, x)
 			}
@@ -199,7 +200,7 @@ func (s *Service) hIssueTimeline(w http.ResponseWriter, r *http.Request) {
 		for rows.Next() {
 			var x timelineTransition
 			var ho []byte
-			if rows.Scan(&x.ID, &x.Tid, &x.State, &x.Why, &x.Status, &x.Phase, &x.Assignee, &x.Error, &x.CreatedAt, &ho) == nil {
+			if rows.Scan(&x.ID, &x.Tid, &x.State, &x.Why, &x.Status, &x.Phase, &x.Assignee, &x.Error, sqlTime{&x.CreatedAt}, &ho) == nil {
 				if len(ho) > 0 && string(ho) != "null" {
 					x.Handoff = &Handoff{}
 					if json.Unmarshal(ho, x.Handoff) != nil {
@@ -219,7 +220,7 @@ func (s *Service) hIssueTimeline(w http.ResponseWriter, r *http.Request) {
 	}
 	var waiting, lastErr string
 	var backoff *time.Time
-	_ = s.opt.Pool.QueryRowContext(r.Context(), `SELECT last_wait, last_error, next_at FROM orchestrator_issue_state WHERE issue_id=$1`, v.ID).Scan(&waiting, &lastErr, &backoff)
+	_ = s.opt.Pool.QueryRowContext(r.Context(), `SELECT last_wait, last_error, next_at FROM orchestrator_issue_state WHERE issue_id=$1`, v.ID).Scan(&waiting, &lastErr, sqlTimePtr{&backoff})
 	writeJSON(w, 200, map[string]any{"issue": v, "flow": flow, "runs": runs, "transitions": trs,
 		"waiting": waiting, "last_error": short(lastErr, 400), "backoff_until": backoff})
 }

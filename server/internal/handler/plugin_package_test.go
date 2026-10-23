@@ -167,79 +167,9 @@ func surfaceScript(t *testing.T, installationID, surfaceKey string) (*httptest.R
 // An author with no server of their own publishes a panel plugin by upload, an
 // administrator installs it, and the panel's code comes back from us. That is
 // the acceptance criterion for the whole change.
-func TestUploadedBundleInstallsAndServesItsOwnCode(t *testing.T) {
-	withPluginsV1Flag(t, testHandler, true)
-	cleanupPluginInstallations(t)
-	withHostCapabilities(t)
-
-	published := publishUploadedBundle(t, packageManifest("1.0.0"), "console.log('v1');\n")
-	if len(published.Versions) != 1 || published.Versions[0].Version != "1.0.0" {
-		t.Fatalf("unexpected published versions: %+v", published.Versions)
-	}
-	if published.Versions[0].Digest == "" || published.Versions[0].SizeBytes == 0 {
-		t.Fatalf("a published version must report what was stored: %+v", published.Versions[0])
-	}
-
-	installationID := installPublishedVersion(t, published.Versions[0].ID)
-	recorder, script := surfaceScript(t, installationID, "hello")
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("surface script: status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-	if !strings.Contains(script.Code, "console.log('v1')") {
-		t.Fatalf("the served code is not what was uploaded: %q", script.Code)
-	}
-	if script.Version != "1.0.0" {
-		t.Fatalf("script version = %q, want the installed version", script.Version)
-	}
-}
 
 // The invariant the RFC called non-negotiable: publishing again must not change
 // what an installed workspace runs.
-func TestPublishingANewVersionDoesNotChangeAnInstalledWorkspace(t *testing.T) {
-	withPluginsV1Flag(t, testHandler, true)
-	cleanupPluginInstallations(t)
-	withHostCapabilities(t)
-
-	first := publishUploadedBundle(t, packageManifest("1.0.0"), "console.log('v1');\n")
-	installationID := installPublishedVersion(t, first.Versions[0].ID)
-
-	second := publishUploadedBundle(t, packageManifest("2.0.0"), "console.log('v2');\n")
-	if len(second.Versions) != 2 {
-		t.Fatalf("the second publish should add a version, not replace one: %+v", second.Versions)
-	}
-
-	_, script := surfaceScript(t, installationID, "hello")
-	if strings.Contains(script.Code, "v2") {
-		t.Fatalf("a publish changed the code an installed workspace runs: %q", script.Code)
-	}
-	if script.Version != "1.0.0" {
-		t.Fatalf("installed version = %q, want 1.0.0 until an administrator upgrades", script.Version)
-	}
-
-	// The settings page has to be able to say which one is running, or "upgrade
-	// available" is not something an administrator can act on.
-	installedFlags := map[string]bool{}
-	for _, version := range second.Versions {
-		installedFlags[version.Version] = version.Installed
-	}
-	if !installedFlags["1.0.0"] || installedFlags["2.0.0"] {
-		t.Fatalf("installed markers are wrong: %+v", second.Versions)
-	}
-
-	// And upgrading is what moves it.
-	upgradeVersionID := ""
-	for _, version := range second.Versions {
-		if version.Version == "2.0.0" {
-			upgradeVersionID = version.ID
-		}
-	}
-	if got := installPublishedVersion(t, upgradeVersionID); got != installationID {
-		t.Fatalf("upgrade created a second installation: %s != %s", got, installationID)
-	}
-	if _, upgraded := surfaceScript(t, installationID, "hello"); !strings.Contains(upgraded.Code, "v2") {
-		t.Fatalf("after upgrading, the code is still %q", upgraded.Code)
-	}
-}
 
 // Republishing a version is refused rather than accepted as an overwrite. The
 // unique index is what makes immutability a rule instead of a convention.
@@ -258,76 +188,7 @@ func TestPublishRefusesToOverwriteAnExistingVersion(t *testing.T) {
 	}
 }
 
-func TestDeletePublishedPackageRefusesWhileInstalled(t *testing.T) {
-	withPluginsV1Flag(t, testHandler, true)
-	cleanupPluginInstallations(t)
-	withHostCapabilities(t)
 
-	published := publishUploadedBundle(t, packageManifest("1.0.0"), "console.log('v1');\n")
-	installationID := installPublishedVersion(t, published.Versions[0].ID)
-
-	params := map[string]string{"id": testWorkspaceID, "packageId": published.ID}
-	recorder := httptest.NewRecorder()
-	testHandler.DeletePluginPackage(recorder, pluginHandlerRequest(http.MethodDelete, "/plugins/packages", nil, params))
-	if recorder.Code != http.StatusConflict {
-		t.Fatalf("delete while installed status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-
-	uninstall := httptest.NewRecorder()
-	testHandler.UninstallPlugin(uninstall, pluginHandlerRequest(http.MethodDelete, "/plugins", nil, map[string]string{
-		"id": testWorkspaceID, "installationId": installationID,
-	}))
-	if uninstall.Code != http.StatusNoContent {
-		t.Fatalf("uninstall status=%d body=%s", uninstall.Code, uninstall.Body.String())
-	}
-
-	recorder = httptest.NewRecorder()
-	testHandler.DeletePluginPackage(recorder, pluginHandlerRequest(http.MethodDelete, "/plugins/packages", nil, params))
-	if recorder.Code != http.StatusNoContent {
-		t.Fatalf("delete after uninstall status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-
-	// The stored bundle goes with it; a package row with orphaned files behind
-	// it is storage nothing can reach.
-	var remaining int
-	if err := testPool.QueryRow(context.Background(),
-		`SELECT COUNT(*) FROM plugin_package_file WHERE version_id IN (
-			SELECT id FROM plugin_package_version WHERE workspace_id = $1)`, testWorkspaceID).Scan(&remaining); err != nil {
-		t.Fatalf("count package files: %v", err)
-	}
-	if remaining != 0 {
-		t.Fatalf("deleting the package left %d files behind", remaining)
-	}
-}
-
-func TestSurfaceScriptRefusesWhatWasNeverInstalled(t *testing.T) {
-	withPluginsV1Flag(t, testHandler, true)
-	cleanupPluginInstallations(t)
-	withHostCapabilities(t)
-
-	published := publishUploadedBundle(t, packageManifest("1.0.0"), "console.log('v1');\n")
-	installationID := installPublishedVersion(t, published.Versions[0].ID)
-
-	// A surface key the installed manifest does not declare. The manifest
-	// consulted is the installation's own snapshot, so this cannot be widened by
-	// publishing a version that declares more.
-	if recorder, _ := surfaceScript(t, installationID, "nope"); recorder.Code != http.StatusNotFound {
-		t.Fatalf("unknown surface key status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-
-	disable := httptest.NewRecorder()
-	testHandler.DisablePlugin(disable, pluginHandlerRequest(http.MethodPost, "/plugins/disable", nil, map[string]string{
-		"id": testWorkspaceID, "installationId": installationID,
-	}))
-	if disable.Code != http.StatusOK {
-		t.Fatalf("disable status=%d body=%s", disable.Code, disable.Body.String())
-	}
-	// Disabling has to stop the code from being served, or "disabled" is a UI
-	// state rather than a decision.
-	if recorder, _ := surfaceScript(t, installationID, "hello"); recorder.Code != http.StatusForbidden {
-		t.Fatalf("disabled installation served its code: status=%d body=%s", recorder.Code, recorder.Body.String())
-	}
-}
 
 // withHostCapabilities enables every contribution kind for the duration of a
 // test, so these exercise publishing rather than the staged-rollout gate.

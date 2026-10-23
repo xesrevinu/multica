@@ -94,15 +94,15 @@ func (d *skillReadDBTX) QueryContext(_ context.Context, query string, _ ...any) 
 		if d.failQuery == "ListSkillFilesBySkillIDs" {
 			return nil, errInjectedSkillRead
 		}
-		return nil, fmt.Errorf("sqlite rows unsupported in test double")
+		return mockQueryRows(d.files, nil)
 	case strings.Contains(query, "ListSkillFiles"):
 		d.perSkillFileCall++
-		return nil, fmt.Errorf("sqlite rows unsupported in test double")
+		return mockQueryRows(nil, nil)
 	case strings.Contains(query, "ListAgentSkills"):
 		if d.failQuery == "ListAgentSkills" {
 			return nil, errInjectedSkillRead
 		}
-		return nil, fmt.Errorf("sqlite rows unsupported in test double")
+		return mockQueryRows(d.skills, nil)
 	}
 	return nil, fmt.Errorf("unexpected query: %s", query)
 }
@@ -112,14 +112,14 @@ func (d *skillReadDBTX) QueryContext(_ context.Context, query string, _ ...any) 
 func skillRow(id string, name, description, content string) []any {
 	return []any{
 		id, testUUID(0xF0), name, description, content,
-		[]byte(nil), "", sql.NullString{}, sql.NullString{}, "",
+		[]byte(nil), "", "", "", "",
 	}
 }
 
 func skillFileRow(skillID string, path, content string) []any {
 	return []any{
 		testUUID(0xF1), skillID, path, content,
-		sql.NullString{}, sql.NullString{},
+		"", "",
 	}
 }
 

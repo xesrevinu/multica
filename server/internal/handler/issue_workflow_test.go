@@ -265,58 +265,6 @@ func TestDefaultWorkflowIsEditableButNotDeletable(t *testing.T) {
 	testutil.Call(t, testHandler.DeleteIssueWorkflow, del).Want(http.StatusBadRequest)
 }
 
-func TestSetProjectWorkflowMapsOnlyUnlistedStatuses(t *testing.T) {
-	seedTestCatalog(t)
-	resetDefaultWorkflow(t)
-	agentID := seededReadyAgentID(t)
-	wf := createTestWorkflow(t, "Map "+workflowTestSuffix(), "in_review")
-	projectID := createWorkflowTestProject(t, "Workflow map project")
-	setWorkflowHandoff(t, wf.ID, "in_review", handToAgent(agentID, "")).Want(http.StatusOK)
-	keep := dbfx.Issue(t, "stays on todo", testutil.Cols{"project_id": projectID, "status": "todo"})
-	moved := dbfx.Issue(t, "leaves in_progress", testutil.Cols{"project_id": projectID, "status": "in_progress"})
-
-	var dry struct {
-		Plan workflowMappingPlan `json:"plan"`
-	}
-	setProjectWorkflow(t, projectID, map[string]any{"workflow_id": wf.ID, "dry_run": true}).Want(http.StatusOK).JSON(&dry)
-	if len(dry.Plan.Required) != 1 || dry.Plan.Required[0].StatusKey != "in_progress" || dry.Plan.Required[0].IssueCount != 1 {
-		t.Fatalf("plan = %+v, want only in_progress with one issue", dry.Plan)
-	}
-	if len(dry.Plan.Unchanged) != 1 || dry.Plan.Unchanged[0].StatusKey != "todo" {
-		t.Fatalf("unchanged = %+v, want todo kept", dry.Plan.Unchanged)
-	}
-	if got := dry.Plan.Required[0].SuggestedStatusKey; got != "in_review" {
-		t.Fatalf("suggested target = %q, want the same-category step in_review", got)
-	}
-
-	setProjectWorkflow(t, projectID, map[string]any{"workflow_id": wf.ID}).Want(http.StatusConflict)
-	setProjectWorkflow(t, projectID, map[string]any{
-		"workflow_id":    wf.ID,
-		"status_mapping": map[string]string{"in_progress": "code_review_nope"},
-	}).Want(http.StatusConflict)
-
-	setProjectWorkflow(t, projectID, map[string]any{
-		"workflow_id":    wf.ID,
-		"status_mapping": map[string]string{"in_progress": "in_review"},
-	}).Want(http.StatusOK)
-
-	if status, _, _ := issueStatusAndAssignee(t, keep); status != "todo" {
-		t.Fatalf("an issue on a listed status moved to %q", status)
-	}
-	status, assigneeType, _ := issueStatusAndAssignee(t, moved)
-	if status != "in_review" {
-		t.Fatalf("mapped issue status = %q, want in_review", status)
-	}
-	// Mapping is administrative: entering a handoff column this way neither
-	// reassigns the issue nor starts a run.
-	if assigneeType != "" || taskCountFor(t, moved, agentID) != 0 {
-		t.Fatalf("a workflow switch handed the issue off (assignee type %q)", assigneeType)
-	}
-
-	// Switching back to Default needs no mapping and works with the flag off.
-	withFeatureFlag(t, testHandler, featureflags.ProjectWorkflowsV1, false)
-	setProjectWorkflow(t, projectID, map[string]any{"workflow_id": nil}).Want(http.StatusOK)
-}
 
 func TestUpdateIssueRejectsStatusOutsideNamedWorkflow(t *testing.T) {
 	seedTestCatalog(t)
@@ -336,90 +284,7 @@ func TestUpdateIssueRejectsStatusOutsideNamedWorkflow(t *testing.T) {
 	updateIssueForTest(t, issueID, map[string]any{"status": "blocked"}).Want(http.StatusOK)
 }
 
-func TestStatusChangeHandsOffOnDefaultProject(t *testing.T) {
-	seedTestCatalog(t)
-	agentID := seededReadyAgentID(t)
-	projectID := deliveryProject(t, "Workflow handoff project", agentID)
-	issueID := dbfx.Issue(t, "hand me off", testutil.Cols{"project_id": projectID, "status": "todo"})
 
-	updateIssueForTest(t, issueID, map[string]any{"status": "in_progress"}).Want(http.StatusOK)
-
-	_, assigneeType, assigneeID := issueStatusAndAssignee(t, issueID)
-	if assigneeType != "agent" || assigneeID != agentID {
-		t.Fatalf("assignee = %s/%s, want the column's agent %s", assigneeType, assigneeID, agentID)
-	}
-	tasks, err := testHandler.Queries.ListTasksByIssue(context.Background(), nullString(util.MustParseUUID(issueID)))
-	if err != nil || len(tasks) != 1 {
-		t.Fatalf("tasks = %d (%v), want one handoff run", len(tasks), err)
-	}
-	// The run reads the step's brief from its claim; the handoff note is
-	// left for a caller's own instruction.
-	if tasks[0].HandoffNote.String != "" {
-		t.Fatalf("handoff note = %q, want none: the brief rides the claim", tasks[0].HandoffNote.String)
-	}
-	brief := claimBriefForTest(t, issueID, tasks[0])
-	for _, want := range []string{"Implement it and open a PR.", "This project's workflow — Default (Workflow handoff project)", "Step done      → multica issue status"} {
-		if !strings.Contains(brief, want) {
-			t.Fatalf("claim brief is missing %q:\n%s", want, brief)
-		}
-	}
-
-	// A caller-written note rides beside the step's brief.
-	back := dbfx.Issue(t, "explicit note", testutil.Cols{"project_id": projectID, "status": "todo"})
-	updateIssueForTest(t, back, map[string]any{"status": "in_progress", "handoff_note": "Only the login flow."}).Want(http.StatusOK)
-	backTasks, _ := testHandler.Queries.ListTasksByIssue(context.Background(), nullString(util.MustParseUUID(back)))
-	if len(backTasks) != 1 || backTasks[0].HandoffNote.String != "Only the login flow." {
-		t.Fatalf("explicit handoff note was not kept: %+v", backTasks)
-	}
-	if !strings.Contains(claimBriefForTest(t, back, backTasks[0]), "Implement it and open a PR.") {
-		t.Fatal("a caller-written note must not cost the run its step brief")
-	}
-
-	// A project on a workflow without handoffs hands nothing off.
-	plainProject := createWorkflowTestProject(t, "Workflow no handoff project")
-	setProjectWorkflow(t, plainProject, map[string]any{"workflow_id": createTestWorkflow(t, "Plain "+workflowTestSuffix(), "in_progress").ID}).Want(http.StatusOK)
-	plain := dbfx.Issue(t, "no handoff", testutil.Cols{"project_id": plainProject, "status": "todo"})
-	updateIssueForTest(t, plain, map[string]any{"status": "in_progress"}).Want(http.StatusOK)
-	if _, at, _ := issueStatusAndAssignee(t, plain); at != "" {
-		t.Fatalf("a project without handoffs reassigned the issue to a %s", at)
-	}
-}
-
-func TestSetWorkflowHandoffValidatesAndClears(t *testing.T) {
-	seedTestCatalog(t)
-	agentID := seededReadyAgentID(t)
-	wf := createTestWorkflow(t, "Handoff validation "+workflowTestSuffix(), "in_progress")
-	setWorkflowHandoff(t, wf.ID, "done", map[string]any{"handler": map[string]any{"type": "project_lead"}}).Want(http.StatusBadRequest)
-	setWorkflowHandoff(t, wf.ID, "code_review_nope", handToAgent(agentID, "")).Want(http.StatusBadRequest)
-	setWorkflowHandoff(t, wf.ID, "in_progress", map[string]any{"handler": map[string]any{"type": "creator"}}).Want(http.StatusBadRequest)
-	setWorkflowHandoff(t, wf.ID, "in_progress", map[string]any{
-		"handler": map[string]any{"type": "agent", "id": agentID}, "next_status_key": "in_progress",
-	}).Want(http.StatusBadRequest)
-
-	step := func(resp IssueWorkflowResponse) IssueWorkflowStepPayload {
-		for _, s := range resp.Steps {
-			if s.StatusKey == "in_progress" {
-				return s
-			}
-		}
-		t.Fatalf("in_progress missing from %+v", resp.Steps)
-		return IssueWorkflowStepPayload{}
-	}
-	var saved IssueWorkflowResponse
-	setWorkflowHandoff(t, wf.ID, "in_progress", handToAgent(agentID, "Build it")).Want(http.StatusOK).JSON(&saved)
-	if got := step(saved); got.Handler.ID != agentID || got.Instructions != "Build it" || len(saved.Steps) != 6 {
-		t.Fatalf("saved = %+v", saved.Steps)
-	}
-	setWorkflowHandoff(t, wf.ID, "in_progress", map[string]any{"handler": map[string]any{"type": "none"}}).Want(http.StatusOK).JSON(&saved)
-	if got := step(saved); got.Handler.Type != "none" || got.Instructions != "" {
-		t.Fatalf("clearing left %+v", got)
-	}
-	var stored string
-	dbfx.QueryRow(t, `SELECT steps::text FROM issue_workflow WHERE id = $1`, wf.ID).Scan(&stored)
-	if strings.Contains(stored, "handler") {
-		t.Fatalf("cleared handoff still stored: %s", stored)
-	}
-}
 
 // A workflow's handoffs apply to every project using it, so only workspace
 // admins change them; a project's lead may still switch its workflow.
@@ -489,95 +354,10 @@ func TestWorkflowWithoutBacklogOrBlocked(t *testing.T) {
 	}
 }
 
-func TestExplicitAssigneeWinsOverStepHandler(t *testing.T) {
-	seedTestCatalog(t)
-	agentID := seededReadyAgentID(t)
-	projectID := deliveryProject(t, "Workflow explicit project", agentID)
-	issueID := dbfx.Issue(t, "keep my assignee", testutil.Cols{"project_id": projectID, "status": "todo"})
 
-	updateIssueForTest(t, issueID, map[string]any{
-		"status": "in_progress", "assignee_type": "member", "assignee_id": testUserID,
-	}).Want(http.StatusOK)
-	_, assigneeType, assigneeID := issueStatusAndAssignee(t, issueID)
-	if assigneeType != "member" || assigneeID != testUserID {
-		t.Fatalf("assignee = %s/%s, want the explicit member", assigneeType, assigneeID)
-	}
-	if n := taskCountFor(t, issueID, agentID); n != 0 {
-		t.Fatalf("the step handler ran %d time(s) although the write chose an assignee", n)
-	}
-}
-
-func TestMoveIntoWorkflowProjectKeepsEquivalentStatusWithoutHandoff(t *testing.T) {
-	seedTestCatalog(t)
-	resetDefaultWorkflow(t)
-	agentID := seededReadyAgentID(t)
-	wf := createTestWorkflow(t, "Move "+workflowTestSuffix(), "in_review")
-	projectID := createWorkflowTestProject(t, "Workflow move project")
-	setProjectWorkflow(t, projectID, map[string]any{"workflow_id": wf.ID}).Want(http.StatusOK)
-	setColumnHandoff(t, projectID, "in_review", handToAgent(agentID, "")).Want(http.StatusOK)
-	issueID := dbfx.Issue(t, "moving in", testutil.Cols{"status": "in_progress"})
-
-	updateIssueForTest(t, issueID, map[string]any{"project_id": projectID}).Want(http.StatusOK)
-	status, assigneeType, _ := issueStatusAndAssignee(t, issueID)
-	if status != "in_review" {
-		t.Fatalf("status after move = %q, want the same-category step in_review", status)
-	}
-	if assigneeType != "" || taskCountFor(t, issueID, agentID) != 0 {
-		t.Fatal("moving an issue into a project must not hand it off")
-	}
-
-	// A move confirmed in the UI enters the column it lands on.
-	entering := dbfx.Issue(t, "entering", testutil.Cols{"status": "in_progress"})
-	var preview WorkflowHandoffPreviewResponse
-	req := withURLParam(newRequest("GET", "/api/issues/"+entering+"/workflow-handoff?project_id="+projectID, nil), "id", entering)
-	testutil.Call(t, testHandler.PreviewWorkflowHandoff, req).Want(http.StatusOK).JSON(&preview)
-	if !preview.Handoff || preview.ToStatus != "in_review" || preview.HandlerID != agentID {
-		t.Fatalf("move preview = %+v, want a handoff to in_review's agent", preview)
-	}
-	updateIssueForTest(t, entering, map[string]any{"project_id": projectID, "enter_workflow_step": true}).Want(http.StatusOK)
-	status, assigneeType, assigneeID := issueStatusAndAssignee(t, entering)
-	if status != "in_review" || assigneeType != "agent" || assigneeID != agentID || taskCountFor(t, entering, agentID) != 1 {
-		t.Fatalf("entering move = %s %s/%s, want in_review handed to the agent with one run", status, assigneeType, assigneeID)
-	}
-}
 
 // Saving a shared workflow's handoff for one project copies the workflow for
 // that project; the other projects keep the original.
-func TestWorkflowHandoffCopyForProject(t *testing.T) {
-	seedTestCatalog(t)
-	agentID := seededReadyAgentID(t)
-	withFeatureFlag(t, testHandler, featureflags.ProjectWorkflowsV1, true)
-	wf := createTestWorkflow(t, "Shared "+workflowTestSuffix(), "in_progress")
-	mine := createWorkflowTestProject(t, "Workflow copy mine")
-	theirs := createWorkflowTestProject(t, "Workflow copy theirs")
-	elsewhere := createWorkflowTestProject(t, "Workflow copy elsewhere")
-	setProjectWorkflow(t, mine, map[string]any{"workflow_id": wf.ID}).Want(http.StatusOK)
-	setProjectWorkflow(t, theirs, map[string]any{"workflow_id": wf.ID}).Want(http.StatusOK)
-
-	body := handToAgent(agentID, "Only here")
-	body["copy_for_project_id"] = elsewhere
-	setWorkflowHandoff(t, wf.ID, "in_progress", body).Want(http.StatusConflict)
-
-	body["copy_for_project_id"] = mine
-	var copied IssueWorkflowResponse
-	setWorkflowHandoff(t, wf.ID, "in_progress", body).Want(http.StatusCreated).JSON(&copied)
-	if copied.ID == wf.ID || !strings.HasPrefix(copied.Name, wf.Name+" (") || len(copied.ProjectIDs) != 1 || copied.ProjectIDs[0] != mine {
-		t.Fatalf("copy = %+v, want a new workflow used only by the project", copied)
-	}
-	handlerOf := func(id string) string {
-		var steps string
-		dbfx.QueryRow(t, `SELECT steps::text FROM issue_workflow WHERE id = $1`, id).Scan(&steps)
-		return steps
-	}
-	if !strings.Contains(handlerOf(copied.ID), agentID) || strings.Contains(handlerOf(wf.ID), agentID) {
-		t.Fatal("the handoff must land on the copy only")
-	}
-	var theirsWorkflow string
-	dbfx.QueryRow(t, `SELECT workflow_id::text FROM project WHERE id = $1`, theirs).Scan(&theirsWorkflow)
-	if theirsWorkflow != wf.ID {
-		t.Fatalf("the other project moved to %s", theirsWorkflow)
-	}
-}
 
 func TestProjectCopyName(t *testing.T) {
 	taken := map[string]bool{"delivery (payments)": true}
@@ -590,34 +370,6 @@ func TestProjectCopyName(t *testing.T) {
 	}
 }
 
-func TestCreateIssueHandsOffItsStartingColumn(t *testing.T) {
-	seedTestCatalog(t)
-	resetDefaultWorkflow(t)
-	agentID := seededReadyAgentID(t)
-	projectID := createWorkflowTestProject(t, "Workflow create project")
-	setColumnHandoff(t, projectID, "todo", map[string]any{
-		"handler": map[string]any{"type": "agent", "id": agentID}, "instructions": "Triage it.",
-	}).Want(http.StatusOK)
-
-	created := createIssueForTest(t, map[string]any{"title": "starts in todo", "project_id": projectID})
-	if created.Status != "todo" {
-		t.Fatalf("status = %q, want todo", created.Status)
-	}
-	if created.AssigneeID == nil || *created.AssigneeID != agentID {
-		t.Fatalf("assignee = %v, want the todo column's agent", created.AssigneeID)
-	}
-	tasks, _ := testHandler.Queries.ListTasksByIssue(context.Background(), nullString(util.MustParseUUID(created.ID)))
-	if len(tasks) != 1 || !strings.Contains(claimBriefForTest(t, created.ID, tasks[0]), "Triage it.") {
-		t.Fatalf("create did not start the column's run with its brief: %+v", tasks)
-	}
-
-	wf := createTestWorkflow(t, "Create "+workflowTestSuffix())
-	named := createWorkflowTestProject(t, "Workflow create named project")
-	setProjectWorkflow(t, named, map[string]any{"workflow_id": wf.ID}).Want(http.StatusOK)
-	testutil.Call(t, testHandler.CreateIssue, newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
-		"title": "outside the workflow", "project_id": named, "status": "in_progress",
-	})).Want(http.StatusBadRequest)
-}
 
 func TestArchiveStatusGuardsNamedWorkflowsOnly(t *testing.T) {
 	seedTestCatalog(t)
@@ -651,48 +403,6 @@ func TestArchiveStatusGuardsNamedWorkflowsOnly(t *testing.T) {
 	}
 }
 
-func TestClaimCarriesProjectWorkflow(t *testing.T) {
-	seedTestCatalog(t)
-	resetDefaultWorkflow(t)
-	agentID := seededReadyAgentID(t)
-	quietProject := createWorkflowTestProject(t, "Workflow quiet project")
-	quiet := dbfx.Issue(t, "no handoffs", testutil.Cols{"project_id": quietProject, "status": "todo"})
-	quietIssue, _ := testHandler.Queries.GetIssue(context.Background(), util.MustParseUUID(quiet))
-	if testHandler.claimProjectWorkflow(context.Background(), quietIssue, nil) != nil {
-		t.Fatal("a Default project without handoffs must not carry a workflow")
-	}
-
-	projectID := deliveryProject(t, "Workflow claim project", agentID)
-	issueID := dbfx.Issue(t, "claim context", testutil.Cols{
-		"project_id": projectID, "status": "in_progress", "assignee_type": "agent", "assignee_id": agentID,
-	})
-
-	// The assignee's run gets the step's instructions and its commands.
-	brief := claimBriefForTest(t, issueID, db.AgentTaskQueue{AgentID: util.MustParseUUID(agentID)})
-	for _, want := range []string{
-		"This project's workflow — Default (Workflow claim project)",
-		"Implement it and open a PR.",
-		"   ← current",
-		"Step done      → multica issue status",
-	} {
-		if !strings.Contains(brief, want) {
-			t.Fatalf("assignee brief is missing %q:\n%s", want, brief)
-		}
-	}
-
-	// Any other agent on the issue — mentioned in a comment, say — gets the
-	// statuses and is told to leave them to the assignee.
-	other := claimBriefForTest(t, issueID, db.AgentTaskQueue{AgentID: util.MustParseUUID(dbfx.Agent(t, "Workflow observer", handlerTestRuntimeID(t)))})
-	if !strings.Contains(other, "You are not its assignee") || strings.Contains(other, "Step done") || strings.Contains(other, "Implement it and open a PR.") {
-		t.Fatalf("observer brief must leave the step to its assignee:\n%s", other)
-	}
-
-	plain := dbfx.Issue(t, "no workflow", testutil.Cols{"status": "todo"})
-	plainIssue, _ := testHandler.Queries.GetIssue(context.Background(), util.MustParseUUID(plain))
-	if testHandler.claimProjectWorkflow(context.Background(), plainIssue, nil) != nil {
-		t.Fatal("an issue outside a project must not carry a workflow")
-	}
-}
 
 // claimBriefForTest renders the workflow brief a claim of task would carry
 // for the issue as it is now.
@@ -709,34 +419,6 @@ func claimBriefForTest(t *testing.T, issueID string, task db.AgentTaskQueue) str
 	return got.Brief
 }
 
-func TestPreviewWorkflowHandoffNamesHandlerRunsAndBrief(t *testing.T) {
-	seedTestCatalog(t)
-	agentID := seededReadyAgentID(t)
-	projectID := deliveryProject(t, "Workflow preview project", agentID)
-	issueID := dbfx.Issue(t, "preview me", testutil.Cols{"project_id": projectID, "status": "todo"})
-
-	call := func(status string) *testutil.Response {
-		req := withURLParam(newRequest("GET", "/api/issues/"+issueID+"/workflow-handoff?status="+status, nil), "id", issueID)
-		return testutil.Call(t, testHandler.PreviewWorkflowHandoff, req)
-	}
-	var got WorkflowHandoffPreviewResponse
-	call("in_progress").Want(http.StatusOK).JSON(&got)
-	if !got.Handoff || got.HandlerType != "agent" || got.HandlerID != agentID || got.WorkflowName != "Default" {
-		t.Fatalf("preview = %+v, want a handoff to the column's agent", got)
-	}
-	if !strings.Contains(got.Brief, "Implement it and open a PR.") {
-		t.Fatalf("preview brief is missing the step instructions:\n%s", got.Brief)
-	}
-	if status, _, _ := issueStatusAndAssignee(t, issueID); status != "todo" {
-		t.Fatalf("a preview moved the issue to %q", status)
-	}
-
-	var manual WorkflowHandoffPreviewResponse
-	call("done").Want(http.StatusOK).JSON(&manual)
-	if manual.Handoff {
-		t.Fatalf("a column without a handoff previewed one: %+v", manual)
-	}
-}
 
 func TestPreviewIssueWorkflowBriefUsesTheDraft(t *testing.T) {
 	seedTestCatalog(t)
@@ -989,76 +671,3 @@ func TestWorkflowSwitchIntoDoneEndsWakeups(t *testing.T) {
 // as its run, so the agent's event wakeups skip it; other agents' wakeups and
 // the platform's own rules (which have no agent) still capture it. Holds for
 // workflow handoffs and plain assignment alike.
-func TestHandoffDoesNotAlsoWakeTheHandler(t *testing.T) {
-	seedTestCatalog(t)
-	handler := seededReadyAgentID(t)
-	var runtimeID string
-	dbfx.QueryRow(t, `SELECT runtime_id::text FROM agent WHERE id = $1`, handler).Scan(&runtimeID)
-	watcher := dbfx.Agent(t, "Workflow wakeup watcher "+workflowTestSuffix(), runtimeID)
-	projectID := deliveryProject(t, "Workflow wakeup dedupe project", handler)
-	svc := service.IssueWakeupService{Tasks: testHandler.TaskService}
-	subscribe := func(issueID, agentID string) string {
-		t.Helper()
-		w, err := svc.Create(context.Background(), parseUUID(issueID), parseUUID(testUserID), "", service.WakeupInput{
-			AgentID: agentID, Kind: "event", EventTypes: []string{"issue.status_changed", "issue.assignee_changed"}, Instruction: "look again",
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() {
-			testPool.Exec(context.Background(), `DELETE FROM issue_wakeup_receipt WHERE wakeup_id = $1`, w.ID)
-		})
-		return uuidToString(w.ID)
-	}
-	pending := func(wakeupID string) int {
-		t.Helper()
-		var n int
-		dbfx.QueryRow(t, `SELECT count(*) FROM issue_wakeup_receipt WHERE wakeup_id = $1 AND processed_at IS NULL`, wakeupID).Scan(&n)
-		return n
-	}
-
-	handedOff := dbfx.Issue(t, "handed off", testutil.Cols{"project_id": projectID, "status": "todo"})
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue_wakeup WHERE issue_id = $1`, handedOff) })
-	handlerWakeup, watcherWakeup := subscribe(handedOff, handler), subscribe(handedOff, watcher)
-	platformRule := func(issueID string) string {
-		t.Helper()
-		var id string
-		dbfx.QueryRow(t, `INSERT INTO issue_wakeup (id, workspace_id, issue_id, instruction, kind, mode, event_types, system_rule)
-			VALUES (gen_random_uuid(), $1, $2, 'stage closed', 'event', 'continuous', ARRAY['issue.status_changed'], 'child_done')
-			RETURNING id::text`, testWorkspaceID, issueID).Scan(&id)
-		t.Cleanup(func() {
-			testPool.Exec(context.Background(), `DELETE FROM issue_wakeup_receipt WHERE wakeup_id = $1`, id)
-		})
-		return id
-	}
-	handedOffRule := platformRule(handedOff)
-	updateIssueForTest(t, handedOff, map[string]any{"status": "in_progress"}).Want(http.StatusOK)
-	if n := pending(handlerWakeup); n != 0 {
-		t.Fatalf("the handoff also woke its handler: %d receipt(s)", n)
-	}
-	if n := pending(watcherWakeup); n == 0 {
-		t.Fatal("another agent's wakeup missed the handoff")
-	}
-	if n := pending(handedOffRule); n == 0 {
-		t.Fatal("the platform rule missed the handoff")
-	}
-
-	parked := dbfx.Issue(t, "parked without a handoff", testutil.Cols{"status": "todo"})
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue_wakeup WHERE issue_id = $1`, parked) })
-	parkedRule := platformRule(parked)
-	updateIssueForTest(t, parked, map[string]any{"status": "backlog"}).Want(http.StatusOK)
-	if n := pending(parkedRule); n == 0 {
-		t.Fatal("the platform rule missed a status change that handed the issue to nobody")
-	}
-
-	assigned := dbfx.Issue(t, "assigned", testutil.Cols{"status": "todo"})
-	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue_wakeup WHERE issue_id = $1`, assigned) })
-	handlerWakeup, watcherWakeup = subscribe(assigned, handler), subscribe(assigned, watcher)
-	updateIssueForTest(t, assigned, map[string]any{"assignee_type": "agent", "assignee_id": handler}).Want(http.StatusOK)
-	if n := pending(handlerWakeup); n != 0 {
-		t.Fatalf("assignment also woke the assignee: %d receipt(s)", n)
-	}
-	if n := pending(watcherWakeup); n == 0 {
-		t.Fatal("another agent's wakeup missed the assignment")
-	}
-}

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 func TestLarkJSONFrameDecoderTextMessageInP2P(t *testing.T) {
@@ -126,7 +126,7 @@ func TestLarkJSONFrameDecoderGroupMentionUnionID(t *testing.T) {
 		}`)
 	}
 	d := NewLarkJSONFrameDecoder()
-	pgText := func(s string) pgtype.Text { return pgtype.Text{String: s, Valid: true} }
+	pgText := func(s string) sql.NullString { return sql.NullString{String: s, Valid: true} }
 
 	t.Run("union_id match wins even when open_id mismatches", func(t *testing.T) {
 		// Two-bot group chat, this bot's WS perspective:
@@ -190,7 +190,7 @@ func TestLarkJSONFrameDecoderGroupMentionUnionID(t *testing.T) {
 // natural-looking message body.
 func TestLarkJSONFrameDecoderMentionPlaceholderRewrite(t *testing.T) {
 	t.Parallel()
-	pgText := func(s string) pgtype.Text { return pgtype.Text{String: s, Valid: true} }
+	pgText := func(s string) sql.NullString { return sql.NullString{String: s, Valid: true} }
 
 	mkRaw := func(text, mentionsJSON string) []byte {
 		// Lark wraps text in a `{"text": ...}` JSON envelope inside

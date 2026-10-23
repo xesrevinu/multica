@@ -179,7 +179,7 @@ func parseTranscriptCursor(before string) (string, string) {
 	if err != nil {
 		return "", ""
 	}
-	return t.UTC().Format(time.RFC3339Nano), uid
+	return t.UTC().Format("2006-01-02T15:04:05.000000000Z"), uid
 }
 
 // transcriptAuthor labels a chat_message row with the channel vocabulary

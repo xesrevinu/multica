@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
+	"errors"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -17,17 +17,11 @@ func coalescedCommentIDs(t *testing.T, issueID string) []string {
 	t.Helper()
 	var ids []string
 	err := testPool.QueryRow(context.Background(),
-		`SELECT COALESCE(array_agg(c::text), '{}')
-		   FROM (
-		     SELECT unnest(coalesced_comment_ids) AS c
-		       FROM (
-		         SELECT coalesced_comment_ids
-		           FROM agent_task_queue
-		          WHERE issue_id = $1 AND status IN ('queued', 'dispatched', 'waiting_local_directory', 'deferred')
-		          ORDER BY created_at DESC
-		          LIMIT 1
-		       ) t
-		   ) s`,
+		`SELECT COALESCE(coalesced_comment_ids, '[]')
+		   FROM agent_task_queue
+		  WHERE issue_id = $1 AND status IN ('queued', 'dispatched', 'waiting_local_directory', 'deferred')
+		  ORDER BY created_at DESC
+		  LIMIT 1`,
 		issueID).Scan(&ids)
 	if err != nil {
 		t.Fatalf("failed to read coalesced_comment_ids: %v", err)
@@ -120,7 +114,7 @@ func TestGetLatestMemberCommentForIssueSince(t *testing.T) {
 	// An agent comment AFTER the anchor — must be ignored (loop safety).
 	insertCommentAt(t, issueID, "agent", agentID, "agent reply after start", anchor.Add(2*time.Minute))
 
-	pgAnchor := pgtype.Timestamptz{Time: anchor, Valid: true}
+	pgAnchor := anchor.UTC().Format(time.RFC3339Nano)
 	pgIssue := toPgUUID(t, issueID)
 
 	// With only an older member comment and a newer agent comment, nothing
@@ -128,7 +122,7 @@ func TestGetLatestMemberCommentForIssueSince(t *testing.T) {
 	if _, err := queries.GetLatestMemberCommentForIssueSince(ctx, db.GetLatestMemberCommentForIssueSinceParams{
 		IssueID: pgIssue,
 		Since:   pgAnchor,
-	}); err != pgx.ErrNoRows {
+	}); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("expected pgx.ErrNoRows when only an agent comment is newer, got %v", err)
 	}
 
@@ -167,22 +161,13 @@ func insertCommentAt(t *testing.T, issueID, authorType, authorID, content string
 	return id
 }
 
-func toPgUUID(t *testing.T, s string) pgtype.UUID {
+func toPgUUID(t *testing.T, s string) string {
 	t.Helper()
-	var u pgtype.UUID
-	if err := u.Scan(s); err != nil {
-		t.Fatalf("parse uuid %q: %v", s, err)
-	}
-	return u
+	return s
 }
 
-func pgUUIDToText(u pgtype.UUID) string {
-	v, err := u.Value()
-	if err != nil || v == nil {
-		return ""
-	}
-	s, _ := v.(string)
-	return s
+func pgUUIDToText(u string) string {
+	return u
 }
 
 // TestMergeCommentIntoPendingTask_RecomputesOriginatorAndSkipsDispatched is the
@@ -240,12 +225,12 @@ func TestMergeCommentIntoPendingTask_RecomputesOriginatorAndSkipsDispatched(t *t
 	// A DIFFERENT originator (userB) now MERGES (no gate): trigger repointed to
 	// cidB, originator re-stamped to userB, cidA preserved as coalesced.
 	if _, err := queries.MergeCommentIntoPendingTask(ctx, db.MergeCommentIntoPendingTaskParams{
-		IssueID:              pgIssue,
+		IssueID:              sql.NullString{String: pgIssue, Valid: pgIssue != ""},
 		AgentID:              pgAgent,
-		NewTriggerCommentID:  toPgUUID(t, cidB),
-		NewOriginatorUserID:  toPgUUID(t, otherUserID),
-		NewAccountableUserID: toPgUUID(t, otherUserID),
-		NewTriggerSummary:    pgtype.Text{String: "second, folds in", Valid: true},
+		NewTriggerCommentID:  sql.NullString{String: cidB, Valid: cidB != ""},
+		NewOriginatorUserID:  sql.NullString{String: otherUserID, Valid: otherUserID != ""},
+		NewAccountableUserID: sql.NullString{String: otherUserID, Valid: otherUserID != ""},
+		NewTriggerSummary:    sql.NullString{String: "second, folds in", Valid: true},
 	}); err != nil {
 		t.Fatalf("recompute merge should succeed for a different originator, got %v", err)
 	}
@@ -267,13 +252,13 @@ func TestMergeCommentIntoPendingTask_RecomputesOriginatorAndSkipsDispatched(t *t
 	}
 	cidC := insertCommentAt(t, issueID, "member", testUserID, "third, arrives after dispatch", now, cidA)
 	if _, err := queries.MergeCommentIntoPendingTask(ctx, db.MergeCommentIntoPendingTaskParams{
-		IssueID:              pgIssue,
+		IssueID:              sql.NullString{String: pgIssue, Valid: pgIssue != ""},
 		AgentID:              pgAgent,
-		NewTriggerCommentID:  toPgUUID(t, cidC),
-		NewOriginatorUserID:  toPgUUID(t, testUserID),
-		NewAccountableUserID: toPgUUID(t, testUserID),
-		NewTriggerSummary:    pgtype.Text{String: "third", Valid: true},
-	}); err != pgx.ErrNoRows {
+		NewTriggerCommentID:  sql.NullString{String: cidC, Valid: cidC != ""},
+		NewOriginatorUserID:  sql.NullString{String: testUserID, Valid: testUserID != ""},
+		NewAccountableUserID: sql.NullString{String: testUserID, Valid: testUserID != ""},
+		NewTriggerSummary:    sql.NullString{String: "third", Valid: true},
+	}); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("merge into a dispatched task must return pgx.ErrNoRows, got %v", err)
 	}
 }
@@ -373,12 +358,12 @@ func TestMergeCommentIntoPendingTask_TargetsQueuedNotDeferred(t *testing.T) {
 	}
 
 	row, err := queries.MergeCommentIntoPendingTask(ctx, db.MergeCommentIntoPendingTaskParams{
-		IssueID:              toPgUUID(t, issueID),
+		IssueID:              sql.NullString{String: issueID, Valid: issueID != ""},
 		AgentID:              toPgUUID(t, agentID),
-		NewTriggerCommentID:  toPgUUID(t, cidNew),
-		NewOriginatorUserID:  toPgUUID(t, testUserID),
-		NewAccountableUserID: toPgUUID(t, testUserID),
-		NewTriggerSummary:    pgtype.Text{String: "new comment", Valid: true},
+		NewTriggerCommentID:  sql.NullString{String: cidNew, Valid: cidNew != ""},
+		NewOriginatorUserID:  sql.NullString{String: testUserID, Valid: testUserID != ""},
+		NewAccountableUserID: sql.NullString{String: testUserID, Valid: testUserID != ""},
+		NewTriggerSummary:    sql.NullString{String: "new comment", Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("merge should target the queued task, got %v", err)

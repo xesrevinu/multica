@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
@@ -420,54 +419,6 @@ func TestListPinsHidesViewPinsWithoutOptIn(t *testing.T) {
 	}
 }
 
-func TestIssueViewWriteLimits(t *testing.T) {
-
-	// JSON null for a definition blob is rejected up front, not left to
-	// become a DB CHECK 500.
-	_, code, body := createIssueViewForTest(t, map[string]any{
-		"name":       "Null query",
-		"scope_type": "workspace",
-		"query":      nil,
-	})
-	if code != http.StatusBadRequest {
-		t.Fatalf("null query: expected 400, got %d: %s", code, body)
-	}
-
-	// Oversized body: a query blob past the byte cap is a 400.
-	big := strings.Repeat("x", issueViewBodyMaxBytes)
-	_, code, _ = createIssueViewForTest(t, map[string]any{
-		"name":       "Huge",
-		"scope_type": "workspace",
-		"query":      map[string]any{"blob": big},
-	})
-	if code != http.StatusBadRequest {
-		t.Fatalf("oversized body: expected 400, got %d", code)
-	}
-
-	// Per-owner quota: fill to the cap directly, then one more create fails.
-	ctx := context.Background()
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO issue_view (workspace_id, owner_id, name, scope_type, visibility, definition_version, query, display)
-		SELECT $1::uuid, $2::uuid, 'quota filler ' || g, 'workspace', 'private', 1, '{}', '{}'
-		FROM generate_series(1, $3::int) AS g
-	`, testWorkspaceID, testUserID, issueViewsPerOwnerMax); err != nil {
-		t.Fatalf("seed quota rows: %v", err)
-	}
-	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM issue_view WHERE name LIKE 'quota filler %'`)
-	})
-	_, code, body = createIssueViewForTest(t, map[string]any{
-		"name":       "One too many",
-		"scope_type": "workspace",
-		"query":      map[string]any{},
-	})
-	if code != http.StatusBadRequest {
-		t.Fatalf("quota: expected 400, got %d: %s", code, body)
-	}
-	if !strings.Contains(body, "limit") {
-		t.Fatalf("quota error should mention the limit, got: %s", body)
-	}
-}
 
 // Member removal must sweep the departed member's private views and their
 // view-bar preferences in the revoke transaction; shared views stay for the

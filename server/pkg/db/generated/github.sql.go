@@ -567,9 +567,9 @@ checks AS (
         SUM(CASE WHEN cr.status <> 'completed' OR cr.conclusion IS NULL
             THEN 1 ELSE 0 END) AS running,
         COALESCE(
-            array_agg(cr.name) FILTER (WHERE cr.status = 'completed' AND cr.conclusion IN
+            json_group_array(cr.name) FILTER (WHERE cr.status = 'completed' AND cr.conclusion IN
                 ('failure','cancelled','timed_out','action_required','startup_failure','stale','error')),
-            '{}'
+            '[]'
         ) AS failed_names
     FROM github_pull_request_check_run cr
     JOIN issue_prs ip ON ip.id = cr.pr_id
@@ -590,7 +590,7 @@ SELECT
     COALESCE(c.passed, 0)  AS checks_passed,
     COALESCE(c.failed, 0)  AS checks_failed,
     COALESCE(c.running, 0) AS checks_running,
-    COALESCE(c.failed_names, '{}') AS failed_check_names
+    COALESCE(c.failed_names, '[]') AS failed_check_names
 FROM github_pull_request pr
 JOIN issue_pull_request ipr ON ipr.pull_request_id = pr.id
 LEFT JOIN checks c ON c.pr_id = pr.id
@@ -809,7 +809,7 @@ ON CONFLICT (workspace_id, repo_owner, repo_name, pr_number) DO UPDATE SET
     pr_updated_at = EXCLUDED.pr_updated_at,
     head_sha = EXCLUDED.head_sha,
     mergeable_state = CASE
-        WHEN COALESCE(sqlc.narg('clear_mergeable_state'), FALSE) THEN NULL
+        WHEN COALESCE(?21, 0) != 0 THEN NULL
         WHEN EXCLUDED.mergeable_state IS NOT NULL THEN EXCLUDED.mergeable_state
         ELSE github_pull_request.mergeable_state
     END,
@@ -841,7 +841,8 @@ type UpsertGitHubPullRequestParams struct {
 	AuthorAvatarUrl sql.NullString `json:"author_avatar_url"`
 	MergedAt        sql.NullString `json:"merged_at"`
 	ClosedAt        sql.NullString `json:"closed_at"`
-	MergeableState  sql.NullString `json:"mergeable_state"`
+	MergeableState      sql.NullString `json:"mergeable_state"`
+	ClearMergeableState bool           `json:"clear_mergeable_state"`
 }
 
 // =====================
@@ -883,6 +884,7 @@ func (q *Queries) UpsertGitHubPullRequest(ctx context.Context, arg UpsertGitHubP
 		arg.MergedAt,
 		arg.ClosedAt,
 		arg.MergeableState,
+		arg.ClearMergeableState,
 	)
 	var i GithubPullRequest
 	err := row.Scan(

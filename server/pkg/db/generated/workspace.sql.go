@@ -61,8 +61,45 @@ DELETE FROM agent_to_label WHERE agent_id IN (SELECT id FROM (SELECT id FROM age
 // their workspace-owned rows here so they commit or roll back atomically with
 // the workspace row.
 func (q *Queries) DeleteWorkspace(ctx context.Context, workspaceID string) error {
-	_, err := q.db.ExecContext(ctx, deleteWorkspace, workspaceID)
-	return err
+	if _, err := q.db.ExecContext(ctx, deleteWorkspace, workspaceID); err != nil {
+		return err
+	}
+	for _, step := range []func(context.Context, string) error{
+		q.DeleteWorkspace_Step2,
+		q.DeleteWorkspace_Step3,
+		q.DeleteWorkspace_Step4,
+		q.DeleteWorkspace_Step5,
+		q.DeleteWorkspace_Step6,
+		q.DeleteWorkspace_Step7,
+		q.DeleteWorkspace_Step7b,
+		q.DeleteWorkspace_Step7c,
+		q.DeleteWorkspace_Step7d,
+		q.DeleteWorkspace_Step7e,
+		q.DeleteWorkspace_Step7f,
+		q.DeleteWorkspace_Step8,
+		q.DeleteWorkspace_Step9,
+		q.DeleteWorkspace_Step10,
+		q.DeleteWorkspace_Step11,
+		q.DeleteWorkspace_Step12,
+		q.DeleteWorkspace_Step13,
+		q.DeleteWorkspace_Step14,
+		q.DeleteWorkspace_Step15,
+		q.DeleteWorkspace_Step16,
+		q.DeleteWorkspace_Step17,
+		q.DeleteWorkspace_Step18,
+		q.DeleteWorkspace_Step19,
+		q.DeleteWorkspace_Step20,
+		q.DeleteWorkspace_Step21,
+		q.DeleteWorkspace_Step22,
+	} {
+		if err := step(ctx, workspaceID); err != nil {
+			return err
+		}
+	}
+	if err := q.DeleteWorkspace_Step23(ctx, sql.NullString{String: workspaceID, Valid: workspaceID != ""}); err != nil {
+		return err
+	}
+	return q.DeleteWorkspace_Step24(ctx, workspaceID)
 }
 
 const deleteWorkspace_Step10 = `-- name: DeleteWorkspace_Step10 :exec

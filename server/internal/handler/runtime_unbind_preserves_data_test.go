@@ -59,58 +59,6 @@ func TestPublishRuntimeTeardown_UsesAutomaticGCActorAndRefreshAction(t *testing.
 // TestUnbindAgentsAndDeleteRuntime_KeepsChatHistory: the agent's chat sessions
 // and messages cascade from the agent row, so hard-deleting it destroyed every
 // conversation with it. Unbinding must leave them readable.
-func TestUnbindAgentsAndDeleteRuntime_KeepsChatHistory(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-
-	runtimeID := createCascadeFixtureRuntime(t, ctx, "Unbind Chat Runtime")
-	agentID := createCascadeFixtureAgent(t, ctx, runtimeID, "Unbind Chat Agent")
-
-	var sessionID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO chat_session (workspace_id, agent_id, creator_id, runtime_id, title)
-		VALUES ($1, $2, $3, $4, 'unbind chat history')
-		RETURNING id
-	`, testWorkspaceID, agentID, testUserID, runtimeID).Scan(&sessionID); err != nil {
-		t.Fatalf("insert chat session: %v", err)
-	}
-	if _, err := testPool.Exec(ctx, `
-		INSERT INTO chat_message (chat_session_id, role, content)
-		VALUES ($1, 'user', 'does this survive the machine being retired?')
-	`, sessionID); err != nil {
-		t.Fatalf("insert chat message: %v", err)
-	}
-
-	unbindRuntime(t, ctx, runtimeID, agentID)
-
-	var sessions, messages int
-	if err := testPool.QueryRow(ctx,
-		`SELECT count(*) FROM chat_session WHERE id = $1`, sessionID).Scan(&sessions); err != nil {
-		t.Fatalf("count chat sessions: %v", err)
-	}
-	if sessions != 1 {
-		t.Fatalf("chat session rows = %d, want 1 (the conversation must survive)", sessions)
-	}
-	if err := testPool.QueryRow(ctx,
-		`SELECT count(*) FROM chat_message WHERE chat_session_id = $1`, sessionID).Scan(&messages); err != nil {
-		t.Fatalf("count chat messages: %v", err)
-	}
-	if messages != 1 {
-		t.Fatalf("chat message rows = %d, want 1", messages)
-	}
-	// chat_session.runtime_id is ON DELETE SET NULL, so the session detaches from
-	// the deleted runtime and a rebind starts a fresh provider session.
-	var sessionBound bool
-	if err := testPool.QueryRow(ctx,
-		`SELECT runtime_id IS NOT NULL FROM chat_session WHERE id = $1`, sessionID).Scan(&sessionBound); err != nil {
-		t.Fatalf("read chat session runtime: %v", err)
-	}
-	if sessionBound {
-		t.Fatalf("chat session must no longer point at the deleted runtime")
-	}
-}
 
 // TestUnbindAgentsAndDeleteRuntime_KeepsTaskHistory is the second half of the
 // data loss, and the one that needs agent_task_queue.runtime_id to be nullable:

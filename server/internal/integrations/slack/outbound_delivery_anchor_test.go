@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -22,7 +22,7 @@ type anchoredDeliveryQueries struct {
 	delivery db.ChannelTaskDelivery
 }
 
-func (q *anchoredDeliveryQueries) GetChannelTaskDelivery(context.Context, pgtype.UUID) (db.ChannelTaskDelivery, error) {
+func (q *anchoredDeliveryQueries) GetChannelTaskDelivery(context.Context, string) (db.ChannelTaskDelivery, error) {
 	return q.delivery, nil
 }
 
@@ -43,9 +43,9 @@ func TestOutbound_SendsToSnapshotThreadNotMovedBindingCursor(t *testing.T) {
 		binding: db.ChannelChatSessionBinding{
 			InstallationID: uid(1),
 			ChannelChatID:  "C123:thread-B",
-			Config:         []byte(`{"channel_id":"C123"}`),
-			LastMessageID:  pgtype.Text{String: "msg-B", Valid: true},
-			LastThreadID:   pgtype.Text{String: "thread-B", Valid: true},
+			Config:         `{"channel_id":"C123"}`,
+			LastMessageID:  sql.NullString{String: "msg-B", Valid: true},
+			LastThreadID:   sql.NullString{String: "thread-B", Valid: true},
 		},
 		inst: db.ChannelInstallation{ID: uid(1), Status: "active", Config: slackInstallConfigJSON()},
 	}
@@ -57,9 +57,9 @@ func TestOutbound_SendsToSnapshotThreadNotMovedBindingCursor(t *testing.T) {
 			InstallationID:   uid(1),
 			ChannelType:      string(TypeSlack),
 			ChannelChatID:    "C123:thread-A",
-			ChannelMessageID: pgtype.Text{String: "msg-A", Valid: true},
-			ChannelThreadID:  pgtype.Text{String: "thread-A", Valid: true},
-			Config:           []byte(`{"channel_id":"C123"}`),
+			ChannelMessageID: sql.NullString{String: "msg-A", Valid: true},
+			ChannelThreadID:  sql.NullString{String: "thread-A", Valid: true},
+			Config:           `{"channel_id":"C123"}`,
 		},
 	}
 	fs := &fakeSender{}

@@ -4606,7 +4606,7 @@ func (s *TaskService) writeChatCompletionOutcome(ctx context.Context, qtx *db.Qu
 	// turn a real image/file response — NOT a no_response — and need a row to
 	// hang on. Count + bind run on qtx so message creation and binding are one
 	// atomic outcome.
-	wsUUID, _ := util.ParseUUID(s.ResolveTaskWorkspaceID(ctx, task))
+	wsUUID, _ := util.ParseUUID(s.resolveTaskWorkspaceIDWithQueries(ctx, qtx, task))
 	var pendingAttachments int64
 	if wsUUID != "" {
 		n, err := qtx.CountUnboundChatAttachmentsForTask(ctx, db.CountUnboundChatAttachmentsForTaskParams{
@@ -7275,6 +7275,33 @@ func (s *TaskService) broadcastTaskFailedEvent(ctx context.Context, task db.Agen
 func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentTaskQueue) string {
 	workspaceID, _ := s.ResolveTaskWorkspaceIDChecked(ctx, task)
 	return workspaceID
+}
+
+func (s *TaskService) resolveTaskWorkspaceIDWithQueries(ctx context.Context, q *db.Queries, task db.AgentTaskQueue) string {
+	if q == nil {
+		return s.ResolveTaskWorkspaceID(ctx, task)
+	}
+	if task.IssueID.Valid {
+		if issue, err := q.GetIssue(ctx, task.IssueID.String); err == nil {
+			return util.UUIDToString(issue.WorkspaceID)
+		}
+	}
+	if task.ChatSessionID.Valid {
+		if cs, err := q.GetChatSession(ctx, task.ChatSessionID.String); err == nil {
+			return util.UUIDToString(cs.WorkspaceID)
+		}
+	}
+	if task.AutopilotRunID.Valid {
+		if run, err := q.GetAutopilotRun(ctx, task.AutopilotRunID.String); err == nil {
+			if ap, apErr := q.GetAutopilot(ctx, run.AutopilotID); apErr == nil {
+				return util.UUIDToString(ap.WorkspaceID)
+			}
+		}
+	}
+	if qc, ok := s.parseQuickCreateContext(task); ok {
+		return qc.WorkspaceID
+	}
+	return ""
 }
 
 // ResolveTaskWorkspaceIDChecked resolves a task's workspace and keeps the two

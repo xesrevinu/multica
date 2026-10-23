@@ -3,7 +3,7 @@ package attribution
 import (
 	"testing"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 // TestDelegatedSubscriber_AgentCreateInheritsHuman is the core MUL-5483 case:
@@ -73,7 +73,7 @@ func TestDelegatedSubscriber_NoHumanNoSubscription(t *testing.T) {
 	if _, _, ok := DelegatedSubscriber(SubscriptionFacts{
 		CreatorType:      "agent",
 		OriginType:       "agent_create",
-		OriginOriginator: pgtype.UUID{},
+		OriginOriginator: sql.NullString{},
 		OriginRootSource: SourceDirectHuman,
 	}); ok {
 		t.Fatal("an unattributed origin task must not produce a subscriber")

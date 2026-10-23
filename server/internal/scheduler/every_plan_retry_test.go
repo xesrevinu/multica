@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"database/sql"
 )
 
 // TestManagerEveryPlanRetriesFailedSamePlanTime exercises the
@@ -97,9 +97,9 @@ func TestManagerEveryPlanRetriesFailedSamePlanTime(t *testing.T) {
 	// retry as due. We deliberately use the DB's clock so this stays
 	// independent of the app process clock (consistent with the rest
 	// of the scheduler's time handling).
-	if _, err := pool.Exec(ctx, `
+	if _, err := pool.ExecContext(ctx, `
 		UPDATE sys_cron_executions
-		   SET next_retry_at = now() - INTERVAL '1 minute'
+		   SET next_retry_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 minute')
 		 WHERE id = $1
 	`, r1.ID); err != nil {
 		t.Fatalf("force next_retry_at into the past: %v", err)
@@ -147,10 +147,10 @@ type rowSnapshot struct {
 	NextRetryAt time.Time
 }
 
-func dumpJobRows(t *testing.T, pool *pgxpool.Pool, jobName string) []rowSnapshot {
+func dumpJobRows(t *testing.T, pool *sql.DB, jobName string) []rowSnapshot {
 	t.Helper()
-	rows, err := pool.Query(context.Background(), `
-		SELECT id, plan_time, status, attempt, max_attempts, COALESCE(next_retry_at, 'epoch'::timestamptz)
+	rows, err := pool.QueryContext(context.Background(), `
+		SELECT id, plan_time, status, attempt, max_attempts, next_retry_at
 		  FROM sys_cron_executions
 		 WHERE job_name = $1
 		 ORDER BY plan_time ASC
@@ -162,18 +162,15 @@ func dumpJobRows(t *testing.T, pool *pgxpool.Pool, jobName string) []rowSnapshot
 	var out []rowSnapshot
 	for rows.Next() {
 		var r rowSnapshot
-		if err := rows.Scan(&r.ID, &r.PlanTime, &r.Status, &r.Attempt, &r.MaxAttempts, &r.NextRetryAt); err != nil {
+		var planStr string
+		var nextRetry sql.NullString
+		if err := rows.Scan(&r.ID, &planStr, &r.Status, &r.Attempt, &r.MaxAttempts, &nextRetry); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
-		// Treat the 'epoch' COALESCE sentinel as zero so callers can
-		// distinguish "no retry scheduled" from "retry scheduled at
-		// some real timestamp".
-		if r.NextRetryAt.Year() == 1970 {
-			r.NextRetryAt = time.Time{}
-		} else {
-			r.NextRetryAt = r.NextRetryAt.UTC()
+		r.PlanTime = parseDBTime(planStr)
+		if nextRetry.Valid {
+			r.NextRetryAt = parseDBTime(nextRetry.String)
 		}
-		r.PlanTime = r.PlanTime.UTC()
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {

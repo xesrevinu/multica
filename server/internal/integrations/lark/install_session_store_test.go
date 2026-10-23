@@ -6,16 +6,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
-func installSessionUUID(t *testing.T, s string) pgtype.UUID {
+func installSessionUUID(t *testing.T, s string) string {
 	t.Helper()
-	var u pgtype.UUID
-	if err := u.Scan(s); err != nil {
+	u, err := uuid.Parse(s)
+	if err != nil {
 		t.Fatalf("parse uuid %q: %v", s, err)
 	}
-	return u
+	return u.String()
 }
 
 // Both implementations must honour the same contract, so the behavioural

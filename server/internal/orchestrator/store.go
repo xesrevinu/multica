@@ -24,8 +24,126 @@ type Team struct {
 
 type store struct{ pool *sql.DB }
 
+func parseSQLTime(s string) (time.Time, error) {
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999Z07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.UTC(), nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("cannot parse time %q", s)
+}
+
+type sqlTime struct{ dst *time.Time }
+
+func (t sqlTime) Scan(src any) error {
+	switch v := src.(type) {
+	case nil:
+		*t.dst = time.Time{}
+		return nil
+	case time.Time:
+		*t.dst = v.UTC()
+		return nil
+	case string:
+		if v == "" {
+			*t.dst = time.Time{}
+			return nil
+		}
+		parsed, err := parseSQLTime(v)
+		if err != nil {
+			return err
+		}
+		*t.dst = parsed
+		return nil
+	case []byte:
+		return t.Scan(string(v))
+	default:
+		return fmt.Errorf("unsupported time scan type %T", src)
+	}
+}
+
+type sqlTimePtr struct{ dst **time.Time }
+
+func (t sqlTimePtr) Scan(src any) error {
+	switch v := src.(type) {
+	case nil:
+		*t.dst = nil
+		return nil
+	case time.Time:
+		utc := v.UTC()
+		*t.dst = &utc
+		return nil
+	case string:
+		if v == "" {
+			*t.dst = nil
+			return nil
+		}
+		parsed, err := parseSQLTime(v)
+		if err != nil {
+			return err
+		}
+		*t.dst = &parsed
+		return nil
+	case []byte:
+		return t.Scan(string(v))
+	default:
+		return fmt.Errorf("unsupported time ptr scan type %T", src)
+	}
+}
+
+type sqlLabels struct{ dst *[]string }
+
+func (l sqlLabels) Scan(src any) error {
+	switch v := src.(type) {
+	case nil:
+		*l.dst = nil
+		return nil
+	case string:
+		if v == "" || v == "[]" || v == "{}" {
+			*l.dst = nil
+			return nil
+		}
+		var out []string
+		if err := json.Unmarshal([]byte(v), &out); err != nil {
+			return err
+		}
+		*l.dst = out
+		return nil
+	case []byte:
+		return l.Scan(string(v))
+	default:
+		return fmt.Errorf("unsupported labels scan type %T", src)
+	}
+}
+
+type sqlRawJSON struct{ dst *json.RawMessage }
+
+func (r sqlRawJSON) Scan(src any) error {
+	switch v := src.(type) {
+	case nil:
+		*r.dst = nil
+		return nil
+	case string:
+		*r.dst = json.RawMessage(v)
+		return nil
+	case []byte:
+		b := make([]byte, len(v))
+		copy(b, v)
+		*r.dst = json.RawMessage(b)
+		return nil
+	default:
+		return fmt.Errorf("unsupported raw json scan type %T", src)
+	}
+}
+
 func (s *store) teams(ctx context.Context) ([]*Team, error) {
-	rows, err := s.pool.QueryContext(ctx, `SELECT project_id::text, workspace_id::text, spec, spec_yaml, paused, paused_reason, COALESCE(human_user_id::text,''), updated_at FROM orchestrator_team`)
+	rows, err := s.pool.QueryContext(ctx, `SELECT project_id, workspace_id, spec, spec_yaml, paused, paused_reason, COALESCE(human_user_id,''), updated_at FROM orchestrator_team`)
 	if err != nil {
 		return nil, err
 	}
@@ -34,7 +152,7 @@ func (s *store) teams(ctx context.Context) ([]*Team, error) {
 	for rows.Next() {
 		t := &Team{}
 		var raw []byte
-		if err := rows.Scan(&t.ProjectID, &t.WorkspaceID, &raw, &t.SpecYAML, &t.Paused, &t.PausedReason, &t.HumanUserID, &t.UpdatedAt); err != nil {
+		if err := rows.Scan(&t.ProjectID, &t.WorkspaceID, &raw, &t.SpecYAML, &t.Paused, &t.PausedReason, &t.HumanUserID, sqlTime{&t.UpdatedAt}); err != nil {
 			return nil, err
 		}
 		t.Spec = &Spec{}
@@ -68,10 +186,10 @@ func metaStrings(raw []byte) map[string]string {
 	return out
 }
 
-const issueCols = `i.id::text, w.issue_prefix || '-' || i.number, i.title, i.status, COALESCE(i.parent_issue_id::text,''), COALESCE(i.stage,0),
-	COALESCE(i.assignee_type,''), COALESCE(CASE WHEN i.assignee_type='agent' THEN a.name ELSE i.assignee_id::text END,''),
-	COALESCE((SELECT array_agg(l.name) FROM issue_to_label il JOIN issue_label l ON l.id=il.label_id WHERE il.issue_id=i.id), '{}'),
-	i.metadata, COALESCE(i.description,''), i.updated_at, i.revision, COALESCE(i.project_id::text,''), i.workspace_id::text`
+const issueCols = `i.id, w.issue_prefix || '-' || i.number, i.title, i.status, COALESCE(i.parent_issue_id,''), COALESCE(i.stage,0),
+	COALESCE(i.assignee_type,''), COALESCE(CASE WHEN i.assignee_type='agent' THEN a.name ELSE i.assignee_id END,''),
+	COALESCE((SELECT json_group_array(l.name) FROM issue_to_label il JOIN issue_label l ON l.id=il.label_id WHERE il.issue_id=i.id), '[]'),
+	i.metadata, COALESCE(i.description,''), i.updated_at, i.revision, COALESCE(i.project_id,''), i.workspace_id`
 
 const issueFrom = ` FROM issue i JOIN workspace w ON w.id=i.workspace_id LEFT JOIN agent a ON a.id=i.assignee_id AND i.assignee_type='agent' `
 
@@ -87,7 +205,7 @@ func scanIssues(rows *sql.Rows) ([]issueRow, error) {
 	for rows.Next() {
 		var r issueRow
 		var raw []byte
-		if err := rows.Scan(&r.ID, &r.Key, &r.Title, &r.Status, &r.ParentID, &r.Stage, &r.AssigneeType, &r.Assignee, &r.Labels, &raw, &r.Description, &r.UpdatedAt, &r.Revision, &r.ProjectID, &r.Workspace); err != nil {
+		if err := rows.Scan(&r.ID, &r.Key, &r.Title, &r.Status, &r.ParentID, &r.Stage, &r.AssigneeType, &r.Assignee, sqlLabels{&r.Labels}, &raw, &r.Description, sqlTime{&r.UpdatedAt}, &r.Revision, &r.ProjectID, &r.Workspace); err != nil {
 			return nil, err
 		}
 		r.Meta = metaStrings(raw)
@@ -118,7 +236,7 @@ func (s *store) issue(ctx context.Context, id string) (*issueRow, error) {
 
 // issueByKey resolves "ATT-12" or a UUID inside a workspace.
 func (s *store) issueByKey(ctx context.Context, workspaceID, key string) (*issueRow, error) {
-	q := `SELECT ` + issueCols + issueFrom + `WHERE i.workspace_id=$1 AND (i.id::text=$2 OR upper(w.issue_prefix || '-' || i.number)=upper($2))`
+	q := `SELECT ` + issueCols + issueFrom + `WHERE i.workspace_id=$1 AND (i.id=$2 OR upper(w.issue_prefix || '-' || i.number)=upper($2))`
 	rows, err := s.pool.QueryContext(ctx, q, workspaceID, key)
 	if err != nil {
 		return nil, err
@@ -156,14 +274,14 @@ func (s *store) busyOwners(ctx context.Context, workspaceID string) (map[string]
 var terminalTask = []string{"completed", "failed", "cancelled"}
 
 func (s *store) runs(ctx context.Context, issueID string) (active, last *Run, err error) {
-	rows, err := s.pool.QueryContext(ctx, `SELECT q.id::text, q.status, q.started_at, (SELECT max(m.created_at) FROM task_message m WHERE m.task_id=q.id), COALESCE(q.failure_reason, ''), q.created_at, q.completed_at, COALESCE((SELECT lower(rt.provider) FROM agent_runtime rt WHERE rt.id=q.runtime_id), ''), COALESCE(q.error, '') FROM agent_task_queue q WHERE q.issue_id=$1 ORDER BY q.created_at DESC LIMIT 20`, issueID)
+	rows, err := s.pool.QueryContext(ctx, `SELECT q.id, q.status, q.started_at, (SELECT max(m.created_at) FROM task_message m WHERE m.task_id=q.id), COALESCE(q.failure_reason, ''), q.created_at, q.completed_at, COALESCE((SELECT lower(rt.provider) FROM agent_runtime rt WHERE rt.id=q.runtime_id), ''), COALESCE(q.error, '') FROM agent_task_queue q WHERE q.issue_id=$1 ORDER BY q.created_at DESC LIMIT 20`, issueID)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		r := &Run{}
-		if err := rows.Scan(&r.ID, &r.Status, &r.StartedAt, &r.LastActivity, &r.Reason, &r.CreatedAt, &r.EndedAt, &r.Backend, &r.Error); err != nil {
+		if err := rows.Scan(&r.ID, &r.Status, sqlTimePtr{&r.StartedAt}, sqlTimePtr{&r.LastActivity}, &r.Reason, sqlTimePtr{&r.CreatedAt}, sqlTimePtr{&r.EndedAt}, &r.Backend, &r.Error); err != nil {
 			return nil, nil, err
 		}
 		if contains(terminalTask, r.Status) {
@@ -179,7 +297,7 @@ func (s *store) runs(ctx context.Context, issueID string) (active, last *Run, er
 
 func (s *store) agentID(ctx context.Context, workspaceID, name string) (string, error) {
 	var id string
-	err := s.pool.QueryRowContext(ctx, `SELECT id::text FROM agent WHERE workspace_id=$1 AND name=$2 AND archived_at IS NULL LIMIT 1`, workspaceID, name).Scan(&id)
+	err := s.pool.QueryRowContext(ctx, `SELECT id FROM agent WHERE workspace_id=$1 AND name=$2 AND archived_at IS NULL LIMIT 1`, workspaceID, name).Scan(&id)
 	if err == sql.ErrNoRows {
 		return "", fmt.Errorf("agent %q not found in workspace", name)
 	}
@@ -203,7 +321,7 @@ func (s *store) begin(ctx context.Context, t *Team, row *issueRow, d *Decision, 
 	err = tx.QueryRowContext(ctx, `INSERT INTO orchestrator_transition (workspace_id, project_id, issue_id, tid, idem_key, decision, state, source)
 		VALUES ($1,$2,$3,$4,$5,$6,'started',$7)
 		ON CONFLICT (idem_key) DO UPDATE SET idem_key=EXCLUDED.idem_key RETURNING id, state`,
-		t.WorkspaceID, t.ProjectID, row.ID, d.Tid, idem, dj, source).Scan(&logID, &state)
+		t.WorkspaceID, t.ProjectID, row.ID, d.Tid, idem, string(dj), source).Scan(&logID, &state)
 	if err != nil {
 		return 0, false, err
 	}
@@ -211,18 +329,18 @@ func (s *store) begin(ctx context.Context, t *Team, row *issueRow, d *Decision, 
 		return logID, false, nil
 	}
 	if len(d.Meta) > 0 {
-		set, del := map[string]any{}, []string{}
+		patch := map[string]any{}
 		for k, v := range d.Meta {
 			if v == "" {
-				del = append(del, k)
+				patch[k] = nil
 			} else if n, e := strconv.Atoi(v); e == nil && strings.HasPrefix(k, "attempt_") {
-				set[k] = n
+				patch[k] = n
 			} else {
-				set[k] = v
+				patch[k] = v
 			}
 		}
-		sj, _ := json.Marshal(set)
-		if _, err := tx.ExecContext(ctx, `UPDATE issue SET metadata = (metadata || $2::jsonb) - $3::text[], revision = revision + 1, updated_at = now() WHERE id=$1`, row.ID, sj, del); err != nil {
+		sj, _ := json.Marshal(patch)
+		if _, err := tx.ExecContext(ctx, `UPDATE issue SET metadata = json_patch(COALESCE(metadata, '{}'), $2), revision = revision + 1, updated_at = now() WHERE id=$1`, row.ID, string(sj)); err != nil {
 			return 0, false, err
 		}
 	}
@@ -241,7 +359,7 @@ func (s *store) finish(ctx context.Context, id int64, err error) {
 
 func (s *store) backoffOK(ctx context.Context, issueID string, now time.Time) bool {
 	var next *time.Time
-	_ = s.pool.QueryRowContext(ctx, `SELECT next_at FROM orchestrator_issue_state WHERE issue_id=$1`, issueID).Scan(&next)
+	_ = s.pool.QueryRowContext(ctx, `SELECT next_at FROM orchestrator_issue_state WHERE issue_id=$1`, issueID).Scan(sqlTimePtr{&next})
 	return next == nil || !next.After(now)
 }
 
@@ -253,7 +371,7 @@ func (s *store) recordFailure(ctx context.Context, issueID string, err error, ba
 	if wait > capS || wait <= 0 {
 		wait = capS
 	}
-	_, _ = s.pool.ExecContext(ctx, `UPDATE orchestrator_issue_state SET next_at = now() + $2::interval WHERE issue_id=$1`, issueID, fmt.Sprintf("%d milliseconds", wait.Milliseconds()))
+	_, _ = s.pool.ExecContext(ctx, `UPDATE orchestrator_issue_state SET next_at = $2 WHERE issue_id=$1`, issueID, time.Now().UTC().Add(wait).Format(time.RFC3339Nano))
 	return n, wait
 }
 
@@ -270,7 +388,7 @@ func (s *store) setWait(ctx context.Context, issueID, wait string) bool {
 func (s *store) remindDue(ctx context.Context, issueID string, every time.Duration) bool {
 	tag, _ := s.pool.ExecContext(ctx, `INSERT INTO orchestrator_issue_state (issue_id, reminded_at) VALUES ($1, now())
 		ON CONFLICT (issue_id) DO UPDATE SET reminded_at=now()
-		WHERE orchestrator_issue_state.reminded_at IS NULL OR orchestrator_issue_state.reminded_at < now() - $2::interval`, issueID, fmt.Sprintf("%d seconds", int(every.Seconds())))
+		WHERE orchestrator_issue_state.reminded_at IS NULL OR orchestrator_issue_state.reminded_at < $2`, issueID, time.Now().UTC().Add(-every).Format(time.RFC3339Nano))
 	return rowsAffected(tag) > 0
 }
 
@@ -283,16 +401,16 @@ func (s *store) enqueue(ctx context.Context, issueID, kind string) error {
 
 // claim marks all pending events processed and returns their distinct issues.
 func (s *store) claim(ctx context.Context) ([]string, error) {
-	rows, err := s.pool.QueryContext(ctx, `UPDATE orchestrator_event SET processed_at=now() WHERE processed_at IS NULL RETURNING issue_id::text`)
+	rows, err := s.pool.QueryContext(ctx, `UPDATE orchestrator_event SET processed_at=now() WHERE processed_at IS NULL RETURNING issue_id`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	seen := map[string]bool{}
 	var out []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		if !seen[id] {
@@ -300,8 +418,11 @@ func (s *store) claim(ctx context.Context) ([]string, error) {
 			out = append(out, id)
 		}
 	}
-	_, _ = s.pool.ExecContext(ctx, `DELETE FROM orchestrator_event WHERE processed_at < now() - interval '1 day'`)
-	return out, rows.Err()
+	rowsErr := rows.Err()
+	rows.Close()
+	cutoff := time.Now().UTC().Add(-24 * time.Hour).Format(time.RFC3339Nano)
+	_, _ = s.pool.ExecContext(ctx, `DELETE FROM orchestrator_event WHERE processed_at < $1`, cutoff)
+	return out, rowsErr
 }
 
 // shadow records a decision a shadow team would have applied, once per
@@ -310,7 +431,7 @@ func (s *store) shadow(ctx context.Context, t *Team, row *issueRow, d *Decision,
 	dj, _ := json.Marshal(d)
 	tag, err := s.pool.ExecContext(ctx, `INSERT INTO orchestrator_transition (workspace_id, project_id, issue_id, tid, idem_key, decision, state, source, finished_at)
 		VALUES ($1,$2,$3,$4,$5,$6,'shadow',$7,now()) ON CONFLICT (idem_key) DO NOTHING`,
-		t.WorkspaceID, t.ProjectID, row.ID, d.Tid, fmt.Sprintf("shadow|%s|%s|%d", row.ID, d.Tid, row.Revision), dj, source)
+		t.WorkspaceID, t.ProjectID, row.ID, d.Tid, fmt.Sprintf("shadow|%s|%s|%d", row.ID, d.Tid, row.Revision), string(dj), source)
 	return err == nil && rowsAffected(tag) > 0
 }
 

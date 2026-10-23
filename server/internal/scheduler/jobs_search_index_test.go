@@ -14,34 +14,34 @@ func TestSearchIndexChangePruneJobRemovesExpiredRowsAndRaisesMark(t *testing.T) 
 	pool := integrationPool(t)
 	ctx := context.Background()
 
-	var previousMark *string
-	_ = pool.QueryRow(ctx, `SELECT pruned_through_xid::text FROM search_index_prune_mark`).Scan(&previousMark)
+	var previousMark *int64
+	_ = pool.QueryRowContext(ctx, `SELECT pruned_through_seq FROM search_index_prune_mark`).Scan(&previousMark)
 	t.Cleanup(func() {
 		if previousMark == nil {
-			pool.Exec(context.Background(), `DELETE FROM search_index_prune_mark`)
+			_, _ = pool.ExecContext(context.Background(), `DELETE FROM search_index_prune_mark`)
 			return
 		}
-		pool.Exec(context.Background(), `UPDATE search_index_prune_mark SET pruned_through_xid = $1::xid8`, *previousMark)
+		_, _ = pool.ExecContext(context.Background(), `UPDATE search_index_prune_mark SET pruned_through_seq = $1`, *previousMark)
 	})
 
 	workspaceID := uuid.New()
 	expiredID, freshID := uuid.New(), uuid.New()
 	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM search_index_change WHERE workspace_id = $1`, workspaceID)
+		_, _ = pool.ExecContext(context.Background(), `DELETE FROM search_index_change WHERE workspace_id = $1`, workspaceID.String())
 	})
 	planTime := time.Now().UTC().Truncate(time.Hour)
-	var expiredXid string
-	if err := pool.QueryRow(ctx, `
-		INSERT INTO search_index_change (entity_type, entity_id, workspace_id, change_xid, changed_at)
-		VALUES ('comment', $1, $2, pg_current_xact_id(), $3)
-		RETURNING change_xid::text
-	`, expiredID, workspaceID, planTime.Add(-SearchIndexChangeRetention-time.Hour)).Scan(&expiredXid); err != nil {
+	var expiredSeq int64
+	if err := pool.QueryRowContext(ctx, `
+		INSERT INTO search_index_change (entity_type, entity_id, workspace_id, change_seq, changed_at)
+		VALUES ('comment', $1, $2, 1, $3)
+		RETURNING change_seq
+	`, expiredID.String(), workspaceID.String(), formatDBTime(planTime.Add(-SearchIndexChangeRetention-time.Hour))).Scan(&expiredSeq); err != nil {
 		t.Fatalf("insert expired change: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO search_index_change (entity_type, entity_id, workspace_id, change_xid, changed_at)
-		VALUES ('comment', $1, $2, pg_current_xact_id(), $3)
-	`, freshID, workspaceID, planTime.Add(-time.Hour)); err != nil {
+	if _, err := pool.ExecContext(ctx, `
+		INSERT INTO search_index_change (entity_type, entity_id, workspace_id, change_seq, changed_at)
+		VALUES ('comment', $1, $2, 2, $3)
+	`, freshID.String(), workspaceID.String(), formatDBTime(planTime.Add(-time.Hour))); err != nil {
 		t.Fatalf("insert fresh change: %v", err)
 	}
 
@@ -55,15 +55,17 @@ func TestSearchIndexChangePruneJobRemovesExpiredRowsAndRaisesMark(t *testing.T) 
 	}
 
 	var remaining []uuid.UUID
-	rows, err := pool.Query(ctx, `SELECT entity_id FROM search_index_change WHERE workspace_id = $1`, workspaceID)
+	rows, err := pool.QueryContext(ctx, `SELECT entity_id FROM search_index_change WHERE workspace_id = $1`, workspaceID.String())
 	if err != nil {
 		t.Fatalf("list remaining: %v", err)
 	}
+	defer rows.Close()
 	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
+		var idStr string
+		if err := rows.Scan(&idStr); err != nil {
 			t.Fatalf("scan remaining: %v", err)
 		}
+		id, _ := uuid.Parse(idStr)
 		remaining = append(remaining, id)
 	}
 	if len(remaining) != 1 || remaining[0] != freshID {
@@ -71,12 +73,12 @@ func TestSearchIndexChangePruneJobRemovesExpiredRowsAndRaisesMark(t *testing.T) 
 	}
 
 	var covered bool
-	if err := pool.QueryRow(ctx, `
-		SELECT pruned_through_xid >= $1::xid8 FROM search_index_prune_mark WHERE singleton
-	`, expiredXid).Scan(&covered); err != nil {
+	if err := pool.QueryRowContext(ctx, `
+		SELECT pruned_through_seq >= $1 FROM search_index_prune_mark WHERE singleton = 1
+	`, expiredSeq).Scan(&covered); err != nil {
 		t.Fatalf("read prune mark: %v", err)
 	}
 	if !covered {
-		t.Fatalf("prune mark must cover the pruned xid %s", expiredXid)
+		t.Fatalf("prune mark must cover the pruned seq %d", expiredSeq)
 	}
 }

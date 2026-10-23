@@ -1,7 +1,9 @@
 package util
 
 import (
+	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,8 +37,27 @@ func MustParseUUID(s string) string {
 	return u
 }
 
-func UUIDToString(u string) string {
-	return u
+func UUIDToString(u any) string {
+	switch v := u.(type) {
+	case string:
+		return v
+	case sql.NullString:
+		if !v.Valid {
+			return ""
+		}
+		return v.String
+	case pgtype.UUID:
+		if !v.Valid {
+			return ""
+		}
+		parsed, err := uuid.FromBytes(v.Bytes[:])
+		if err != nil {
+			return ""
+		}
+		return parsed.String()
+	default:
+		return ""
+	}
 }
 
 func TextToPtr(t pgtype.Text) *string {
@@ -134,11 +155,12 @@ func ParseCalendarDate(s string) (pgtype.Date, error) {
 	return pgtype.Date{}, fmt.Errorf("invalid date %q: expected YYYY-MM-DD", s)
 }
 
-func UUIDToPtr(u string) *string {
-	if u == "" {
+func UUIDToPtr(u any) *string {
+	s := UUIDToString(u)
+	if s == "" {
 		return nil
 	}
-	return &u
+	return &s
 }
 
 func Int8ToPtr(v pgtype.Int8) *int64 {
@@ -160,4 +182,36 @@ func PtrToInt4(v *int32) pgtype.Int4 {
 		return pgtype.Int4{}
 	}
 	return pgtype.Int4{Int32: *v, Valid: true}
+}
+
+func ParseTime(s string) time.Time {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999Z07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+		time.DateOnly,
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
+func NullTime(ns sql.NullString) (time.Time, bool) {
+	if !ns.Valid || strings.TrimSpace(ns.String) == "" {
+		return time.Time{}, false
+	}
+	t := ParseTime(ns.String)
+	if t.IsZero() {
+		return time.Time{}, false
+	}
+	return t, true
 }

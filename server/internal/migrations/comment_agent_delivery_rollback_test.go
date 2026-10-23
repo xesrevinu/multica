@@ -3,6 +3,7 @@ package migrations
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -12,7 +13,7 @@ const commentAgentDeliveryRollbackTestSchema = "comment_agent_delivery_rollback_
 
 func TestCommentAgentDeliveryRollbackMigrationRemovesRevertedSchema(t *testing.T) {
 	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
+	if !strings.HasPrefix(dbURL, "postgres") {
 		t.Skip("integration test requires Postgres at DATABASE_URL")
 	}
 

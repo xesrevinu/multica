@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,8 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/multica-ai/multica/server/internal/events"
@@ -26,7 +25,7 @@ import (
 // cleanup, rather than deleting only the member row in the regression fixture.
 func removeNotificationMember(t *testing.T, userID, memberID, method string) {
 	t.Helper()
-	h := &handler.Handler{Queries: db.New(testPool), TxStarter: testPool, Bus: events.New()}
+	h := &handler.Handler{Queries: db.New(testPool), TxStarter: handler.WrapTxStarter(testPool), Bus: events.New()}
 	r := httptest.NewRequest(http.MethodDelete, "/", nil)
 	actor := testUserID
 	if method == "leave" {
@@ -178,15 +177,15 @@ func TestNotification_CurrentMembership(t *testing.T) {
 
 // Only the origin lookup is fault-injected to select the unconfirmed branch;
 // task transitions and inbox writes still run against real PostgreSQL.
-type originLookupFailure struct{ *pgxpool.Pool }
+type originLookupFailure struct{ *testutil.Pool }
 type failedOriginRow struct{}
 
 func (failedOriginRow) Scan(...any) error { return errors.New("injected origin lookup failure") }
-func (q originLookupFailure) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	if strings.HasPrefix(sql, "-- name: GetIssueByOrigin ") {
-		return failedOriginRow{}
+func (q originLookupFailure) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	if strings.HasPrefix(query, "-- name: GetIssueByOrigin ") {
+		return q.Pool.QueryRowContext(ctx, "SELECT invalid_column_for_injected_origin_lookup_failure")
 	}
-	return q.Pool.QueryRow(ctx, sql, args...)
+	return q.Pool.QueryRowContext(ctx, query, args...)
 }
 
 func TestNotification_ServiceMembership(t *testing.T) {

@@ -92,6 +92,50 @@ type DeleteDingTalkInstallationForReplacementParams struct {
 // this statement. The steps clear child rows while the installation still
 // matches; this statement deletes it and returns the id.
 func (q *Queries) DeleteDingTalkInstallationForReplacement(ctx context.Context, arg DeleteDingTalkInstallationForReplacementParams) (string, error) {
+	if err := q.DeleteDingTalkInstallationForReplacement_Step2(ctx, DeleteDingTalkInstallationForReplacement_Step2Params(arg)); err != nil {
+		return "", err
+	}
+	if err := q.DeleteDingTalkInstallationForReplacement_Step3(ctx, DeleteDingTalkInstallationForReplacement_Step3Params(arg)); err != nil {
+		return "", err
+	}
+	if err := q.DeleteDingTalkInstallationForReplacement_Step4(ctx, DeleteDingTalkInstallationForReplacement_Step4Params(arg)); err != nil {
+		return "", err
+	}
+	if err := q.DeleteDingTalkInstallationForReplacement_Step5(ctx, DeleteDingTalkInstallationForReplacement_Step5Params(arg)); err != nil {
+		return "", err
+	}
+	if err := q.DeleteDingTalkInstallationForReplacement_Step6(ctx, DeleteDingTalkInstallationForReplacement_Step6Params(arg)); err != nil {
+		return "", err
+	}
+	if err := q.DeleteDingTalkInstallationForReplacement_Step7(ctx, DeleteDingTalkInstallationForReplacement_Step7Params(arg)); err != nil {
+		return "", err
+	}
+	if err := q.DeleteDingTalkInstallationForReplacement_Step8(ctx, DeleteDingTalkInstallationForReplacement_Step8Params(arg)); err != nil {
+		return "", err
+	}
+	if err := q.DeleteDingTalkInstallationForReplacement_Step9(ctx, DeleteDingTalkInstallationForReplacement_Step9Params(arg)); err != nil {
+		return "", err
+	}
+	if err := q.DeleteDingTalkInstallationForReplacement_Step10(ctx, DeleteDingTalkInstallationForReplacement_Step10Params(arg)); err != nil {
+		return "", err
+	}
+	if err := q.DeleteDingTalkInstallationForReplacement_Step11(ctx, DeleteDingTalkInstallationForReplacement_Step11Params(arg)); err != nil {
+		return "", err
+	}
+	if err := q.DeleteDingTalkInstallationForReplacement_Step12(ctx, DeleteDingTalkInstallationForReplacement_Step12Params{
+		InstallationID: sql.NullString{String: arg.InstallationID, Valid: arg.InstallationID != ""},
+		WorkspaceID:    arg.WorkspaceID,
+		AgentID:        arg.AgentID,
+	}); err != nil {
+		return "", err
+	}
+	if err := q.DeleteDingTalkInstallationForReplacement_Step13(ctx, DeleteDingTalkInstallationForReplacement_Step13Params{
+		InstallationID: sql.NullString{String: arg.InstallationID, Valid: arg.InstallationID != ""},
+		WorkspaceID:    arg.WorkspaceID,
+		AgentID:        arg.AgentID,
+	}); err != nil {
+		return "", err
+	}
 	row := q.db.QueryRowContext(ctx, deleteDingTalkInstallationForReplacement, arg.InstallationID, arg.WorkspaceID, arg.AgentID)
 	var id string
 	err := row.Scan(&id)
@@ -731,8 +775,16 @@ func (q *Queries) RecordDingTalkGroupPresence(ctx context.Context, arg RecordDin
 		arg.WorkspaceID,
 	)
 	var installation_id string
-	err := row.Scan(&installation_id)
-	return installation_id, err
+	if err := row.Scan(&installation_id); err != nil {
+		return "", err
+	}
+	if err := q.RecordDingTalkGroupPresence_Step2(ctx, RecordDingTalkGroupPresence_Step2Params{
+		InstallationID: installation_id,
+		ConversationID: arg.ConversationID,
+	}); err != nil {
+		return installation_id, err
+	}
+	return installation_id, nil
 }
 
 const recordDingTalkGroupPresence_Step2 = `-- name: RecordDingTalkGroupPresence_Step2 :exec

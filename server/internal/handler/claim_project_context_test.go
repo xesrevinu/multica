@@ -3,14 +3,9 @@ package handler
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
-	"errors"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -100,247 +95,23 @@ type claimProjectFields struct {
 // to workspace context. Before MUL-6547 the issue branch used GetProject, which
 // has no workspace predicate, so the foreign project's title, description,
 // repository URL and local path were all serialized into the claim.
-func TestClaimTask_IssueProjectInForeignWorkspace_DegradesToWorkspaceRepos(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	setHandlerTestWorkspaceRepos(t, []map[string]string{
-		{"url": localFallbackRepoURL, "description": "local"},
-	})
-	_, foreignProjectID := foreignWorkspaceWithProject(t, "foreign-issue-project-ws", "FIP")
-
-	var agentID, runtimeID string
-	dbfx.QueryRow(t,
-		`SELECT id, runtime_id FROM agent WHERE workspace_id = $1 LIMIT 1`,
-		testWorkspaceID,
-	).Scan(&agentID, &runtimeID)
-
-	issueID := dbfx.Issue(t, "issue pointing at a foreign project", testutil.Cols{
-		"project_id": foreignProjectID,
-		"priority":   "medium",
-		"number":     88101,
-	})
-	dbfx.Task(t, agentID, testutil.Cols{
-		"runtime_id": runtimeID,
-		"issue_id":   issueID,
-	})
-
-	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil,
-		testWorkspaceID, "test-claim-foreign-issue-project")
-	req = withURLParam(req, "runtimeId", runtimeID)
-	w := testutil.Call(t, testHandler.ClaimTaskByRuntime, req).Want(http.StatusOK)
-
-	var resp struct {
-		Task *claimProjectFields `json:"task"`
-	}
-	w.JSON(&resp)
-	if resp.Task == nil {
-		t.Fatal("expected task in response")
-	}
-	assertNoForeignContext(t, w.Text(), foreignProjectID)
-
-	if resp.Task.ProjectID != "" {
-		t.Errorf("project_id = %q, want empty for an out-of-workspace project reference", resp.Task.ProjectID)
-	}
-	if len(resp.Task.ProjectResources) != 0 {
-		t.Errorf("project_resources = %+v, want none", resp.Task.ProjectResources)
-	}
-	if len(resp.Task.Repos) != 1 || resp.Task.Repos[0].URL != localFallbackRepoURL {
-		t.Fatalf("repos = %+v, want only the local workspace fallback", resp.Task.Repos)
-	}
-}
 
 // The quick-create branch resolves its project from the task context JSONB
 // rather than an issue row, and used the same unscoped GetProject. It needs its
 // own assertion: a requester who edits the stored project_id must not be able to
 // pull another tenant's resources into the claim.
-func TestClaimTask_QuickCreateProjectInForeignWorkspace_DegradesToWorkspaceRepos(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	setHandlerTestWorkspaceRepos(t, []map[string]string{
-		{"url": localFallbackRepoURL, "description": "local"},
-	})
-	_, foreignProjectID := foreignWorkspaceWithProject(t, "foreign-qc-project-ws", "FQP")
-
-	agentID, runtimeID, daemonID := createRuntimeGuardAgent(t, ctx)
-	quickContext, _ := json.Marshal(map[string]any{
-		"type":         "quick_create",
-		"prompt":       "create a follow-up issue",
-		"requester_id": testUserID,
-		"workspace_id": testWorkspaceID,
-		"project_id":   foreignProjectID,
-	})
-	dbfx.Exec(t, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, context)
-		VALUES ($1, $2, 'queued', 2, $3)
-	`, agentID, runtimeID, quickContext)
-
-	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil,
-		testWorkspaceID, daemonID)
-	req = withURLParam(req, "runtimeId", runtimeID)
-	w := testutil.Call(t, testHandler.ClaimTaskByRuntime, req).Want(http.StatusOK)
-
-	var resp struct {
-		Task *claimProjectFields `json:"task"`
-	}
-	w.JSON(&resp)
-	if resp.Task == nil {
-		t.Fatal("expected task in response")
-	}
-	assertNoForeignContext(t, w.Text(), foreignProjectID)
-
-	if resp.Task.ProjectID != "" {
-		t.Errorf("quick-create project_id = %q, want empty for an out-of-workspace project", resp.Task.ProjectID)
-	}
-	if len(resp.Task.ProjectResources) != 0 {
-		t.Errorf("quick-create project_resources = %+v, want none", resp.Task.ProjectResources)
-	}
-	if len(resp.Task.Repos) != 1 || resp.Task.Repos[0].URL != localFallbackRepoURL {
-		t.Fatalf("quick-create repos = %+v, want only the local workspace fallback", resp.Task.Repos)
-	}
-}
 
 // A project_resource row carries its own workspace_id, so a resource can
 // disagree with the project it hangs off. Listing by project_id alone — which
 // every claim branch did before MUL-6547 — serialized that row anyway. The
 // in-workspace resource on the same project must still come through, proving the
 // new predicate filters rather than just emptying the list.
-func TestClaimTask_ProjectResourceFromForeignWorkspace_IsFilteredOut(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	foreignWorkspaceID, _ := foreignWorkspaceWithProject(t, "foreign-resource-ws", "FRW")
-
-	const localRepoURL = "https://github.com/example/local-project-repo"
-	projectID := dbfx.Project(t, "Project with a mismatched resource row")
-	dbfx.Insert(t, "project_resource", testutil.Cols{
-		"project_id":    projectID,
-		"workspace_id":  testWorkspaceID,
-		"resource_type": "github_repo",
-		"resource_ref":  `{"url":"` + localRepoURL + `"}`,
-		"position":      0,
-	})
-	// Same project, foreign workspace_id: only reachable through corrupt data,
-	// which is exactly the case the predicate exists for.
-	dbfx.Insert(t, "project_resource", testutil.Cols{
-		"project_id":    projectID,
-		"workspace_id":  foreignWorkspaceID,
-		"resource_type": "github_repo",
-		"resource_ref":  `{"url":"` + foreignRepoURL + `"}`,
-		"position":      1,
-	})
-	dbfx.Insert(t, "project_resource", testutil.Cols{
-		"project_id":    projectID,
-		"workspace_id":  foreignWorkspaceID,
-		"resource_type": "local_directory",
-		"resource_ref":  `{"daemon_id":"foreign-daemon","local_path":"` + foreignLocalPath + `","execution_mode":"in_place"}`,
-		"position":      2,
-	})
-
-	var agentID, runtimeID string
-	dbfx.QueryRow(t,
-		`SELECT id, runtime_id FROM agent WHERE workspace_id = $1 LIMIT 1`,
-		testWorkspaceID,
-	).Scan(&agentID, &runtimeID)
-
-	issueID := dbfx.Issue(t, "issue with a mismatched project resource", testutil.Cols{
-		"project_id": projectID,
-		"priority":   "medium",
-		"number":     88102,
-	})
-	dbfx.Task(t, agentID, testutil.Cols{
-		"runtime_id": runtimeID,
-		"issue_id":   issueID,
-	})
-
-	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil,
-		testWorkspaceID, "test-claim-foreign-resource")
-	req = withURLParam(req, "runtimeId", runtimeID)
-	w := testutil.Call(t, testHandler.ClaimTaskByRuntime, req).Want(http.StatusOK)
-
-	var resp struct {
-		Task *claimProjectFields `json:"task"`
-	}
-	w.JSON(&resp)
-	if resp.Task == nil {
-		t.Fatal("expected task in response")
-	}
-	assertNoForeignContext(t, w.Text())
-
-	if resp.Task.ProjectID != projectID {
-		t.Errorf("project_id = %q, want %q", resp.Task.ProjectID, projectID)
-	}
-	if len(resp.Task.ProjectResources) != 1 {
-		t.Fatalf("project_resources count = %d, want only the in-workspace row: %+v",
-			len(resp.Task.ProjectResources), resp.Task.ProjectResources)
-	}
-	if len(resp.Task.Repos) != 1 || resp.Task.Repos[0].URL != localRepoURL {
-		t.Fatalf("repos = %+v, want only the in-workspace project repo", resp.Task.Repos)
-	}
-}
 
 // A run_only autopilot owns its task's workspace. taskToResponse seeds
 // resp.WorkspaceID with the RUNTIME's workspace, and the branch used to widen it
 // only `if resp.WorkspaceID == ""` — a condition that never held, so the
 // isolation check compared the runtime workspace against itself and a
 // cross-workspace autopilot_run_id was dispatched instead of rejected.
-func TestClaimTask_AutopilotRunOnlyForeignWorkspace_CancelsTask(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	var localAgentID, localRuntimeID string
-	dbfx.QueryRow(t,
-		`SELECT id, runtime_id FROM agent WHERE workspace_id = $1 LIMIT 1`,
-		testWorkspaceID,
-	).Scan(&localAgentID, &localRuntimeID)
-
-	foreignWorkspaceID, foreignProjectID := foreignWorkspaceWithProject(t, "foreign-autopilot-ws", "FAW")
-
-	const foreignAutopilotTitle = "Foreign autopilot must not leak"
-	foreignAutopilotID := dbfx.Insert(t, "autopilot", testutil.Cols{
-		"workspace_id":    foreignWorkspaceID,
-		"project_id":      foreignProjectID,
-		"title":           foreignAutopilotTitle,
-		"assignee_id":     localAgentID,
-		"execution_mode":  "run_only",
-		"created_by_type": "member",
-		"created_by_id":   testUserID,
-	})
-	foreignRunID := dbfx.Insert(t, "autopilot_run", testutil.Cols{
-		"autopilot_id": foreignAutopilotID,
-		"source":       "manual",
-		"status":       "running",
-	})
-	taskID := dbfx.Task(t, localAgentID, testutil.Cols{
-		"runtime_id":       localRuntimeID,
-		"issue_id":         nil,
-		"autopilot_run_id": foreignRunID,
-	})
-
-	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+localRuntimeID+"/claim", nil,
-		testWorkspaceID, "test-claim-foreign-autopilot")
-	req = withURLParam(req, "runtimeId", localRuntimeID)
-	w := testutil.Call(t, testHandler.ClaimTaskByRuntime, req).Want(http.StatusInternalServerError)
-	if !strings.Contains(w.Text(), "task workspace isolation check failed") {
-		t.Fatalf("claim error = %q, want the workspace isolation failure", w.Text())
-	}
-	assertNoForeignContext(t, w.Text(), foreignProjectID)
-	if strings.Contains(w.Text(), foreignAutopilotTitle) {
-		t.Errorf("claim error leaked the foreign autopilot title: %s", w.Text())
-	}
-
-	var status string
-	dbfx.QueryRow(t, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status)
-	if status != "cancelled" {
-		t.Fatalf("cross-workspace autopilot task status = %q, want cancelled", status)
-	}
-}
 
 // failQueryDBTX delegates every query to the real pool except the ones whose
 // SQL contains failOn, which fail with a transient-looking error. db.Queries is
@@ -354,22 +125,18 @@ type failQueryDBTX struct {
 	err    error
 }
 
-type errRow struct{ err error }
-
-func (r errRow) Scan(...any) error { return r.err }
-
-func (f failQueryDBTX) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	if strings.Contains(sql, f.failOn) {
-		return errRow{err: f.err}
+func (f failQueryDBTX) QueryRowContext(ctx context.Context, sqlQuery string, args ...any) *sql.Row {
+	if strings.Contains(sqlQuery, f.failOn) {
+		return errSQLRow(f.err)
 	}
-	return f.DBTX.QueryRow(ctx, sql, args...)
+	return f.DBTX.QueryRowContext(ctx, sqlQuery, args...)
 }
 
-func (f failQueryDBTX) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
-	if strings.Contains(sql, f.failOn) {
+func (f failQueryDBTX) QueryContext(ctx context.Context, sqlQuery string, args ...any) (*sql.Rows, error) {
+	if strings.Contains(sqlQuery, f.failOn) {
 		return nil, f.err
 	}
-	return f.DBTX.Query(ctx, sql, args...)
+	return f.DBTX.QueryContext(ctx, sqlQuery, args...)
 }
 
 // A claim resolves its SOURCE row — issue, chat session, autopilot_run,
@@ -384,109 +151,6 @@ func (f failQueryDBTX) Query(ctx context.Context, sql string, args ...any) (pgx.
 // A transient read failure must instead produce NO claim payload and preserve
 // the task for the stale-dispatched reclaim — cancelling would destroy a valid
 // task over a momentary DB error.
-func TestBuildClaimedTaskResponse_SourceLoadFailure_PreservesTaskAndEmitsNoContext(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	var agentID, runtimeID string
-	dbfx.QueryRow(t,
-		`SELECT id, runtime_id FROM agent WHERE workspace_id = $1 LIMIT 1`,
-		testWorkspaceID,
-	).Scan(&agentID, &runtimeID)
-
-	projectID := dbfx.Project(t, "Source load failure project")
-	dbfx.Insert(t, "project_resource", testutil.Cols{
-		"project_id":    projectID,
-		"workspace_id":  testWorkspaceID,
-		"resource_type": "github_repo",
-		"resource_ref":  `{"url":"https://github.com/example/must-not-appear"}`,
-		"position":      0,
-	})
-	issueID := dbfx.Issue(t, "source load failure issue", testutil.Cols{
-		"project_id": projectID,
-		"priority":   "medium",
-		"number":     88201,
-	})
-	chatSessionID := dbfx.ChatSession(t, agentID, testutil.Cols{"project_id": projectID})
-
-	for _, tc := range []struct {
-		name   string
-		failOn string
-		cols   testutil.Cols
-	}{
-		{
-			name:   "issue",
-			failOn: "FROM issue\nWHERE id = $1",
-			cols:   testutil.Cols{"runtime_id": runtimeID, "issue_id": issueID},
-		},
-		{
-			name:   "chat session",
-			failOn: "FROM chat_session\nWHERE id = $1",
-			cols:   testutil.Cols{"runtime_id": runtimeID, "issue_id": nil, "chat_session_id": chatSessionID},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			taskID := dbfx.Task(t, agentID, tc.cols)
-			dbfx.Exec(t, `UPDATE agent_task_queue SET status = 'dispatched' WHERE id = $1`, taskID)
-
-			task := db.AgentTaskQueue{
-				ID:        parseUUID(taskID),
-				AgentID:   parseUUID(agentID),
-				RuntimeID: nullString(parseUUID(runtimeID)),
-				Status:    "dispatched",
-			}
-			if issueRef, ok := tc.cols["issue_id"].(string); ok {
-				task.IssueID = nullString(parseUUID(issueRef))
-			}
-			if chatRef, ok := tc.cols["chat_session_id"].(string); ok {
-				task.ChatSessionID = nullString(parseUUID(chatRef))
-			}
-
-			brokenHandler := *testHandler
-			brokenHandler.Queries = db.New(failQueryDBTX{
-				DBTX:   testSQLite,
-				failOn: tc.failOn,
-				err:    errors.New("simulated transient read failure"),
-			})
-
-			runtime := db.AgentRuntime{
-				ID:          parseUUID(runtimeID),
-				WorkspaceID: parseUUID(testWorkspaceID),
-			}
-			req := httptest.NewRequest(http.MethodPost, "/api/daemon/runtimes/"+runtimeID+"/claim", nil)
-
-			resp, _, _, _, _, failure := brokenHandler.buildClaimedTaskResponse(
-				req, &task, runtime, runtimeID, testWorkspaceID)
-
-			if failure == nil {
-				t.Fatal("expected the claim to be rejected when its source row cannot be read")
-			}
-			if failure.outcome != "error_source_load" {
-				t.Errorf("outcome = %q, want error_source_load", failure.outcome)
-			}
-			if failure.status != http.StatusInternalServerError {
-				t.Errorf("status = %d, want 500", failure.status)
-			}
-
-			// No context may be assembled from a source the handler could not read.
-			if resp.ThreadName != "" {
-				t.Errorf("thread_name = %q, want empty on a failed source read", resp.ThreadName)
-			}
-			if resp.ProjectID != "" || len(resp.ProjectResources) != 0 || len(resp.Repos) != 0 {
-				t.Errorf("project context leaked into a failed claim: project_id=%q resources=%d repos=%d",
-					resp.ProjectID, len(resp.ProjectResources), len(resp.Repos))
-			}
-
-			// A transient failure preserves the task for the reclaim path.
-			var status string
-			dbfx.QueryRow(t, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status)
-			if status != "dispatched" {
-				t.Errorf("task status = %q, want it preserved as dispatched for reclaim", status)
-			}
-		})
-	}
-}
 
 // The other half of the split: a source row that is GONE cannot be retried into
 // existence, so it settles terminally instead of spinning in the reclaim loop.

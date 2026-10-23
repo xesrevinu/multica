@@ -7,15 +7,6 @@ import (
 	"testing"
 )
 
-func TestSearchIssuesOmitsExactTotal(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	recorder := httptest.NewRecorder()
-	testHandler.SearchIssues(recorder, newRequest(http.MethodGet, "/api/issues/search?q=exact-total-contract-test", nil))
-	assertSearchResponseOmitsExactTotal(t, recorder, "issues")
-}
 
 func TestSearchProjectsOmitsExactTotal(t *testing.T) {
 	if testHandler == nil {

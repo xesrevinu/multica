@@ -497,14 +497,42 @@ WHERE wakeup_id IN (
 `
 
 type DeleteIssueParams struct {
+	ID          string `json:"id"`
 	IssueID     string `json:"issue_id"`
 	WorkspaceID string `json:"workspace_id"`
 }
 
 // Child rows are removed by the following steps. There is no FK cascade.
 func (q *Queries) DeleteIssue(ctx context.Context, arg DeleteIssueParams) error {
-	_, err := q.db.ExecContext(ctx, deleteIssue, arg.IssueID, arg.WorkspaceID)
-	return err
+	issueID := arg.IssueID
+	if issueID == "" {
+		issueID = arg.ID
+	}
+	if _, err := q.db.ExecContext(ctx, deleteIssue, issueID, arg.WorkspaceID); err != nil {
+		return err
+	}
+	if err := q.DeleteIssue_Step2(ctx, DeleteIssue_Step2Params{IssueID: issueID, WorkspaceID: arg.WorkspaceID}); err != nil {
+		return err
+	}
+	if err := q.DeleteIssue_Step3(ctx, DeleteIssue_Step3Params{ParentID: issueID, WorkspaceID: arg.WorkspaceID}); err != nil {
+		return err
+	}
+	if err := q.DeleteIssue_Step4(ctx, DeleteIssue_Step4Params{IssueID: issueID, WorkspaceID: arg.WorkspaceID}); err != nil {
+		return err
+	}
+	if err := q.DeleteIssue_Step5(ctx, DeleteIssue_Step5Params{IssueID: issueID, WorkspaceID: arg.WorkspaceID}); err != nil {
+		return err
+	}
+	if err := q.DeleteIssue_Step6(ctx, DeleteIssue_Step6Params{IssueID: issueID, WorkspaceID: arg.WorkspaceID}); err != nil {
+		return err
+	}
+	if err := q.DeleteIssue_Step7(ctx, DeleteIssue_Step7Params{IssueID: issueID, WorkspaceID: arg.WorkspaceID}); err != nil {
+		return err
+	}
+	if err := q.DeleteIssue_Step8(ctx, DeleteIssue_Step8Params{IssueID: issueID, WorkspaceID: arg.WorkspaceID}); err != nil {
+		return err
+	}
+	return q.DeleteIssue_Step9(ctx, DeleteIssue_Step9Params{ID: issueID, WorkspaceID: arg.WorkspaceID})
 }
 
 const deleteIssueMetadataKey = `-- name: DeleteIssueMetadataKey :one
@@ -2245,7 +2273,7 @@ UPDATE issue SET
     updated_at = now()
 WHERE issue.id = ?14
   AND (?15 IS NULL OR issue.revision = ?15)
-  AND COALESCE(?16, '') = COALESCE(?16, '')
+  AND set_config('multica.source_task_id', COALESCE(?16, ''), 1) IS NOT NULL
 RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id
 `
 
@@ -2345,7 +2373,7 @@ UPDATE issue SET
     END,
     updated_at = now()
 WHERE issue.id = ?1 AND issue.workspace_id = ?3
-  AND COALESCE(?4, '') = COALESCE(?4, '')
+  AND set_config('multica.source_task_id', COALESCE(?4, ''), 1) IS NOT NULL
 RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id
 `
 

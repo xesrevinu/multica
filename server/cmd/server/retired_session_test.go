@@ -8,7 +8,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 )
 
 // newPoisonTestChatSession creates a chat session for the retired-session
@@ -33,7 +33,7 @@ func newPoisonTestChatSession(t *testing.T, agentID, runtimeID, title string) st
 
 func lastChatTaskSessionParams(chatSessionID string) db.GetLastChatTaskSessionParams {
 	return db.GetLastChatTaskSessionParams{
-		ChatSessionID: pgtype.UUID{Bytes: parseUUIDBytes(chatSessionID), Valid: true},
+		ChatSessionID: sql.NullString{String: parseUUID(chatSessionID), Valid: true},
 	}
 }
 
@@ -197,8 +197,8 @@ func TestRetiredSessionExcludedFromIssueResume(t *testing.T) {
 
 	queries := db.New(testPool)
 	prior, err := queries.GetLastTaskSession(ctx, db.GetLastTaskSessionParams{
-		AgentID: pgtype.UUID{Bytes: parseUUIDBytes(agentID), Valid: true},
-		IssueID: pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true},
+		AgentID: parseUUID(agentID),
+		IssueID: sql.NullString{String: parseUUID(issueID), Valid: true},
 	})
 	requireSessionExcluded(t, prior.SessionID, err)
 }
@@ -266,7 +266,7 @@ func TestFailTaskClearsPoisonedChatPointer(t *testing.T) {
 	taskSvc := service.NewTaskService(queries, testPool, nil, events.New())
 
 	// The un-upgraded-daemon shape: catchall reason, poisoning only in the text.
-	if _, err := taskSvc.FailTask(ctx, pgtype.UUID{Bytes: parseUUIDBytes(taskID), Valid: true},
+	if _, err := taskSvc.FailTask(ctx, parseUUID(taskID),
 		"Invalid request: the message at position 37 with role 'assistant' must not be empty",
 		"CHAT-PTR-S", "/tmp/chat", "", "agent_error.unknown", false, "", ""); err != nil {
 		t.Fatalf("FailTask: %v", err)
@@ -311,7 +311,7 @@ func TestFailTaskKeepsChatPointerOnTransientFailure(t *testing.T) {
 	queries := db.New(testPool)
 	taskSvc := service.NewTaskService(queries, testPool, nil, events.New())
 
-	if _, err := taskSvc.FailTask(ctx, pgtype.UUID{Bytes: parseUUIDBytes(taskID), Valid: true},
+	if _, err := taskSvc.FailTask(ctx, parseUUID(taskID),
 		"Connection closed mid-response", "CHAT-KEEP-S", "/tmp/chat", "",
 		"agent_error.provider_network", false, "", ""); err != nil {
 		t.Fatalf("FailTask: %v", err)

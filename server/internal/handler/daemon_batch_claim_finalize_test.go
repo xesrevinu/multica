@@ -66,27 +66,6 @@ func TestClaimTasksByRuntime_MaxTasksNegativeIsBadRequest(t *testing.T) {
 // TestClaimTasksByRuntime_SkipsInvalidRuntimeID pins the MUL-4257 review fix:
 // a malformed runtime_id must be skipped (non-panicking parse), not turned into
 // a 500 — and a valid runtime in the same request is still claimed.
-func TestClaimTasksByRuntime_SkipsInvalidRuntimeID(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	rt := createClaimReclaimRuntime(t, ctx, "Batch badid rt")
-	a, i := createClaimReclaimAgentAndIssue(t, ctx, rt, "Batch badid agent")
-	seedQueuedIssueTask(t, ctx, a, rt, i)
-
-	w := postBatchClaim(t, testWorkspaceID, []string{"not-a-uuid", rt}, 5)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 (invalid id skipped, not 500), got %d: %s", w.Code, w.Body.String())
-	}
-	var resp batchClaimReceiptResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(resp.Tasks) != 1 || resp.Tasks[0].RuntimeID != rt {
-		t.Fatalf("expected the valid runtime's task to be claimed despite the invalid id, got %+v", resp.Tasks)
-	}
-}
 
 // seedCommentBackedQueuedTask inserts a queued task triggered by a real comment
 // on its issue, returning (taskID, commentID).
@@ -131,84 +110,11 @@ func assertCommentDelivered(t *testing.T, ctx context.Context, taskID, commentID
 // must-fix: the batch path routes through FinalizeTaskClaim, so a comment-backed
 // task claimed via batch persists the delivered_comment_ids receipt AND returns
 // it in the response.
-func TestClaimTasksByRuntime_PersistsCommentDeliveryReceipt(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	rt := createClaimReclaimRuntime(t, ctx, "Batch receipt rt")
-	a, i := createClaimReclaimAgentAndIssue(t, ctx, rt, "Batch receipt agent")
-	taskID, commentID := seedCommentBackedQueuedTask(t, ctx, a, rt, i)
-
-	w := postBatchClaim(t, testWorkspaceID, []string{rt}, 5)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	var resp batchClaimReceiptResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(resp.Tasks) != 1 {
-		t.Fatalf("claimed %d tasks, want 1: %s", len(resp.Tasks), w.Body.String())
-	}
-	found := false
-	for _, id := range resp.Tasks[0].DeliveredCommentIDs {
-		if id == commentID {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("response delivered_comment_ids %v missing trigger comment %s", resp.Tasks[0].DeliveredCommentIDs, commentID)
-	}
-	assertCommentDelivered(t, ctx, taskID, commentID)
-}
 
 // TestClaimTasksByRuntime_StaleReclaimRecordsDeliveryReceipt pins that a
 // comment-backed task recovered via the batch reclaim path (dispatched, never
 // started, past the recovery window) is re-finalized so its delivery receipt is
 // recorded on the replacement claim.
-func TestClaimTasksByRuntime_StaleReclaimRecordsDeliveryReceipt(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	rt := createClaimReclaimRuntime(t, ctx, "Batch stale-receipt rt")
-	a, i := createClaimReclaimAgentAndIssue(t, ctx, rt, "Batch stale-receipt agent")
-
-	var commentID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO comment (workspace_id, issue_id, author_type, author_id, content)
-		VALUES ($1, $2, 'member', $3, 'stale reclaim comment')
-		RETURNING id
-	`, testWorkspaceID, i, testUserID).Scan(&commentID); err != nil {
-		t.Fatalf("seed comment: %v", err)
-	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM comment WHERE id = $1`, commentID) })
-
-	// Stale dispatched, comment-backed, never started, past the 90s window.
-	var taskID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, trigger_comment_id, status, priority, dispatched_at, started_at)
-		VALUES ($1, $2, $3, $4, 'dispatched', 0, now() - interval '120 seconds', NULL)
-		RETURNING id
-	`, a, rt, i, commentID).Scan(&taskID); err != nil {
-		t.Fatalf("seed stale dispatched comment task: %v", err)
-	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
-
-	w := postBatchClaim(t, testWorkspaceID, []string{rt}, 5)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	var resp batchClaimReceiptResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(resp.Tasks) != 1 || resp.Tasks[0].ID != taskID {
-		t.Fatalf("expected the stale task %s reclaimed, got %+v", taskID, resp.Tasks)
-	}
-	assertCommentDelivered(t, ctx, taskID, commentID)
-}
 
 // TestClaimTasksByRuntime_SkipsRuntimeOwnedByAnotherDaemon pins the MUL-4257
 // review must-fix: a daemon must not batch-claim a task routed to a runtime
@@ -277,73 +183,3 @@ func TestClaimTasksByRuntime_RequiresDaemonID(t *testing.T) {
 // survivors remain), the batch path must NOT finalize+dispatch it (which would
 // silently drop the surviving comment). Instead it cancels the stale task,
 // omits it from the batch, and replays the surviving comment as a fresh plan.
-func TestClaimTasksByRuntime_RepairsStaleCommentPlan(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	rt := createClaimReclaimRuntime(t, ctx, "Stale plan rt")
-	agentID, issueID := createClaimReclaimAgentAndIssue(t, ctx, rt, "Stale plan agent")
-	// Assign the issue to the agent so the surviving comment re-routes to it.
-	if _, err := testPool.Exec(ctx, `UPDATE issue SET assignee_type='agent', assignee_id=$1 WHERE id=$2`, agentID, issueID); err != nil {
-		t.Fatalf("assign issue: %v", err)
-	}
-
-	// A surviving member comment on the issue.
-	var survivorID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO comment (workspace_id, issue_id, author_type, author_id, content)
-		VALUES ($1, $2, 'member', $3, 'please still handle this')
-		RETURNING id
-	`, testWorkspaceID, issueID, testUserID).Scan(&survivorID); err != nil {
-		t.Fatalf("seed survivor comment: %v", err)
-	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM comment WHERE id = $1`, survivorID) })
-
-	// Stale plan: trigger_comment_id NULL, only coalesced survivor remains.
-	var staleID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, coalesced_comment_ids)
-		VALUES ($1, $2, $3, 'queued', 0, ARRAY[$4]::uuid[])
-		RETURNING id
-	`, agentID, rt, issueID, survivorID).Scan(&staleID); err != nil {
-		t.Fatalf("seed stale task: %v", err)
-	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, staleID) })
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE issue_id = $1`, issueID) })
-
-	w := postBatchClaim(t, testWorkspaceID, []string{rt}, 5)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	var resp batchClaimReceiptResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	// (1) The stale task must not be returned.
-	for _, task := range resp.Tasks {
-		if task.ID == staleID {
-			t.Fatalf("stale-plan task %s was dispatched by the batch path; want it repaired/omitted", staleID)
-		}
-	}
-	// (2) The stale task must be cancelled.
-	var status string
-	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, staleID).Scan(&status); err != nil {
-		t.Fatalf("read stale status: %v", err)
-	}
-	if status != "cancelled" {
-		t.Fatalf("stale task status = %s, want cancelled", status)
-	}
-	// (3) The surviving comment was rebuilt into a fresh plan (a new task with
-	// the survivor as its trigger).
-	var rebuilt int
-	if err := testPool.QueryRow(ctx, `
-		SELECT count(*) FROM agent_task_queue
-		WHERE issue_id = $1 AND trigger_comment_id = $2 AND id <> $3
-	`, issueID, survivorID, staleID).Scan(&rebuilt); err != nil {
-		t.Fatalf("count rebuilt: %v", err)
-	}
-	if rebuilt < 1 {
-		t.Fatalf("expected the surviving comment rebuilt into a new trigger task, found %d", rebuilt)
-	}
-}

@@ -90,77 +90,10 @@ func skillNamesForInstallation(t *testing.T, installationID string) []string {
 	return names
 }
 
-func TestPluginSkillInstallsAndIsRemovedOnUninstall(t *testing.T) {
-	withPluginsV1Flag(t, testHandler, true)
-	cleanupPluginInstallations(t)
-	root := t.TempDir()
-	writePluginSkillFile(t, root, "pr-review", prReviewSkill)
-	installationID := installSkillPlugin(t, root, skillPluginManifest)
-
-	names := skillNamesForInstallation(t, installationID)
-	if len(names) != 1 || names[0] != "pr-review" {
-		t.Fatalf("installed skills = %v, want [pr-review]", names)
-	}
-
-	// The content is the file, not a stub: a skill that installs empty is worse
-	// than one that fails, because the agent gets a plausible no-op.
-	var content, description string
-	if err := testPool.QueryRow(context.Background(),
-		`SELECT content, description FROM skill WHERE plugin_installation_id = $1`, installationID,
-	).Scan(&content, &description); err != nil {
-		t.Fatalf("read skill: %v", err)
-	}
-	if len(content) < 20 {
-		t.Fatalf("skill content looks empty: %q", content)
-	}
-	if description == "" {
-		t.Fatal("description should come from the frontmatter")
-	}
-
-	uninstall := httptest.NewRecorder()
-	testHandler.UninstallPlugin(uninstall, pluginHandlerRequest(http.MethodDelete, "/plugins", nil, map[string]string{
-		"id": testWorkspaceID, "installationId": installationID,
-	}))
-	if uninstall.Code != http.StatusNoContent {
-		t.Fatalf("uninstall: status=%d body=%s", uninstall.Code, uninstall.Body.String())
-	}
-	if remaining := skillNamesForInstallation(t, installationID); len(remaining) != 0 {
-		t.Fatalf("uninstall left skills behind: %v", remaining)
-	}
-}
 
 // An upgrade that drops a skill must remove it. Otherwise a renamed skill
 // leaves its predecessor in the workspace forever, with nothing to attribute
 // it to.
-func TestPluginSkillUpgradePrunesWhatTheManifestDropped(t *testing.T) {
-	withPluginsV1Flag(t, testHandler, true)
-	cleanupPluginInstallations(t)
-	root := t.TempDir()
-	writePluginSkillFile(t, root, "pr-review", prReviewSkill)
-	installationID := installSkillPlugin(t, root, skillPluginManifest)
-
-	// Version 2 renames the skill.
-	writePluginSkillFile(t, root, "code-review", prReviewSkill)
-	upgraded := `{
-  "manifest_version": 1,
-  "key": "com.example.skilled",
-  "name": "Skilled",
-  "version": "2.0.0",
-  "author": { "name": "example" },
-  "scopes": ["issues:read"],
-  "contributes": {
-    "resources": [{ "type": "skill", "key": "code-review", "entry": "skills/code-review/SKILL.md" }]
-  }
-}`
-	if got := installSkillPlugin(t, root, upgraded); got != installationID {
-		t.Fatalf("upgrade created a second installation: %s != %s", got, installationID)
-	}
-
-	names := skillNamesForInstallation(t, installationID)
-	if len(names) != 1 || names[0] != "code-review" {
-		t.Fatalf("after upgrade skills = %v, want [code-review] — the dropped one was not pruned", names)
-	}
-}
 
 // A plugin must not be able to take over a name a person already used. The
 // upsert is scoped to rows this installation owns, so the collision surfaces

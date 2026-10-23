@@ -2,12 +2,9 @@ package engine_test
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/multica-ai/multica/server/internal/integrations/channel"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
@@ -22,18 +19,7 @@ import (
 // the real binders also covers Slack, whose session dependency is concrete.
 func TestChannelStartTitleCommandMappingDB(t *testing.T) {
 	ctx := context.Background()
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL is required for the channel title integration test")
-	}
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	if err := pool.Ping(ctx); err != nil {
-		t.Fatal(err)
-	}
+	pool := dbfx.SetupTestDB(t)
 	for _, platform := range []string{"feishu", "telegram", "slack"} {
 		t.Run(platform, func(t *testing.T) {
 			fx := dbfx.New(pool, "", "")
@@ -51,13 +37,7 @@ func TestChannelStartTitleCommandMappingDB(t *testing.T) {
 			fx.Cleanup(t, `DELETE FROM channel_chat_session_binding WHERE installation_id=$1`, installation)
 			fx.Cleanup(t, `DELETE FROM channel_chat_context_generation WHERE chat_session_id IN (SELECT id FROM chat_session WHERE workspace_id=$1)`, fx.WorkspaceID)
 			fx.Cleanup(t, `DELETE FROM chat_message WHERE chat_session_id IN (SELECT id FROM chat_session WHERE workspace_id=$1)`, fx.WorkspaceID)
-			asUUID := func(s string) pgtype.UUID {
-				var u pgtype.UUID
-				if err := u.Scan(s); err != nil {
-					t.Fatal(err)
-				}
-				return u
-			}
+			asUUID := func(s string) string { return s }
 			q := db.New(pool)
 			session := engine.NewChatSession(q, pool, channel.Type(platform), engine.SessionTitles{})
 			var binder engine.SessionBinder

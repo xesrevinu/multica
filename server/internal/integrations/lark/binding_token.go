@@ -104,14 +104,18 @@ func (s *BindingTokenService) Mint(ctx context.Context, workspaceID, installatio
 	hash := hashToken(raw)
 	expiresAt := s.now().Add(BindingTokenTTL)
 
-	if _, err := s.queries.CreateLarkBindingToken(ctx, CreateBindingTokenParams{
+	row, err := s.queries.CreateLarkBindingToken(ctx, CreateBindingTokenParams{
 		TokenHash:      hash,
 		WorkspaceID:    workspaceID,
 		InstallationID: installationID,
 		ChannelUserID:  string(openID),
 		ExpiresAt:      expiresAt,
-	}); err != nil {
+	})
+	if err != nil {
 		return BindingToken{}, fmt.Errorf("persist token: %w", err)
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, row.ExpiresAt); err == nil {
+		expiresAt = parsed
 	}
 	return BindingToken{Raw: raw, ExpiresAt: expiresAt}, nil
 }

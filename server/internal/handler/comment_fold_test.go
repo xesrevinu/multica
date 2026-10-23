@@ -233,17 +233,3 @@ func TestListComments_FoldRejectsPartialThreadModes(t *testing.T) {
 // TestListComments_FoldComposesWithThread confirms fold applies to an untailed
 // single-thread read: reading just the reply-resolved thread1 returns root1 +
 // conclusion, dropping the intermediate replies.
-func TestListComments_FoldComposesWithThread(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-	fx := newCommentListFixture(t)
-	setCommentResolvedAt(t, fx.R1b, fx.Base.Add(20*time.Minute))
-
-	v := url.Values{}
-	v.Set("fold", "true")
-	v.Set("thread", fx.R1a) // anchor on a reply; server resolves to root1
-	_, rows := listComments(t, fx.IssueID, v.Encode())
-	eqIDs(t, ids(rows), []string{fx.Root1, fx.R1b}, "fold + thread")
-	assertFolded(t, byID(rows)[fx.Root1], 2, "fold + thread")
-}

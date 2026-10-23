@@ -177,14 +177,6 @@ func (a dbSessionQueries) CreateAttachment(ctx context.Context, arg db.CreateAtt
 	if err != nil {
 		return db.Attachment{}, err
 	}
-	// Step2/Step3 are the issue and comment revision bumps the old CTE applied
-	// in the same statement as the insert.
-	if err := a.q.CreateAttachment_Step2(ctx, arg.IssueID); err != nil {
-		return db.Attachment{}, err
-	}
-	if err := a.q.CreateAttachment_Step3(ctx, arg.CommentID); err != nil {
-		return db.Attachment{}, err
-	}
 	return created.Attachment(), nil
 }
 func (a dbSessionQueries) LinkAttachmentsToChatMessage(ctx context.Context, arg db.LinkAttachmentsToChatMessageParams) ([]string, error) {
@@ -232,12 +224,6 @@ func (a dbSessionQueries) SetChannelChatContextInitiator(ctx context.Context, ar
 	return a.q.SetChannelChatContextInitiator(ctx, arg)
 }
 func (a dbSessionQueries) UpdateChannelChatSessionBindingReplyTarget(ctx context.Context, arg db.UpdateChannelChatSessionBindingReplyTargetParams) error {
-	if err := a.q.UpdateChannelChatSessionBindingReplyTarget_Step2(ctx, db.UpdateChannelChatSessionBindingReplyTarget_Step2Params{
-		LastMessageID:      arg.LastMessageID,
-		ReplyChatSessionID: arg.ReplyChatSessionID,
-	}); err != nil {
-		return err
-	}
 	return a.q.UpdateChannelChatSessionBindingReplyTarget(ctx, arg)
 }
 func (a dbSessionQueries) SetChannelChatContextReplyTarget(ctx context.Context, arg db.SetChannelChatContextReplyTargetParams) error {

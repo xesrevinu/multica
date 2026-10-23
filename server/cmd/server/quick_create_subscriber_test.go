@@ -7,8 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"database/sql"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -48,12 +47,12 @@ func TestQuickCreateFailure_DoesNotSubscribeRequester(t *testing.T) {
 		parseUUID(testWorkspaceID),
 		parseUUID(testUserID),
 		parseUUID(agentID),
-		pgtype.UUID{},
+		"",
 		"another bug",
 		"",
 		"",
-		pgtype.UUID{},
-		pgtype.UUID{},
+		"",
+		"",
 		nil,
 	)
 	if err != nil {
@@ -117,12 +116,12 @@ func TestQuickCreateFailure_SurfacesAgentOutput(t *testing.T) {
 		parseUUID(testWorkspaceID),
 		parseUUID(testUserID),
 		parseUUID(agentID),
-		pgtype.UUID{},
+		"",
 		"file that same bug again",
 		"",
 		"",
-		pgtype.UUID{},
-		pgtype.UUID{},
+		"",
+		"",
 		nil,
 	)
 	if err != nil {
@@ -189,12 +188,12 @@ func TestQuickCreateLookupFault_WritesUnconfirmedInbox(t *testing.T) {
 		parseUUID(testWorkspaceID),
 		parseUUID(testUserID),
 		parseUUID(agentID),
-		pgtype.UUID{},
+		"",
 		"file a bug while the db is flaky",
 		"",
 		"",
-		pgtype.UUID{},
-		pgtype.UUID{},
+		"",
+		"",
 		nil,
 	)
 	if err != nil {
@@ -270,12 +269,12 @@ func TestQuickCreateFailure_RedactsAgentOutput(t *testing.T) {
 		parseUUID(testWorkspaceID),
 		parseUUID(testUserID),
 		parseUUID(agentID),
-		pgtype.UUID{},
+		"",
 		"file a bug and leak a token",
 		"",
 		"",
-		pgtype.UUID{},
-		pgtype.UUID{},
+		"",
+		"",
 		nil,
 	)
 	if err != nil {
@@ -339,12 +338,12 @@ func TestQuickCreateLookupCancelled_StillWritesUnconfirmedInbox(t *testing.T) {
 		parseUUID(testWorkspaceID),
 		parseUUID(testUserID),
 		parseUUID(agentID),
-		pgtype.UUID{},
+		"",
 		"file a bug while the request is cancelled",
 		"",
 		"",
-		pgtype.UUID{},
-		pgtype.UUID{},
+		"",
+		"",
 		nil,
 	)
 	if err != nil {
@@ -394,7 +393,7 @@ func TestQuickCreateLookupCancelled_StillWritesUnconfirmedInbox(t *testing.T) {
 // concurrent/ordering-sensitive cases from reading a sibling test's row; the
 // type is asserted because the failed and unconfirmed outcomes must never
 // collapse into one another (clients frame them differently).
-func requireQuickCreateOutcomeInbox(t *testing.T, taskID pgtype.UUID, inboxType string) (string, string, string) {
+func requireQuickCreateOutcomeInbox(t *testing.T, taskID string, inboxType string) (string, string, string) {
 	t.Helper()
 	var body, errDetail, title string
 	err := testPool.QueryRow(context.Background(), `
@@ -412,7 +411,7 @@ func requireQuickCreateOutcomeInbox(t *testing.T, taskID pgtype.UUID, inboxType 
 	return body, errDetail, title
 }
 
-func deleteInboxForTask(taskID pgtype.UUID) {
+func deleteInboxForTask(taskID string) {
 	testPool.Exec(context.Background(),
 		`DELETE FROM inbox_item WHERE details->>'task_id' = $1::text`, taskID)
 }
@@ -426,13 +425,13 @@ type failGetIssueByOriginDB struct {
 	err error
 }
 
-func (f failGetIssueByOriginDB) QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row {
+func (f failGetIssueByOriginDB) QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row {
 	// sqlc keeps the `-- name: <Query>` header in the generated SQL constant,
 	// so this matches that one query and nothing else.
-	if strings.Contains(sql, "name: GetIssueByOrigin") {
-		return errRow{err: f.err}
+	if strings.Contains(query, "name: GetIssueByOrigin") {
+		return f.DBTX.QueryRowContext(ctx, "SELECT invalid_column_for_simulated_fault")
 	}
-	return f.DBTX.QueryRow(ctx, sql, args...)
+	return f.DBTX.QueryRowContext(ctx, query, args...)
 }
 
 // cancelOnGetIssueByOriginDB cancels the caller's context at the moment of the
@@ -444,12 +443,11 @@ type cancelOnGetIssueByOriginDB struct {
 	cancel context.CancelFunc
 }
 
-func (f cancelOnGetIssueByOriginDB) QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row {
-	if strings.Contains(sql, "name: GetIssueByOrigin") {
+func (f cancelOnGetIssueByOriginDB) QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row {
+	if strings.Contains(query, "name: GetIssueByOrigin") {
 		f.cancel()
-		return errRow{err: context.Canceled}
 	}
-	return f.DBTX.QueryRow(ctx, sql, args...)
+	return f.DBTX.QueryRowContext(ctx, query, args...)
 }
 
 type errRow struct{ err error }

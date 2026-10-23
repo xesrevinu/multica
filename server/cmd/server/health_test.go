@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 )
 
 type stubReadinessDB struct {
@@ -26,7 +25,7 @@ func (s *stubReadinessDB) Ping(context.Context) error {
 	return s.pingErr
 }
 
-func (s *stubReadinessDB) QueryRow(context.Context, string, ...any) pgx.Row {
+func (s *stubReadinessDB) QueryRow(context.Context, string, ...any) readinessRow {
 	s.queryCalls.Add(1)
 	return stubRow{appliedCount: s.appliedCount, err: s.queryErr}
 }

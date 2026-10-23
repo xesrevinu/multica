@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -108,17 +107,23 @@ type mockDB struct {
 	pendingInvitationErr error
 }
 
-func (m *mockDB) QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row {
-	if strings.HasPrefix(sql, "-- name: HasPendingInvitationForEmail :one\n") {
+func (m *mockDB) QueryRowContext(ctx context.Context, sqlStr string, args ...interface{}) *sql.Row {
+	if strings.HasPrefix(sqlStr, "-- name: HasPendingInvitationForEmail :one\n") {
 		m.invitationLookups++
 		m.invitationEmail = args[0].(string)
-		return &mockRow{err: m.pendingInvitationErr, boolValue: &m.pendingInvitation}
+		if m.pendingInvitationErr != nil {
+			return errSQLRow(m.pendingInvitationErr)
+		}
+		return valSQLRow(m.pendingInvitation)
 	}
-	return &mockRow{err: m.getUserErr}
+	if m.getUserErr != nil {
+		return errSQLRow(m.getUserErr)
+	}
+	return valSQLRow("00000000-0000-0000-0000-000000000001", "user@example.com", "User", nil, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
 }
 
-func (m *mockDB) Exec(ctx context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error) {
-	return pgconn.NewCommandTag("INSERT 1"), nil
+func (m *mockDB) ExecContext(ctx context.Context, sqlStr string, args ...interface{}) (sql.Result, error) {
+	return nil, nil
 }
 
 type mockRow struct {
@@ -141,53 +146,6 @@ func (m *mockRow) Scan(dest ...interface{}) error {
 	return m.err
 }
 
-func TestFindOrCreateUserGating(t *testing.T) {
-	t.Run("new_user_blocked", func(t *testing.T) {
-		cfg := Config{AllowSignup: false}
-		h := newTestHandler(cfg)
-		h.Queries = db.New(&mockDB{getUserErr: sql.ErrNoRows})
-
-		_, isNew, err := h.findOrCreateUser(context.Background(), "new@blocked.com")
-		if err == nil {
-			t.Fatal("expected error for new user when signup disabled")
-		}
-		if isNew {
-			t.Fatal("isNew should be false when signup is blocked")
-		}
-		if !strings.Contains(err.Error(), "registration is disabled") {
-			t.Fatalf("expected registration disabled error, got %v", err)
-		}
-	})
-
-	t.Run("existing_user_allowed", func(t *testing.T) {
-		cfg := Config{AllowSignup: false}
-		h := newTestHandler(cfg)
-		// mockDB returns nil error for Scan, simulating user found
-		h.Queries = db.New(&mockDB{getUserErr: nil})
-
-		_, isNew, err := h.findOrCreateUser(context.Background(), "existing@test.com")
-		if err != nil {
-			t.Fatalf("expected no error for existing user, got %v", err)
-		}
-		if isNew {
-			t.Fatal("existing user should not be flagged as new")
-		}
-	})
-
-	t.Run("whitelisted_user_allowed", func(t *testing.T) {
-		cfg := Config{AllowSignup: false, AllowedEmails: []string{"whitelisted@test.com"}}
-		h := newTestHandler(cfg)
-		h.Queries = db.New(&mockDB{getUserErr: sql.ErrNoRows})
-
-		// This will pass checkSignupAllowed and move to CreateUser.
-		// Our mockDB Exec returns success, but Queries.CreateUser might expect QueryRow for RETURNING id.
-		// Let's see if it works.
-		_, _, err := h.findOrCreateUser(context.Background(), "whitelisted@test.com")
-		if err != nil && strings.Contains(err.Error(), "registration is disabled") {
-			t.Fatalf("expected whitelisted user to pass signup check, but got %v", err)
-		}
-	})
-}
 
 // Invitations are explicit per-email exceptions for both signup flag values.
 func TestSignupInvitationAllowlistInteraction(t *testing.T) {

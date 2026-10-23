@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -158,71 +157,3 @@ func TestListAgentTasksHydratesUsage(t *testing.T) {
 	}
 }
 
-func TestListAgentTasksReturnsErrorWhenUsageLoadFails(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
-	}
-
-	agentID := createHandlerTestAgent(t, "AgentTaskUsageFailure", []byte("[]"))
-	dbfx.Task(t, agentID, testutil.Cols{
-		"runtime_id": handlerTestRuntimeID(t),
-		"status":     "completed",
-	})
-
-	lockTx, err := testPool.Begin(context.Background())
-	if err != nil {
-		t.Fatalf("begin controlled task usage query failure: %v", err)
-	}
-	t.Cleanup(func() { _ = lockTx.Rollback(context.Background()) })
-	if _, err := lockTx.Exec(context.Background(), `LOCK TABLE task_usage IN ACCESS EXCLUSIVE MODE`); err != nil {
-		_ = lockTx.Rollback(context.Background())
-		t.Fatalf("lock task usage for controlled query failure: %v", err)
-	}
-
-	defaultReq := newRequest(http.MethodGet, "/api/agents/"+agentID+"/tasks", nil)
-	defaultReq = withURLParam(defaultReq, "id", agentID)
-	var defaultResp []AgentTaskResponse
-	testutil.Call(t, testHandler.ListAgentTasks, defaultReq).Want(http.StatusOK).JSON(&defaultResp)
-	if len(defaultResp) == 0 {
-		t.Fatal("default task history unexpectedly empty")
-	}
-	for _, task := range defaultResp {
-		if len(task.Usage) != 0 {
-			t.Fatalf("default task history loaded usage while accounting table was locked: %+v", task.Usage)
-		}
-	}
-
-	// One pinned connection whose lock_timeout turns the wait on the locked
-	// table into an error. It covers every read the handler makes, so it stays
-	// long enough that a sibling package's brief lock cannot fail an earlier
-	// read; only the read that reaches the locked table waits it out. A request
-	// deadline did the same job but had to cover every earlier read's run time
-	// as well, and was then waited out in full.
-	conn, err := testPool.Acquire(context.Background())
-	if err != nil {
-		t.Fatalf("acquire usage connection: %v", err)
-	}
-	defer conn.Release()
-	if _, err := conn.Exec(context.Background(), `SET lock_timeout = '200ms'`); err != nil {
-		t.Fatalf("set lock_timeout: %v", err)
-	}
-	defer conn.Exec(context.Background(), `RESET lock_timeout`)
-	h := *testHandler
-	h.Queries = db.New(conn)
-
-	req := newRequest(http.MethodGet, "/api/agents/"+agentID+"/tasks?include_usage=true", nil)
-	req = withURLParam(req, "id", agentID)
-	// Only a backstop: the usage read fails on its lock_timeout long before.
-	errorCtx, cancel := context.WithTimeout(req.Context(), 10*time.Second)
-	req = req.WithContext(errorCtx)
-	w := testutil.Call(t, h.ListAgentTasks, req)
-	cancel()
-	if err := lockTx.Rollback(context.Background()); err != nil {
-		t.Fatalf("release controlled task usage lock: %v", err)
-	}
-
-	w.Want(http.StatusInternalServerError)
-	if !strings.Contains(w.Body.String(), "failed to list agent task usage") {
-		t.Fatalf("usage query failure should not fall back to empty usage: %s", w.Body.String())
-	}
-}

@@ -73,7 +73,7 @@ func TestIssueWakeupStructuredEvidenceSurvivesDatabaseRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(stored.Evidence.Facts) != 2 || stored.Evidence.Legacy != "" || !strings.Contains(task.HandoffNote.String, first) || !strings.Contains(task.HandoffNote.String, second) {
-		t.Fatalf("summary did not survive database round trip: %s", task.Context)
+		t.Fatalf("summary did not survive database round trip: %s", task.Context.String)
 	}
 }
 

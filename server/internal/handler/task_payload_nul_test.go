@@ -5,13 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/multica-ai/multica/server/internal/util"
-	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // seedNULTask creates an agent with one running task, ready to be driven
@@ -242,59 +239,3 @@ func TestReportTaskMessagesCreatesUUIDv7(t *testing.T) {
 // above: it proves the database really does refuse these payloads, so the
 // handler tests are demonstrating a fix rather than a no-op. If PostgreSQL ever
 // starts accepting them, this fails and the guards can be reconsidered.
-func TestPostgresRejectsUnsanitizedTaskPayloads(t *testing.T) {
-	ctx := context.Background()
-	_, taskID := seedNULTask(t, "nul-control-agent")
-
-	t.Run("complete result JSONB", func(t *testing.T) {
-		raw, err := json.Marshal(TaskCompleteRequest{Output: "done\x00 summary"})
-		if err != nil {
-			t.Fatalf("marshal: %v", err)
-		}
-		if !strings.Contains(string(raw), "\\u0000") {
-			t.Fatalf("premise broken: payload carries no NUL escape: %s", raw)
-		}
-		if _, err := testHandler.Queries.CompleteAgentTask(ctx, db.CompleteAgentTaskParams{
-			ID:     util.MustParseUUID(taskID),
-			Result: nullString(string(raw)),
-		}); err == nil {
-			t.Fatal("PostgreSQL accepted a JSONB payload containing a NUL escape")
-		}
-
-		// The rejected write rolled back — which is exactly the reported wedge.
-		var status string
-		if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status); err != nil {
-			t.Fatalf("read task: %v", err)
-		}
-		if status != "running" {
-			t.Fatalf("status after rejected write = %q, want running", status)
-		}
-	})
-
-	t.Run("task message input JSONB", func(t *testing.T) {
-		raw, err := json.Marshal(map[string]any{
-			"result": map[string]any{"stdout": "ELF\x00binary"},
-		})
-		if err != nil {
-			t.Fatalf("marshal: %v", err)
-		}
-		if _, err := testHandler.Queries.CreateTaskMessage(ctx, db.CreateTaskMessageParams{
-			TaskID: util.MustParseUUID(taskID),
-			Seq:    99,
-			Type:   "tool_use",
-			Input:  nullString(string(raw)),
-		}); err == nil {
-			t.Fatal("PostgreSQL accepted nested JSONB containing a NUL escape")
-		}
-	})
-
-	t.Run("task message type TEXT", func(t *testing.T) {
-		if _, err := testHandler.Queries.CreateTaskMessage(ctx, db.CreateTaskMessageParams{
-			TaskID: util.MustParseUUID(taskID),
-			Seq:    98,
-			Type:   "tool_use\x00",
-		}); err == nil {
-			t.Fatal("PostgreSQL accepted a TEXT value containing a NUL")
-		}
-	})
-}

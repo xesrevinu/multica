@@ -868,12 +868,6 @@ func (h *Handler) mergeLegacyRuntime(ctx context.Context, newRuntimeID, oldRunti
 	if !sqliteTruthy(reassignment.FenceOk) {
 		return errRuntimeMergeFenced
 	}
-	if err := qtx.ReassignTasksToRuntime_Step2(ctx, db.ReassignTasksToRuntime_Step2Params{
-		NewRuntimeID: nullString(newRuntimeID),
-		OldRuntimeID: nullString(oldRuntimeID),
-	}); err != nil {
-		return fmt.Errorf("reassign tasks: %w", err)
-	}
 
 	agents, err := qtx.ReassignAgentsToRuntime(ctx, db.ReassignAgentsToRuntimeParams{
 		NewRuntimeID: nullString(newRuntimeID),

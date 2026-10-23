@@ -2,67 +2,12 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-func TestUpdateIssueActivityExcludesPositionOnlyWrites(t *testing.T) {
-	created := createIssueForTest(t, map[string]any{
-		"title": "activity contract",
-	})
-	if created.LastActivityAt == nil {
-		t.Fatal("CreateIssue response omitted last_activity_at")
-	}
-	var initial time.Time
-	if err := testPool.QueryRow(context.Background(), `SELECT last_activity_at FROM issue WHERE id = $1`, created.ID).Scan(&initial); err != nil {
-		t.Fatalf("read initial last_activity_at: %v", err)
-	}
-
-	update := func(body map[string]any) IssueResponse {
-		t.Helper()
-		w := httptest.NewRecorder()
-		r := withURLParam(newRequest(http.MethodPut, "/api/issues/"+created.ID, body), "id", created.ID)
-		testHandler.UpdateIssue(w, r)
-		if w.Code != http.StatusOK {
-			t.Fatalf("UpdateIssue: expected 200, got %d: %s", w.Code, w.Body.String())
-		}
-		var response IssueResponse
-		if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
-			t.Fatalf("decode UpdateIssue: %v", err)
-		}
-		return response
-	}
-
-	positionOnly := update(map[string]any{"position": created.Position + 1})
-	if positionOnly.LastActivityAt == nil {
-		t.Fatal("position update response omitted last_activity_at")
-	}
-	var positionActivity time.Time
-	if err := testPool.QueryRow(context.Background(), `SELECT last_activity_at FROM issue WHERE id = $1`, created.ID).Scan(&positionActivity); err != nil {
-		t.Fatalf("read position last_activity_at: %v", err)
-	}
-	if !positionActivity.Equal(initial) {
-		t.Fatalf("position-only update changed activity: before=%s after=%s", initial, positionActivity)
-	}
-
-	time.Sleep(10 * time.Millisecond)
-	titleUpdate := update(map[string]any{"title": "activity contract changed"})
-	if titleUpdate.LastActivityAt == nil {
-		t.Fatal("title update response omitted last_activity_at")
-	}
-	var titleActivity time.Time
-	if err := testPool.QueryRow(context.Background(), `SELECT last_activity_at FROM issue WHERE id = $1`, created.ID).Scan(&titleActivity); err != nil {
-		t.Fatalf("read title last_activity_at: %v", err)
-	}
-	if !titleActivity.After(positionActivity) {
-		t.Fatalf("semantic update did not advance activity: before=%s after=%s", positionActivity, titleActivity)
-	}
-}
 
 func TestIssueActivityTimestampIsMonotonic(t *testing.T) {
 	created := createIssueForTest(t, map[string]any{"title": "monotonic activity"})

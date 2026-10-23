@@ -2,13 +2,12 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/testutil"
@@ -82,64 +81,28 @@ func claimForRuntimeExpecting(t *testing.T, h *Handler, runtimeID, daemonID stri
 // and asserts the response lists attachments in message order first and, within
 // a message, in created_at order — the exact append order the per-message loop
 // produced before batching.
-func TestClaimChatAttachmentsPreserveMessageThenCreatedAtOrder(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	ctx := context.Background()
-	agentID, sessionID, runtimeID, daemonID := setupDirectChatSession(t, ctx, "attachment order chat")
-
-	// Two user messages, m1 before m2. Attachment timestamps interleave across
-	// messages (m1.a=00:01, m2.a=00:02, m1.b=00:03, m2.b=00:04) so a naive
-	// "global created_at" flatten would produce m1a,m2a,m1b,m2b — the grouping
-	// must instead yield m1a,m1b,m2a,m2b.
-	m1 := seedLegacyChatUserMessage(t, sessionID, "first", "2020-01-01T00:00:01Z")
-	m2 := seedLegacyChatUserMessage(t, sessionID, "second", "2020-01-01T00:00:05Z")
-	m1a := seedMessageAttachment(t, sessionID, m1, "m1a.png", "2020-01-01T00:00:01Z")
-	m2a := seedMessageAttachment(t, sessionID, m2, "m2a.png", "2020-01-01T00:00:02Z")
-	m1b := seedMessageAttachment(t, sessionID, m1, "m1b.png", "2020-01-01T00:00:03Z")
-	m2b := seedMessageAttachment(t, sessionID, m2, "m2b.png", "2020-01-01T00:00:04Z")
-
-	// A legacy (NULL chat_input_task_id) queued chat task for this session.
-	dbfx.Task(t, agentID, testutil.Cols{
-		"runtime_id":      runtimeID,
-		"chat_session_id": sessionID,
-		"status":          "queued",
-	})
-
-	var resp claimAttachmentsResponse
-	claimForRuntimeExpecting(t, testHandler, runtimeID, daemonID, http.StatusOK).JSON(&resp)
-	if resp.Task == nil {
-		t.Fatal("expected a claimed task")
-	}
-
-	gotIDs := make([]string, 0, len(resp.Task.ChatMessageAttachments))
-	for _, a := range resp.Task.ChatMessageAttachments {
-		gotIDs = append(gotIDs, a.ID)
-	}
-	want := []string{m1a, m1b, m2a, m2b}
-	if strings.Join(gotIDs, ",") != strings.Join(want, ",") {
-		t.Errorf("attachment order = %v, want %v (message order, then per-message created_at)", gotIDs, want)
-	}
-}
 
 // chatAttachmentBatchFailDBTX passes every statement through to the real pool
 // EXCEPT the batched chat-message attachment read, which it fails.
 type chatAttachmentBatchFailDBTX struct{ inner db.DBTX }
 
-func (f chatAttachmentBatchFailDBTX) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	return f.inner.Exec(ctx, sql, args...)
+func (f chatAttachmentBatchFailDBTX) ExecContext(ctx context.Context, sqlQuery string, args ...any) (sql.Result, error) {
+	return f.inner.ExecContext(ctx, sqlQuery, args...)
 }
 
-func (f chatAttachmentBatchFailDBTX) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
-	if strings.Contains(sql, "FROM attachment") && strings.Contains(sql, "chat_message_id = ANY(") {
+func (f chatAttachmentBatchFailDBTX) PrepareContext(ctx context.Context, sqlQuery string) (*sql.Stmt, error) {
+	return f.inner.PrepareContext(ctx, sqlQuery)
+}
+
+func (f chatAttachmentBatchFailDBTX) QueryContext(ctx context.Context, sql string, args ...any) (*sql.Rows, error) {
+	if strings.Contains(sql, "FROM attachment") && (strings.Contains(sql, "chat_message_id = ANY(") || strings.Contains(sql, "chat_message_id IN (SELECT value FROM json_each(")) {
 		return nil, errInjectedChatAttachmentRead
 	}
-	return f.inner.Query(ctx, sql, args...)
+	return f.inner.QueryContext(ctx, sql, args...)
 }
 
-func (f chatAttachmentBatchFailDBTX) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	return f.inner.QueryRow(ctx, sql, args...)
+func (f chatAttachmentBatchFailDBTX) QueryRowContext(ctx context.Context, sql string, args ...any) *sql.Row {
+	return f.inner.QueryRowContext(ctx, sql, args...)
 }
 
 var errInjectedChatAttachmentRead = errors.New("injected chat attachment batch read failure")

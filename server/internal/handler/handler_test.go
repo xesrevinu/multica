@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"io"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -14,19 +16,17 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/service"
-	"github.com/multica-ai/multica/server/internal/sqliteutil"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 var testHandler *Handler
-var testPool *pgxpool.Pool
+var testPool *testutil.Pool
 var testSQLite *sql.DB
 var testUserID string
 var testWorkspaceID string
@@ -45,27 +45,12 @@ const (
 
 func TestMain(m *testing.M) {
 	ctx := context.Background()
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		dbURL = "postgres://multica:multica@localhost:5432/multica?sslmode=disable"
-	}
-
-	pool, err := pgxpool.New(ctx, dbURL)
+	sqlDB, err := testutil.OpenTestPool()
 	if err != nil {
-		fmt.Printf("Skipping tests: could not connect to database: %v\n", err)
+		fmt.Printf("Skipping tests: could not open test sqlite: %v\n", err)
 		os.Exit(0)
 	}
-	if err := pool.Ping(ctx); err != nil {
-		fmt.Printf("Skipping tests: database not reachable: %v\n", err)
-		pool.Close()
-		os.Exit(0)
-	}
-
-	sqlDB, sqlErr := sqliteutil.Open(ctx, "file:handler-tests?mode=memory&cache=shared")
-	if sqlErr != nil {
-		fmt.Printf("Skipping tests: could not open sqlite: %v\n", sqlErr)
-		os.Exit(0)
-	}
+	pool := testutil.WrapPool(sqlDB)
 	testSQLite = sqlDB
 	queries := db.New(sqlDB)
 	hub := realtime.NewHub()
@@ -109,7 +94,7 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func setupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) (string, string, error) {
+func setupHandlerTestFixture(ctx context.Context, pool *testutil.Pool) (string, string, error) {
 	if err := cleanupHandlerTestFixture(ctx, pool); err != nil {
 		return "", "", err
 	}
@@ -175,9 +160,9 @@ func setupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) (string, s
 	return userID, workspaceID, nil
 }
 
-func cleanupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) error {
+func cleanupHandlerTestFixture(ctx context.Context, pool *testutil.Pool) error {
 	var hasClientUsageTable bool
-	if err := pool.QueryRow(ctx, `SELECT to_regclass('client_usage_daily') IS NOT NULL`).Scan(&hasClientUsageTable); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='client_usage_daily')`).Scan(&hasClientUsageTable); err != nil {
 		return err
 	}
 	if hasClientUsageTable {
@@ -3748,4 +3733,90 @@ func TestUpsertSkillFileRejectsSkillMd(t *testing.T) {
 	if !strings.Contains(upsertRec.Body.String(), "SKILL.md is reserved") {
 		t.Fatalf("expected error message about reserved SKILL.md, got: %s", upsertRec.Body.String())
 	}
+}
+
+type errDriverConnector struct {
+	err    error
+	after  func()
+	cols   []string
+	values [][]driver.Value
+}
+
+type errDriverRows struct {
+	cols   []string
+	values [][]driver.Value
+	idx    int
+	err    error
+	after  func()
+}
+
+func (r *errDriverRows) Columns() []string {
+	if len(r.cols) == 0 {
+		return []string{"v"}
+	}
+	return r.cols
+}
+
+func (r *errDriverRows) Close() error {
+	if r.after != nil {
+		fn := r.after
+		r.after = nil
+		fn()
+	}
+	return nil
+}
+
+func (r *errDriverRows) Next(dest []driver.Value) error {
+	if r.err != nil {
+		if r.after != nil {
+			fn := r.after
+			r.after = nil
+			fn()
+		}
+		return r.err
+	}
+	if r.idx >= len(r.values) {
+		return io.EOF
+	}
+	copy(dest, r.values[r.idx])
+	r.idx++
+	return nil
+}
+
+type errDriverConn struct {
+	c errDriverConnector
+}
+
+func (c errDriverConn) Prepare(string) (driver.Stmt, error) { return nil, c.c.err }
+func (c errDriverConn) Close() error                        { return nil }
+func (c errDriverConn) Begin() (driver.Tx, error)           { return nil, c.c.err }
+func (c errDriverConn) QueryContext(_ context.Context, _ string, _ []driver.NamedValue) (driver.Rows, error) {
+	if c.c.err != nil && len(c.c.values) == 0 && c.c.after == nil {
+		return nil, c.c.err
+	}
+	return &errDriverRows{cols: c.c.cols, values: c.c.values, err: c.c.err, after: c.c.after}, nil
+}
+
+func (c errDriverConnector) Connect(context.Context) (driver.Conn, error) {
+	return errDriverConn{c: c}, nil
+}
+func (c errDriverConnector) Driver() driver.Driver { return nil }
+
+func errSQLRow(err error) *sql.Row {
+	sqldb := sql.OpenDB(errDriverConnector{err: err})
+	defer sqldb.Close()
+	return sqldb.QueryRow("")
+}
+
+func hookedSQLRows(cols []string, err error, after func()) *sql.Rows {
+	sqldb := sql.OpenDB(errDriverConnector{cols: cols, err: err, after: after})
+	defer sqldb.Close()
+	rows, _ := sqldb.Query("")
+	return rows
+}
+
+func valSQLRow(vals ...driver.Value) *sql.Row {
+	sqldb := sql.OpenDB(errDriverConnector{values: [][]driver.Value{vals}})
+	defer sqldb.Close()
+	return sqldb.QueryRow("")
 }

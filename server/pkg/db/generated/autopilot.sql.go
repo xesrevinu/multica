@@ -1982,8 +1982,8 @@ JOIN autopilot_run r
  AND r.status IN ('completed', 'failed')
 WHERE a.status = 'active'
 GROUP BY a.id, a.workspace_id, a.title, a.assignee_id, a.created_by_type, a.created_by_id
-HAVING COUNT(r.id) >= ?2
-   AND (SUM(CASE WHEN r.status = 'failed' THEN 1 ELSE 0 END) * 1.0) / COUNT(r.id) >= ?3
+HAVING COUNT(r.id) >= CAST(?2 AS INTEGER)
+   AND (SUM(CASE WHEN r.status = 'failed' THEN 1 ELSE 0 END) * 1.0) / COUNT(r.id) >= CAST(?3 AS REAL)
 ORDER BY failed_runs DESC, a.id ASC
 `
 
@@ -2636,11 +2636,11 @@ SET status = ?1,
         ELSE result
     END,
     failure_reason = CASE
-        WHEN @terminal_status IN ('failed', 'skipped') THEN ?3
+        WHEN ?1 IN ('failed', 'skipped') THEN ?3
         ELSE failure_reason
     END,
     reason_code = CASE
-        WHEN @terminal_status IN ('failed', 'skipped') THEN ?4
+        WHEN ?1 IN ('failed', 'skipped') THEN ?4
         ELSE reason_code
     END
 WHERE id = ?5

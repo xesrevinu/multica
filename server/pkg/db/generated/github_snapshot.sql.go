@@ -226,21 +226,20 @@ WITH candidates AS (
 SELECT installation_id, repo_owner, repo_name, pr_number
 FROM candidates
 ORDER BY (
-    ROW(installation_id, repo_owner, repo_name, pr_number) >
-    ROW(
-        sqlc.arg('after_installation_id'),
-        sqlc.arg('after_repo_owner'),
-        sqlc.arg('after_repo_name'),
-        sqlc.arg('after_pr_number')
-    )
+    (installation_id, repo_owner, repo_name, pr_number) >
+    (?3, ?4, ?5, ?6)
 ) DESC,
 installation_id, repo_owner, repo_name, pr_number
 LIMIT ?1
 `
 
 type ListStaleUndecidedGitHubPRsParams struct {
-	MaxRows   int64          `json:"max_rows"`
-	OlderThan sql.NullString `json:"older_than"`
+	MaxRows             int64          `json:"max_rows"`
+	OlderThan           sql.NullString `json:"older_than"`
+	AfterInstallationID int64          `json:"after_installation_id"`
+	AfterRepoOwner      string         `json:"after_repo_owner"`
+	AfterRepoName       string         `json:"after_repo_name"`
+	AfterPrNumber       int64          `json:"after_pr_number"`
 }
 
 type ListStaleUndecidedGitHubPRsRow struct {
@@ -257,7 +256,7 @@ type ListStaleUndecidedGitHubPRsRow struct {
 // the cursor sort first, followed by a wrap to the start, so even perpetually
 // failing addresses cannot pin the same first LIMIT rows forever.
 func (q *Queries) ListStaleUndecidedGitHubPRs(ctx context.Context, arg ListStaleUndecidedGitHubPRsParams) ([]ListStaleUndecidedGitHubPRsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listStaleUndecidedGitHubPRs, arg.MaxRows, arg.OlderThan)
+	rows, err := q.db.QueryContext(ctx, listStaleUndecidedGitHubPRs, arg.MaxRows, arg.OlderThan, arg.AfterInstallationID, arg.AfterRepoOwner, arg.AfterRepoName, arg.AfterPrNumber)
 	if err != nil {
 		return nil, err
 	}

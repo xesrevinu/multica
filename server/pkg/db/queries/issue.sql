@@ -226,7 +226,7 @@ UPDATE issue SET
     updated_at = now()
 WHERE issue.id = sqlc.arg('id')
   AND (sqlc.narg('expected_revision') IS NULL OR issue.revision = sqlc.narg('expected_revision'))
-  AND COALESCE(sqlc.narg('source_task_id'), '') = COALESCE(sqlc.narg('source_task_id'), '')
+  AND set_config('multica.source_task_id', COALESCE(sqlc.narg('source_task_id'), ''), 1) IS NOT NULL
 RETURNING *;
 
 -- name: UpdateIssueStatus :one
@@ -252,7 +252,7 @@ UPDATE issue SET
     END,
     updated_at = now()
 WHERE issue.id = ?1 AND issue.workspace_id = ?3
-  AND COALESCE(sqlc.narg('source_task_id'), '') = COALESCE(sqlc.narg('source_task_id'), '')
+  AND set_config('multica.source_task_id', COALESCE(sqlc.narg('source_task_id'), ''), 1) IS NOT NULL
 RETURNING *;
 
 -- name: LockIssuesForDuplicateMark :many

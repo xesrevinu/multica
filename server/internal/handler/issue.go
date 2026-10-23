@@ -160,7 +160,7 @@ func (h *Handler) issueStatusSortExpression(
 		return "", err
 	}
 	return fmt.Sprintf(
-		"COALESCE(array_position(%s::text[], i.status), 100000)",
+		"COALESCE(array_position(%s[], i.status), 100000)",
 		addArg(issueTableStatusOrder(entries)),
 	), nil
 }
@@ -881,7 +881,7 @@ func buildSearchQuery(phrase string, terms []string, queryNum int, hasNum bool, 
 
 	issueWhere := "i.workspace_id = " + wsParam
 	if terminalStatusesParam != "" {
-		issueWhere += fmt.Sprintf(" AND NOT (i.status = ANY(%s::text[]))", terminalStatusesParam)
+		issueWhere += fmt.Sprintf(" AND NOT (i.status IN (SELECT value FROM json_each(%s)))", terminalStatusesParam)
 	}
 	// PostgreSQL otherwise inlines scalar LATERAL subqueries and recomputes the
 	// LOWER expressions for every flag. The OFFSET 0 fences cache the normalized
@@ -1389,11 +1389,11 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 			WorkspaceID:        wsUUID,
 			TerminalStatusKeys: terminalStatusKeys,
 			Priority:           priorityFilter,
-			AssigneeID:         assigneeFilter,
+			AssigneeID:         nilStringIfEmpty(assigneeFilter),
 			AssigneeIds:        assigneeIdsFilter,
-			CreatorID:          creatorFilter,
-			ProjectID:          projectFilter,
-			InvolvesUserID:     involvesUserFilter,
+			CreatorID:          nilStringIfEmpty(creatorFilter),
+			ProjectID:          nilStringIfEmpty(projectFilter),
+			InvolvesUserID:     nilStringIfEmpty(involvesUserFilter),
 			MetadataFilter:     metadataFilter,
 			PropertiesFilter:   openPropertiesFilter,
 		})
@@ -1550,7 +1550,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	where := []string{"i.workspace_id = $1"}
 	args := []any{wsUUID}
 	addArg := func(v any) string {
-		args = append(args, v)
+		args = append(args, normalizeDynamicSQLArg(v))
 		return "$" + strconv.Itoa(len(args))
 	}
 	if len(statusCategoriesFilter) > 0 {
@@ -1564,28 +1564,28 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to resolve status categories")
 			return
 		}
-		where = append(where, fmt.Sprintf("i.status = ANY(%s::text[])", addArg(keys)))
+		where = append(where, fmt.Sprintf("i.status IN (SELECT value FROM json_each(%s))", addArg(keys)))
 	}
 	if len(statusesFilter) > 0 {
-		where = append(where, fmt.Sprintf("i.status = ANY(%s::text[])", addArg(statusesFilter)))
+		where = append(where, fmt.Sprintf("i.status IN (SELECT value FROM json_each(%s))", addArg(statusesFilter)))
 	}
 	if len(prioritiesFilter) > 0 {
-		where = append(where, fmt.Sprintf("i.priority = ANY(%s::text[])", addArg(prioritiesFilter)))
+		where = append(where, fmt.Sprintf("i.priority IN (SELECT value FROM json_each(%s))", addArg(prioritiesFilter)))
 	}
 	if assigneeFilter != "" {
-		where = append(where, fmt.Sprintf("i.assignee_id = %s::uuid", addArg(assigneeFilter)))
+		where = append(where, fmt.Sprintf("i.assignee_id = %s", addArg(assigneeFilter)))
 	}
 	if len(assigneeIdsFilter) > 0 {
-		where = append(where, fmt.Sprintf("i.assignee_id = ANY(%s::uuid[])", addArg(assigneeIdsFilter)))
+		where = append(where, fmt.Sprintf("i.assignee_id IN (SELECT value FROM json_each(%s))", addArg(assigneeIdsFilter)))
 	}
 	if len(assigneeTypesFilter) > 0 {
-		where = append(where, fmt.Sprintf("i.assignee_type = ANY(%s::text[])", addArg(assigneeTypesFilter)))
+		where = append(where, fmt.Sprintf("i.assignee_type IN (SELECT value FROM json_each(%s))", addArg(assigneeTypesFilter)))
 	}
 	if creatorFilter != "" {
-		where = append(where, fmt.Sprintf("i.creator_id = %s::uuid", addArg(creatorFilter)))
+		where = append(where, fmt.Sprintf("i.creator_id = %s", addArg(creatorFilter)))
 	}
 	if projectFilter != "" {
-		where = append(where, fmt.Sprintf("i.project_id = %s::uuid", addArg(projectFilter)))
+		where = append(where, fmt.Sprintf("i.project_id = %s", addArg(projectFilter)))
 	}
 
 	// Table facets must be part of the server window. Applying them after
@@ -1600,7 +1600,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		ors := make([]string, 0, len(assigneeFilters)+1)
 		for _, filter := range assigneeFilters {
 			ors = append(ors, fmt.Sprintf(
-				"(i.assignee_type = %s::text AND i.assignee_id = %s::uuid)",
+				"(i.assignee_type = %s AND i.assignee_id = %s)",
 				addArg(filter.actorType),
 				addArg(filter.actorID),
 			))
@@ -1619,7 +1619,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		ors := make([]string, 0, len(creatorFilters))
 		for _, filter := range creatorFilters {
 			ors = append(ors, fmt.Sprintf(
-				"(i.creator_type = %s::text AND i.creator_id = %s::uuid)",
+				"(i.creator_type = %s AND i.creator_id = %s)",
 				addArg(filter.actorType),
 				addArg(filter.actorID),
 			))
@@ -1635,7 +1635,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	if len(projectIDs) > 0 || includeNoProject {
 		ors := make([]string, 0, 2)
 		if len(projectIDs) > 0 {
-			ors = append(ors, fmt.Sprintf("i.project_id = ANY(%s::uuid[])", addArg(projectIDs)))
+			ors = append(ors, fmt.Sprintf("i.project_id IN (SELECT value FROM json_each(%s))", addArg(projectIDs)))
 		}
 		if includeNoProject {
 			ors = append(ors, "i.project_id IS NULL")
@@ -1649,7 +1649,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(labelIDs) > 0 {
 		where = append(where, fmt.Sprintf(
-			"EXISTS (SELECT 1 FROM issue_to_label itl WHERE itl.issue_id = i.id AND itl.label_id = ANY(%s::uuid[]))",
+			"EXISTS (SELECT 1 FROM issue_to_label itl WHERE itl.issue_id = i.id AND itl.label_id IN (SELECT value FROM json_each(%s)))",
 			addArg(labelIDs),
 		))
 	}
@@ -1665,7 +1665,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		if idsFilter == nil {
 			idsFilter = []string{}
 		}
-		where = append(where, fmt.Sprintf("i.id = ANY(%s::uuid[])", addArg(idsFilter)))
+		where = append(where, fmt.Sprintf("i.id IN (SELECT value FROM json_each(%s))", addArg(idsFilter)))
 	}
 	if r.URL.Query().Get("top_level_only") == "true" {
 		where = append(where, "i.parent_issue_id IS NULL")
@@ -1675,7 +1675,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		where = append(where, "(i.start_date IS NOT NULL OR i.due_date IS NOT NULL)")
 	}
 	if metadataFilter != nil {
-		where = append(where, fmt.Sprintf("i.metadata @> %s::jsonb", addArg(string(metadataFilter))))
+		where = append(where, fmt.Sprintf("NOT EXISTS (SELECT 1 FROM json_each(%s) AS mf WHERE json_extract(i.metadata, '$.' || mf.key) IS NOT mf.value)", addArg(string(metadataFilter))))
 	}
 	if propertiesFilter != nil {
 		where = append(where, propertiesFilterPredicate(propertiesFilter, addArg))
@@ -1687,7 +1687,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
     (i.assignee_type = 'agent' AND i.assignee_id IN (
        SELECT a.id FROM agent a
         WHERE a.workspace_id = $1
-          AND a.owner_id     = %[1]s::uuid
+          AND a.owner_id     = %[1]s
     ))
     OR (i.assignee_type = 'squad' AND i.assignee_id IN (
        SELECT sm.squad_id
@@ -1695,14 +1695,14 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
          JOIN squad s ON s.id = sm.squad_id
         WHERE s.workspace_id = $1
           AND sm.member_type = 'member'
-          AND sm.member_id   = %[1]s::uuid
+          AND sm.member_id   = %[1]s
        UNION
        SELECT s.id
          FROM squad s
          JOIN agent a ON a.id = s.leader_id
         WHERE s.workspace_id = $1
           AND a.workspace_id = $1
-          AND a.owner_id     = %[1]s::uuid
+          AND a.owner_id     = %[1]s
        UNION
        SELECT sm.squad_id
          FROM squad_member sm
@@ -1711,7 +1711,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
         WHERE s.workspace_id = $1
           AND sm.member_type = 'agent'
           AND a.workspace_id = $1
-          AND a.owner_id     = %[1]s::uuid
+          AND a.owner_id     = %[1]s
     ))
 )`, ref))
 	}
@@ -2041,7 +2041,7 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 	where := []string{"i.workspace_id = $1"}
 	args := []any{wsUUID}
 	addArg := func(v any) string {
-		args = append(args, v)
+		args = append(args, normalizeDynamicSQLArg(v))
 		return "$" + strconv.Itoa(len(args))
 	}
 
@@ -2050,7 +2050,7 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 		statuses = splitCommaParam(r.URL.Query().Get("status"))
 	}
 	if len(statuses) > 0 {
-		where = append(where, fmt.Sprintf("i.status = ANY(%s::text[])", addArg(statuses)))
+		where = append(where, fmt.Sprintf("i.status IN (SELECT value FROM json_each(%s))", addArg(statuses)))
 	}
 	// See ListIssues: category filtering is what lets the board keep a fixed
 	// column count as a workspace adds custom statuses. (MUL-6243)
@@ -2067,7 +2067,7 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to resolve status categories")
 			return
 		}
-		where = append(where, fmt.Sprintf("i.status = ANY(%s::text[])", addArg(keys)))
+		where = append(where, fmt.Sprintf("i.status IN (SELECT value FROM json_each(%s))", addArg(keys)))
 	}
 
 	priorities := splitCommaParam(r.URL.Query().Get("priorities"))
@@ -2075,7 +2075,7 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 		priorities = splitCommaParam(r.URL.Query().Get("priority"))
 	}
 	if len(priorities) > 0 {
-		where = append(where, fmt.Sprintf("i.priority = ANY(%s::text[])", addArg(priorities)))
+		where = append(where, fmt.Sprintf("i.priority IN (SELECT value FROM json_each(%s))", addArg(priorities)))
 	}
 
 	assigneeTypes := splitCommaParam(r.URL.Query().Get("assignee_types"))
@@ -2086,7 +2086,7 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		where = append(where, fmt.Sprintf("i.assignee_type = ANY(%s::text[])", addArg(assigneeTypes)))
+		where = append(where, fmt.Sprintf("i.assignee_type IN (SELECT value FROM json_each(%s))", addArg(assigneeTypes)))
 	}
 
 	if raw := r.URL.Query().Get("assignee_id"); raw != "" {
@@ -2094,7 +2094,7 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		where = append(where, fmt.Sprintf("i.assignee_id = %s::uuid", addArg(id)))
+		where = append(where, fmt.Sprintf("i.assignee_id = %s", addArg(id)))
 	}
 	if raw := r.URL.Query().Get("assignee_ids"); raw != "" {
 		ids, ok := parseUUIDParamList(w, raw, "assignee_ids")
@@ -2102,7 +2102,7 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(ids) > 0 {
-			where = append(where, fmt.Sprintf("i.assignee_id = ANY(%s::uuid[])", addArg(ids)))
+			where = append(where, fmt.Sprintf("i.assignee_id IN (SELECT value FROM json_each(%s))", addArg(ids)))
 		}
 	}
 	if raw := r.URL.Query().Get("creator_id"); raw != "" {
@@ -2110,19 +2110,19 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		where = append(where, fmt.Sprintf("i.creator_id = %s::uuid", addArg(id)))
+		where = append(where, fmt.Sprintf("i.creator_id = %s", addArg(id)))
 	}
 	if raw := r.URL.Query().Get("project_id"); raw != "" {
 		id, ok := parseUUIDOrBadRequest(w, raw, "project_id")
 		if !ok {
 			return
 		}
-		where = append(where, fmt.Sprintf("i.project_id = %s::uuid", addArg(id)))
+		where = append(where, fmt.Sprintf("i.project_id = %s", addArg(id)))
 	}
 	if filter, ok := parseMetadataFilterParam(w, r.URL.Query().Get("metadata")); !ok {
 		return
 	} else if filter != nil {
-		where = append(where, fmt.Sprintf("i.metadata @> %s::jsonb", addArg(string(filter))))
+		where = append(where, fmt.Sprintf("NOT EXISTS (SELECT 1 FROM json_each(%s) AS mf WHERE json_extract(i.metadata, '$.' || mf.key) IS NOT mf.value)", addArg(string(filter))))
 	}
 	if filter, ok := parsePropertiesFilterParam(w, r.URL.Query().Get("properties")); !ok {
 		return
@@ -2145,7 +2145,7 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
     (i.assignee_type = 'agent' AND i.assignee_id IN (
        SELECT a.id FROM agent a
         WHERE a.workspace_id = $1
-          AND a.owner_id     = %[1]s::uuid
+          AND a.owner_id     = %[1]s
     ))
     OR (i.assignee_type = 'squad' AND i.assignee_id IN (
        SELECT sm.squad_id
@@ -2153,14 +2153,14 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
          JOIN squad s ON s.id = sm.squad_id
         WHERE s.workspace_id = $1
           AND sm.member_type = 'member'
-          AND sm.member_id   = %[1]s::uuid
+          AND sm.member_id   = %[1]s
        UNION
        SELECT s.id
          FROM squad s
          JOIN agent a ON a.id = s.leader_id
         WHERE s.workspace_id = $1
           AND a.workspace_id = $1
-          AND a.owner_id     = %[1]s::uuid
+          AND a.owner_id     = %[1]s
        UNION
        SELECT sm.squad_id
          FROM squad_member sm
@@ -2169,7 +2169,7 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
         WHERE s.workspace_id = $1
           AND sm.member_type = 'agent'
           AND a.workspace_id = $1
-          AND a.owner_id     = %[1]s::uuid
+          AND a.owner_id     = %[1]s
     ))
 )`, ref))
 	}
@@ -2183,7 +2183,7 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 		ors := make([]string, 0, len(assigneeFilters)+1)
 		for _, filter := range assigneeFilters {
 			ors = append(ors, fmt.Sprintf(
-				"(i.assignee_type = %s::text AND i.assignee_id = %s::uuid)",
+				"(i.assignee_type = %s AND i.assignee_id = %s)",
 				addArg(filter.actorType),
 				addArg(filter.actorID),
 			))
@@ -2202,7 +2202,7 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 		ors := make([]string, 0, len(creatorFilters))
 		for _, filter := range creatorFilters {
 			ors = append(ors, fmt.Sprintf(
-				"(i.creator_type = %s::text AND i.creator_id = %s::uuid)",
+				"(i.creator_type = %s AND i.creator_id = %s)",
 				addArg(filter.actorType),
 				addArg(filter.actorID),
 			))
@@ -2218,7 +2218,7 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 	if len(projectIDs) > 0 || includeNoProject {
 		ors := make([]string, 0, 2)
 		if len(projectIDs) > 0 {
-			ors = append(ors, fmt.Sprintf("i.project_id = ANY(%s::uuid[])", addArg(projectIDs)))
+			ors = append(ors, fmt.Sprintf("i.project_id IN (SELECT value FROM json_each(%s))", addArg(projectIDs)))
 		}
 		if includeNoProject {
 			ors = append(ors, "i.project_id IS NULL")
@@ -2232,7 +2232,7 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(labelIDs) > 0 {
 		where = append(where, fmt.Sprintf(
-			"EXISTS (SELECT 1 FROM issue_to_label itl WHERE itl.issue_id = i.id AND itl.label_id = ANY(%s::uuid[]))",
+			"EXISTS (SELECT 1 FROM issue_to_label itl WHERE itl.issue_id = i.id AND itl.label_id IN (SELECT value FROM json_each(%s)))",
 			addArg(labelIDs),
 		))
 	}
@@ -2261,7 +2261,7 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			where = append(where, fmt.Sprintf(
-				"(i.assignee_type = %s::text AND i.assignee_id = %s::uuid)",
+				"(i.assignee_type = %s AND i.assignee_id = %s)",
 				addArg(groupAssigneeType),
 				addArg(assigneeID),
 			))
@@ -5045,4 +5045,31 @@ func (h *Handler) BatchDeleteIssues(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("batch delete issues", append(logger.RequestAttrs(r), "count", deleted)...)
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
+}
+
+func nilStringIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+func normalizeDynamicSQLArg(v any) any {
+	switch x := v.(type) {
+	case []string:
+		if x == nil {
+			return nil
+		}
+		b, _ := json.Marshal(x)
+		return string(b)
+	case time.Time:
+		return x.UTC().Format(time.RFC3339Nano)
+	case *time.Time:
+		if x == nil {
+			return nil
+		}
+		return x.UTC().Format(time.RFC3339Nano)
+	default:
+		return v
+	}
 }
