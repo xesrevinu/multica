@@ -89,3 +89,27 @@ capacity_config="$(
 require_rendered_value "$capacity_config" 'MULTICA_CLOUD_URL: "https://multica-cloud.internal"'
 
 echo "helm config rendering ok"
+
+# Default single-container mode: backend pod exposes 8080 + 3000, uses SQLite
+# on /app/data/db/multica.db, frontend Service selects backend, and postgres
+# Deployment is omitted while its PVC is retained by default.
+require_rendered_value "$default_backend" 'value: "file:/app/data/db/multica.db"'
+require_rendered_value "$default_backend" 'containerPort: 3000'
+require_rendered_value "$default_backend" 'mountPath: /app/data/db'
+require_rendered_value "$default_backend" 'subPath: db'
+default_frontend="$(helm template multica "$CHART_DIR" --show-only templates/frontend.yaml)"
+require_rendered_value "$default_frontend" 'app.kubernetes.io/component: backend'
+if printf '%s\n' "$default_frontend" | grep -Fq 'kind: Deployment'; then
+  echo "expected default embedded frontend mode to omit frontend Deployment"
+  exit 1
+fi
+default_postgres="$(helm template multica "$CHART_DIR" --show-only templates/postgres.yaml)"
+require_rendered_value "$default_postgres" 'kind: PersistentVolumeClaim'
+if printf '%s\n' "$default_postgres" | grep -Fq 'kind: Deployment'; then
+  echo "expected default SQLite mode to omit postgres Deployment"
+  exit 1
+fi
+
+# Legacy split mode remains supported when explicitly configured.
+split_frontend="$(helm template multica "$CHART_DIR" --set frontend.embedded=false --show-only templates/frontend.yaml)"
+require_rendered_value "$split_frontend" 'kind: Deployment'

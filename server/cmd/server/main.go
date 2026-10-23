@@ -218,6 +218,7 @@ func newMainHTTPServer(addr string, handler http.Handler) *http.Server {
 }
 
 func main() {
+	maybeRunMulticall()
 	logger.Init()
 	tracingShutdown, err := tracing.Setup(context.Background(), tracing.ConfigFromEnv(), version)
 	if err != nil {
@@ -275,6 +276,10 @@ func main() {
 		dbURL = "file:./data/multica.db"
 	}
 
+	if err := ensureSQLiteParentDir(dbURL); err != nil {
+		slog.Error("unable to prepare database directory", "error", err)
+		os.Exit(1)
+	}
 	startupSettings := dbstartup.SettingsFromEnv()
 	pool, err := newDBPool(context.Background(), dbURL, startupSettings.ConnectTimeout)
 	if err != nil {

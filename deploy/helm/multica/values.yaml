@@ -49,6 +49,7 @@ existingSecret: multica-secrets
 # PostgreSQL
 # -----------------------------------------------------------------------------
 postgres:
+  enabled: false
   # Set external.enabled=true to skip the built-in postgres Deployment/PVC and
   # supply DATABASE_URL directly via the existingSecret instead. When true,
   # the postgres Deployment, PVC, and Service are not created.
@@ -58,6 +59,7 @@ postgres:
   database: multica
   user: multica
   persistence:
+    retainClaim: true
     size: 10Gi
     # Leave empty to use the cluster's default StorageClass.
     storageClass: ""
@@ -120,6 +122,7 @@ backend:
     configMap: ""
   # All non-secret backend env. Secret values come from `existingSecret`.
   config:
+    databaseUrl: "file:/app/data/db/multica.db"
     # Optional container-loopback maintenance API; empty disables it. Never expose via Service/Ingress.
     maintenancePort: ""
     # The migrator and API server retry transient PostgreSQL startup failures
@@ -184,6 +187,7 @@ backend:
 # Frontend (Next.js standalone)
 # -----------------------------------------------------------------------------
 frontend:
+  embedded: true
   replicas: 1
   config:
     # Backend origin used by the frontend runtime proxy for /v1, /api, /auth,

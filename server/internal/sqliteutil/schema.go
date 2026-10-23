@@ -33,6 +33,7 @@ func ApplySchema(ctx context.Context, db *sql.DB, path string) error {
 		return fmt.Errorf("split sqlite schema %q: %w", path, err)
 	}
 	for i, stmt := range stmts {
+		stmt = makeCreateIdempotent(stmt)
 		stmt = strings.Replace(stmt, "\n    id TEXT NOT NULL,\n", "\n    id TEXT DEFAULT (gen_random_uuid()) NOT NULL,\n", 1)
 		stmt = strings.ReplaceAll(stmt, "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", "now()")
 		stmt = strings.ReplaceAll(stmt, "strftime('%Y-%m-%dT%H:%M:%fZ', ", "datetime(")
@@ -120,4 +121,35 @@ END`,
 		}
 	}
 	return nil
+}
+
+func makeCreateIdempotent(stmt string) string {
+	lines := strings.Split(stmt, "\n")
+	for idx, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "--") {
+			continue
+		}
+		upper := strings.ToUpper(trimmed)
+		for _, pair := range [][2]string{
+			{"CREATE TABLE IF NOT EXISTS ", "CREATE TABLE "},
+			{"CREATE UNIQUE INDEX IF NOT EXISTS ", "CREATE UNIQUE INDEX "},
+			{"CREATE INDEX IF NOT EXISTS ", "CREATE INDEX "},
+			{"CREATE TRIGGER IF NOT EXISTS ", "CREATE TRIGGER "},
+			{"CREATE VIRTUAL TABLE IF NOT EXISTS ", "CREATE VIRTUAL TABLE "},
+			{"INSERT OR IGNORE INTO SEARCH_CHANGE_COUNTER ", "INSERT INTO SEARCH_CHANGE_COUNTER "},
+		} {
+			withINE, prefix := pair[0], pair[1]
+			if strings.HasPrefix(upper, withINE) {
+				return stmt
+			}
+			if strings.HasPrefix(upper, prefix) {
+				leadingLen := len(line) - len(strings.TrimLeft(line, " \t"))
+				lines[idx] = line[:leadingLen] + withINE + trimmed[len(prefix):]
+				return strings.Join(lines, "\n")
+			}
+		}
+		break
+	}
+	return stmt
 }

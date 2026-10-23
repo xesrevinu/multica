@@ -25,11 +25,13 @@ under the kustomize layout when installed as `helm install multica ...`.
 {{- end -}}
 
 {{/*
-DATABASE_URL pieced together from the postgres service + Secret values.
-The $(VAR) syntax is resolved by the kubelet from the container's env, so
-POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB must also be loaded into env
-on the same container (see envFrom on the backend Deployment).
+DATABASE_URL defaults to the embedded SQLite database path when postgres.enabled
+is false, or the legacy postgres URL when postgres.enabled is true.
 */}}
 {{- define "multica.databaseUrl" -}}
+{{- if .Values.postgres.enabled -}}
 postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@{{ include "multica.postgres.fullname" . }}:5432/$(POSTGRES_DB)?sslmode=disable
+{{- else -}}
+{{ default "file:/app/data/db/multica.db" .Values.backend.config.databaseUrl }}
+{{- end -}}
 {{- end -}}

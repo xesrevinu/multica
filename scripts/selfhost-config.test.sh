@@ -286,7 +286,12 @@ done
 exit 0
 STUB
 
-chmod +x "$stub_dir/docker" "$stub_dir/curl"
+cat >"$stub_dir/pnpm" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+
+chmod +x "$stub_dir/docker" "$stub_dir/curl" "$stub_dir/pnpm"
 
 # Throwaway checkout so the recipe never touches this repo's own .env.
 recipe_dir="$tmp_dir/recipe"

@@ -302,3 +302,22 @@ INSERT INTO item (note) VALUES ('a;b');
 		t.Fatal(err)
 	}
 }
+
+func TestApplySchemaFullIdempotent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := t.TempDir()
+	db, err := Open(ctx, filepath.Join(dir, "full.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	schemaPath := filepath.Join("..", "..", "schema", "sqlite.sql")
+	if err := ApplySchema(ctx, db, schemaPath); err != nil {
+		t.Fatalf("first ApplySchema: %v", err)
+	}
+	if err := ApplySchema(ctx, db, schemaPath); err != nil {
+		t.Fatalf("second ApplySchema (idempotency): %v", err)
+	}
+}

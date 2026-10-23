@@ -1,6 +1,10 @@
 {{- $backendImageTag := default .Chart.AppVersion .Values.images.backend.tag -}}
 {{- /* `helm upgrade --reuse-values` from a chart without extraCACerts carries no such key. */ -}}
 {{- $extraCACerts := (default dict .Values.backend.extraCACerts).configMap -}}
+{{- $embeddedFrontend := true -}}
+{{- if hasKey .Values.frontend "embedded" -}}
+{{- $embeddedFrontend = .Values.frontend.embedded -}}
+{{- end -}}
 {{- if .Values.backend.uploads.persistence.enabled -}}
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -28,10 +32,6 @@ metadata:
     {{- include "multica.labels" . | nindent 4 }}
     app.kubernetes.io/component: backend
 spec:
-  # The backend entrypoint runs migrations before starting. Concurrent
-  # runs are protected by a Postgres advisory lock in cmd/migrate (see
-  # GitHub multica-ai/multica#3647), so multiple replicas no longer race;
-  # 1 is still the chart default (strategy: Recreate, no leader split).
   replicas: {{ .Values.backend.replicas }}
   strategy:
     type: Recreate
@@ -43,19 +43,9 @@ spec:
   template:
     metadata:
       annotations:
-        # Roll the backend pods whenever its config changes. envFrom does not
-        # watch the referenced objects, and helm upgrade alone won't change the
-        # pod template hash, so without these checksums editing values.yaml +
-        # `helm upgrade` would leave the old pods running stale config.
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
-        # existingSecret is created out-of-band (not a chart template), so we
-        # checksum the live object via lookup instead of $.Template.BasePath.
-        # lookup returns empty during `helm template`/`--dry-run`, so the
-        # rendered value there is a placeholder; on a real install/upgrade it
-        # reflects the actual Secret and rolls pods on rotation.
         checksum/secret: {{ (lookup "v1" "Secret" .Release.Namespace .Values.existingSecret).data | toYaml | sha256sum }}
         {{- if $extraCACerts }}
-        # Same lookup pattern: the backend reads extra CAs only at startup.
         checksum/extra-ca-certs: {{ (lookup "v1" "ConfigMap" .Release.Namespace $extraCACerts).data | toYaml | sha256sum }}
         {{- end }}
       labels:
@@ -69,21 +59,40 @@ spec:
           ports:
             - containerPort: 8080
               name: http
+            {{- if $embeddedFrontend }}
+            - containerPort: 3000
+              name: web
+            {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ .Release.Name }}-config
             - secretRef:
                 name: {{ .Values.existingSecret }}
-          {{- if or (not .Values.postgres.external.enabled) $extraCACerts }}
+          {{- if or (not .Values.postgres.external.enabled) $extraCACerts $embeddedFrontend }}
           env:
             {{- if not .Values.postgres.external.enabled }}
             - name: DATABASE_URL
               value: {{ include "multica.databaseUrl" . | quote }}
             {{- end }}
+            {{- if $embeddedFrontend }}
+            - name: FRONTEND_PORT
+              value: "3000"
+            - name: REMOTE_API_URL
+              value: {{ default "http://127.0.0.1:8080" .Values.frontend.config.remoteApiUrl | quote }}
+            {{- if .Values.frontend.config.docsUrl }}
+            - name: DOCS_URL
+              value: {{ .Values.frontend.config.docsUrl | quote }}
+            {{- end }}
+            {{- if .Values.frontend.config.publicApiUrl }}
+            - name: NEXT_PUBLIC_API_URL
+              value: {{ .Values.frontend.config.publicApiUrl | quote }}
+            {{- end }}
+            {{- if .Values.frontend.config.publicWsUrl }}
+            - name: NEXT_PUBLIC_WS_URL
+              value: {{ .Values.frontend.config.publicWsUrl | quote }}
+            {{- end }}
+            {{- end }}
             {{- if $extraCACerts }}
-            # Go loads the system bundle file plus every file in these
-            # directories. SSL_CERT_DIR replaces the default directory list,
-            # so the system directory stays in it alongside the extra CAs.
             - name: SSL_CERT_DIR
               value: /etc/ssl/certs:/etc/multica/ca-certs
             {{- end }}
@@ -93,6 +102,9 @@ spec:
             {{- if .Values.backend.uploads.persistence.enabled }}
             - name: uploads
               mountPath: /app/data/uploads
+            - name: uploads
+              mountPath: /app/data/db
+              subPath: db
             {{- end }}
             {{- if $extraCACerts }}
             - name: extra-ca-certs
@@ -100,12 +112,6 @@ spec:
               readOnly: true
             {{- end }}
           {{- end }}
-          # The entrypoint runs `./migrate up` before serving traffic. On a
-          # cold cluster (Postgres still coming up) this can take minutes. The
-          # startupProbe holds off liveness/readiness until /healthz is OK.
-          # Its 10 minute window exceeds the shared 3 minute database retry
-          # budget and leaves time for migrations before kubelet may restart
-          # the pod.
           startupProbe:
             httpGet:
               path: /healthz
@@ -120,8 +126,6 @@ spec:
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              # Liveness must not depend on PostgreSQL. A database outage makes
-              # the pod NotReady, but should not restart an otherwise live API.
               path: /health
               port: 8080
             initialDelaySeconds: 30
@@ -169,15 +173,6 @@ spec:
       name: http
 {{- if .Values.frontend.compatibility.backendAlias }}
 ---
-# DNS alias for legacy multica-web images that baked
-# REMOTE_API_URL=http://backend:8080 at build time. Current images resolve
-# frontend.config.remoteApiUrl at runtime and do not need this Service.
-#
-# The name is intentionally unprefixed ("backend", not "{{ .Release.Name }}-backend")
-# because the baked-in host has no release prefix. As a result only ONE release
-# of this chart can run per namespace, and the name may collide with a
-# pre-existing Service/backend (see frontend.compatibility.backendAlias in
-# values.yaml).
 apiVersion: v1
 kind: Service
 metadata:

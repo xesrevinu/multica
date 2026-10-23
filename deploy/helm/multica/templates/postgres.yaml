@@ -1,4 +1,8 @@
-{{- if not .Values.postgres.external.enabled -}}
+{{- $retainClaim := true -}}
+{{- if hasKey .Values.postgres.persistence "retainClaim" -}}
+{{- $retainClaim = .Values.postgres.persistence.retainClaim -}}
+{{- end -}}
+{{- if and (not .Values.postgres.external.enabled) (or .Values.postgres.enabled $retainClaim) -}}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -14,6 +18,8 @@ spec:
   {{- with .Values.postgres.persistence.storageClass }}
   storageClassName: {{ . | quote }}
   {{- end }}
+{{- end }}
+{{- if and (not .Values.postgres.external.enabled) .Values.postgres.enabled -}}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -60,8 +66,6 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.existingSecret }}
                   key: POSTGRES_PASSWORD
-            # local-path PVCs mount with a lost+found directory — point PGDATA
-            # at a subdir so initdb sees an empty target.
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
           volumeMounts:
@@ -106,5 +110,4 @@ spec:
   ports:
     - port: 5432
       targetPort: 5432
-
 {{- end }}
