@@ -4189,7 +4189,7 @@ func (h *Handler) StartTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		generation, parseErr := time.Parse(time.RFC3339Nano, req.DispatchedAt)
-		if parseErr != nil || generation.Nanosecond()%1000 != 0 {
+		if parseErr != nil {
 			writeError(w, http.StatusBadRequest, "dispatched_at must be a PostgreSQL claim timestamp")
 			return
 		}

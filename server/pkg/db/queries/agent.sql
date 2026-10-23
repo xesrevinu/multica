@@ -939,7 +939,7 @@ RETURNING *;
 -- Serialize start/replay with reclaim and cancellation. A stale delivery must
 -- never start or acknowledge a newer claim, even on the same runtime.
 SELECT * FROM agent_task_queue
-WHERE id = ?1 AND runtime_id = ?2 AND dispatched_at = ?3
+WHERE id = ?1 AND runtime_id = ?2 AND (dispatched_at = ?3 OR datetime(dispatched_at) = datetime(?3))
   AND status IN ('dispatched', 'waiting_local_directory', 'running');
 
 -- name: MarkAgentTaskWaitingLocalDirectory :one
