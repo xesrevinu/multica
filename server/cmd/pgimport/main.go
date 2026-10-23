@@ -271,7 +271,7 @@ func importAllTables(ctx context.Context, pgConn *pgx.Conn, sqliteDB *sql.DB, ro
 	var regularTables []string
 	var deferredTables []string
 	for t := range pgTables {
-		if t == "search_index_change" || t == "search_index_prune_mark" {
+		if t == "search_index_change" || t == "search_index_prune_mark" || t == "issue_child_event" {
 			deferredTables = append(deferredTables, t)
 		} else {
 			regularTables = append(regularTables, t)
@@ -317,6 +317,9 @@ func importAllTables(ctx context.Context, pgConn *pgx.Conn, sqliteDB *sql.DB, ro
 	}
 	if _, err := sqliteDB.ExecContext(ctx, `DELETE FROM search_index_prune_mark`); err != nil {
 		return nil, fmt.Errorf("clear search_index_prune_mark: %w", err)
+	}
+	if _, err := sqliteDB.ExecContext(ctx, `DELETE FROM issue_child_event`); err != nil {
+		return nil, fmt.Errorf("clear trigger-populated issue_child_event: %w", err)
 	}
 
 	for _, table := range deferredTables {
