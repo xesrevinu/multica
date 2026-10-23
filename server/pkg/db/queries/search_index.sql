@@ -74,7 +74,7 @@ WHERE workspace_id = @workspace_id
   AND change_seq > @since
   AND change_seq <= @target
   AND (change_seq, entity_type, entity_id)
-      > (@after_seq, @after_type, @after_id)
+      > (@after_seq, CAST(@after_type AS TEXT), CAST(@after_id AS TEXT))
 ORDER BY change_seq, entity_type, entity_id
 LIMIT @page_limit;
 

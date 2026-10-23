@@ -16,6 +16,20 @@ spec:
     - host: {{ .Values.ingress.frontend.host | quote }}
       http:
         paths:
+          - path: /ws
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "multica.backend.fullname" . }}
+                port:
+                  number: 8080
+          - path: /api/daemon/ws
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "multica.backend.fullname" . }}
+                port:
+                  number: 8080
           - path: /
             pathType: Prefix
             backend:

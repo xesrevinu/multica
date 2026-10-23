@@ -87,3 +87,18 @@ func assertIDs(t *testing.T, label string, got, want []string) {
 
 
 
+
+func TestSearchIndexChangesLegacyPGSnapshotCursorReturns410(t *testing.T) {
+	wsID := searchIndexWorkspace(t, "SI")
+	legacyCursor := encodeSearchIndexCursor(searchIndexCursor{
+		Since: "100:100:",
+	})
+	testutil.Call(t, testHandler.ListSearchIndexChanges,
+		searchIndexRequest(http.MethodPost, "/api/search-index/changes", wsID, map[string]any{"cursor": legacyCursor}),
+	).Want(http.StatusGone)
+
+	manifest := searchIndexManifest(t, wsID)
+	issueID := dbfx.Issue(t, "Indexed after manifest", testutil.Cols{"workspace_id": wsID})
+	changes := searchIndexChanges(t, wsID, manifest.Cursor, 100)
+	assertIDs(t, "changed issues", issueIDs(changes.Issues), []string{issueID})
+}

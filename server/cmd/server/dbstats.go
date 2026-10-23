@@ -65,7 +65,7 @@ func runDBStatsLogger(ctx context.Context, role string, pool *sql.DB) {
 			"wait_count_delta", waitDelta,
 			"avg_wait_ms", avgWaitMs,
 		}
-		if waitDelta > 0 {
+		if waitDelta > 0 && avgWaitMs >= 50 {
 			slog.Warn("db pool pressure", fields...)
 		} else {
 			slog.Info("db pool stats", fields...)

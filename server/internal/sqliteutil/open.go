@@ -45,7 +45,48 @@ var (
 	rePropsHasKey      = regexp.MustCompile(`(?i)\bi\.properties\s*\?\s*(\$\d+|'[^']*')`)
 	reEqAny            = regexp.MustCompile(`(?i)=\s*ANY\s*\(\s*(\$\d+|\?\d*|[a-zA-Z_][a-zA-Z0-9_.]*)\s*\)`)
 	reGenerateSeries   = regexp.MustCompile(`(?i)\bFROM\s+generate_series\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*(?:AS\s+)?([a-zA-Z_][a-zA-Z0-9_]*)`)
+	reBareArraySuffix  = regexp.MustCompile(`(\$\d+|\?\d*)\[\]`)
+	reFromUnnest       = regexp.MustCompile(`(?i)\bFROM\s+unnest\s*\(\s*(\$\d+|\?\d*)\s*\)\s+AS\s+([a-zA-Z_]\w*)\s*\(\s*([a-zA-Z_]\w*)\s*\)`)
+	reSelectUnnest     = regexp.MustCompile(`(?i)\bSELECT\s+unnest\s*\(\s*(\$\d+|\?\d*)\s*\)\s+AS\s+([a-zA-Z_]\w*)`)
+	reJsonObjectAgg    = regexp.MustCompile(`(?i)\bjsonb?_object_agg\s*\(`)
+	reGroupingWhen     = regexp.MustCompile(`WHEN GROUPING\((.+?)\) = 0 THEN '([^']+)'`)
 )
+
+func rewriteGroupingSets(q string) string {
+	if !strings.Contains(q, "GROUP BY GROUPING SETS") {
+		return q
+	}
+	fromIdx := strings.Index(q, "\nFROM issue i\nWHERE ")
+	groupIdx := strings.Index(q, "\nGROUP BY GROUPING SETS (")
+	if fromIdx < 0 || groupIdx < 0 || groupIdx <= fromIdx {
+		return q
+	}
+	firstLineEnd := strings.IndexByte(q, '\n')
+	if firstLineEnd < 0 || firstLineEnd > fromIdx {
+		return q
+	}
+	firstLine := q[:firstLineEnd]
+	matches := reGroupingWhen.FindAllStringSubmatch(firstLine, -1)
+	if len(matches) == 0 {
+		return q
+	}
+	whereClause := q[fromIdx+len("\nFROM issue i\nWHERE ") : groupIdx]
+	groupingTail := q[groupIdx+len("\nGROUP BY GROUPING SETS ("):]
+	includeTotal := strings.Contains(groupingTail, "()")
+	branches := make([]string, 0, len(matches)+1)
+	for _, m := range matches {
+		expr := m[1]
+		identity := m[2]
+		branches = append(branches, fmt.Sprintf(
+			"SELECT '%s', COALESCE(CAST((%s) AS TEXT), ''), COUNT(*) FROM _facet_base i GROUP BY (%s)",
+			identity, expr, expr,
+		))
+	}
+	if includeTotal {
+		branches = append(branches, "SELECT '__total__', '', COUNT(*) FROM _facet_base i")
+	}
+	return fmt.Sprintf("WITH _facet_base AS (SELECT * FROM issue i WHERE %s)\n%s", whereClause, strings.Join(branches, "\nUNION ALL\n"))
+}
 
 // NormalizeSQL rewrites Postgres-specific SQL syntax into SQLite-compatible SQL.
 func NormalizeSQL(q string) string {
@@ -53,8 +94,13 @@ func NormalizeSQL(q string) string {
 	if len(trimmed) >= 7 && strings.EqualFold(trimmed[:7], "CREATE ") {
 		return q
 	}
+	q = rewriteGroupingSets(q)
 	q = reNumericCast.ReplaceAllString(q, "CAST($1 AS REAL)")
 	q = rePGCast.ReplaceAllString(q, "")
+	q = reBareArraySuffix.ReplaceAllString(q, "$1")
+	q = reFromUnnest.ReplaceAllString(q, "FROM (SELECT value AS $3 FROM json_each($1)) AS $2")
+	q = reSelectUnnest.ReplaceAllString(q, "SELECT value AS $2 FROM json_each($1)")
+	q = reJsonObjectAgg.ReplaceAllString(q, "json_group_object(")
 	q = reNowMinusInterval.ReplaceAllString(q, "datetime('now', '-$1')")
 	q = reNowPlusInterval.ReplaceAllString(q, "datetime('now', '+$1')")
 	q = reNowMinusMakeInterval.ReplaceAllString(q, "datetime('now', '-' || ($1) || ' seconds')")

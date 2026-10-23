@@ -126,6 +126,8 @@ func encodeSearchIndexCursor(c searchIndexCursor) string {
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
 
+var errSearchIndexCursorExpired = errors.New("search index cursor expired")
+
 func decodeSearchIndexCursor(s string) (searchIndexCursor, error) {
 	var c searchIndexCursor
 	if s == "" || len(s) > searchIndexCursorMaxBytes {
@@ -139,6 +141,9 @@ func decodeSearchIndexCursor(s string) (searchIndexCursor, error) {
 		return c, errors.New("invalid cursor")
 	}
 	if !validChangeSeqText(c.Since) {
+		if validPGSnapshotText(c.Since) {
+			return c, errSearchIndexCursorExpired
+		}
 		return c, errors.New("invalid cursor")
 	}
 	if c.Target == "" {
@@ -148,6 +153,9 @@ func decodeSearchIndexCursor(s string) (searchIndexCursor, error) {
 		return c, nil
 	}
 	if !validChangeSeqText(c.Target) {
+		if validPGSnapshotText(c.Target) {
+			return c, errSearchIndexCursorExpired
+		}
 		return c, errors.New("invalid cursor")
 	}
 	if _, err := strconv.ParseUint(c.AfterXid, 10, 64); err != nil {
@@ -416,6 +424,10 @@ func (h *Handler) ListSearchIndexChanges(w http.ResponseWriter, r *http.Request)
 	}
 	cur, err := decodeSearchIndexCursor(req.Cursor)
 	if err != nil {
+		if errors.Is(err, errSearchIndexCursorExpired) {
+			writeError(w, http.StatusGone, "search index cursor expired; rebuild the local index")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid cursor")
 		return
 	}
@@ -454,11 +466,16 @@ func (h *Handler) ListSearchIndexChanges(w http.ResponseWriter, r *http.Request)
 				return err
 			}
 		}
-		var afterSeq, afterType, afterID int64
+		if sinceSeq > target {
+			pruned = true
+			return nil
+		}
+		var afterSeq int64
+		var afterType, afterID string
 		if cur.Target != "" {
 			afterSeq, _ = strconv.ParseInt(cur.AfterXid, 10, 64)
-			afterType, _ = strconv.ParseInt(cur.AfterType, 10, 64)
-			afterID, _ = strconv.ParseInt(cur.AfterID, 10, 64)
+			afterType = cur.AfterType
+			afterID = cur.AfterID
 		}
 		params := db.ListSearchIndexChangesParams{
 			WorkspaceID: wsUUID,

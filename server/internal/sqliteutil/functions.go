@@ -425,4 +425,63 @@ func init() {
 			},
 		)
 	}
+	sqlite.MustRegisterScalarFunction(
+		"array_position",
+		2,
+		func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+			if len(args) < 2 || args[0] == nil || args[1] == nil {
+				return nil, nil
+			}
+			raw := strings.TrimSpace(fmt.Sprint(args[0]))
+			target := fmt.Sprint(args[1])
+			if raw == "" || raw == "{}" || raw == "[]" || raw == "null" {
+				return nil, nil
+			}
+			var arr []any
+			if err := json.Unmarshal([]byte(raw), &arr); err == nil {
+				for i, elem := range arr {
+					if fmt.Sprint(elem) == target {
+						return int64(i + 1), nil
+					}
+				}
+				return nil, nil
+			}
+			if strings.HasPrefix(raw, "{") && strings.HasSuffix(raw, "}") {
+				inner := raw[1 : len(raw)-1]
+				if inner == "" {
+					return nil, nil
+				}
+				for i, part := range strings.Split(inner, ",") {
+					if strings.Trim(strings.TrimSpace(part), `"`) == target {
+						return int64(i + 1), nil
+					}
+				}
+			}
+			return nil, nil
+		},
+	)
+	sqlite.MustRegisterScalarFunction(
+		"split_part",
+		3,
+		func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+			if len(args) < 3 || args[0] == nil || args[1] == nil || args[2] == nil {
+				return nil, nil
+			}
+			s := fmt.Sprint(args[0])
+			delim := fmt.Sprint(args[1])
+			f, ok := toFloat(args[2])
+			if !ok {
+				return "", nil
+			}
+			idx := int(f)
+			if idx <= 0 {
+				return "", nil
+			}
+			parts := strings.Split(s, delim)
+			if idx > len(parts) {
+				return "", nil
+			}
+			return parts[idx-1], nil
+		},
+	)
 }

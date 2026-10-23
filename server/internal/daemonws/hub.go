@@ -430,7 +430,7 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request, identity C
 	c := &client{
 		hub:      h,
 		conn:     conn,
-		send:     make(chan []byte, 16),
+		send:     make(chan []byte, 128),
 		identity: identity,
 		runtimes: runtimes,
 		rpcSem:   make(chan struct{}, maxInFlightRPCPerClient),

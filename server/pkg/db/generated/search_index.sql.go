@@ -96,8 +96,8 @@ type ListSearchIndexChangesParams struct {
 	Since       int64  `json:"since"`
 	Target      int64  `json:"target"`
 	AfterSeq    int64  `json:"after_seq"`
-	AfterType   int64  `json:"after_type"`
-	AfterID     int64  `json:"after_id"`
+	AfterType   string `json:"after_type"`
+	AfterID     string `json:"after_id"`
 	PageLimit   int64  `json:"page_limit"`
 }
 
