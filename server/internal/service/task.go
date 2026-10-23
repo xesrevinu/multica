@@ -1225,7 +1225,7 @@ func (s *TaskService) enqueueIssueTaskWithCommentPlan(ctx context.Context, issue
 		IssueID:              nullString(issue.ID),
 		Priority:             int64(priorityToInt(issue.Priority)),
 		TriggerCommentID:     nullString(triggerCommentID),
-		CoalescedCommentIds:  nullString(strings.Join(coalescedCommentIDs, ",")),
+		CoalescedCommentIds:  sql.NullString{String: stringListJSON(coalescedCommentIDs), Valid: len(coalescedCommentIDs) > 0},
 		TriggerSummary:       s.buildCommentTriggerSummary(ctx, issue.WorkspaceID, triggerCommentID),
 		ForceFreshSession:    sql.NullInt64{Int64: boolInt(forceFreshSession), Valid: true},
 		HandoffNote:          sql.NullString{String: handoffNote, Valid: handoffNote != ""},
@@ -1396,7 +1396,7 @@ func (s *TaskService) enqueueMentionTaskWithCommentPlan(ctx context.Context, iss
 		IssueID:              nullString(issue.ID),
 		Priority:             int64(priorityToInt(issue.Priority)),
 		TriggerCommentID:     nullString(triggerCommentID),
-		CoalescedCommentIds:  nullString(strings.Join(coalescedCommentIDs, ",")),
+		CoalescedCommentIds:  sql.NullString{String: stringListJSON(coalescedCommentIDs), Valid: len(coalescedCommentIDs) > 0},
 		TriggerSummary:       s.buildCommentTriggerSummary(ctx, issue.WorkspaceID, triggerCommentID),
 		IsLeaderTask:         sql.NullInt64{Int64: boolInt(isLeader), Valid: true},
 		ForceFreshSession:    sql.NullInt64{Int64: boolInt(forceFreshSession), Valid: true},
@@ -3787,7 +3787,7 @@ func (s *TaskService) FinalizeTaskClaim(
 			return nil
 		}
 		persisted, err := qtx.SetTaskDeliveredCommentIDs(ctx, db.SetTaskDeliveredCommentIDsParams{
-			DeliveredCommentIds:      strings.Join(deliveredCommentIDs, ","),
+			DeliveredCommentIds:      stringListJSON(deliveredCommentIDs),
 			TaskID:                   task.ID,
 			RuntimeID:                task.RuntimeID,
 			DispatchedAt:             task.DispatchedAt,
@@ -3802,10 +3802,7 @@ func (s *TaskService) FinalizeTaskClaim(
 	if err != nil {
 		return nil, err
 	}
-	if receipt == "" {
-		return nil, nil
-	}
-	return strings.Split(receipt, ","), nil
+	return parseStringList(receipt), nil
 }
 
 // RequeueTaskAfterClaimFailure immediately releases an exact dispatched claim
@@ -6132,7 +6129,7 @@ func SettleTerminalTaskState(ctx context.Context, q *db.Queries, tasks ...db.Age
 // check and no query.
 func SettleDeliveredDelegatedFailureRecoveries(ctx context.Context, q *db.Queries, tasks ...db.AgentTaskQueue) error {
 	for _, t := range tasks {
-		if len(t.DeliveredCommentIds) == 0 {
+		if len(parseStringList(t.DeliveredCommentIds)) == 0 {
 			continue
 		}
 		if _, err := q.SettleDelegatedFailureRecoveriesForTask(ctx, t.ID); err != nil {

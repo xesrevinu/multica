@@ -697,7 +697,7 @@ func compactIDs(us []string) []string {
 
 func parseIDList(raw string) []string {
 	raw = strings.TrimSpace(raw)
-	if raw == "" || raw == "null" || raw == "[]" {
+	if raw == "" || raw == "null" || raw == "[]" || raw == "{}" {
 		return nil
 	}
 	var ids []string

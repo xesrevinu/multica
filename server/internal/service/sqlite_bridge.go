@@ -157,6 +157,10 @@ func stringListJSON(items []string) string {
 }
 
 func parseStringList(s string) []string {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "null" || s == "[]" || s == "{}" {
+		return nil
+	}
 	var out []string
 	if err := json.Unmarshal([]byte(s), &out); err != nil {
 		return nil

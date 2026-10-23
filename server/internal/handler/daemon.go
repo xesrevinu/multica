@@ -1650,7 +1650,7 @@ func parseRuntimeConnectedAppsForClaim(raw []byte, taskID string) []runtimeapps.
 // proceed with a normal claim. Shared by the per-runtime and batch claim
 // handlers so the batch path can't silently drop surviving comments (MUL-4257).
 func (h *Handler) repairStaleCommentPlanIfNeeded(ctx context.Context, task *db.AgentTaskQueue, runtimeWorkspaceID string) (handled bool, failure *claimBuildFailure) {
-	if len(task.CoalescedCommentIds) == 0 {
+	if len(uuidsToStrings(task.CoalescedCommentIds)) == 0 {
 		return false, nil
 	}
 	if task.TriggerCommentID.Valid {
@@ -1891,7 +1891,7 @@ func (h *Handler) ClaimTasksByRuntime(w http.ResponseWriter, r *http.Request) {
 		// final delivery gate re-verifies current runtime ownership inside the
 		// same transaction; a rejected task is settled via FailTask and skipped
 		// while valid tasks in the same batch continue.
-		commentBackedTask := task.TriggerCommentID.Valid || len(task.CoalescedCommentIds) > 0
+		commentBackedTask := task.TriggerCommentID.Valid || len(uuidsToStrings(task.CoalescedCommentIds)) > 0
 		receipt, deliveryFailure, ferr := h.finalizeClaimDelivery(r.Context(), &task, rt, uuidToString(task.RuntimeID.String), rtWorkspaceID, &resp, db.CreateTaskTokenParams{
 			ID:          dbid.NewV7(),
 			TokenHash:   auth.HashToken(tokenStr),
@@ -3844,7 +3844,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		outcome = "no_task"
 		return
 	}
-	if len(task.CoalescedCommentIds) > 0 {
+	if len(uuidsToStrings(task.CoalescedCommentIds)) > 0 {
 		handled, failure := h.repairStaleCommentPlanIfNeeded(r.Context(), task, runtimeWorkspaceID)
 		if handled {
 			if failure != nil {
@@ -3871,7 +3871,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		writeError(w, failure.status, failure.message)
 		return
 	}
-	commentBackedTask := task.TriggerCommentID.Valid || len(task.CoalescedCommentIds) > 0
+	commentBackedTask := task.TriggerCommentID.Valid || len(uuidsToStrings(task.CoalescedCommentIds)) > 0
 	requeueFailedClaim := func(reason string) {
 		if _, err := h.TaskService.RequeueTaskAfterClaimFailure(r.Context(), *task); err != nil {
 			slog.Error("task claim: failed to requeue after finalization error",

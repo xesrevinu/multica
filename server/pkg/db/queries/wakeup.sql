@@ -184,7 +184,7 @@ INSERT INTO agent_task_queue (
 )
 SELECT
     ?1 AS agent_id, ?2 AS runtime_id, ?3 AS issue_id, 'queued' AS status, ?4 AS priority, sqlc.narg(trigger_comment_id) AS trigger_comment_id,
-    COALESCE(sqlc.narg(coalesced_comment_ids), '{}') AS coalesced_comment_ids,
+    COALESCE(sqlc.narg(coalesced_comment_ids), '[]') AS coalesced_comment_ids,
     sqlc.narg(trigger_summary) AS trigger_summary,
     COALESCE(sqlc.narg('force_fresh_session'), FALSE) AS force_fresh_session,
     COALESCE(sqlc.narg('is_leader_task'), FALSE) AS is_leader_task,

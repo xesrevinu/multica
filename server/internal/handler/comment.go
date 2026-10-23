@@ -2445,7 +2445,7 @@ func (h *Handler) mergeCommentIntoPendingTask(ctx context.Context, issue db.Issu
 		"issue_id", uuidToString(issue.ID),
 		"agent_id", uuidToString(trigger.Agent.ID),
 		"new_trigger_comment_id", uuidToString(newTriggerCommentID),
-		"coalesced_count", len(row.CoalescedCommentIds))
+		"coalesced_count", len(uuidsToStrings(row.CoalescedCommentIds)))
 	return commentMergeSucceeded
 }
 
@@ -2475,7 +2475,7 @@ func (h *Handler) registerPlannedCommentForActiveTask(ctx context.Context, issue
 		"issue_id", uuidToString(issue.ID),
 		"agent_id", uuidToString(agentID),
 		"comment_id", uuidToString(commentID),
-		"coalesced_count", len(row.CoalescedCommentIds))
+		"coalesced_count", len(uuidsToStrings(row.CoalescedCommentIds)))
 	return true, nil
 }
 

@@ -320,7 +320,7 @@ INSERT INTO agent_task_queue (
 )
 SELECT
     ?1 AS agent_id, ?2 AS runtime_id, ?3 AS issue_id, 'queued' AS status, ?4 AS priority, sqlc.narg(trigger_comment_id) AS trigger_comment_id,
-    COALESCE(sqlc.narg(coalesced_comment_ids), '{}') AS coalesced_comment_ids,
+    COALESCE(sqlc.narg(coalesced_comment_ids), '[]') AS coalesced_comment_ids,
     sqlc.narg(trigger_summary) AS trigger_summary,
     COALESCE(sqlc.narg('force_fresh_session'), FALSE) AS force_fresh_session,
     COALESCE(sqlc.narg('is_leader_task'), FALSE) AS is_leader_task,
@@ -365,7 +365,7 @@ INSERT INTO agent_task_queue (
 )
 SELECT
     ?1 AS agent_id, ?2 AS runtime_id, ?3 AS issue_id, 'deferred' AS status, ?4 AS priority, sqlc.narg(trigger_comment_id) AS trigger_comment_id,
-    COALESCE(sqlc.narg(coalesced_comment_ids), '{}') AS coalesced_comment_ids,
+    COALESCE(sqlc.narg(coalesced_comment_ids), '[]') AS coalesced_comment_ids,
     sqlc.narg(trigger_summary) AS trigger_summary,
     COALESCE(sqlc.narg('force_fresh_session'), FALSE) AS force_fresh_session,
     COALESCE(sqlc.narg('is_leader_task'), FALSE) AS is_leader_task,
@@ -808,7 +808,7 @@ UPDATE agent_task_queue
 SET status = 'queued',
     dispatched_at = NULL,
     prepare_lease_expires_at = NULL,
-    delivered_comment_ids = '{}'
+    delivered_comment_ids = '[]'
 WHERE id = @task_id
   AND runtime_id = @runtime_id
   AND status = 'dispatched'
