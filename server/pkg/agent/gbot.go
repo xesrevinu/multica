@@ -107,12 +107,15 @@ func (b *gbotBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 func gbotResult(stdout, stderr []byte, runErr error, elapsed time.Duration) Result {
 	result := Result{Status: "failed", DurationMs: elapsed.Milliseconds()}
 	parsed := gbotTaskResult{}
-	if err := json.Unmarshal(bytes.TrimSpace(stdout), &parsed); err != nil {
-		result.Error = "gbot returned no task result"
-		if runErr != nil {
-			result.Error = runErr.Error()
+	raw := bytes.TrimSpace(stdout)
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		// gbot --json may still print a banner or progress line before the
+		// result document; recover the last JSON object when present so a
+		// completed marker is not lost as a bare "exit status 1".
+		if obj := lastJSONObject(raw); len(obj) == 0 || json.Unmarshal(obj, &parsed) != nil {
+			result.Error = gbotNoResultError(runErr, stderr, raw)
+			return result
 		}
-		return result
 	}
 	result.SessionID = parsed.SessionID
 	result.Output = parsed.Reply
@@ -133,6 +136,44 @@ func gbotResult(stdout, stderr []byte, runErr error, elapsed time.Duration) Resu
 		}
 	}
 	return result
+}
+
+// lastJSONObject returns the last top-level JSON object in b, or nil.
+func lastJSONObject(b []byte) []byte {
+	for i := bytes.LastIndexByte(b, '{'); i >= 0; i = bytes.LastIndexByte(b[:i], '{') {
+		dec := json.NewDecoder(bytes.NewReader(b[i:]))
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err == nil {
+			return raw
+		}
+		if i == 0 {
+			break
+		}
+	}
+	return nil
+}
+
+func gbotNoResultError(runErr error, stderr, stdout []byte) string {
+	parts := make([]string, 0, 3)
+	if runErr != nil {
+		parts = append(parts, runErr.Error())
+	} else {
+		parts = append(parts, "gbot returned no task result")
+	}
+	if s := strings.TrimSpace(string(stderr)); s != "" {
+		parts = append(parts, "stderr: "+shortTail(s, 800))
+	}
+	if s := strings.TrimSpace(string(stdout)); s != "" {
+		parts = append(parts, "stdout: "+shortTail(s, 400))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func shortTail(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return "…" + s[len(s)-n:]
 }
 
 // GbotArtifactRootEnv overrides where gbot keeps run state outside checkouts.

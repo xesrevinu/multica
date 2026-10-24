@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,8 +20,21 @@ func TestGbotResultMapsTerminalStates(t *testing.T) {
 		t.Fatalf("unknown = %#v", unknown)
 	}
 	missing := gbotResult([]byte("not-json"), nil, nil, time.Second)
-	if missing.Status != "failed" || missing.Error != "gbot returned no task result" {
+	if missing.Status != "failed" || !strings.Contains(missing.Error, "gbot returned no task result") || !strings.Contains(missing.Error, "not-json") {
 		t.Fatalf("missing = %#v", missing)
+	}
+	// Prefixed junk before the result document must not collapse a completed
+	// marker into a bare process failure (OX-220: work done, exit status 1).
+	prefixed := gbotResult(
+		[]byte("starting…\n{\"status\":\"completed\",\"sessionId\":\"m2\",\"reply\":\"shipped\",\"exitCode\":0}\n"),
+		nil, fmt.Errorf("exit status 1"), time.Second,
+	)
+	if prefixed.Status != "completed" || prefixed.SessionID != "m2" || prefixed.Output != "shipped" {
+		t.Fatalf("prefixed completed = %#v", prefixed)
+	}
+	opaque := gbotResult(nil, []byte("Timed out before a terminal task marker.\n"), fmt.Errorf("exit status 1"), time.Second)
+	if opaque.Status != "failed" || !strings.Contains(opaque.Error, "exit status 1") || !strings.Contains(opaque.Error, "Timed out") {
+		t.Fatalf("opaque = %#v", opaque)
 	}
 }
 
