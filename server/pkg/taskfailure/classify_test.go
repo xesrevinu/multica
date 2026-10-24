@@ -95,6 +95,9 @@ func TestClassifyRules(t *testing.T) {
 		{"504 at end", "upstream returned 504", ReasonAgentProviderServerError},
 		{"service unavailable", "service unavailable, retry later", ReasonAgentProviderServerError},
 		{"bad gateway", "Bad Gateway: upstream rejected", ReasonAgentProviderServerError},
+		{"listAgents 417", `exit status 1; stderr: {"error":{"code":"render-failed","message":"listAgents failed: 417 Expectation Failed"}}`, ReasonAgentProviderServerError},
+		{"render-failed code", `{"error":{"code":"render-failed","message":"listAgents failed: 417 Expectation Failed"}}`, ReasonAgentProviderServerError},
+		{"expectation failed text", "listAgents failed: 417 Expectation Failed", ReasonAgentProviderServerError},
 
 		// 7. Provider network.
 		{"stream disconnected", "stream disconnected before completion", ReasonAgentProviderNetwork},

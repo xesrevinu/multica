@@ -33,6 +33,9 @@ var (
 	httpAuthCodeRe     = regexp.MustCompile(`(^|[^0-9])(401|403)([^0-9]|$)`)
 	httpQuotaCodeRe    = regexp.MustCompile(`(^|[^0-9])402([^0-9]|$)`)
 	httpCapacityCodeRe = regexp.MustCompile(`(^|[^0-9])(429|529)([^0-9]|$)`)
+	// 417 Expectation Failed is the Cursor gateway flake on listAgents;
+	// Multica must count it as infra attach, not process_failure.
+	httpInfraAttachCodeRe = regexp.MustCompile(`(^|[^0-9])417([^0-9]|$)`)
 )
 
 // concurrentRequestLimitWitness is emitted by Anthropic-compatible providers
@@ -188,7 +191,13 @@ func Classify(rawError string) Reason {
 		"internal error",
 		"service unavailable",
 		"bad gateway",
+		// Grok Bot / Cursor gateway attach flakes (listAgents 417 → render-failed).
+		// These are infra attach failures, not agent process_failure.
+		"listagents failed",
+		"render-failed",
+		"expectation failed",
 	),
+		httpInfraAttachCodeRe.MatchString(lower),
 		providerHTTP5xxRe.MatchString(lower):
 		return ReasonAgentProviderServerError
 

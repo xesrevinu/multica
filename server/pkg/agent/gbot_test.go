@@ -134,3 +134,60 @@ func TestGbotSessionFileWithoutIssueIsPerTask(t *testing.T) {
 		t.Fatalf("got %s", got)
 	}
 }
+
+func TestGbotAttachTaskIDReusesAcceptedInFlight(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ox-7.session.json")
+	body := `{"version":1,"taskId":"old-task","workspaceId":"ws-1","bot":"Heavy Rust Master","issue":"OX-7","delivery":"accepted"}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := gbotAttachTaskID(path, "ws-1", "Heavy Rust Master", "OX-7", "new-task")
+	if got != "old-task" {
+		t.Fatalf("got %q, want old-task (reattach)", got)
+	}
+}
+
+func TestGbotAttachTaskIDLeavesTerminalAlone(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ox-7.session.json")
+	body := `{"version":1,"taskId":"old-task","workspaceId":"ws-1","bot":"Heavy Rust Master","issue":"OX-7","delivery":"accepted","status":"completed"}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := gbotAttachTaskID(path, "ws-1", "Heavy Rust Master", "OX-7", "new-task")
+	if got != "new-task" {
+		t.Fatalf("got %q, want new-task after terminal status", got)
+	}
+}
+
+func TestGbotExecuteReattachesAcceptedSession(t *testing.T) {
+	exe, argsLog := writeFakeGbot(t, `echo '{"id":"b1","kind":"bot"}'; exit 0`)
+	root := t.TempDir()
+	session := filepath.Join(root, "multica", "gbot", "ws-1", "heavy-rust-master", "ox-7.session.json")
+	if err := os.MkdirAll(filepath.Dir(session), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"version":1,"taskId":"old-task","workspaceId":"ws-1","bot":"Heavy Rust Master","issue":"OX-7","delivery":"accepted"}`
+	if err := os.WriteFile(session, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := runFakeGbot(t, exe, map[string]string{
+		"MULTICA_GBOT_BOT":         "Heavy Rust Master",
+		"MULTICA_ISSUE_IDENTIFIER": "OX-7",
+		GbotArtifactRootEnv:        root,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "completed" {
+		t.Fatalf("result = %#v", result)
+	}
+	logged, _ := os.ReadFile(argsLog)
+	if !strings.Contains(string(logged), "--task-id old-task") {
+		t.Fatalf("expected reattach of old-task, args:\n%s", logged)
+	}
+	if strings.Contains(string(logged), "--task-id task-1") {
+		t.Fatalf("minted a new task id into a busy thread:\n%s", logged)
+	}
+}

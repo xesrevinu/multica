@@ -62,11 +62,16 @@ func (b *gbotBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 	}
 	issue := strings.TrimSpace(b.cfg.Env["MULTICA_ISSUE_IDENTIFIER"])
 	sessionFile := gbotSessionFile(b.cfg.Env, opts.WorkspaceID, bot, issue, b.cfg.TaskID)
+	// Persistent cloud thread: if a prior delivery was accepted and has not
+	// reached a terminal marker yet, reattach that same --task-id and re-poll.
+	// Minting a new Multica task id would post another continue into the busy
+	// thread (T5_rerun bounce).
+	taskID := gbotAttachTaskID(sessionFile, opts.WorkspaceID, bot, issue, b.cfg.TaskID)
 	args := []string{
 		"task", "run",
 		"--workspace-id", opts.WorkspaceID,
 		"--bot", bot,
-		"--task-id", b.cfg.TaskID,
+		"--task-id", taskID,
 		"--cwd", opts.Cwd,
 		"--session-file", sessionFile,
 		"--json",
@@ -195,6 +200,49 @@ func ArtifactRoot(env map[string]string, project string) string {
 		base = filepath.Join(home, ".cursor", "artifacts")
 	}
 	return filepath.Join(base, gbotSlug(project))
+}
+
+
+// gbotSessionState is the on-disk session written by grok-bot-cli.
+type gbotSessionState struct {
+	Version     int    `json:"version"`
+	TaskID      string `json:"taskId"`
+	WorkspaceID string `json:"workspaceId"`
+	Bot         string `json:"bot"`
+	Issue       string `json:"issue,omitempty"`
+	Delivery    string `json:"delivery"`
+	Status      string `json:"status,omitempty"`
+}
+
+// gbotAttachTaskID returns the session's task id when a prior delivery is still
+// in flight (accepted, no terminal status). Otherwise it returns wantTaskID so
+// a fresh Multica execution can mint a new cloud task id.
+func gbotAttachTaskID(sessionFile, workspaceID, bot, issue, wantTaskID string) string {
+	raw, err := os.ReadFile(sessionFile)
+	if err != nil {
+		return wantTaskID
+	}
+	var s gbotSessionState
+	if err := json.Unmarshal(raw, &s); err != nil || s.Version != 1 || s.TaskID == "" {
+		return wantTaskID
+	}
+	if s.WorkspaceID != workspaceID {
+		return wantTaskID
+	}
+	if s.Bot != "" && bot != "" && s.Bot != bot {
+		return wantTaskID
+	}
+	if issue != "" && s.Issue != "" && s.Issue != issue {
+		return wantTaskID
+	}
+	switch strings.ToLower(strings.TrimSpace(s.Status)) {
+	case "completed", "failed", "unknown":
+		return wantTaskID
+	}
+	if strings.ToLower(strings.TrimSpace(s.Delivery)) != "accepted" {
+		return wantTaskID
+	}
+	return s.TaskID
 }
 
 // gbotSessionFile keeps one session per issue (per task when there is no
