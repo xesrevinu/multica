@@ -82,11 +82,10 @@ func (b *gbotBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 	if strings.TrimSpace(prompt) != "" {
 		args = append(args, "--", prompt)
 	}
-	timeout := opts.Timeout
-	if timeout == 0 {
-		timeout = 30 * time.Minute
-	}
-	runCtx, cancel := runContext(ctx, timeout)
+	// Zero Timeout means no wall-clock deadline (same as other backends /
+	// runContext / MUL-3064). Do not invent a gbot-only 30m default — that
+	// SIGKILLed long Multica runs and surfaced as a false process crash (FX-179).
+	runCtx, cancel := runContext(ctx, opts.Timeout)
 	cmd, _, _ := b.cfg.commandAt(execName).execVia(runCtx, chooseDirectInvocation, lookedUp, args, b.cfg.Logger)
 	cmd.Dir = opts.Cwd
 	cmd.Env = buildEnv(b.cfg.Env)

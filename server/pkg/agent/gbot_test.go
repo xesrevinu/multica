@@ -191,3 +191,39 @@ func TestGbotExecuteReattachesAcceptedSession(t *testing.T) {
 		t.Fatalf("minted a new task id into a busy thread:\n%s", logged)
 	}
 }
+
+func TestGbotZeroTimeoutImposesNoWallDeadline(t *testing.T) {
+	// FX-179 regression: when ExecOptions.Timeout is unset/0, gbot must not
+	// invent a 30m wall clock. runContext already treats 0 as no deadline;
+	// Execute must pass opts.Timeout through unchanged (same as other backends).
+	opts := ExecOptions{Timeout: 0}
+	ctx, cancel := runContext(context.Background(), opts.Timeout)
+	defer cancel()
+	if deadline, ok := ctx.Deadline(); ok {
+		t.Fatalf("Timeout=0 set a wall deadline %v; want none so long Multica gbot runs are not SIGKILLed", deadline)
+	}
+
+	exe, _ := writeFakeGbot(t, `echo '{"id":"b1","kind":"bot"}'; exit 0`)
+	backend, err := New("gbot", Config{
+		ExecutablePath: exe,
+		TaskID:         "task-zero-timeout",
+		Env:            map[string]string{"MULTICA_GBOT_BOT": "Grok Bot"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := backend.Execute(context.Background(), "ping", ExecOptions{
+		WorkspaceID: "ws-1",
+		Cwd:         t.TempDir(),
+		Timeout:     0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range session.Messages {
+	}
+	result := <-session.Result
+	if result.Status != "completed" {
+		t.Fatalf("result = %#v", result)
+	}
+}
