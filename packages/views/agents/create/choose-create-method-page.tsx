@@ -3,10 +3,9 @@
 import { ChevronRight, FileText, MessageSquare } from "lucide-react";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { cn } from "@multica/ui/lib/utils";
-import { AppLink, useBackOrReplace, useNavigation } from "../../navigation";
+import { AppLink, useBackOrReplace } from "../../navigation";
 import { useT } from "../../i18n";
 import { AgentCreateShell } from "./create-shell";
-import { withSquadParam } from "./squad-param";
 
 /**
  * Entry route of agent creation: pick a method, then hand off to that method's
@@ -16,24 +15,18 @@ import { withSquadParam } from "./squad-param";
 export function ChooseCreateMethodPage() {
   const { t } = useT("agents");
   const paths = useWorkspacePaths();
-  const navigation = useNavigation();
   const backOrReplace = useBackOrReplace();
-  const squadId = navigation.searchParams.get("squad");
 
   return (
     <AgentCreateShell
-      title={
-        squadId
-          ? t(($) => $.creation_studio.squad_title)
-          : t(($) => $.creation_studio.title)
-      }
+      title={t(($) => $.creation_studio.title)}
       step={t(($) => $.creation_studio.step_choose)}
       onBack={() => backOrReplace(paths.agents())}
     >
       <main className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-10">
         <CreateMethodChooser
-          blankHref={withSquadParam(paths.newAgentManual(), squadId)}
-          aiHref={withSquadParam(paths.newAgentAi(), squadId)}
+          blankHref={paths.newAgentManual()}
+          aiHref={paths.newAgentAi()}
         />
       </main>
     </AgentCreateShell>

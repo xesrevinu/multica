@@ -3,11 +3,18 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { AlertTriangle, CircleCheck, OctagonX } from "lucide-react";
-import { useOrchFlowAction, type OrchFlowAction, type OrchTimeline } from "@multica/core/orchestrator";
+import {
+  flowCardMode,
+  useOrchFlowAction,
+  type OrchFlowAction,
+  type OrchTimeline,
+} from "@multica/core/orchestrator";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../../i18n";
 import { shortSha } from "../format";
+
+export { flowCardMode };
 
 export function useFlowAction(wsId: string, key: string) {
   const { t } = useT("orch");
@@ -21,17 +28,6 @@ export function useFlowAction(wsId: string, key: string) {
       },
     );
   return { run, pending: m.isPending };
-}
-
-type Mode = "acceptance" | "blocked" | "cancel_proposed" | null;
-
-export function flowCardMode(tl: OrchTimeline | null | undefined): Mode {
-  const i = tl?.issue;
-  if (!i?.orchestrated || i.status === "done" || i.status === "cancelled") return null;
-  if (i.phase === "awaiting_acceptance") return "acceptance";
-  if (i.phase === "cancel_proposed") return "cancel_proposed";
-  if (i.status === "blocked") return "blocked";
-  return null;
 }
 
 // FlowStateCard: the one decision the issue is waiting on, pinned above the

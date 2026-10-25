@@ -34,7 +34,6 @@ export function AiCreateAgentPage() {
   const paths = useWorkspacePaths();
   const navigation = useNavigation();
   const backOrReplace = useBackOrReplace();
-  const squadId = navigation.searchParams.get("squad");
 
   const builderSessions = useQuery(agentBuilderSessionListOptions(wsId));
   const sessions = builderSessions.data ?? [];
@@ -51,20 +50,15 @@ export function AiCreateAgentPage() {
     (sessionId: string, runtimeId: string | null) =>
       navigation.replace(
         createPathWithParams(paths.newAgentAiSession(sessionId), {
-          squad: squadId,
           runtime: runtimeId,
         }),
       ),
-    [navigation, paths, squadId],
+    [navigation, paths],
   );
 
   return (
     <AgentCreateShell
-      title={
-        squadId
-          ? t(($) => $.creation_studio.squad_title)
-          : t(($) => $.creation_studio.title)
-      }
+      title={t(($) => $.creation_studio.title)}
       step={t(($) => $.creation_studio.step_ai)}
       onBack={() => backOrReplace(paths.newAgent())}
       chips={

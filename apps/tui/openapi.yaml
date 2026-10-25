@@ -1,0 +1,2705 @@
+openapi: 3.1.0
+info:
+  title: Multica Workspace API
+  version: v1
+  description: >-
+    Read-only subset of the Multica internal workspace API consumed by
+    `multica-tui`. Multica does not publish an OpenAPI document for this
+    surface; this file is maintained by hand from the Go handlers in
+    `server/internal/handler` and the shared TypeScript types in
+    `packages/core/types`. Every request carries `Authorization: Bearer <token>`
+    and `X-Workspace-ID: <workspace uuid>`; the TUI injects both through the
+    HttpClient rather than per-operation parameters. Run `bun run generate`
+    after editing this file.
+servers:
+  - url: https://multica-api.home.internal
+    description: Self-hosted API server
+security:
+  - bearer: []
+paths:
+  /api/me:
+    get:
+      operationId: getMe
+      summary: Get the authenticated user
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/workspaces:
+    get:
+      operationId: listWorkspaces
+      summary: List workspaces the user belongs to
+      responses:
+        "200":
+          description: Workspaces
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Workspace"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/workspaces/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getWorkspace
+      summary: Get a workspace
+      responses:
+        "200":
+          description: Workspace
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Workspace"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/workspaces/{id}/members:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listMembers
+      summary: List workspace members with user identity
+      responses:
+        "200":
+          description: Members
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MemberWithUser"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/issues:
+    get:
+      operationId: listIssues
+      summary: List issues in the active workspace
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          schema:
+            type: integer
+        - name: q
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: statuses
+          in: query
+          description: Comma-separated status keys
+          schema:
+            type: string
+        - name: priority
+          in: query
+          schema:
+            type: string
+        - name: assignee_id
+          in: query
+          schema:
+            type: string
+        - name: assignee_types
+          in: query
+          description: Comma-separated assignee types (member, agent)
+          schema:
+            type: string
+        - name: creator_id
+          in: query
+          description: Filter to issues created by this user id
+          schema:
+            type: string
+        - name: involves_user_id
+          in: query
+          description: Issues assigned to the user's agents (excludes direct member assignment)
+          schema:
+            type: string
+        - name: project_id
+          in: query
+          schema:
+            type: string
+        - name: include_no_project
+          in: query
+          schema:
+            type: boolean
+        - name: label_ids
+          in: query
+          description: Comma-separated label IDs
+          schema:
+            type: string
+        - name: sort_by
+          in: query
+          schema:
+            type: string
+        - name: sort_direction
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+      responses:
+        "200":
+          description: Issues
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListIssuesResponse"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createIssue
+      summary: Create an issue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateIssueRequest"
+      responses:
+        "201":
+          description: Created issue
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Issue"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/issues/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getIssue
+      summary: Get an issue by ID or identifier
+      responses:
+        "200":
+          description: Issue
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Issue"
+        default:
+          $ref: "#/components/responses/Error"
+    put:
+      operationId: updateIssue
+      summary: Update an issue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateIssueRequest"
+      responses:
+        "200":
+          description: Updated issue
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Issue"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/issues/{id}/comments:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listIssueComments
+      summary: List comments on an issue
+      responses:
+        "200":
+          description: Comments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Comment"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createComment
+      summary: Create a comment on an issue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCommentRequest"
+      responses:
+        "201":
+          description: Created comment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Comment"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/issues/{id}/timeline:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listIssueTimeline
+      summary: List the merged activity and comment timeline of an issue
+      responses:
+        "200":
+          description: Timeline entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TimelineEntry"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/issues/{id}/task-runs:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listIssueTaskRuns
+      summary: List agent task runs for an issue
+      responses:
+        "200":
+          description: Task runs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AgentTask"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/issues/{id}/active-task:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getActiveTasksForIssue
+      summary: List active agent tasks for an issue
+      responses:
+        "200":
+          description: Active tasks
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActiveTasksResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/issues/{id}/tasks/{taskId}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+      - $ref: "#/components/parameters/TaskId"
+    post:
+      operationId: cancelTask
+      summary: Cancel a queued or running task on an issue
+      responses:
+        "200":
+          description: Cancelled task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentTask"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/issues/{id}/children:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listIssueChildren
+      summary: List sub-issues of an issue
+      responses:
+        "200":
+          description: Child issues
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChildIssuesResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/tasks/{taskId}/messages:
+    parameters:
+      - $ref: "#/components/parameters/TaskId"
+    get:
+      operationId: listTaskMessages
+      summary: List execution messages for a task
+      parameters:
+        - name: since
+          in: query
+          schema:
+            type: integer
+          description: Return messages with seq greater than this value
+      responses:
+        "200":
+          description: Task messages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TaskMessage"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/issue-statuses:
+    get:
+      operationId: listIssueStatuses
+      summary: List the workspace issue status catalog
+      parameters:
+        - name: include_archived
+          in: query
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Status catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListIssueStatusesResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/labels:
+    get:
+      operationId: listLabels
+      summary: List workspace labels
+      parameters:
+        - name: resource_type
+          in: query
+          schema:
+            type: string
+            enum: [issue, agent, skill]
+      responses:
+        "200":
+          description: Labels
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListLabelsResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/projects:
+    get:
+      operationId: listProjects
+      summary: List projects
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Projects
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListProjectsResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/projects/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getProject
+      summary: Get a project
+      responses:
+        "200":
+          description: Project
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/projects/{id}/resources:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listProjectResources
+      summary: List resources attached to a project
+      responses:
+        "200":
+          description: Project resources
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListProjectResourcesResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/agents:
+    get:
+      operationId: listAgents
+      summary: List agents
+      parameters:
+        - name: include_archived
+          in: query
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Agents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Agent"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/agents/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getAgent
+      summary: Get an agent
+      responses:
+        "200":
+          description: Agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/agents/{id}/tasks:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listAgentTasks
+      summary: List recent tasks executed by an agent
+      responses:
+        "200":
+          description: Tasks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AgentTask"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/agents/{id}/skills:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listAgentSkills
+      summary: List skills assigned to an agent
+      responses:
+        "200":
+          description: Skills
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SkillSummary"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/runtimes:
+    get:
+      operationId: listRuntimes
+      summary: List daemon-registered agent runtimes
+      parameters:
+        - name: owner
+          in: query
+          schema:
+            type: string
+            enum: [me]
+      responses:
+        "200":
+          description: Runtimes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Runtime"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/skills:
+    get:
+      operationId: listSkills
+      summary: List workspace skills without their SKILL.md bodies
+      responses:
+        "200":
+          description: Skills
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SkillSummary"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/skills/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getSkill
+      summary: Get a skill with file contents
+      responses:
+        "200":
+          description: Skill
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillWithFiles"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/working-agents:
+    get:
+      operationId: listWorkingAgents
+      summary: List agents with at least one running task
+      responses:
+        "200":
+          description: Working agents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WorkingAgent"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/inbox:
+    get:
+      operationId: listInbox
+      summary: List unread and read inbox items
+      responses:
+        "200":
+          description: Inbox items
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/InboxItem"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/inbox/archived:
+    get:
+      operationId: listArchivedInbox
+      summary: List archived inbox items
+      responses:
+        "200":
+          description: Archived inbox items
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/InboxItem"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/inbox/unread-count:
+    get:
+      operationId: getInboxUnreadCount
+      summary: Unread inbox count for the current member
+      responses:
+        "200":
+          description: Count
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InboxUnreadCount"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/inbox/mark-all-read:
+    post:
+      operationId: markAllInboxRead
+      summary: Mark all inbox items as read
+      responses:
+        "200":
+          description: Done
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        default:
+          $ref: "#/components/responses/Error"
+  /api/inbox/{id}/read:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: markInboxRead
+      summary: Mark an inbox item as read
+      responses:
+        "200":
+          description: Updated item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InboxItem"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/inbox/{id}/unread:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: markInboxUnread
+      summary: Mark an inbox item as unread
+      responses:
+        "200":
+          description: Updated item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InboxItem"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/inbox/{id}/archive:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: archiveInbox
+      summary: Archive an inbox item
+      responses:
+        "200":
+          description: Archived item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InboxItem"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/inbox/{id}/unarchive:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: unarchiveInbox
+      summary: Restore an archived inbox item
+      responses:
+        "200":
+          description: Restored item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InboxItem"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/inbox/archive-all:
+    post:
+      operationId: archiveAllInbox
+      summary: Archive every active inbox item
+      responses:
+        "200":
+          description: Count archived
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InboxBatchResult"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/inbox/archive-all-read:
+    post:
+      operationId: archiveAllReadInbox
+      summary: Archive all read inbox items
+      responses:
+        "200":
+          description: Count archived
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InboxBatchResult"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/inbox/archive-completed:
+    post:
+      operationId: archiveCompletedInbox
+      summary: Archive inbox items whose linked issue is completed
+      responses:
+        "200":
+          description: Count archived
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InboxBatchResult"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/chat/sessions:
+    get:
+      operationId: listChatSessions
+      summary: List chat sessions
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, archived]
+      responses:
+        "200":
+          description: Sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ChatSession"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createChatSession
+      summary: Create a chat session with an agent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateChatSessionRequest"
+      responses:
+        "200":
+          description: Created session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatSession"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/chat/sessions/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getChatSession
+      summary: Get a chat session
+      responses:
+        "200":
+          description: Session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatSession"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/chat/sessions/{id}/messages:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listChatMessages
+      summary: List messages in a chat session
+      responses:
+        "200":
+          description: Messages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ChatMessage"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: sendChatMessage
+      summary: Send a message in a chat session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendChatMessageRequest"
+      responses:
+        "200":
+          description: Send result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SendChatMessageResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/chat/sessions/{id}/pin:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    patch:
+      operationId: setChatSessionPinned
+      summary: Pin or unpin a chat session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetChatSessionPinnedRequest"
+      responses:
+        "200":
+          description: Updated session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatSession"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/chat/sessions/{id}/archive:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    patch:
+      operationId: setChatSessionArchived
+      summary: Archive or restore a chat session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetChatSessionArchivedRequest"
+      responses:
+        "200":
+          description: Updated session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatSession"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/autopilots:
+    get:
+      operationId: listAutopilots
+      summary: List workspace autopilots
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, paused, archived]
+      responses:
+        "200":
+          description: Autopilots
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListAutopilotsResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/autopilots/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getAutopilot
+      summary: Get an autopilot and its triggers
+      responses:
+        "200":
+          description: Autopilot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetAutopilotResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/autopilots/{id}/trigger:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: triggerAutopilot
+      summary: Run an autopilot now
+      responses:
+        "200":
+          description: Triggered
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        default:
+          $ref: "#/components/responses/Error"
+  /api/autopilots/{id}/runs:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listAutopilotRuns
+      summary: List recent autopilot runs
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Runs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListAutopilotRunsResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/dashboard/usage/by-agent:
+    get:
+      operationId: getDashboardUsageByAgent
+      summary: Token usage totals by agent
+      parameters:
+        - name: days
+          in: query
+          schema:
+            type: integer
+        - name: project_id
+          in: query
+          schema:
+            type: string
+        - name: tz
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Usage rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DashboardUsageByAgent"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/comments/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    put:
+      operationId: updateComment
+      summary: Update a comment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCommentRequest"
+      responses:
+        "200":
+          description: Updated comment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Comment"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteComment
+      summary: Delete a comment
+      responses:
+        "204":
+          description: Deleted
+        default:
+          $ref: "#/components/responses/Error"
+  /api/comments/{id}/resolve:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: resolveComment
+      summary: Resolve a comment thread
+      responses:
+        "200":
+          description: Resolved comment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Comment"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: unresolveComment
+      summary: Reopen a resolved comment
+      responses:
+        "200":
+          description: Unresolved comment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Comment"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/issues/{id}/labels:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: attachLabel
+      summary: Attach a label to an issue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AttachLabelRequest"
+      responses:
+        "200":
+          description: Labels on the issue
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IssueLabelsResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/issues/{id}/labels/{labelId}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+      - $ref: "#/components/parameters/LabelId"
+    delete:
+      operationId: detachLabel
+      summary: Detach a label from an issue
+      responses:
+        "200":
+          description: Labels on the issue
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IssueLabelsResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/orchestrator/issues:
+    get:
+      operationId: listOrchIssues
+      summary: List orchestrator attention issues
+      parameters:
+        - name: settled_limit
+          in: query
+          schema:
+            type: integer
+        - name: project
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Issue-centric orchestrator rows
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrchIssuesResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/orchestrator/issues/{key}/timeline:
+    get:
+      operationId: getOrchIssueTimeline
+      summary: Orchestrator timeline for one issue
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Timeline payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrchTimeline"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/orchestrator/flow/{key}/{action}:
+    post:
+      operationId: orchFlowAction
+      summary: Member flow control (accept/reject/unblock/cancel/replay/...)
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: action
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [accept, reject, unblock, cancel, pause, resume, replay, resolve-conflict]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrchFlowActionRequest"
+      responses:
+        "200":
+          description: Updated flow metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        default:
+          $ref: "#/components/responses/Error"
+  /api/orchestrator/teams:
+    get:
+      operationId: listOrchTeams
+      summary: List orchestrator teams
+      responses:
+        "200":
+          description: Teams
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrchTeamsResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/orchestrator/issues/{key}/pr:
+    get:
+      operationId: getOrchIssuePR
+      summary: Orchestrator PR card for one issue
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: number
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: PR card payload (parsed by shared zod)
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        default:
+          $ref: "#/components/responses/Error"
+  /api/orchestrator/issues/{key}/pr/{op}:
+    post:
+      operationId: orchPROp
+      summary: Member PR op (update-branch / rerun-checks / merge / ...)
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: op
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [update-branch, rerun-checks, merge, sync-labels, delete-branch]
+        - name: number
+          in: query
+          schema:
+            type: integer
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrchPROpRequest"
+      responses:
+        "200":
+          description: Op result
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        default:
+          $ref: "#/components/responses/Error"
+  /api/orchestrator/worktrees:
+    get:
+      operationId: listOrchWorktrees
+      summary: List orchestrator worktrees
+      parameters:
+        - name: issue
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Worktrees payload (parsed by shared zod)
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        default:
+          $ref: "#/components/responses/Error"
+  /api/orchestrator/teams/{project}/pause:
+    post:
+      operationId: pauseOrchTeam
+      summary: Pause orchestrator for a project
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrchFlowActionRequest"
+      responses:
+        "200":
+          description: Updated team
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        default:
+          $ref: "#/components/responses/Error"
+  /api/orchestrator/teams/{project}/resume:
+    post:
+      operationId: resumeOrchTeam
+      summary: Resume orchestrator for a project
+      parameters:
+        - name: project
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Updated team
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        default:
+          $ref: "#/components/responses/Error"
+  /api/issues/{id}/pull-requests:
+    get:
+      operationId: listIssuePullRequests
+      summary: Linked pull requests for an issue
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Linked PRs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IssuePullRequestsResponse"
+        default:
+          $ref: "#/components/responses/Error"
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: Personal access token (`mul_...`) or CLI token
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      schema:
+        type: string
+    LabelId:
+      name: labelId
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    Error:
+      description: Error envelope written by the server for every non-2xx status
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+  schemas:
+    ApiError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+    User:
+      type: object
+      required: [id, name, email, avatar_url, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+        avatar_url:
+          type: [string, "null"]
+        language:
+          type: [string, "null"]
+        timezone:
+          type: [string, "null"]
+        profile_description:
+          type: string
+        created_at:
+          type: string
+        updated_at:
+          type: string
+    WorkspaceRepo:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+        description:
+          type: string
+    Workspace:
+      type: object
+      required: [id, name, slug, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type: [string, "null"]
+        context:
+          type: [string, "null"]
+        repos:
+          type: [array, "null"]
+          items:
+            $ref: "#/components/schemas/WorkspaceRepo"
+        issue_prefix:
+          type: string
+        avatar_url:
+          type: [string, "null"]
+        created_at:
+          type: string
+        updated_at:
+          type: string
+    MemberWithUser:
+      type: object
+      required: [id, workspace_id, user_id, role, created_at, name, email]
+      properties:
+        id:
+          type: string
+        workspace_id:
+          type: string
+        user_id:
+          type: string
+        role:
+          type: string
+          enum: [owner, admin, member]
+        created_at:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+        avatar_url:
+          type: [string, "null"]
+    Label:
+      type: object
+      required: [id, workspace_id, name, color, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        workspace_id:
+          type: string
+        resource_type:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        color:
+          type: string
+        usage_count:
+          type: integer
+        created_at:
+          type: string
+        updated_at:
+          type: string
+    ListLabelsResponse:
+      type: object
+      required: [labels, total]
+      properties:
+        labels:
+          type: array
+          items:
+            $ref: "#/components/schemas/Label"
+        total:
+          type: integer
+    IssueStatusCategory:
+      type: string
+      enum: [backlog, todo, in_progress, in_review, done, blocked, cancelled]
+    IssueStatusEntry:
+      type: object
+      required: [id, workspace_id, key, name, category, color, is_system, position, archived_at, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        workspace_id:
+          type: string
+        key:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        category:
+          $ref: "#/components/schemas/IssueStatusCategory"
+        color:
+          type: string
+        is_system:
+          type: boolean
+        position:
+          type: integer
+        archived_at:
+          type: [string, "null"]
+        created_at:
+          type: string
+        updated_at:
+          type: string
+    ListIssueStatusesResponse:
+      type: object
+      required: [statuses, categories, total]
+      properties:
+        statuses:
+          type: array
+          items:
+            $ref: "#/components/schemas/IssueStatusEntry"
+        categories:
+          type: array
+          items:
+            $ref: "#/components/schemas/IssueStatusCategory"
+        total:
+          type: integer
+    IssuePriority:
+      type: string
+      enum: [urgent, high, medium, low, none]
+    CreateIssueRequest:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+        description:
+          type: [string, "null"]
+        status:
+          type: string
+        priority:
+          $ref: "#/components/schemas/IssuePriority"
+        assignee_type:
+          oneOf:
+            - $ref: "#/components/schemas/ActorType"
+            - type: "null"
+        assignee_id:
+          type: [string, "null"]
+        parent_issue_id:
+          type: [string, "null"]
+        project_id:
+          type: [string, "null"]
+        start_date:
+          type: [string, "null"]
+        due_date:
+          type: [string, "null"]
+    UpdateIssueRequest:
+      type: object
+      properties:
+        expected_revision:
+          type: integer
+        title:
+          type: string
+        description:
+          type: [string, "null"]
+        status:
+          type: string
+        priority:
+          $ref: "#/components/schemas/IssuePriority"
+        assignee_type:
+          oneOf:
+            - $ref: "#/components/schemas/ActorType"
+            - type: "null"
+        assignee_id:
+          type: [string, "null"]
+        project_id:
+          type: [string, "null"]
+        start_date:
+          type: [string, "null"]
+        due_date:
+          type: [string, "null"]
+        suppress_run:
+          type: boolean
+        handoff_note:
+          type: string
+    CreateCommentRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+        type:
+          type: string
+          default: comment
+        parent_id:
+          type: [string, "null"]
+    ActorType:
+      type: string
+      enum: [member, agent, squad]
+    Issue:
+      type: object
+      required:
+        - id
+        - workspace_id
+        - number
+        - identifier
+        - title
+        - description
+        - status
+        - priority
+        - assignee_type
+        - assignee_id
+        - creator_type
+        - creator_id
+        - parent_issue_id
+        - project_id
+        - position
+        - start_date
+        - due_date
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        workspace_id:
+          type: string
+        number:
+          type: integer
+        identifier:
+          type: string
+        title:
+          type: string
+        description:
+          type: [string, "null"]
+        status:
+          type: string
+          description: Status key; one of the 7 built-in categories or a workspace custom key
+        status_category:
+          $ref: "#/components/schemas/IssueStatusCategory"
+        status_name:
+          type: string
+        priority:
+          $ref: "#/components/schemas/IssuePriority"
+        assignee_type:
+          oneOf:
+            - $ref: "#/components/schemas/ActorType"
+            - type: "null"
+        assignee_id:
+          type: [string, "null"]
+        creator_type:
+          type: string
+        creator_id:
+          type: string
+        parent_issue_id:
+          type: [string, "null"]
+        project_id:
+          type: [string, "null"]
+        position:
+          type: number
+        stage:
+          type: [integer, "null"]
+        start_date:
+          type: [string, "null"]
+        due_date:
+          type: [string, "null"]
+        metadata:
+          type: object
+          additionalProperties: true
+        labels:
+          type: array
+          items:
+            $ref: "#/components/schemas/Label"
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        revision:
+          type: integer
+        last_activity_at:
+          type: [string, "null"]
+    ListIssuesResponse:
+      type: object
+      required: [issues, total]
+      properties:
+        issues:
+          type: array
+          items:
+            $ref: "#/components/schemas/Issue"
+        total:
+          type: integer
+    ChildIssuesResponse:
+      type: object
+      required: [issues]
+      properties:
+        issues:
+          type: array
+          items:
+            $ref: "#/components/schemas/Issue"
+    Comment:
+      type: object
+      required: [id, issue_id, author_type, author_id, content, type, parent_id, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        issue_id:
+          type: string
+        author_type:
+          type: string
+          enum: [member, agent, system]
+        author_id:
+          type: string
+        content:
+          type: string
+        type:
+          type: string
+          description: comment, status_change, progress_update, or system
+        parent_id:
+          type: [string, "null"]
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        revision:
+          type: integer
+        resolved_at:
+          type: [string, "null"]
+        source_task_id:
+          type: [string, "null"]
+    TimelineEntry:
+      type: object
+      required: [type, id, actor_type, actor_id, created_at]
+      properties:
+        type:
+          type: string
+          enum: [activity, comment]
+        id:
+          type: string
+        actor_type:
+          type: string
+        actor_id:
+          type: string
+        actor_name:
+          type: string
+        created_at:
+          type: string
+        action:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+        content:
+          type: string
+        parent_id:
+          type: [string, "null"]
+        updated_at:
+          type: string
+        comment_type:
+          type: string
+        resolved_at:
+          type: [string, "null"]
+        source_task_id:
+          type: [string, "null"]
+    AgentTaskStatus:
+      type: string
+      enum: [queued, dispatched, waiting_local_directory, running, completed, failed, cancelled]
+    TaskUsage:
+      type: object
+      required: [model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens]
+      properties:
+        provider:
+          type: string
+        model:
+          type: string
+        input_tokens:
+          type: integer
+        output_tokens:
+          type: integer
+        cache_read_tokens:
+          type: integer
+        cache_write_tokens:
+          type: integer
+        cost_usd_ticks:
+          type: integer
+    AgentTask:
+      type: object
+      required: [id, agent_id, runtime_id, issue_id, status, priority, dispatched_at, started_at, completed_at, error, created_at]
+      properties:
+        id:
+          type: string
+        agent_id:
+          type: string
+        runtime_id:
+          type: string
+        issue_id:
+          type: string
+          description: Empty string when the task has no linked issue
+        status:
+          $ref: "#/components/schemas/AgentTaskStatus"
+        priority:
+          type: integer
+        dispatched_at:
+          type: [string, "null"]
+        started_at:
+          type: [string, "null"]
+        completed_at:
+          type: [string, "null"]
+        error:
+          type: [string, "null"]
+        failure_reason:
+          type: string
+        created_at:
+          type: string
+        chat_session_id:
+          type: string
+        autopilot_run_id:
+          type: string
+        parent_task_id:
+          type: string
+        attempt:
+          type: integer
+        trigger_comment_id:
+          type: string
+        trigger_summary:
+          type: string
+        handoff_note:
+          type: string
+        kind:
+          type: string
+          enum: [comment, autopilot, chat, quick_create, direct]
+        relative_work_dir:
+          type: string
+        relative_durable_work_dir:
+          type: string
+        branch_name:
+          type: string
+        usage:
+          type: array
+          items:
+            $ref: "#/components/schemas/TaskUsage"
+    AgentSkillSummary:
+      type: object
+      required: [id, name, description]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        enabled:
+          type: boolean
+    Agent:
+      type: object
+      required:
+        - id
+        - workspace_id
+        - runtime_id
+        - name
+        - description
+        - instructions
+        - avatar_url
+        - runtime_mode
+        - custom_args
+        - visibility
+        - status
+        - max_concurrent_tasks
+        - model
+        - owner_id
+        - skills
+        - created_at
+        - updated_at
+        - archived_at
+      properties:
+        id:
+          type: string
+        workspace_id:
+          type: string
+        runtime_id:
+          type: string
+          description: Empty string when the agent is unbound from any runtime
+        runtime_bound:
+          type: boolean
+        name:
+          type: string
+        description:
+          type: string
+        instructions:
+          type: string
+        system_key:
+          type: string
+        avatar_url:
+          type: [string, "null"]
+        runtime_mode:
+          type: string
+          enum: [local, cloud]
+        runtime_config:
+          type: object
+          additionalProperties: true
+        custom_args:
+          type: [array, "null"]
+          items:
+            type: string
+        has_custom_env:
+          type: boolean
+        custom_env_key_count:
+          type: integer
+        mcp_config_redacted:
+          type: boolean
+        visibility:
+          type: string
+          enum: [workspace, private]
+        permission_mode:
+          type: string
+          enum: [private, public_to]
+        status:
+          type: string
+          enum: [idle, working, blocked, error, offline]
+        max_concurrent_tasks:
+          type: integer
+        model:
+          type: string
+        thinking_level:
+          type: string
+        service_tier:
+          type: string
+        owner_id:
+          type: [string, "null"]
+        skills:
+          type: [array, "null"]
+          items:
+            $ref: "#/components/schemas/AgentSkillSummary"
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        archived_at:
+          type: [string, "null"]
+        archived_by:
+          type: [string, "null"]
+    Runtime:
+      type: object
+      required:
+        - id
+        - workspace_id
+        - daemon_id
+        - name
+        - runtime_mode
+        - provider
+        - status
+        - device_info
+        - owner_id
+        - last_seen_at
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        workspace_id:
+          type: string
+        daemon_id:
+          type: [string, "null"]
+        name:
+          type: string
+        custom_name:
+          type: [string, "null"]
+        runtime_mode:
+          type: string
+          enum: [local, cloud]
+        provider:
+          type: string
+        launch_header:
+          type: string
+        status:
+          type: string
+          enum: [online, offline]
+        device_info:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        owner_id:
+          type: [string, "null"]
+        visibility:
+          type: string
+          enum: [private, public]
+        profile_id:
+          type: [string, "null"]
+        last_seen_at:
+          type: [string, "null"]
+        created_at:
+          type: string
+        updated_at:
+          type: string
+    Project:
+      type: object
+      required:
+        - id
+        - workspace_id
+        - title
+        - description
+        - icon
+        - status
+        - priority
+        - lead_type
+        - lead_id
+        - start_date
+        - due_date
+        - created_at
+        - updated_at
+        - issue_count
+        - done_count
+      properties:
+        id:
+          type: string
+        workspace_id:
+          type: string
+        title:
+          type: string
+        description:
+          type: [string, "null"]
+        icon:
+          type: [string, "null"]
+        status:
+          type: string
+          enum: [planned, in_progress, paused, completed, cancelled]
+        priority:
+          $ref: "#/components/schemas/IssuePriority"
+        lead_type:
+          type: [string, "null"]
+        lead_id:
+          type: [string, "null"]
+        start_date:
+          type: [string, "null"]
+        due_date:
+          type: [string, "null"]
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        issue_count:
+          type: integer
+        done_count:
+          type: integer
+        resource_count:
+          type: integer
+    ListProjectsResponse:
+      type: object
+      required: [projects, total]
+      properties:
+        projects:
+          type: array
+          items:
+            $ref: "#/components/schemas/Project"
+        total:
+          type: integer
+    ProjectResource:
+      type: object
+      required: [id, project_id, workspace_id, resource_type, resource_ref, label, position, created_at]
+      properties:
+        id:
+          type: string
+        project_id:
+          type: string
+        workspace_id:
+          type: string
+        resource_type:
+          type: string
+          description: github_repo or local_directory
+        resource_ref:
+          type: object
+          additionalProperties: true
+        label:
+          type: [string, "null"]
+        position:
+          type: number
+        created_at:
+          type: string
+        created_by:
+          type: [string, "null"]
+    ListProjectResourcesResponse:
+      type: object
+      required: [resources, total]
+      properties:
+        resources:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProjectResource"
+        total:
+          type: integer
+    SkillSummary:
+      type: object
+      required: [id, workspace_id, name, description, created_by, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        workspace_id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        config:
+          type: object
+          additionalProperties: true
+        created_by:
+          type: [string, "null"]
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        enabled:
+          type: boolean
+    SkillFile:
+      type: object
+      required: [path, content]
+      properties:
+        path:
+          type: string
+        content:
+          type: string
+    SkillWithFiles:
+      type: object
+      required: [id, workspace_id, name, description, created_by, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        workspace_id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        config:
+          type: object
+          additionalProperties: true
+        created_by:
+          type: [string, "null"]
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        enabled:
+          type: boolean
+        files:
+          type: array
+          items:
+            $ref: "#/components/schemas/SkillFile"
+    ActiveTasksResponse:
+      type: object
+      required: [tasks]
+      properties:
+        tasks:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentTask"
+    TaskMessage:
+      type: object
+      required: [task_id, seq, type]
+      properties:
+        task_id:
+          type: string
+        issue_id:
+          type: string
+        seq:
+          type: integer
+        type:
+          type: string
+        tool:
+          type: string
+        content:
+          type: string
+        output:
+          type: string
+        created_at:
+          type: string
+    WorkingAgent:
+      type: object
+      required: [id, name, avatar_url, running_task_count, issue_ids]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        avatar_url:
+          type: [string, "null"]
+        running_task_count:
+          type: integer
+        issue_ids:
+          type: [array, "null"]
+          items:
+            type: string
+    InboxSeverity:
+      type: string
+      enum: [action_required, attention, info]
+    InboxItem:
+      type: object
+      required: [id, workspace_id, recipient_type, recipient_id, type, severity, title, read, archived, created_at]
+      properties:
+        id:
+          type: string
+        workspace_id:
+          type: string
+        recipient_type:
+          type: string
+          enum: [member, agent]
+        recipient_id:
+          type: string
+        actor_type:
+          type: [string, "null"]
+        actor_id:
+          type: [string, "null"]
+        type:
+          type: string
+        severity:
+          $ref: "#/components/schemas/InboxSeverity"
+        issue_id:
+          type: [string, "null"]
+        title:
+          type: string
+        body:
+          type: [string, "null"]
+        issue_status:
+          type: [string, "null"]
+        issue_priority:
+          type: [string, "null"]
+        read:
+          type: boolean
+        archived:
+          type: boolean
+        created_at:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+    InboxUnreadCount:
+      type: object
+      required: [count]
+      properties:
+        count:
+          type: integer
+    InboxBatchResult:
+      type: object
+      required: [count]
+      properties:
+        count:
+          type: integer
+    ChatLastMessage:
+      type: object
+      required: [content, role, created_at]
+      properties:
+        content:
+          type: string
+        role:
+          type: string
+          enum: [user, assistant]
+        created_at:
+          type: string
+        failure_reason:
+          type: [string, "null"]
+        message_kind:
+          type: string
+    ChatSession:
+      type: object
+      required: [id, workspace_id, agent_id, creator_id, title, status, has_unread, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        workspace_id:
+          type: string
+        agent_id:
+          type: string
+        creator_id:
+          type: string
+        project_id:
+          type: [string, "null"]
+        title:
+          type: string
+        status:
+          type: string
+          enum: [active, archived]
+        has_unread:
+          type: boolean
+        unread_count:
+          type: integer
+        last_message:
+          oneOf:
+            - $ref: "#/components/schemas/ChatLastMessage"
+            - type: "null"
+        pinned:
+          type: boolean
+        created_at:
+          type: string
+        updated_at:
+          type: string
+    CreateChatSessionRequest:
+      type: object
+      required: [agent_id]
+      properties:
+        agent_id:
+          type: string
+        title:
+          type: string
+        project_id:
+          type: [string, "null"]
+    ChatMessage:
+      type: object
+      required: [id, chat_session_id, role, content, created_at]
+      properties:
+        id:
+          type: string
+        chat_session_id:
+          type: string
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+        task_id:
+          type: [string, "null"]
+        created_at:
+          type: string
+        failure_reason:
+          type: [string, "null"]
+        elapsed_ms:
+          type: [integer, "null"]
+        message_kind:
+          type: string
+    SendChatMessageRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+        attachment_ids:
+          type: array
+          items:
+            type: string
+    SendChatMessageResponse:
+      type: object
+      additionalProperties: true
+    SetChatSessionPinnedRequest:
+      type: object
+      required: [pinned]
+      properties:
+        pinned:
+          type: boolean
+    SetChatSessionArchivedRequest:
+      type: object
+      required: [archived]
+      properties:
+        archived:
+          type: boolean
+    Autopilot:
+      type: object
+      required: [id, workspace_id, title, assignee_id, status, execution_mode, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        workspace_id:
+          type: string
+        title:
+          type: string
+        description:
+          type: [string, "null"]
+        project_id:
+          type: [string, "null"]
+        assignee_type:
+          type: string
+          enum: [agent, squad]
+        assignee_id:
+          type: string
+        status:
+          type: string
+          enum: [active, paused, archived]
+        pause_reason:
+          type: [string, "null"]
+        execution_mode:
+          type: string
+        issue_title_template:
+          type: [string, "null"]
+        last_run_at:
+          type: [string, "null"]
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        trigger_kinds:
+          type: array
+          items:
+            type: string
+        next_run_at:
+          type: [string, "null"]
+        last_run_status:
+          type: [string, "null"]
+        can_write:
+          type: boolean
+    AutopilotTrigger:
+      type: object
+      required: [id, autopilot_id, kind, enabled]
+      properties:
+        id:
+          type: string
+        autopilot_id:
+          type: string
+        kind:
+          type: string
+        enabled:
+          type: boolean
+        cron_expression:
+          type: [string, "null"]
+        timezone:
+          type: [string, "null"]
+        next_run_at:
+          type: [string, "null"]
+        label:
+          type: [string, "null"]
+        last_fired_at:
+          type: [string, "null"]
+    AutopilotRun:
+      type: object
+      required: [id, autopilot_id, source, status, triggered_at, created_at]
+      properties:
+        id:
+          type: string
+        autopilot_id:
+          type: string
+        source:
+          type: string
+        status:
+          type: string
+        issue_id:
+          type: [string, "null"]
+        task_id:
+          type: [string, "null"]
+        triggered_at:
+          type: string
+        completed_at:
+          type: [string, "null"]
+        failure_reason:
+          type: [string, "null"]
+        created_at:
+          type: string
+    ListAutopilotsResponse:
+      type: object
+      required: [autopilots, total]
+      properties:
+        autopilots:
+          type: array
+          items:
+            $ref: "#/components/schemas/Autopilot"
+        total:
+          type: integer
+    GetAutopilotResponse:
+      type: object
+      required: [autopilot, triggers]
+      properties:
+        autopilot:
+          $ref: "#/components/schemas/Autopilot"
+        triggers:
+          type: array
+          items:
+            $ref: "#/components/schemas/AutopilotTrigger"
+    ListAutopilotRunsResponse:
+      type: object
+      required: [runs, total]
+      properties:
+        runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/AutopilotRun"
+        total:
+          type: integer
+    ListAutopilotRunsParams:
+      type: object
+      properties:
+        limit:
+          type: integer
+        offset:
+          type: integer
+    DashboardUsageByAgent:
+      type: object
+      required: [agent_id, provider, model, input_tokens, output_tokens, task_count]
+      properties:
+        agent_id:
+          type: string
+        provider:
+          type: string
+        model:
+          type: string
+        input_tokens:
+          type: integer
+        output_tokens:
+          type: integer
+        cache_read_tokens:
+          type: integer
+        cache_write_tokens:
+          type: integer
+        task_count:
+          type: integer
+    UpdateCommentRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+        expected_revision:
+          type: integer
+    AttachLabelRequest:
+      type: object
+      required: [label_id]
+      properties:
+        label_id:
+          type: string
+    IssueLabelsResponse:
+      type: object
+      required: [labels]
+      properties:
+        labels:
+          type: array
+          items:
+            $ref: "#/components/schemas/Label"
+        issue_revision:
+          type: integer
+
+    OrchAttention:
+      type: object
+      required: [bucket, since]
+      properties:
+        bucket:
+          type: string
+          enum: [needs_you, running, queued, settled]
+        reason:
+          type: [string, "null"]
+        since:
+          type: string
+    OrchRun:
+      type: object
+      required: [task_id, agent_id, agent, status, created_at]
+      properties:
+        task_id:
+          type: string
+        agent_id:
+          type: string
+        agent:
+          type: string
+        status:
+          type: string
+        created_at:
+          type: string
+        started_at:
+          type: [string, "null"]
+        ended_at:
+          type: [string, "null"]
+        error:
+          type: [string, "null"]
+    OrchPRSummary:
+      type: object
+      required: [number, url, title, state, additions, deletions, changed_files, repo]
+      properties:
+        number:
+          type: integer
+        url:
+          type: string
+        title:
+          type: string
+        state:
+          type: string
+        branch:
+          type: [string, "null"]
+        head_sha:
+          type: [string, "null"]
+        additions:
+          type: integer
+        deletions:
+          type: integer
+        changed_files:
+          type: integer
+        checks:
+          type: [string, "null"]
+        mergeable:
+          type: [string, "null"]
+        merge_state:
+          type: [string, "null"]
+        repo:
+          type: string
+    OrchIssue:
+      type: object
+      required: [id, key, number, title, status, priority, labels, orchestrated, paused, attention, children, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        key:
+          type: string
+        number:
+          type: integer
+        title:
+          type: string
+        status:
+          type: string
+        priority:
+          type: string
+        project:
+          type: object
+          required: [id, title]
+          properties:
+            id: { type: string }
+            title: { type: string }
+        parent_id:
+          type: [string, "null"]
+        assignee:
+          type: object
+          required: [type, id, name]
+          properties:
+            type: { type: string }
+            id: { type: string }
+            name: { type: string }
+        labels:
+          type: array
+          items: { type: string }
+        orchestrated:
+          type: boolean
+        mode:
+          type: [string, "null"]
+        phase:
+          type: [string, "null"]
+        risk:
+          type: [string, "null"]
+        expert:
+          type: [string, "null"]
+        paused:
+          type: boolean
+        attempts:
+          type: object
+          required: [impl, review, infra]
+          properties:
+            impl: { type: integer }
+            review: { type: integer }
+            infra: { type: integer }
+        attention:
+          $ref: "#/components/schemas/OrchAttention"
+        running:
+          $ref: "#/components/schemas/OrchRun"
+        pr:
+          $ref: "#/components/schemas/OrchPRSummary"
+        worktree:
+          type: object
+          properties:
+            path: { type: [string, "null"] }
+            branch: { type: [string, "null"] }
+        children:
+          type: object
+          required: [total, done]
+          properties:
+            total: { type: integer }
+            done: { type: integer }
+        created_at:
+          type: string
+        updated_at:
+          type: string
+    OrchIssuesResponse:
+      type: object
+      required: [issues]
+      properties:
+        issues:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrchIssue"
+        settled_total:
+          type: integer
+    OrchTransition:
+      type: object
+      required: [id, tid, state, created_at]
+      properties:
+        id: { type: integer }
+        tid: { type: string }
+        state: { type: string }
+        why: { type: [string, "null"] }
+        status: { type: [string, "null"] }
+        phase: { type: [string, "null"] }
+        assignee: { type: [string, "null"] }
+        error: { type: [string, "null"] }
+        created_at: { type: string }
+    OrchTimeline:
+      type: object
+      required: [issue]
+      properties:
+        issue:
+          $ref: "#/components/schemas/OrchIssue"
+        flow:
+          type: object
+          additionalProperties: { type: string }
+        runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrchRun"
+        transitions:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrchTransition"
+        waiting: { type: [string, "null"] }
+        last_error: { type: [string, "null"] }
+        backoff_until: { type: [string, "null"] }
+    OrchPROpRequest:
+      type: object
+      properties:
+        head_sha:
+          type: string
+    OrchFlowActionRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+    OrchTeam:
+      type: object
+      required: [project]
+      properties:
+        project: { type: string }
+        project_id: { type: string }
+        paused: { type: boolean }
+        preset: { type: string }
+        shadow: { type: boolean }
+    OrchTeamsResponse:
+      type: object
+      required: [teams]
+      properties:
+        teams:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrchTeam"
+    IssuePullRequest:
+      type: object
+      required: [id, number, title, state, html_url, repo_owner, repo_name]
+      properties:
+        id: { type: string }
+        number: { type: integer }
+        title: { type: string }
+        state: { type: string }
+        html_url: { type: string }
+        repo_owner: { type: string }
+        repo_name: { type: string }
+        branch: { type: [string, "null"] }
+        merged_at: { type: [string, "null"] }
+    IssuePullRequestsResponse:
+      type: object
+      properties:
+        pull_requests:
+          type: array
+          items:
+            $ref: "#/components/schemas/IssuePullRequest"

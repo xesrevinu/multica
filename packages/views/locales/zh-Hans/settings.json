@@ -296,10 +296,6 @@
         "label": "前往智能体",
         "description": "打开智能体列表。"
       },
-      "goSquads": {
-        "label": "前往小队",
-        "description": "打开小队列表。"
-      },
       "goUsage": {
         "label": "前往用量",
         "description": "打开用量分析。"

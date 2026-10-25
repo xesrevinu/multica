@@ -298,10 +298,6 @@
         "label": "Go to Agents",
         "description": "Open the agent list."
       },
-      "goSquads": {
-        "label": "Go to Squads",
-        "description": "Open the squad list."
-      },
       "goUsage": {
         "label": "Go to Usage",
         "description": "Open usage analytics."

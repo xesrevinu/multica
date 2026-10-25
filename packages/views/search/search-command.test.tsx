@@ -232,7 +232,6 @@ vi.mock("@multica/core/paths", async (importOriginal) => ({
     projects: () => "/ws-test/projects",
     autopilots: () => "/ws-test/autopilots",
     agents: () => "/ws-test/agents",
-    squads: () => "/ws-test/squads",
     usage: () => "/ws-test/usage",
     runtimes: () => "/ws-test/runtimes",
     skills: () => "/ws-test/skills",
@@ -240,7 +239,6 @@ vi.mock("@multica/core/paths", async (importOriginal) => ({
     issueDetail: (id: string) => `/ws-test/issues/${id}`,
     memberDetail: (id: string) => `/ws-test/members/${id}`,
     agentDetail: (id: string) => `/ws-test/agents/${id}`,
-    squadDetail: (id: string) => `/ws-test/squads/${id}`,
     projectDetail: (id: string) => `/ws-test/projects/${id}`,
   }),
 }));

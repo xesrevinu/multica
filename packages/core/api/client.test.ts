@@ -3171,3 +3171,27 @@ describe("ApiClient shared credential across windows", () => {
     expect(onUnauthorized).toHaveBeenCalledTimes(1);
   });
 });
+
+
+describe("ApiClient workspace id header (TUI/CLI token mode)", () => {
+  it("getWorkspaceId stamps X-Workspace-ID when no slug is set", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "me" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test", {
+      getToken: () => "tok",
+      getWorkspaceId: () => "ws-uuid-1",
+      identity: { platform: "multica-tui" },
+    });
+    await client.getMe();
+    const headers = fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>;
+    expect(headers["Authorization"]).toBe("Bearer tok");
+    expect(headers["X-Workspace-ID"]).toBe("ws-uuid-1");
+    expect(headers["X-Client-Platform"]).toBe("multica-tui");
+    expect(headers["X-Workspace-Slug"]).toBeUndefined();
+  });
+});

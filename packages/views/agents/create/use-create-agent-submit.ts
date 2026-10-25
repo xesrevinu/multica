@@ -36,14 +36,11 @@ export function classifyAgentCreateError(
  * Commits the draft and leaves the creation flow.
  *
  * Deliberately not optimistic: the flow navigates away on success, so the agent
- * has to exist before the destination renders. A failed squad join is reported
- * as a warning instead of failing the create — the agent is already committed
- * at that point and a retry would duplicate it.
+ * has to exist before the destination renders.
  */
 export function useCreateAgentSubmit(options: {
   draft: AgentDraft;
   runtimeId: string | null;
-  squadId: string | null;
   /** Creation-source attribution for the `agent_created` analytics event. */
   template?: string;
   duplicateSource?: Agent | null;

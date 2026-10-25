@@ -296,10 +296,6 @@
         "label": "エージェントへ移動",
         "description": "エージェント一覧を開きます。"
       },
-      "goSquads": {
-        "label": "Squadsへ移動",
-        "description": "Squad一覧を開きます。"
-      },
       "goUsage": {
         "label": "使用量へ移動",
         "description": "使用量分析を開きます。"

@@ -1,7 +1,7 @@
 "use client";
 
-import { Suspense, lazy, useRef, useState } from "react";
-import { Bot, Camera, ImagePlus, Loader2, Users, X } from "lucide-react";
+import {Suspense, lazy, useRef, useState} from "react";
+import { Bot, Camera, ImagePlus, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
@@ -29,7 +29,7 @@ const EmojiPicker = lazy(() =>
   })),
 );
 
-export type AvatarUploadVariant = "user" | "agent" | "squad" | "workspace";
+export type AvatarUploadVariant = "user" | "agent" | "workspace";
 
 interface AvatarUploadControlProps {
   /** Current avatar URL, raw (unresolved). `null` renders the empty state. */
@@ -86,9 +86,6 @@ function AvatarFallback({
 }) {
   if (variant === "agent") {
     return <Bot style={{ width: size * 0.5, height: size * 0.5 }} />;
-  }
-  if (variant === "squad") {
-    return <Users style={{ width: size * 0.5, height: size * 0.5 }} />;
   }
   const text =
     variant === "workspace"

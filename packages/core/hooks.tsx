@@ -1,17 +1,20 @@
 "use client";
 
 import { useCurrentWorkspace } from "./paths/hooks";
+import { getCurrentWsId } from "./platform/workspace-storage";
 
 /**
- * Returns the current workspace UUID. Throws if called outside a workspace route.
+ * Returns the current workspace UUID. Throws if none is selected.
  *
- * Implementation: derives from useCurrentWorkspace() (URL slug + React Query list).
- * No longer backed by a React Context — the WorkspaceIdProvider has been removed
- * as part of the slug-first refactor. The throw semantics are preserved so existing
- * callers that depend on non-null don't need guard code.
+ * Web: URL slug + React Query workspace list (`useCurrentWorkspace`).
+ * TUI/CLI token mode: `setCurrentWorkspace(null, workspaceId)` + ApiClient
+ * `getWorkspaceId` — same id mirror via `getCurrentWsId()` so shared
+ * mutation hooks (inbox, issues, …) work without a slug route.
  */
 export function useWorkspaceId(): string {
   const ws = useCurrentWorkspace();
-  if (!ws) throw new Error("useWorkspaceId: no workspace selected — ensure component renders inside a workspace route");
-  return ws.id;
+  if (ws) return ws.id;
+  const id = getCurrentWsId();
+  if (id) return id;
+  throw new Error("useWorkspaceId: no workspace selected — ensure component renders inside a workspace route (or TUI bootSharedApi)");
 }

@@ -60,7 +60,6 @@ describe("proxy legacy workspace route redirects", () => {
     ["issues", "/acme/issues"],
     ["projects", "/acme/projects"],
     ["agents", "/acme/agents"],
-    ["squads", "/acme/squads"],
     ["inbox", "/acme/inbox"],
     ["my-issues", "/acme/my-issues"],
     ["autopilots", "/acme/autopilots"],
@@ -79,8 +78,8 @@ describe("proxy legacy workspace route redirects", () => {
 
   it("preserves nested legacy paths and query strings", () => {
     expect(
-      redirectLocation("/squads/squad-123?view=members", sessionCookies),
-    ).toBe("https://app.multica.test/acme/squads/squad-123?view=members");
+      redirectLocation("/issues/issue-123?view=board", sessionCookies),
+    ).toBe("https://app.multica.test/acme/issues/issue-123?view=board");
   });
 
   it("sends logged-out legacy URLs to login", () => {
@@ -96,7 +95,7 @@ describe("proxy legacy workspace route redirects", () => {
     // instead. The deep-link query is dropped because feeding a legacy path
     // back through `next` would return here and loop.
     expect(
-      redirectLocation("/squads?view=members", { multica_logged_in: "1" }),
+      redirectLocation("/issues?view=board", { multica_logged_in: "1" }),
     ).toBe("https://app.multica.test/login");
   });
 
@@ -110,7 +109,35 @@ describe("proxy legacy workspace route redirects", () => {
   );
 
   it("does not redirect workspace-scoped URLs whose first segment is already a slug", () => {
-    expect(redirectLocation("/acme/squads", sessionCookies)).toBeNull();
+    expect(redirectLocation("/acme/issues", sessionCookies)).toBeNull();
+  });
+
+  it("redirects dead /squads bookmarks to workspace home", () => {
+    expect(redirectLocation("/squads?view=members", sessionCookies)).toBe(
+      "https://app.multica.test/acme/chat",
+    );
+    expect(
+      redirectLocation("/squads/squad-123?view=members", sessionCookies),
+    ).toBe("https://app.multica.test/acme/chat");
+    expect(redirectLocation("/acme/squads", sessionCookies)).toBe(
+      "https://app.multica.test/acme/chat",
+    );
+    expect(redirectLocation("/acme/squads/squad-123", sessionCookies)).toBe(
+      "https://app.multica.test/acme/chat",
+    );
+  });
+
+  it("sends logged-out /squads URLs to login", () => {
+    expect(redirectLocation("/squads")).toBe("https://app.multica.test/login");
+    expect(redirectLocation("/acme/squads")).toBe(
+      "https://app.multica.test/login",
+    );
+  });
+
+  it("sends slugless logged-in /squads to login", () => {
+    expect(
+      redirectLocation("/squads?view=members", { multica_logged_in: "1" }),
+    ).toBe("https://app.multica.test/login");
   });
 
   it("redirects app-host root URLs to the last workspace", () => {

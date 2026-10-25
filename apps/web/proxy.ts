@@ -14,7 +14,6 @@ const LEGACY_ROUTE_SEGMENTS = new Set([
   "issues",
   "projects",
   "agents",
-  "squads",
   "inbox",
   "chat",
   "my-issues",
@@ -57,11 +56,30 @@ export function proxy(req: NextRequest) {
 
   const hasSession = req.cookies.has("multica_logged_in");
   const lastSlug = req.cookies.get("last_workspace_slug")?.value;
+  const segments = pathname.split("/").filter(Boolean);
+  const firstSegment = segments[0] ?? "";
+
+  // Squads product is gone (orchestrator replaced it). Old /squads and
+  // /{slug}/squads bookmarks redirect to workspace home instead of a dead
+  // surface. assignee_type=squad decode stays in types for historical rows.
+  const isLegacySquads = firstSegment === "squads";
+  const isScopedSquads = segments[1] === "squads";
+  if (isLegacySquads || isScopedSquads) {
+    const url = req.nextUrl.clone();
+    const slug = isLegacySquads ? lastSlug : firstSegment;
+    if (!hasSession || !slug) {
+      url.pathname = "/login";
+      url.search = "";
+      return NextResponse.redirect(url);
+    }
+    url.pathname = `/${slug}/chat`;
+    url.search = "";
+    return NextResponse.redirect(url);
+  }
 
   // --- Legacy URL redirect: /issues/... → /{slug}/issues/... ---
   // Old bookmarks and clients that hit us before the slug migration would
   // otherwise 404 since the route moved under [workspaceSlug].
-  const firstSegment = pathname.split("/")[1] ?? "";
   if (LEGACY_ROUTE_SEGMENTS.has(firstSegment)) {
     const url = req.nextUrl.clone();
 

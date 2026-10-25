@@ -730,20 +730,6 @@ async function refreshWorkingAgentQueries(qc: QueryClient, wsId: string): Promis
   await Promise.all(filters.map((filter) => qc.invalidateQueries(filter)));
 }
 
-function invalidateSquadMemberStatusQueries(qc: QueryClient, wsId: string): void {
-  qc.invalidateQueries({
-    predicate: (query) => {
-      const key = query.queryKey;
-      return (
-        key[0] === "workspaces" &&
-        key[1] === wsId &&
-        key[2] === "squads" &&
-        key[4] === "members-status"
-      );
-    },
-  });
-}
-
 export interface RealtimeSyncStores {
   authStore: UseBoundStore<StoreApi<AuthState>>;
 }
@@ -802,9 +788,7 @@ export function useRealtimeSync(
           qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
           // Squad members status is derived per agent, so any agent
           // change (status flip, archive, runtime swap) needs to refresh the
-          // per-squad members-status cache without refetching the static squad
           // list summary.
-          invalidateSquadMemberStatusQueries(qc, wsId);
         }
       },
       member: () => {
@@ -907,7 +891,6 @@ export function useRealtimeSync(
           // Runtime online/offline transitions move the derived status
           // for every agent that hosts on this runtime, which shifts the
           // working/idle/offline pill on the squad page.
-          invalidateSquadMemberStatusQueries(qc, wsId);
         }
       },
       autopilot: () => {
@@ -971,9 +954,7 @@ export function useRealtimeSync(
         // shape as the tasks invalidation above — any task lifecycle
         // event shifts the aggregated usage numbers.
         qc.invalidateQueries({ queryKey: ["issues", "usage"] });
-        // Squad members-status reads the same task lifecycle to flip
         // working ↔ idle for each agent member.
-        invalidateSquadMemberStatusQueries(qc, wsId);
         // Comment trigger previews answer "who would a send wake right
         // now" — the pending-task dedup guard makes that answer
         // queue-dependent, so any task lifecycle change must refresh an

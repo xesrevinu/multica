@@ -97,7 +97,7 @@ function savedSession(draft: AgentBuilderSessionSummary["draft"]): AgentBuilderS
   };
 }
 function workspace() {
-  return <BuilderWorkspace sessionId="session-1" squadId={null}
+  return <BuilderWorkspace sessionId="session-1"
     session={h.session} sessionSettled={h.settled} fallbackRuntimeId="local"
     onDiscarded={vi.fn()} onRuntimeLabel={vi.fn()} />;
 }

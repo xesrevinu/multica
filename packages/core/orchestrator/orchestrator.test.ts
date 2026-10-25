@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { parseOrchIssues, parseOrchPRCard, parseOrchTimeline } from "./api";
+import { availablePROps, flowCardMode, shouldOfferResolveConflict } from "./flow";
+import { parseOrchIssueList } from "./parse";
 import { DEFAULT_ORCH_VIEW, applyOrchView, filterOrchIssues, groupOrchIssues } from "./tree";
+import type { OrchTimeline } from "./schemas";
 
 vi.mock("../api", () => ({ api: {} }));
 
@@ -105,5 +108,104 @@ describe("applyOrchView", () => {
     expect(applyOrchView(issues, { ...DEFAULT_ORCH_VIEW, assignee: "unassigned" }).map((i) => i.key)).toEqual(["ATT-3"]);
     expect(applyOrchView(issues, { ...DEFAULT_ORCH_VIEW, orchestratedOnly: true }).map((i) => i.key)).toEqual(["ATT-1"]);
     expect(applyOrchView(issues, { ...DEFAULT_ORCH_VIEW, priorities: ["none"] }).map((i) => i.key)).toEqual(["ATT-3"]);
+  });
+});
+
+
+describe("flowCardMode", () => {
+  const base = (partial: Partial<Pick<OrchTimeline["issue"], "phase" | "status" | "orchestrated">> = {}) => ({
+    issue: {
+      orchestrated: true as const,
+      status: "in_review",
+      phase: "awaiting_acceptance" as string | undefined,
+      ...partial,
+    },
+  });
+
+  it("classifies acceptance / blocked / cancel / done", () => {
+    expect(flowCardMode(base())).toBe("acceptance");
+    expect(flowCardMode(base({ phase: "cancel_proposed" }))).toBe("cancel_proposed");
+    expect(flowCardMode(base({ phase: undefined, status: "blocked" }))).toBe("blocked");
+    expect(flowCardMode(base({ status: "done" }))).toBeNull();
+  });
+});
+
+describe("parseOrchIssueList", () => {
+  it("keeps settled_total and drops bad rows", () => {
+    const list = parseOrchIssueList({
+      settled_total: 4,
+      issues: [
+        {
+          id: "1",
+          key: "ATT-1",
+          number: 1,
+          title: "One",
+          status: "todo",
+          priority: "none",
+          labels: [],
+          orchestrated: true,
+          paused: false,
+          attention: { bucket: "queued", since: "2026-10-01T00:00:00Z" },
+          children: { total: 0, done: 0 },
+          created_at: "2026-10-01T00:00:00Z",
+          updated_at: "2026-10-01T00:00:00Z",
+        },
+        { broken: true },
+      ],
+    });
+    expect(list.issues).toHaveLength(1);
+    expect(list.settledTotal).toBe(4);
+  });
+});
+
+
+describe("availablePROps", () => {
+  const can = {
+    read_checks: true,
+    update_branch: true,
+    rerun: true,
+    merge: true,
+    labels: true,
+    delete_branch: true,
+  };
+
+  it("hides member merge/update when orchestrated", () => {
+    expect(
+      availablePROps(can, {
+        live: true,
+        open: true,
+        orchestrated: true,
+        failedChecks: 2,
+        behind: 3,
+      }),
+    ).toEqual(["rerun-checks"]);
+  });
+
+  it("offers merge/update for non-orchestrated open PRs", () => {
+    expect(
+      availablePROps(can, {
+        live: true,
+        open: true,
+        orchestrated: false,
+        behind: 2,
+        conflict: false,
+      }),
+    ).toEqual(["sync-labels", "update-branch", "merge"]);
+  });
+
+  it("offers delete-branch only when closed with a head", () => {
+    expect(
+      availablePROps(can, {
+        live: true,
+        open: false,
+        head: "agent/ATT-1",
+        base: "main",
+      }),
+    ).toEqual(["sync-labels", "delete-branch"]);
+  });
+
+  it("shouldOfferResolveConflict follows Web rules", () => {
+    expect(shouldOfferResolveConflict({ live: true, open: true, orchestrated: true, conflict: true })).toBe(true);
+    expect(shouldOfferResolveConflict({ live: true, open: true, orchestrated: false, conflict: true })).toBe(false);
   });
 });

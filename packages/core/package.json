@@ -152,6 +152,7 @@
     "./constants/*": "./constants/*.ts",
     "./feature-flags": "./feature-flags/index.ts",
     "./platform": "./platform/index.ts",
+    "./platform/workspace-storage": "./platform/workspace-storage.ts",
     "./drafts": "./drafts/index.ts",
     "./drafts/*": "./drafts/*.ts",
     "./shortcuts": "./shortcuts/index.ts",
@@ -166,7 +167,11 @@
     "./skills/pack-archive": "./skills/pack-archive.ts",
     "./skills/stores": "./skills/stores/index.ts",
     "./autopilots/stores": "./autopilots/stores/index.ts",
-    "./orchestrator": "./orchestrator/index.ts"
+    "./orchestrator": "./orchestrator/index.ts",
+    "./orchestrator/schemas": "./orchestrator/schemas.ts",
+    "./orchestrator/parse": "./orchestrator/parse.ts",
+    "./orchestrator/flow": "./orchestrator/flow.ts",
+    "./orchestrator/tree": "./orchestrator/tree.ts"
   },
   "dependencies": {
     "@formatjs/intl-localematcher": "catalog:",

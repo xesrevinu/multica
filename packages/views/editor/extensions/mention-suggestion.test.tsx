@@ -787,7 +787,7 @@ describe("createMentionSuggestion", () => {
     expect(screen.queryByText("Squad")).not.toBeInTheDocument();
   });
 
-  it("includes squads with a runnable leader in the mention list", () => {
+  it("does not offer squad directory entries in mention autocomplete", () => {
     const qc = fakeQc({
       members: [{ user_id: "u1", name: "Alice", role: "member" }],
       agents: [
@@ -806,129 +806,15 @@ describe("createMentionSuggestion", () => {
           archived_at: null,
           leader_id: "leader-1",
         },
-        {
-          id: "s2",
-          name: "独立团",
-          archived_at: null,
-          leader_id: "leader-1",
-        },
-        {
-          id: "s3",
-          name: "Archived Squad",
-          archived_at: "2026-01-01T00:00:00Z",
-          leader_id: "leader-1",
-        },
       ],
     });
     searchIssuesMock.mockReturnValue(new Promise(() => {}));
 
     const config = createMentionSuggestion(qc);
-    const result = config.items!(itemArgs(""));
-
-    const items = result as MentionItem[];
-    expect(items.filter((i) => i.type === "squad")).toHaveLength(2);
-    expect(items.some((i) => i.type === "squad" && i.label === "Jiayuan's Coding Team")).toBe(true);
-    expect(items.some((i) => i.type === "squad" && i.label === "独立团")).toBe(true);
-    expect(items.some((i) => i.type === "squad" && i.label === "Archived Squad")).toBe(false);
-  });
-
-  it("keeps a squad with an unbound leader discoverable but unselectable", () => {
-    const qc = fakeQc({
-      agents: [
-        {
-          id: "leader-1",
-          name: "Leader",
-          archived_at: null,
-          runtime_id: "",
-          runtime_bound: false,
-          visibility: "workspace",
-          owner_id: null,
-        },
-      ],
-      squads: [
-        {
-          id: "s1",
-          name: "Unrunnable Squad",
-          archived_at: null,
-          leader_id: "leader-1",
-        },
-      ],
-    });
-
-    const config = createMentionSuggestion(qc);
     const items = config.items!(itemArgs("")) as MentionItem[];
-
-    expect(items).toContainEqual(
-      expect.objectContaining({
-        type: "squad",
-        id: "s1",
-        disabledReason: "agent_runtime_required",
-      }),
-    );
-  });
-
-  it("keeps squads discoverable while the agents cache is not ready", () => {
-    const qc = fakeQc({
-      squads: [
-        {
-          id: "s1",
-          name: "Cold Cache Squad",
-          archived_at: null,
-          leader_id: "leader-not-cached",
-        },
-      ],
-    });
-
-    const config = createMentionSuggestion(qc);
-    const items = config.items!(itemArgs("")) as MentionItem[];
-    const squad = items.find((item) => item.type === "squad" && item.id === "s1");
-
-    expect(squad).toBeDefined();
-    expect(squad?.disabledReason).toBeUndefined();
-  });
-
-  it("keeps a squad with an archived leader discoverable", () => {
-    const qc = fakeQc({
-      agents: [
-        {
-          id: "leader-1",
-          name: "Archived Leader",
-          archived_at: "2026-01-01T00:00:00Z",
-          visibility: "workspace",
-          owner_id: null,
-        },
-      ],
-      squads: [
-        {
-          id: "s1",
-          name: "Archived Leader Squad",
-          archived_at: null,
-          leader_id: "leader-1",
-        },
-      ],
-    });
-
-    const config = createMentionSuggestion(qc);
-    const items = config.items!(itemArgs("")) as MentionItem[];
-    const squad = items.find((item) => item.type === "squad" && item.id === "s1");
-
-    expect(squad).toBeDefined();
-    expect(squad?.disabledReason).toBeUndefined();
-  });
-
-  it("returns no squads when the squads cache is empty (not yet fetched)", () => {
-    const qc = fakeQc({
-      members: [{ user_id: "u1", name: "Alice", role: "member" }],
-      // squads not provided — simulates cache miss
-    });
-    searchIssuesMock.mockReturnValue(new Promise(() => {}));
-
-    const config = createMentionSuggestion(qc);
-    const result = config.items!(itemArgs(""));
-
-    const items = result as MentionItem[];
     expect(items.filter((i) => i.type === "squad")).toHaveLength(0);
   });
+
 
   it("matches Chinese names by full pinyin", () => {
     const qc = fakeQc({

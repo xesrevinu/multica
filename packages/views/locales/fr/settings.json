@@ -298,10 +298,6 @@
         "label": "Aller aux agents",
         "description": "Ouvrir la liste des agents."
       },
-      "goSquads": {
-        "label": "Aller aux squads",
-        "description": "Ouvrir la liste des squads."
-      },
       "goUsage": {
         "label": "Aller aux statistiques",
         "description": "Ouvrir les statistiques de consommation."

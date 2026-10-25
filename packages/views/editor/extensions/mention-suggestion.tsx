@@ -31,7 +31,6 @@ import type {
   ListIssuesCache,
   MemberWithUser,
   Agent,
-  Squad,
 } from "@multica/core/types";
 import { ListTodo } from "lucide-react";
 import { ActorAvatar } from "../../common/actor-avatar";
@@ -743,7 +742,6 @@ export function createMentionSuggestion(
 
     const members: MemberWithUser[] = qc.getQueryData(workspaceKeys.members(wsId)) ?? [];
     const agents: Agent[] = qc.getQueryData(workspaceKeys.agents(wsId)) ?? [];
-    const squads: Squad[] = qc.getQueryData(workspaceKeys.squads(wsId)) ?? [];
     const listQueries = qc.getQueriesData<ListIssuesCache>({ queryKey: issueKeys.list(wsId) });
     const cachedResponse = listQueries[0]?.[1];
     const cachedIssues: Issue[] = cachedResponse ? flattenIssueBuckets(cachedResponse) : [];
@@ -787,34 +785,13 @@ export function createMentionSuggestion(
           ? undefined
           : ("agent_runtime_required" as const),
       }));
-    const activeAgentRuntimeBinding = new Map(
-      agents
-        .filter((agent) => !agent.archived_at)
-        .map((agent) => [agent.id, isAgentRuntimeBound(agent)]),
-    );
-
-    const squadItems: MentionItem[] = squads
-      .filter(
-        (s) =>
-          !s.archived_at &&
-          (s.name.toLowerCase().includes(q) || matchesPinyin(s.name, q)),
-      )
-      .map((s) => ({
-        id: s.id,
-        label: s.name,
-        type: "squad" as const,
-        disabledReason:
-          activeAgentRuntimeBinding.get(s.leader_id) === false
-            ? ("agent_runtime_required" as const)
-            : undefined,
-      }));
-
     // Members and agents share a single ranked list — recently mentioned
     // targets come first regardless of type, with an alphabetical fallback
     // for everyone the user hasn't mentioned yet on this device.
+    // Squad directory autocomplete removed; typed mention://squad badges still render.
     const recency = getRecencyMap(wsId);
     const userItems = sortUserItemsByRecency(
-      [...memberItems, ...agentItems, ...squadItems],
+      [...memberItems, ...agentItems],
       recency,
     );
 

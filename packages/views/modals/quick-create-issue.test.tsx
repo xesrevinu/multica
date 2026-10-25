@@ -569,9 +569,6 @@ describe("AgentCreatePanel", () => {
   });
 
   it("restores unfinished actor, project, priority, and due-date selections after remount", async () => {
-    mockSquadsData.list = [
-      { id: "squad-1", name: "Frontend Squad", leader_id: "agent-1", archived_at: null },
-    ];
     mockProjectsQuery.data = [{ id: "proj-1", title: "Web", icon: null }];
     mockCreateSettingsStore.quickCreateFields = ["project", "priority", "due_date"];
     const user = userEvent.setup();
@@ -582,13 +579,13 @@ describe("AgentCreatePanel", () => {
       setIsExpanded: vi.fn(),
     });
 
-    await user.click(screen.getByRole("button", { name: /Frontend Squad/ }));
+    await user.click(screen.getByRole("button", { name: /Bohan/ }));
     await user.click(screen.getByTestId("project-picker"));
     await user.click(screen.getByTestId("priority-picker"));
     await user.click(screen.getByTestId("due-date-picker"));
 
     expect(mockIssueDraftStore.draft.agent).toEqual(
-      expect.objectContaining({ actorType: "squad", actorId: "squad-1" }),
+      expect.objectContaining({ actorType: "agent", actorId: "agent-1" }),
     );
     expect(mockIssueDraftStore.draft.shared).toEqual(
       expect.objectContaining({
@@ -601,7 +598,7 @@ describe("AgentCreatePanel", () => {
     firstOpen.unmount();
     renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
 
-    expect(screen.getByRole("button", { name: /Frontend Squad/ })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: /Bohan/ })).toHaveAttribute(
       "data-selected",
       "true",
     );
@@ -848,53 +845,6 @@ describe("AgentCreatePanel", () => {
     });
   });
 
-  // Picking a squad routes the submission through `squad_id` (not
-  // `agent_id`) so the backend can resolve the squad's leader agent and
-  // inject the squad-leader briefing on dispatch. The persisted preference
-  // remembers the actor type so the next open defaults back to the squad.
-  it("submits squad_id when the user picks a squad in the actor picker", async () => {
-    mockSquadsData.list = [
-      { id: "squad-1", name: "Frontend Squad", leader_id: "agent-1", archived_at: null },
-    ];
-    const user = userEvent.setup();
-    const onClose = vi.fn();
-
-    renderPanel({ onClose, isExpanded: false, setIsExpanded: vi.fn() });
-
-    // The picker mock renders both sections inline as buttons; click the
-    // squad row directly.
-    await user.click(screen.getByRole("button", { name: /Frontend Squad/ }));
-
-    const editor = screen.getByPlaceholderText(
-      'Tell the agent what to do, e.g. "let Bohan fix the inbox loading slowness in the Web project"',
-    );
-    await user.clear(editor);
-    await user.type(editor, "Investigate the regression");
-
-    await user.click(screen.getByRole("button", { name: /^Create$/i }));
-
-    await waitFor(() => {
-      expect(mockQuickCreateIssue).toHaveBeenCalledWith({
-        squad_id: "squad-1",
-        prompt: "Investigate the regression",
-        project_id: undefined,
-      });
-    });
-    expect(mockSetLastActor).toHaveBeenCalledWith("squad", "squad-1");
-  });
-
-  // Squads whose leader agent isn't visible (archived, private, etc.) must
-  // not appear in the picker — the backend would reject the pick on
-  // validateAssigneePair, and showing them invites a confusing dead path.
-  it("hides squads whose leader agent is not in the visible-agents list", () => {
-    mockSquadsData.list = [
-      { id: "squad-orphan", name: "Orphan Squad", leader_id: "agent-missing", archived_at: null },
-    ];
-
-    renderPanel({ onClose: vi.fn(), isExpanded: false, setIsExpanded: vi.fn() });
-
-    expect(screen.queryByRole("button", { name: /Orphan Squad/ })).toBeNull();
-  });
 
   // A successful create used to persist its project, so the NEXT open
   // re-seeded the pill with it and quietly filed the following issue into the

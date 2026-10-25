@@ -1,0 +1,4 @@
+preload = ["@opentui/react/runtime-plugin-support"]
+
+[test]
+preload = ["@opentui/react/runtime-plugin-support"]

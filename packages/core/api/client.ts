@@ -487,6 +487,11 @@ export interface ApiClientOptions {
    * per window.
    */
   getToken?: () => string | null;
+  /**
+   * CLI/TUI token mode: stamp `X-Workspace-ID` when no slug is active.
+   * Web keeps using `X-Workspace-Slug` via workspace-storage.
+   */
+  getWorkspaceId?: () => string | null;
 }
 
 export interface ClientRuntimeSnapshot {
@@ -798,6 +803,10 @@ export class ApiClient {
     if (token) headers["Authorization"] = `Bearer ${token}`;
     const slug = getCurrentSlug();
     if (slug) headers["X-Workspace-Slug"] = slug;
+    // Token-mode clients (TUI/CLI) often only have a workspace UUID. Prefer
+    // slug when present; otherwise fall back to X-Workspace-ID (server accepts both).
+    const workspaceId = this.options.getWorkspaceId?.();
+    if (!slug && workspaceId) headers["X-Workspace-ID"] = workspaceId;
     const csrf = this.readCsrfValue();
     if (csrf) headers[CSRF_HEADER] = csrf;
     const id = this.options.identity;

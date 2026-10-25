@@ -17,8 +17,10 @@ import {
   X,
 } from "lucide-react";
 import {
+  availablePROps,
   orchPRCardOptions,
   orchPRListOptions,
+  shouldOfferResolveConflict,
   useOrchFlowAction,
   useOrchPROp,
   type OrchPRCard,
@@ -133,7 +135,24 @@ function PRCardBody({ wsId, issueKey, data, number }: { wsId: string; issueKey: 
     tone === "merged" ? t(($) => $.pr.merged) : tone === "closed" ? t(($) => $.pr.closed) : tone === "draft" ? t(($) => $.pr.draft) : t(($) => $.pr.open);
 
   const rows = graphRows(pr, head, base, pendingOp === "update-branch", t(($) => $.pr.merging_base, { base }), t(($) => $.pr.resolving), timeAgo);
-  const canDeleteBranch = data.can.delete_branch && !open && pr && !pr.head_deleted && head && head !== base;
+  const prOps = availablePROps(data.can, {
+    live: data.live,
+    open,
+    orchestrated: data.orchestrated,
+    conflict,
+    failedChecks: failed,
+    behind,
+    headDeleted: pr?.head_deleted,
+    head,
+    base,
+  });
+  const has = (op: OrchPROp) => prOps.includes(op);
+  const offerResolve = shouldOfferResolveConflict({
+    live: data.live,
+    open,
+    orchestrated: data.orchestrated,
+    conflict,
+  });
 
   return (
     <Card className="gap-0 py-0" data-testid="orch-pr-card">
@@ -241,16 +260,16 @@ function PRCardBody({ wsId, issueKey, data, number }: { wsId: string; issueKey: 
         </div>
       )}
 
-      {data.live && (open || canDeleteBranch || data.can.labels) && (
+      {data.live && (open || prOps.length > 0 || offerResolve) && (
         <div className="flex flex-wrap items-center justify-end gap-1.5 border-t border-border bg-muted/30 px-3 py-2" data-testid="orch-pr-actions">
           {data.orchestrated && open && <span className="mr-auto text-micro text-muted-foreground">{t(($) => $.pr.engine_merges)}</span>}
-          {data.can.labels && !data.orchestrated && (
+          {has("sync-labels") && (
             <Button size="sm" variant="ghost" disabled={op.isPending} onClick={() => run("sync-labels")} data-testid="orch-pr-sync-labels" title={t(($) => $.pr.sync_labels_tip)}>
               {pendingOp === "sync-labels" ? <Loader2 className="size-3.5 animate-spin" /> : <Tags className="size-3.5" />}
               {t(($) => $.pr.sync_labels)}
             </Button>
           )}
-          {canDeleteBranch && (
+          {has("delete-branch") && (
             <Button
               size="sm"
               variant="ghost"
@@ -264,13 +283,13 @@ function PRCardBody({ wsId, issueKey, data, number }: { wsId: string; issueKey: 
               {t(($) => $.pr.delete_branch)}
             </Button>
           )}
-          {open && data.can.rerun && failed > 0 && (
+          {has("rerun-checks") && (
             <Button size="sm" variant="outline" disabled={op.isPending} onClick={() => run("rerun-checks")} data-testid="orch-pr-rerun">
               {pendingOp === "rerun-checks" ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCcw className="size-3.5" />}
               {t(($) => $.pr.rerun)}
             </Button>
           )}
-          {open && data.orchestrated && conflict && (
+          {offerResolve && (
             <Button
               size="sm"
               variant="outline"
@@ -288,7 +307,7 @@ function PRCardBody({ wsId, issueKey, data, number }: { wsId: string; issueKey: 
               {t(($) => $.pr.resolve_conflicts)}
             </Button>
           )}
-          {open && !data.orchestrated && data.can.update_branch && (behind > 0 || conflict) && (
+          {has("update-branch") && (
             <Button
               size="sm"
               variant="outline"
@@ -301,7 +320,7 @@ function PRCardBody({ wsId, issueKey, data, number }: { wsId: string; issueKey: 
               {t(($) => $.pr.update_branch, { base })}
             </Button>
           )}
-          {open && data.can.merge && !data.orchestrated && (
+          {has("merge") && (
             <Button size="sm" disabled={op.isPending || conflict} onClick={() => run("merge")} data-testid="orch-pr-merge">
               <GitMerge className="size-3.5" />
               {t(($) => $.pr.merge)}

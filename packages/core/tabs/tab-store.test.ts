@@ -1416,9 +1416,9 @@ describe("mergePersistedTabs (rehydration, MUL-4370)", () => {
   });
 
   it("rehydrates payloads with no icon field at all", () => {
-    const tab = rehydrate(persistedTab("/acme/squads"));
+    const tab = rehydrate(persistedTab("/acme/chat"));
     expect(tab).not.toHaveProperty("icon");
-    expect(tab.url).toBe("/acme/squads");
+    expect(tab.url).toBe("/acme/chat");
   });
 
   // Payloads written before the generic view-state entries existed carry a
