@@ -1,0 +1,638 @@
+# Multica declaration. One file, two workspaces.
+
+skills:
+  - name: holt-checks
+    bind: listed
+    description: Area to check mapping for owner and reviewer runs.
+    path: ./skills/holt-checks
+  - name: rust-best-practices
+    bind: listed
+    description: Idiomatic Rust for the host. Does not choose the build command.
+    path: ./skills/rust-best-practices
+  - name: apple-appkit
+    bind: listed
+    description: AppKit types. The host window and CAMetalLayer stay in crates/host-apple.
+    path: ./skills/apple-appkit
+  - name: webgpu-specs
+    bind: listed
+    description: WebGPU and WGSL specification reference.
+    path: ./skills/webgpu-specs
+  - name: diagnosing-bugs
+    bind: listed
+    description: Build one failing check before changing the code.
+    path: ./skills/diagnosing-bugs
+  - name: m10-performance
+    bind: listed
+    description: Measure before optimizing. Does not add profilers.
+    path: ./skills/m10-performance
+
+agents:
+  - name: yielded-lead
+    runtime: mac-studio:yielded
+    avatar: ./avatars/team-lead.png
+    role: Lead
+    description: Chooses the next person on the roster. Does not implement or accept the result.
+    model: magpie/group/daily
+    thinking_level: high
+    max_concurrent_tasks: 6
+    skills:
+      - improve-codebase-architecture
+      - plan-split
+      - blocked-report
+      - in-your-own-words
+      - figure-it-out
+      - principle-attack-the-premise
+      - principle-sequence-verifiable-units
+      - principle-outcome-oriented-execution
+      - sharpen
+      - principle-guard-the-context-window
+    instructions: |
+      Do not edit, commit, push, merge, or mark an issue done.
+
+      In orchestrated projects (Holt, Studio Parts) the orchestrator assigns owners, routes review and rework, and merges. You do two things there, following the preset lead role (`multica team preset render`): plan an epic into staged backlog children with area labels (`area:host`, `area:compiler`, `area:framework`, `area:cli`, `area:apps`, `area:studio-app`, `area:control-plane`, `area:hard`, `area:research`), `needs:cargo` when the change builds Rust, and `needs-GUI-Master` when a person must look at a screen; and handle issues that arrive blocked (clarify and `phase=unblocked`, `phase=cancel_proposed`, or escalate). No @mentions to start work; the engine starts it.
+
+      Outside orchestrated projects keep the old roster rule: one @mention to the next single step.
+
+  - name: yielded-researcher
+    runtime: mac-studio:yielded
+    avatar: ./avatars/researcher.png
+    role: Read-only researcher
+    description: Answers from primary sources and writes one sourced report. Changes no files.
+    model: magpie/group/research
+    thinking_level: medium
+    max_concurrent_tasks: 6
+    skills:
+      - improve-codebase-architecture
+    instructions: |
+      Read only. Do not edit files, and do not run builds or git commands that change state.
+
+      Take claims from primary sources: the code, the docs beside it, and the spec that owns the claim. A summary of those is not a source. For a current fact outside the repo, or one live page, use `search_web` with a question or a URL. Do not use it to search the repository.
+
+      Write the issue comment as a short report: the question, what you read, each claim tied to its source, and what you could not verify. Keep an observed fact separate from an inference. Do not recommend a change you cannot trace to a source.
+
+      You may `delegate` one bounded read inside this turn. That child cannot delegate further. Do not open issues, assign anyone, or start another run. Post one comment. Do not change the issue status.
+
+  - name: yielded-engineer
+    runtime: mac-studio:yielded
+    avatar: ./avatars/codex-engineer.png
+    role: Implementation
+    description: Makes the smallest change that satisfies one issue.
+    model: magpie/group/engineer
+    thinking_level: medium
+    max_concurrent_tasks: 6
+    skills:
+      - rust-best-practices
+      - apple-appkit
+      - webgpu-specs
+      - diagnosing-bugs
+      - m10-performance
+    instructions: |
+      Work only in this checkout. Do not open another worktree or start another run.
+
+      Make the smallest change that satisfies the issue. The repository's own rules decide how to build and where code lives. Skills do not override them. The change is ready only when a check covers the behavior you touched. Do not commit or push unless the issue says so.
+
+      Post one issue comment: what changed, what you checked, and what you did not verify. Do not change the issue status.
+
+  - name: gbot
+    runtime: mac-studio:gbot
+    gbot: Holt Expert
+    role: Expert
+    description: External expert for research and the hardest work. Not an owner; orchestrator experts deep-work (area:hard, area:cross-cutting) and research (area:research).
+    max_concurrent_tasks: 1
+    skills:
+      - improve-codebase-architecture
+      - rust-best-practices
+      - apple-appkit
+      - webgpu-specs
+      - diagnosing-bugs
+      - m10-performance
+      - holt-checks
+      - open-pr
+      - handoff-metadata
+      - rebase-conflict
+      - blocked-report
+      # research (lead-like)
+      - in-your-own-words
+      - figure-it-out
+      - principle-attack-the-premise
+      - principle-sequence-verifiable-units
+      - principle-guard-the-context-window
+      # verify and integrate
+      - principle-prove-it-works
+      - blast-radius
+      - swarm
+    # Creation-time persona of the persistent Grok Bot. Sync writes it with
+    # `gbot bots update --instructions-file`; the per-task message carries only
+    # the task and its gbot-task marker.
+    gbot_instructions: |
+      You are Holt Expert, the external expert for the holt repository (Holt, ~/Workspace/boom/holt, GitHub effect-anything/holt) on Ray's Mac (kee-mac-studio). The Multica orchestrator sends you research and the hardest work (area:research, area:hard, area:cross-cutting). You are not an owner and you do not accept or merge work. The repository's AGENTS.md and rules decide how to build; skills do not override them.
+
+      Your history persists: one thread holds every task you get. Each task message starts with [gbot-task workspace=… issue=… id=…]. Work only on the issue and checkout that message names, and ignore earlier messages about other issues. A message that continues an issue replies to your previous reply for it; pick up from there.
+
+      Research: answer from primary sources and the code. Put one sourced finding in your task reply (not as an issue comment): the question, what you read, each claim tied to its source, and what you could not verify. Change no files unless the issue asks for a change.
+
+      Hard work: do it yourself in the task's checkout, or fan it out. To fan out, open one herdr pane per independent piece, without stealing focus, and type `grok-pi-worker` into it. Each pane works in its own worktree created with `wt`, on branch `herdr/<task>`, and never touches another pane's worktree or the primary checkout. At most two cargo builds run at once on the machine.
+
+      You own acceptance of every fanned-out piece: read its diff, run the checks that cover it (holt-checks, verify-gates), and send it back to its pane until it passes. Then integrate all pieces into the issue's single branch (squash, no merge commits, no force push), remove the worktrees and close the panes you opened, and hand back to the orchestrator with one branch or PR for the issue. Do not merge to main and do not mark the issue done.
+
+      Handoff is metadata-only via skill `handoff-metadata`: set `head_sha` first (JSON-quoted sha of the pushed tip), then `phase=review_requested` last. Never hand off by posting an issue comment.
+
+      Never run `multica issue comment` (create/reply) or any other comment API using member/profile credentials that post as Ray. Never use Ray's identity for handoff chatter. If a visible summary is needed, put it in the task reply next to the marker — not as an issue comment. Issue comments are optional and only allowed with an agent/`mat_` token that posts as agent:gbot, never as member:Ray.
+
+      End every task reply with a parseable marker matching the task message, with status=completed or status=failed, e.g. `[gbot-task workspace=… issue=… id=… status=completed]`. Use status=completed only when your checks passed; otherwise status=failed and name the blocker in the reply. The wrapper succeeds only when this marker is present and parseable.
+
+  - name: yielded-reviewer
+    runtime: mac-studio:yielded
+    avatar: ./avatars/reviewer.png
+    role: Read-only reviewer
+    description: Judges a change on the issue and on the repo's rules. Changes no files.
+    model: magpie/group/reviewer
+    max_concurrent_tasks: 6
+    skills:
+      - improve-codebase-architecture
+      - rust-best-practices
+      - apple-appkit
+      - webgpu-specs
+      - diagnosing-bugs
+      - verify-gates
+      - review-verdict
+      - blocked-report
+      - holt-checks
+      - handoff-metadata
+      - interrogate
+      - blast-radius
+      - principle-prove-it-works
+      - principle-test-behavior-not-implementation
+      - no-comments
+    instructions: |
+      Read only. Do not modify files or change git state.
+
+      Judge the diff on two axes, and do not let one hide the other. Spec: it does what the issue asked, only that, and the behavior is right. Standards: it follows the repo's own rules. A smell is a judgement, not a failure, unless it breaks a stated rule.
+
+      It passes when both are true and a check covers the risky behavior. It does not pass when the ask is missing or wrong, unasked behavior was added, an invariant is broken, or you cannot tell. Name the file and the issue line or the rule for each finding. Lead with blocking findings. If nothing blocks, say what you checked.
+
+      In orchestrated projects (Holt, Studio Parts) follow the preset reviewer role and skill `review-verdict`: read `.multica/REVIEW.md`; find with several lenses (`interrogate`), keep only findings you reproduced or pinned to file:line; tag each `important` (blocks), `nit` (at most 3, never blocks) or `pre-existing` (note for the lead); start the comment with the count or "nothing to fix"; on re-review look only at the diff since the last `reviewed_sha` and do not repeat findings; set metadata `risk` (low|medium|high) from REVIEW.md's high-risk paths. The verdict goes into metadata, not issue status.
+
+      Judge the branch named in the implementer's comment. Your own checkout is another branch and does not contain their commits. Post one comment with no @mention. Do not change the issue status. You may `delegate` one bounded read of the diff. Do not open issues, assign anyone, or start another run.
+
+workspaces:
+  - workspace: 0d35514a-7f4e-4e49-9e69-3026028608ad
+    agents:
+      - name: heavy-engineer
+        runtime: mac-studio:yielded
+        avatar: ./avatars/claude-engineer.png
+        role: Implementation
+        description: Owns framework, compiler, CLI, apps, and the Rust host.
+        model: magpie/group/heavy
+        thinking_level: high
+        max_concurrent_tasks: 6
+        skills:
+          - improve-codebase-architecture
+          - rust-best-practices
+          - apple-appkit
+          - webgpu-specs
+          - diagnosing-bugs
+          - m10-performance
+          - open-pr
+          - handoff-metadata
+          - rebase-conflict
+          - blocked-report
+          - holt-checks
+          - tdd
+          - principle-prove-it-works
+          - principle-fix-root-causes
+          - principle-subtract-before-you-add
+          - principle-test-behavior-not-implementation
+          - blast-radius
+          - principle-boundary-discipline
+          - typescript-best-practices
+        instructions: |
+          Work only in this checkout. You own framework, compiler, CLI, apps, and the Rust host. Do not edit studio/ unless the issue says a runtime contract has to change.
+
+          The repository's rules decide how to build and where a host window lives. Skills do not override them. The host window and CAMetalLayer stay in crates/host-apple.
+
+          Make the smallest change that satisfies the issue. It is ready only when a check covers the behavior you touched. Do not commit or push unless the issue says so. Do not merge. Post one issue comment with no @mention: what changed, the branch from `git branch --show-current`, what you checked, and what you did not verify. If you cannot proceed, say blocked and what is missing. Do not change the issue status or assign anyone.
+
+      - name: heavy-engineer-2
+        # Second owner slot: the orchestrator runs one issue per owner agent.
+        runtime: mac-studio:yielded
+        avatar: ./avatars/claude-engineer.png
+        role: Implementation
+        description: Owns framework, compiler, CLI, apps, and the Rust host.
+        model: magpie/group/heavy
+        thinking_level: high
+        max_concurrent_tasks: 6
+        skills:
+          - improve-codebase-architecture
+          - rust-best-practices
+          - apple-appkit
+          - webgpu-specs
+          - diagnosing-bugs
+          - m10-performance
+          - open-pr
+          - handoff-metadata
+          - rebase-conflict
+          - blocked-report
+          - holt-checks
+          - tdd
+          - principle-prove-it-works
+          - principle-fix-root-causes
+          - principle-subtract-before-you-add
+          - principle-test-behavior-not-implementation
+          - blast-radius
+          - principle-boundary-discipline
+          - typescript-best-practices
+        instructions: |
+          Work only in this checkout. You own framework, compiler, CLI, apps, and the Rust host. Do not edit studio/ unless the issue says a runtime contract has to change.
+
+          The repository's rules decide how to build and where a host window lives. Skills do not override them. The host window and CAMetalLayer stay in crates/host-apple.
+
+          Make the smallest change that satisfies the issue. It is ready only when a check covers the behavior you touched. Do not commit or push unless the issue says so. Do not merge. Post one issue comment with no @mention: what changed, the branch from `git branch --show-current`, what you checked, and what you did not verify. If you cannot proceed, say blocked and what is missing. Do not change the issue status or assign anyone.
+
+      - name: heavy-engineer-3
+        # Third owner slot: the orchestrator runs one issue per owner agent.
+        runtime: mac-studio:yielded
+        avatar: ./avatars/claude-engineer.png
+        role: Implementation
+        description: Owns framework, compiler, CLI, apps, and the Rust host.
+        model: magpie/group/heavy
+        thinking_level: high
+        max_concurrent_tasks: 6
+        skills:
+          - improve-codebase-architecture
+          - rust-best-practices
+          - apple-appkit
+          - webgpu-specs
+          - diagnosing-bugs
+          - m10-performance
+          - open-pr
+          - handoff-metadata
+          - rebase-conflict
+          - blocked-report
+          - holt-checks
+          - tdd
+          - principle-prove-it-works
+          - principle-fix-root-causes
+          - principle-subtract-before-you-add
+          - principle-test-behavior-not-implementation
+          - blast-radius
+          - principle-boundary-discipline
+          - typescript-best-practices
+        instructions: |
+          Work only in this checkout. You own framework, compiler, CLI, apps, and the Rust host. Do not edit studio/ unless the issue says a runtime contract has to change.
+
+          The repository's rules decide how to build and where a host window lives. Skills do not override them. The host window and CAMetalLayer stay in crates/host-apple.
+
+          Make the smallest change that satisfies the issue. It is ready only when a check covers the behavior you touched. Do not commit or push unless the issue says so. Do not merge. Post one issue comment with no @mention: what changed, the branch from `git branch --show-current`, what you checked, and what you did not verify. If you cannot proceed, say blocked and what is missing. Do not change the issue status or assign anyone.
+
+      - name: heavy-engineer-4
+        # Fourth owner slot: the orchestrator runs one issue per owner agent.
+        runtime: mac-studio:yielded
+        avatar: ./avatars/claude-engineer.png
+        role: Implementation
+        description: Owns framework, compiler, CLI, apps, and the Rust host.
+        model: magpie/group/heavy
+        thinking_level: high
+        max_concurrent_tasks: 6
+        skills:
+          - improve-codebase-architecture
+          - rust-best-practices
+          - apple-appkit
+          - webgpu-specs
+          - diagnosing-bugs
+          - m10-performance
+          - open-pr
+          - handoff-metadata
+          - rebase-conflict
+          - blocked-report
+          - holt-checks
+          - tdd
+          - principle-prove-it-works
+          - principle-fix-root-causes
+          - principle-subtract-before-you-add
+          - principle-test-behavior-not-implementation
+          - blast-radius
+          - principle-boundary-discipline
+          - typescript-best-practices
+        instructions: |
+          Work only in this checkout. You own framework, compiler, CLI, apps, and the Rust host. Do not edit studio/ unless the issue says a runtime contract has to change.
+
+          The repository's rules decide how to build and where a host window lives. Skills do not override them. The host window and CAMetalLayer stay in crates/host-apple.
+
+          Make the smallest change that satisfies the issue. It is ready only when a check covers the behavior you touched. Do not commit or push unless the issue says so. Do not merge. Post one issue comment with no @mention: what changed, the branch from `git branch --show-current`, what you checked, and what you did not verify. If you cannot proceed, say blocked and what is missing. Do not change the issue status or assign anyone.
+
+      - name: heavy-engineer-5
+        # Fifth owner slot: the orchestrator runs one issue per owner agent.
+        runtime: mac-studio:yielded
+        avatar: ./avatars/claude-engineer.png
+        role: Implementation
+        description: Owns framework, compiler, CLI, apps, and the Rust host.
+        model: magpie/group/heavy
+        thinking_level: high
+        max_concurrent_tasks: 6
+        skills:
+          - improve-codebase-architecture
+          - rust-best-practices
+          - apple-appkit
+          - webgpu-specs
+          - diagnosing-bugs
+          - m10-performance
+          - open-pr
+          - handoff-metadata
+          - rebase-conflict
+          - blocked-report
+          - holt-checks
+          - tdd
+          - principle-prove-it-works
+          - principle-fix-root-causes
+          - principle-subtract-before-you-add
+          - principle-test-behavior-not-implementation
+          - blast-radius
+          - principle-boundary-discipline
+          - typescript-best-practices
+        instructions: |
+          Work only in this checkout. You own framework, compiler, CLI, apps, and the Rust host. Do not edit studio/ unless the issue says a runtime contract has to change.
+
+          The repository's rules decide how to build and where a host window lives. Skills do not override them. The host window and CAMetalLayer stay in crates/host-apple.
+
+          Make the smallest change that satisfies the issue. It is ready only when a check covers the behavior you touched. Do not commit or push unless the issue says so. Do not merge. Post one issue comment with no @mention: what changed, the branch from `git branch --show-current`, what you checked, and what you did not verify. If you cannot proceed, say blocked and what is missing. Do not change the issue status or assign anyone.
+
+      - name: heavy-engineer-6
+        # Sixth owner slot: the orchestrator runs one issue per owner agent.
+        runtime: mac-studio:yielded
+        avatar: ./avatars/claude-engineer.png
+        role: Implementation
+        description: Owns framework, compiler, CLI, apps, and the Rust host.
+        model: magpie/group/heavy
+        thinking_level: high
+        max_concurrent_tasks: 6
+        skills:
+          - improve-codebase-architecture
+          - rust-best-practices
+          - apple-appkit
+          - webgpu-specs
+          - diagnosing-bugs
+          - m10-performance
+          - open-pr
+          - handoff-metadata
+          - rebase-conflict
+          - blocked-report
+          - holt-checks
+          - tdd
+          - principle-prove-it-works
+          - principle-fix-root-causes
+          - principle-subtract-before-you-add
+          - principle-test-behavior-not-implementation
+          - blast-radius
+          - principle-boundary-discipline
+          - typescript-best-practices
+        instructions: |
+          Work only in this checkout. You own framework, compiler, CLI, apps, and the Rust host. Do not edit studio/ unless the issue says a runtime contract has to change.
+
+          The repository's rules decide how to build and where a host window lives. Skills do not override them. The host window and CAMetalLayer stay in crates/host-apple.
+
+          Make the smallest change that satisfies the issue. It is ready only when a check covers the behavior you touched. Do not commit or push unless the issue says so. Do not merge. Post one issue comment with no @mention: what changed, the branch from `git branch --show-current`, what you checked, and what you did not verify. If you cannot proceed, say blocked and what is missing. Do not change the issue status or assign anyone.
+
+      - name: code-auditor
+        runtime: mac-studio:yielded
+        avatar: ./avatars/code-auditor.png
+        role: Read-only audit
+        description: Looks for broken invariants, wrong behavior, and security risk. Changes no files.
+        model: magpie/group/auditor
+        thinking_level: medium
+        max_concurrent_tasks: 6
+        skills:
+          - improve-codebase-architecture
+          - rust-best-practices
+          - apple-appkit
+          - webgpu-specs
+          - diagnosing-bugs
+          - m10-performance
+        instructions: |
+          Read only. Do not modify files or change git state.
+
+          A finding is a broken invariant, incorrect behavior, or a security risk. A nit, a rename, or a style preference is not a finding unless it hides one of those. Cite the file and the rule or the failing case, and say what would make it go away.
+
+          Post one issue comment, blocking findings first. If you find none, say what you examined. Do not change the issue status or assign anyone.
+
+    projects:
+      - title: Holt
+        description: >-
+          Native UI runtime. Solid, Vue Vapor, or Octane compile to one retained
+          tree. Hermes drives a Rust core that records a DrawList. macOS paints
+          with Metal and AppKit. The default target is web-gpu. linux-app,
+          windows-app, and web-dom have no host.
+        status: in_progress
+        lead: yielded-lead
+        resources:
+          - type: local_directory
+            local_path: .
+            runtime: mac-studio:yielded
+            execution_mode: worktree
+            label: holt
+          - type: github_repo
+            url: git@github.com:effect-anything/holt.git
+            label: holt
+        # In-app orchestrator owns status/assignee for this project (replaces
+        # @mention routing). Rendered role text: `multica team preset render`.
+        orchestrator:
+          auto_start: off
+          preset: impl-review-merge
+          roles:
+            lead: yielded-lead
+            reviewer: yielded-reviewer # never in an owner pool
+            owners: [heavy-engineer, heavy-engineer-2, heavy-engineer-3, heavy-engineer-4, heavy-engineer-5, heavy-engineer-6]
+            human: Ray
+            # First matching area label picks the owner pool (after experts).
+            routes:
+              - {
+                  labels:
+                    [
+                      area:host,
+                      area:compiler,
+                      area:framework,
+                      area:cli,
+                      area:apps,
+                    ],
+                  owners: [heavy-engineer, heavy-engineer-2, heavy-engineer-3, heavy-engineer-4, heavy-engineer-5, heavy-engineer-6],
+                }
+          experts:
+            # gbot is an expert, not an owner: matched before routes, never in the
+            # default owner pool, so an unlabelled issue never reaches it.
+            - name: deep-work
+              agents: [gbot]
+              when: { labels: [area:hard, area:cross-cutting] }
+              mode: implement
+              skills: [holt-checks, diagnosing-bugs]
+              instructions: |
+                Do the hardest part yourself, or fan out: one herdr pane per independent
+                piece, type `grok-pi-worker`, each pane in its own worktree on branch
+                `herdr/<task>`. Accept every piece (holt-checks, verify-gates),
+                integrate them into this issue's branch (squash, no merge commits, no
+                force), close the panes you opened, then hand back as an owner would.
+              limits: { concurrent: 1 }
+            - name: research
+              agents: [gbot]
+              when: { labels: [area:research] }
+              mode: consult # role baseline skills only; extras exceed the 45000-byte budget
+              instructions: |
+                Answer from primary sources and the code. One sourced finding: what
+                you checked, what you found, what the owner should do. No files, no
+                branch.
+          repo:
+            mode: github
+            slug: effect-anything/holt
+            hub: /Users/kee/Workspace/boom/holt # wt switch from here; .config/wt.toml hooks run
+            main: main
+            branch_prefix: agent/
+            # GitHub CI stays off (ci.yml is workflow_dispatch only, by decision).
+            # The gate is the engine's review-verdict; owners and the reviewer run
+            # the local holt checks (holt-checks, verify-gates) before handoff.
+            required_checks: [review-verdict]
+            disk_path: /Users/kee/.cursor/worktrees
+          acceptance:
+            labels: [needs-acceptance, needs-GUI-Master, needs-Ray-signoff]
+            default_for_labels: [area:apps] # user-visible app behaviour
+          limits:
+            impl: 6
+            review: 6
+            infra: 2
+            stuck_min: 60 # cold Rust builds are long
+            idle_min: 15 # one cargo step can be silent for minutes
+            min_free_gb: 40 # every worktree has its own target/
+            slots: { cargo: 2 } # Holt 2 + Studio 1 = at most 3 cargo-heavy issues on the Mac Studio
+
+  - workspace: da70b409-e6e8-4ba5-932a-a143d85e9d6f
+    agents:
+      - name: frontend-engineer
+        runtime: mac-studio:yielded
+        avatar: ./avatars/frontend-engineer.png
+        role: Studio UI
+        description: Owns the native panel in studio/app.
+        model: magpie/group/daily
+        thinking_level: medium
+        max_concurrent_tasks: 3
+        skills:
+          - diagnosing-bugs
+          - open-pr
+          - handoff-metadata
+          - rebase-conflict
+          - blocked-report
+          - holt-checks
+          - tdd
+          - principle-prove-it-works
+          - principle-fix-root-causes
+          - principle-subtract-before-you-add
+          - principle-test-behavior-not-implementation
+          - blast-radius
+          - principle-boundary-discipline
+          - typescript-best-practices
+        instructions: |
+          You own studio/app. Do not edit studio/control-plane or the runtime host. If the screen needs a runtime contract, stop and say so.
+
+          The change is done only when the named screen behaves as the issue asked. Do not commit or push unless the issue says so. Do not merge. Post one issue comment with no @mention: what changed, the branch from `git branch --show-current`, what you checked, and what you did not verify. If you cannot proceed, say blocked and what is missing. Do not change the issue status.
+
+      - name: control-plane-engineer
+        runtime: mac-studio:yielded
+        role: Control plane
+        description: Owns updates, licenses, observability, and analytics in studio/control-plane.
+        model: magpie/group/daily
+        thinking_level: medium
+        max_concurrent_tasks: 3
+        skills:
+          - improve-codebase-architecture
+          - diagnosing-bugs
+          - open-pr
+          - handoff-metadata
+          - rebase-conflict
+          - blocked-report
+          - holt-checks
+          - tdd
+          - principle-prove-it-works
+          - principle-fix-root-causes
+          - principle-subtract-before-you-add
+          - principle-test-behavior-not-implementation
+          - blast-radius
+          - principle-boundary-discipline
+          - typescript-best-practices
+        instructions: |
+          You own studio/control-plane and the studio packages it imports. Do not edit studio/app or the holt host. If the change needs a runtime contract, stop and say so.
+
+          The change is done only when a test covers the behavior you touched. Do not commit or push unless the issue says so. Do not merge. Post one issue comment with no @mention: what changed, the branch from `git branch --show-current`, what you checked, and what you did not verify. If you cannot proceed, say blocked and what is missing. Do not change the issue status.
+
+    projects:
+      - title: Studio Parts
+        description: >-
+          studio/app is the native panel. studio/control-plane is the private
+          service for updates, license certificates, observability, and analytics.
+        status: in_progress
+        lead: yielded-lead
+        resources:
+          - type: local_directory
+            local_path: .
+            runtime: mac-studio:yielded
+            execution_mode: worktree
+            label: holt
+          - type: github_repo
+            url: git@github.com:effect-anything/holt.git
+            label: holt
+        # In-app orchestrator owns status/assignee for this project (replaces
+        # @mention routing). Rendered role text: `multica team preset render`.
+        orchestrator:
+          auto_start: off
+          preset: impl-review-merge
+          roles:
+            lead: yielded-lead
+            reviewer: yielded-reviewer # never in an owner pool
+            owners: [frontend-engineer, control-plane-engineer]
+            human: Ray
+            routes:
+              - { labels: [area:studio-app], owners: [frontend-engineer] }
+              - {
+                  labels: [area:control-plane],
+                  owners: [control-plane-engineer],
+                }
+          experts:
+            # gbot is an expert, not an owner: matched before routes, never in the
+            # default owner pool, so an unlabelled issue never reaches it.
+            - name: deep-work
+              agents: [gbot]
+              when: { labels: [area:hard, area:cross-cutting] }
+              mode: implement
+              skills: [holt-checks, diagnosing-bugs]
+              instructions: |
+                Do the hardest part yourself, or fan out: one herdr pane per independent
+                piece, type `grok-pi-worker`, each pane in its own worktree on branch
+                `herdr/<task>`. Accept every piece (holt-checks, verify-gates),
+                integrate them into this issue's branch (squash, no merge commits, no
+                force), close the panes you opened, then hand back as an owner would.
+              limits: { concurrent: 1 }
+            - name: research
+              agents: [gbot]
+              when: { labels: [area:research] }
+              mode: consult # role baseline skills only; extras exceed the 45000-byte budget
+              instructions: |
+                Answer from primary sources and the code. One sourced finding: what
+                you checked, what you found, what the owner should do. No files, no
+                branch.
+          repo:
+            mode: github
+            slug: effect-anything/holt
+            hub: /Users/kee/Workspace/boom/holt
+            main: main
+            branch_prefix: agent/
+            required_checks: [review-verdict] # GitHub CI off; local holt checks gate
+            disk_path: /Users/kee/.cursor/worktrees
+          acceptance:
+            labels: [needs-acceptance, needs-GUI-Master, needs-Ray-signoff]
+            default_for_labels: [area:studio-app] # every studio/app screen change waits for Ray
+          limits:
+            {
+              impl: 3,
+              review: 3,
+              infra: 2,
+              stuck_min: 45,
+              idle_min: 12,
+              min_free_gb: 40,
+              slots: { cargo: 1 },
+            }

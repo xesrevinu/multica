@@ -1,6 +1,7 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import {
   agentCreateArgs,
@@ -807,24 +808,44 @@ labels: []
   });
 });
 
-describe("Verx.app manifest fixture", () => {
+describe("Holt manifest fixture", () => {
   test("parses and validates the checked-in project manifest", () => {
-    const text = readFileSync(new URL("./examples/verx-app.yaml", import.meta.url), "utf8");
-    const manifest = applyDefaults(parseManifest(text));
-    expect(() => validateManifest(manifest)).not.toThrow();
-    expect(manifest.agents.map((agent) => agent.name)).toEqual([
-      "team-lead",
-      "grok-engineer",
-      "pi-engineer",
-      "reviewer",
-      "frontend-engineer",
-      "frontend-master",
-      "researcher",
+    const url = new URL("./examples/holt/project.yaml", import.meta.url);
+    const documents = parseManifestDocuments(readFileSync(url, "utf8"));
+    expect(documents.map((document) => document.workspace)).toEqual([
+      "0d35514a-7f4e-4e49-9e69-3026028608ad",
+      "da70b409-e6e8-4ba5-932a-a143d85e9d6f",
+    ]);
+    const sourceDir = dirname(fileURLToPath(url));
+    for (const document of documents) {
+      const resolved = resolveManifestSources(applyDefaults(document), sourceDir);
+      // Agent skills such as handoff-metadata come from the preset library, not this file.
+      for (const skill of resolved.skills) {
+        if (skill.path) expect(existsSync(join(skill.path, "SKILL.md")), skill.name).toBe(true);
+      }
+    }
+    const [ox, studio] = documents;
+    expect(ox?.projects.map((project) => project.title)).toEqual(["Holt"]);
+    expect(studio?.projects.map((project) => project.title)).toEqual(["Studio Parts"]);
+    expect(ox?.agents.map((agent) => agent.name)).toEqual([
+      "yielded-lead",
+      "yielded-researcher",
+      "yielded-engineer",
+      "gbot",
+      "yielded-reviewer",
+      "heavy-engineer",
+      "heavy-engineer-2",
+      "heavy-engineer-3",
+      "heavy-engineer-4",
+      "heavy-engineer-5",
+      "heavy-engineer-6",
       "code-auditor",
     ]);
-    expect(manifest.agents.every((agent) => /:(pi|grok)$/.test(agent.runtime))).toBe(true);
-    expect(manifest.squads[0]?.members?.some((member) => member.ref === "Ray")).toBe(true);
-    expect(manifest.labels.length).toBeGreaterThan(0);
+    expect(ox?.agents.find((agent) => agent.name === "gbot")?.gbot).toBe("Holt Expert");
+    expect(ox?.projects[0]?.orchestrator).toMatchObject({ preset: "impl-review-merge" });
+    expect(studio?.agents.map((agent) => agent.name)).toContain("frontend-engineer");
+    expect(studio?.agents.map((agent) => agent.name)).toContain("control-plane-engineer");
+    expect(ox?.agents.every((agent) => /:(yielded|gbot)$/.test(agent.runtime))).toBe(true);
   });
 });
 
