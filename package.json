@@ -62,12 +62,14 @@
     "@types/node": "catalog:",
     "@types/pg": "^8.20.0",
     "@typescript/typescript6": "catalog:",
+    "js-yaml": "^4.1.1",
     "knip": "^6.32.3",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
     "pg": "^8.20.0",
     "turbo": "^2.10.12",
     "tsrs": "catalog:",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }

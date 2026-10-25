@@ -15,8 +15,8 @@
 
   "workspaces": {
     ".": {
-      "entry": ["scripts/*.mjs"],
-      "project": ["scripts/*.mjs"],
+      "entry": ["scripts/*.mjs", "multica-config/sync.ts", "multica-config/sync.test.ts"],
+      "project": ["scripts/*.mjs", "multica-config/**/*.ts"],
       "ignoreDependencies": ["oxlint", "oxfmt"]
     },
 

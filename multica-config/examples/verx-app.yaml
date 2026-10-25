@@ -1,0 +1,150 @@
+# Verx.app example manifest
+#
+# This example mirrors the project-level manifest in
+# ~/Workspace/boom/effect-anything/activitywatch/.multica/project.yaml
+# so tests can validate the full project shape without depending on another repo.
+#
+# Runtimes are pi/grok only:
+#   Mac Studio → mac-studio:pi | mac-studio:grok
+#   VMISS      → VMISS:grok
+
+defaults:
+  projects:
+    status: in_progress
+
+labels:
+  - name: architecture
+    color: "#2563eb"
+  - name: greenfield
+    color: "#16a34a"
+  - name: bugfix
+    color: "#dc2626"
+  - name: refactor
+    color: "#d97706"
+  - name: frontend
+    color: "#0ea5e9"
+  - name: review
+    color: "#7c3aed"
+  - name: research
+    color: "#64748b"
+  - name: audit
+    color: "#334155"
+  - name: meta
+    color: "#94a3b8"
+
+agents:
+  - name: team-lead
+    runtime: mac-studio:grok
+    role: Leader
+    description: Coordinates work, delegates to squad members, and makes final execution calls.
+    instructions: |
+      You lead the Verx.app squad.
+    model: grok-4.6
+    thinking_level: high
+
+  - name: grok-engineer
+    runtime: mac-studio:grok
+    role: Architect and greenfield features
+    description: Designs architecture and builds new greenfield features.
+    instructions: |
+      You own architecture and greenfield feature work.
+    model: grok-4.6
+    thinking_level: high
+
+  - name: pi-engineer
+    runtime: mac-studio:pi
+    role: Bug fixes, refactors, incremental features
+    description: Works on bug fixes, refactors, and incremental feature changes.
+    instructions: |
+      You own bug fixes, refactors, and incremental features.
+    model: grok-4.6
+    thinking_level: medium
+
+  - name: reviewer
+    runtime: VMISS:grok
+    role: Reviewer
+    description: Reviews code changes.
+    instructions: |
+      You review changes.
+    access: workspace
+    max_concurrent_tasks: 3
+
+  - name: frontend-engineer
+    runtime: VMISS:grok
+    role: Frontend engineer
+    description: Implements frontend features.
+    instructions: |
+      You implement frontend work.
+    max_concurrent_tasks: 3
+
+  - name: frontend-master
+    runtime: mac-studio:pi
+    role: Frontend lead
+    description: Leads frontend architecture and review.
+    instructions: |
+      You lead frontend work.
+    thinking_level: high
+
+  - name: researcher
+    runtime: VMISS:grok
+    role: Research assistant
+    description: Writes grounded research.
+    instructions: |
+      You are the research assistant.
+    max_concurrent_tasks: 2
+
+  - name: code-auditor
+    runtime: VMISS:grok
+    role: Code auditor
+    description: Audits code.
+    instructions: |
+      You audit code and architecture.
+    max_concurrent_tasks: 2
+
+projects:
+  - title: Verx.app
+    description: Verx.app project example.
+    status: in_progress
+    icon: "🚀"
+    lead: team-lead
+    resources:
+      - type: local_directory
+        local_path: ~/Workspace/boom/effect-anything/activitywatch
+        runtime: mac-studio:pi
+        execution_mode: worktree
+        label: activitywatch-local
+      - type: github_repo
+        url: git@github.com:opraying/super-apps.git
+        label: super-apps-github
+
+squads:
+  - name: Verx.app
+    leader: team-lead
+    description: Cross-functional squad for Verx.app.
+    instructions: |
+      This squad owns Verx.app.
+    members:
+      - type: agent
+        ref: grok-engineer
+        role: architect
+      - type: agent
+        ref: pi-engineer
+        role: implementation
+      - type: agent
+        ref: reviewer
+        role: reviewer
+      - type: agent
+        ref: frontend-engineer
+        role: frontend
+      - type: agent
+        ref: frontend-master
+        role: frontend-lead
+      - type: agent
+        ref: researcher
+        role: research
+      - type: agent
+        ref: code-auditor
+        role: audit
+      - type: member
+        ref: Ray
+        role: lead-architect-final-reviewer
