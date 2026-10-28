@@ -129,6 +129,10 @@ type LocalWorktreeParams struct {
 	// active hold records this one. Zero means there is no separate holder;
 	// the hold stays in use until Finalize parks or releases it.
 	HolderPID int
+	// ctx cancels wt switch and its hooks. Isolated prepare derives this
+	// from SIGTERM; in-process callers pass the prepare deadline. Not
+	// serialized across the helper boundary.
+	ctx context.Context
 }
 
 // owner is the identity a branch created for this task is recorded under.
@@ -307,6 +311,13 @@ type LocalWorktreeOutcome struct {
 // uncommitted state into it. It never writes to the user's working tree: the
 // snapshot is built in a private index inside the task's env root, which leaves
 // their index, their files and their refs exactly as they were.
+func (p LocalWorktreeParams) context() context.Context {
+	if p.ctx != nil {
+		return p.ctx
+	}
+	return context.Background()
+}
+
 func PrepareLocalWorktree(params LocalWorktreeParams, logger *slog.Logger) (*LocalWorktree, error) {
 	if params.LocalPath == "" {
 		return nil, errors.New("execenv: local worktree requires a local path")
@@ -436,7 +447,7 @@ func PrepareLocalWorktree(params LocalWorktreeParams, logger *slog.Logger) (*Loc
 	}
 	if !reused {
 		if worktrunkConfigPresent(gitRoot) {
-			worktreePath, actualBranch, createdBranch, err = addWorktrunkWorktree(gitRoot, plan, params.TaskID, logger)
+			worktreePath, actualBranch, createdBranch, err = addWorktrunkWorktree(params.context(), gitRoot, plan, params.TaskID, logger)
 		} else {
 			actualBranch, createdBranch, err = addLocalWorktree(gitRoot, worktreePath, plan, params.TaskID)
 		}
@@ -974,7 +985,7 @@ func worktreeIsDirty(worktreePath string) (bool, error) {
 func removeLocalWorktreeDir(gitRoot, worktreePath string, logger *slog.Logger) error {
 	defer removeWorktreeExcludes(gitRoot, worktreePath)
 	if worktrunkConfigPresent(gitRoot) {
-		if err := removeViaWorktrunk(gitRoot, worktreePath, logger); err == nil {
+		if err := removeViaWorktrunk(context.Background(), gitRoot, worktreePath, logger); err == nil {
 			return nil
 		} else if logger != nil {
 			logger.Warn("execenv: wt remove failed; falling back to git worktree remove",
@@ -1032,6 +1043,12 @@ func deleteBranch(gitRoot, branch string, logger *slog.Logger) {
 // user needs to see and fix — we fail closed with an actionable message rather
 // than silently degrading to the in-place lock, which would leave the user
 // wondering why their tasks still queue.
+// ResolveGitRoot returns the repository root containing dir. Worktree mode is
+// opt-in per resource, so a non-git directory here is a misconfiguration.
+func ResolveGitRoot(dir string) (string, error) {
+	return resolveGitRoot(dir)
+}
+
 func resolveGitRoot(dir string) (string, error) {
 	root, err := runGitTrimmed(dir, "rev-parse", "--show-toplevel")
 	if err != nil || root == "" {

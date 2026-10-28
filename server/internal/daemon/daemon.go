@@ -87,12 +87,6 @@ const (
 	taskSlotCapacityBackoff  = 5 * time.Second
 	repoCheckoutModeEnv      = "MULTICA_REPO_CHECKOUT_MODE"
 	repoCheckoutModeIsolated = "isolated"
-	// defaultTaskPrepareTimeout is a hard liveness bound for everything after
-	// claim and before StartTask succeeds: runtime resolution, skill bundles,
-	// execution-environment setup, and the StartTask request itself. It is
-	// intentionally independent from AgentTimeout, which only governs the
-	// provider process after the task reaches running.
-	defaultTaskPrepareTimeout = 5 * time.Minute
 	// pendingWorkHeartbeatTimeout bounds the out-of-band heartbeat a
 	// server-pushed daemon:pending_work hint triggers (MUL-5444). Short on
 	// purpose: the hint is only a latency optimisation, and the scheduled
@@ -113,6 +107,17 @@ const (
 	// would pick.
 	idleWatchdogMaxTick = 5 * time.Minute
 )
+
+// defaultTaskPrepareTimeout is a hard liveness bound for everything after
+// claim and before StartTask succeeds: runtime resolution, skill bundles,
+// execution-environment setup, and the StartTask request itself. It is
+// intentionally independent from AgentTimeout, which only governs the
+// provider process after the task reaches running.
+//
+// The value matches execenv.WorktreePrepareTimeout so a wt switch whose
+// pre-start hooks copy a large node_modules (minutes) is not killed at 5m
+// while the copy keeps running. Override with MULTICA_TASK_PREPARE_TIMEOUT.
+var defaultTaskPrepareTimeout = execenv.WorktreePrepareTimeout
 
 // pendingWorkHintMinInterval is the floor between two hint-driven heartbeats
 // for the same runtime. Keeps an interactive first open instant while stopping a
@@ -773,7 +778,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		taskSupplementPollInterval:  defaultTaskSupplementPollInterval,
 		taskSupplementReadyInterval: defaultTaskSupplementReadyInterval,
 		envRootBusyWait:             15 * time.Second,
-		taskPrepareTimeout:          defaultTaskPrepareTimeout,
+		taskPrepareTimeout:          cfg.TaskPrepareTimeout,
 		prepareLeaseRefresh:         taskPrepareLeaseRefresh,
 		reconcile:                   newReconcileBroadcaster(),
 		workspaceChanges:            newWorkspaceChangeSignal(),
@@ -6215,6 +6220,70 @@ func (d *Daemon) acquireLocalDirectoryLockIfNeeded(ctx context.Context, task Tas
 	return release, false
 }
 
+const gitRootPrepareLockPrefix = "\x00git-root-prepare:"
+
+func gitRootPrepareLockKey(gitRoot string) string {
+	return gitRootPrepareLockPrefix + gitRoot
+}
+
+// acquireGitRootPrepareLock serialises PrepareIsolated for one repository
+// inside this daemon. Different issues skip the per-path mutex in worktree
+// mode, so without this they all enter the helper and contend for
+// .git/multica-worktree.lock across a multi-minute hook.
+func (d *Daemon) acquireGitRootPrepareLock(ctx context.Context, deadline *pausableDeadline, task Task, assignment *localDirectoryAssignment, taskLog *slog.Logger) (func(), error) {
+	if assignment == nil {
+		return func() {}, nil
+	}
+	gitRoot, err := execenv.ResolveGitRoot(assignment.AbsPath)
+	if err != nil {
+		return nil, err
+	}
+	waitCtx, waitCancel := context.WithCancel(ctx)
+	defer waitCancel()
+	pollInterval := d.cancelPollInterval
+	if pollInterval == 0 {
+		pollInterval = 5 * time.Second
+	}
+	waitCounted := false
+	var watcherOnce sync.Once
+	release, err := d.localPathLocks.Acquire(waitCtx, gitRootPrepareLockKey(gitRoot), task.ID, func(holder string) {
+		d.resourceWaitTasks.Add(1)
+		waitCounted = true
+		if deadline != nil {
+			deadline.pause()
+		}
+		reason := assignment.DisplayName()
+		if holder != "" {
+			reason = fmt.Sprintf("%s (held by task %s)", reason, shortID(holder))
+		}
+		taskLog.Info("local_directory: waiting to prepare this repository",
+			"git_root", gitRoot, "holder", holder)
+		if waitErr := d.client.MarkTaskWaitingLocalDirectory(waitCtx, task.ID, reason); waitErr != nil {
+			taskLog.Warn("local_directory: mark waiting status failed", "error", waitErr)
+		}
+		watcherOnce.Do(func() {
+			cancelled := d.watchTaskCancellation(waitCtx, task.ID, pollInterval, taskLog)
+			go func() {
+				select {
+				case <-cancelled:
+					waitCancel()
+				case <-waitCtx.Done():
+				}
+			}()
+		})
+	})
+	if waitCounted {
+		d.resourceWaitTasks.Add(-1)
+		if deadline != nil {
+			deadline.resume()
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return release, nil
+}
+
 // reportTaskResult writes the final task disposition back to the server.
 //
 // Fail closed: only an explicit "completed" status is reported as success.
@@ -7440,6 +7509,7 @@ func (d *Daemon) prepareExecutionEnvironment(ctx context.Context, params execenv
 	if d.executionEnvironmentCommand == nil {
 		// Focused runTask tests construct a zero-valued Daemon and keep setup
 		// in-process. Production Daemons created by New always use isolation.
+		params.BindPrepareContext(ctx)
 		return execenv.Prepare(params, d.logger)
 	}
 	command, err := d.executionEnvironmentCommand()
@@ -8112,6 +8182,18 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 				// process so an idle reap can tell a live run from a dead one.
 				HolderPID: os.Getpid(),
 			}
+			// Serialise prepares for this git root in the parent BEFORE the
+			// helper starts. The helper-side file lock is released when a
+			// timed-out helper dies, even if its wt hooks are still copying;
+			// starting the next helper then races those orphans. Queue here,
+			// pause the prepare deadline, and surface waiting_local_directory
+			// so two issues on holt do not spend 5m each on the file lock.
+			releaseGitRoot, gitLockErr := d.acquireGitRootPrepareLock(prepareCtx, prepareDeadline, task, localAssignment, taskLog)
+			if gitLockErr != nil {
+				return TaskResult{}, fmt.Errorf("local_directory worktree: wait to prepare %s: %w",
+					localAssignment.AbsPath, gitLockErr)
+			}
+			defer releaseGitRoot()
 			// Take the per-path mutex for the snapshot alone, then hand it
 			// straight back — long enough to read a consistent tree, short
 			// enough that worktree tasks still overlap for the run itself.

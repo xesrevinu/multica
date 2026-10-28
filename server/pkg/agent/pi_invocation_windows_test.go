@@ -5,10 +5,25 @@ package agent
 import (
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 )
+
+func stubPowerShell(t *testing.T, path string, ok bool) {
+	t.Helper()
+	prev := powerShellLookup
+	powerShellLookup = func() (string, bool) { return path, ok }
+	t.Cleanup(func() { powerShellLookup = prev })
+}
+
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
 
 // TestPlatformPiInvocation_RewritesCmdLauncherToPowerShellCommand is the core
 // Windows test: when LookPath resolves pi to the npm-installed .cmd

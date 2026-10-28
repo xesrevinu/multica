@@ -4240,8 +4240,9 @@ type TaskWaitLocalDirectoryRequest struct {
 
 // MarkTaskWaitingLocalDirectory transitions a dispatched task to
 // waiting_local_directory. Called by the daemon when, after claiming a task
-// whose project carries a local_directory resource, it discovers another
-// in-flight task already holds the path's mutex.
+// whose project carries a local_directory resource, it is queued behind
+// another task's path mutex or per-git-root prepare. Idempotent if the row
+// is already waiting.
 func (h *Handler) MarkTaskWaitingLocalDirectory(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "taskId")
 

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 )
 
 func TestResolveAgentExecutablePath_PreservesDispatchShimName(t *testing.T) {
@@ -1609,4 +1611,36 @@ func TestLoadConfig_BackendOverrides_MalformedConfigFileNonFatal(t *testing.T) {
 	// Should also have logged a slog Warn — we don't assert on the log
 	// output here (avoids brittle string matching), but the build does
 	// make sure log/slog stays imported.
+}
+
+func TestLoadConfig_TaskPrepareTimeout(t *testing.T) {
+	stageFakeAgent(t)
+	t.Setenv("MULTICA_TASK_PREPARE_TIMEOUT", "")
+
+	cfg, err := LoadConfig(Overrides{
+		ServerURL:      "http://localhost:8080",
+		WorkspacesRoot: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.TaskPrepareTimeout != defaultTaskPrepareTimeout {
+		t.Fatalf("TaskPrepareTimeout = %s, want default %s", cfg.TaskPrepareTimeout, defaultTaskPrepareTimeout)
+	}
+	if defaultTaskPrepareTimeout != execenv.WorktreePrepareTimeout {
+		t.Fatalf("default prepare timeout %s must match worktrunk switch budget %s",
+			defaultTaskPrepareTimeout, execenv.WorktreePrepareTimeout)
+	}
+
+	t.Setenv("MULTICA_TASK_PREPARE_TIMEOUT", "20m")
+	cfg, err = LoadConfig(Overrides{
+		ServerURL:      "http://localhost:8080",
+		WorkspacesRoot: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("LoadConfig with override: %v", err)
+	}
+	if cfg.TaskPrepareTimeout != 20*time.Minute {
+		t.Fatalf("TaskPrepareTimeout = %s, want 20m", cfg.TaskPrepareTimeout)
+	}
 }

@@ -15,9 +15,11 @@ import (
 // A daemon never prepares a task in its own process: PrepareIsolated runs the
 // preparation in a short-lived helper (see isolation.go), so N concurrent
 // tasks on one local_directory are N separate processes, all issuing git
-// commands against the SAME repository. Worktree mode deliberately skips the
-// per-path task mutex — sibling tasks running concurrently is the whole point
-// of the mode — so nothing above this layer serialises them either.
+// commands against the SAME repository. Worktree mode skips the per-path
+// task mutex for the run itself — sibling issues overlap once prepared —
+// and the daemon parent now serialises PrepareIsolated per git root so those
+// helpers do not race this lock across a multi-minute hook. The file lock
+// remains the cross-process backstop.
 //
 // An in-process sync.Mutex therefore protected nothing in production: each
 // helper held its own copy and none of them ever contended. `git stash create`
@@ -60,13 +62,14 @@ const (
 // fail rather than proceed unprotected.
 var errGitRootLockBusy = errors.New("execenv: git repository lock is held by another task")
 
-// gitRootLockWait bounds the wait for a sibling's git section. That section is
-// a handful of local git commands plus the bounded untracked-file replay, so a
-// wait this long means the holder is wedged rather than busy: failing with a
-// message that says who to wait for beats occupying a daemon slot forever.
+// gitRootLockWait bounds the wait for a sibling's git section. The daemon
+// parent serialises prepares per git root first; this file lock is the
+// cross-process backstop (two daemons, or a helper that raced). A holder
+// may be inside `wt switch` pre-start hooks, so the wait matches that
+// budget rather than treating a multi-minute copy as a wedged lock.
 //
 // A var only so tests can shrink it; nothing at runtime writes it.
-var gitRootLockWait = 3 * time.Minute
+var gitRootLockWait = WorktreePrepareTimeout
 
 // gitRootFinalizeWait bounds the wait of a FINISHED run for the repo lock.
 // A sibling's prepare holds the lock across `wt switch`, whose start hooks
