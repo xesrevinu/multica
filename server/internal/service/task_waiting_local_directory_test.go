@@ -14,7 +14,8 @@ import (
 
 func TestMarkTaskWaitingLocalDirectoryIsIdempotent(t *testing.T) {
 	ctx := context.Background()
-	fx := testutil.New(sharedTestPool(t), "", "")
+	pool := testutil.OpenTestDB(t)
+	fx := testutil.New(pool, "", "")
 	suffix := time.Now().UnixNano()
 	fx.UserID = fx.User(t, "Wait local directory", fmt.Sprintf("wait-local-%d@multica.test", suffix))
 	fx.WorkspaceID = fx.Workspace(t, "Wait local directory", fmt.Sprintf("wait-local-%d", suffix))
@@ -28,7 +29,7 @@ func TestMarkTaskWaitingLocalDirectoryIsIdempotent(t *testing.T) {
 		"status":     "dispatched",
 	})
 
-	svc := NewTaskService(db.New(fx.Pool), fx.Pool, nil, events.New())
+	svc := NewTaskService(db.New(pool), pool, nil, events.New())
 
 	first, err := svc.MarkTaskWaitingLocalDirectory(ctx, util.MustParseUUID(taskID), "holt")
 	if err != nil {

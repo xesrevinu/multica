@@ -949,15 +949,14 @@ WHERE id = ?1 AND runtime_id = ?2 AND (dispatched_at = ?3 OR datetime(dispatched
 -- human-readable hint (typically the contested path) that the UI surfaces
 -- alongside the status.
 --
--- Accept dispatched and an already-waiting row so a re-mark (git-root
--- queue after a path wait, or a retry after a swallowed 400) is
--- idempotent. Running and terminal statuses stay excluded; StartAgentTask
--- is the reverse transition once the lock is acquired.
+-- The CHECK only allows the transition from 'dispatched' so a daemon can't
+-- mark an already-running or terminal task as waiting; the StartAgentTask
+-- mutation handles the reverse transition once the lock is acquired.
 UPDATE agent_task_queue
 SET status = 'waiting_local_directory',
     wait_reason = ?2,
     prepare_lease_expires_at = datetime(now(), '+' || (@prepare_lease_secs) || ' seconds')
-WHERE id = ?1 AND status IN ('dispatched', 'waiting_local_directory')
+WHERE id = ?1 AND status = 'dispatched'
 RETURNING *;
 
 -- name: CompleteAgentTask :one

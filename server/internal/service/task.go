@@ -4234,11 +4234,19 @@ func (s *TaskService) ExtendTaskPrepareLease(ctx context.Context, taskID, runtim
 // up-to-date snapshot.
 func (s *TaskService) MarkTaskWaitingLocalDirectory(ctx context.Context, taskID string, reason string) (*db.AgentTaskQueue, error) {
 	reason = sanitizeWaitReason(reason)
+	waitReason := sql.NullString{String: reason, Valid: reason != ""}
+	leaseSecs := nullString(fmt.Sprint(prepareLeaseDuration.Seconds()))
 	task, err := s.Queries.MarkAgentTaskWaitingLocalDirectory(ctx, db.MarkAgentTaskWaitingLocalDirectoryParams{
 		ID:               taskID,
-		WaitReason:       sql.NullString{String: reason, Valid: reason != ""},
-		PrepareLeaseSecs: nullString(fmt.Sprint(prepareLeaseDuration.Seconds())),
+		WaitReason:       waitReason,
+		PrepareLeaseSecs: leaseSecs,
 	})
+	if errors.Is(err, sql.ErrNoRows) {
+		// Re-mark after a path wait, git-root queue, or a swallowed 400.
+		// The generated UPDATE only matches dispatched, so an already-waiting
+		// row is refreshed in place instead of returning no-rows to the UI.
+		task, err = s.refreshWaitingLocalDirectory(ctx, taskID, waitReason, leaseSecs)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("mark task waiting_local_directory: %w", err)
 	}
@@ -4265,6 +4273,39 @@ func (s *TaskService) MarkTaskWaitingLocalDirectory(ctx context.Context, taskID 
 	}
 	s.broadcastTaskEvent(ctx, protocol.EventTaskWaitingLocalDirectory, task, extra)
 	return &task, nil
+}
+
+func (s *TaskService) refreshWaitingLocalDirectory(ctx context.Context, taskID string, waitReason sql.NullString, leaseSecs sql.NullString) (db.AgentTaskQueue, error) {
+	existing, err := s.Queries.GetAgentTask(ctx, taskID)
+	if err != nil {
+		return db.AgentTaskQueue{}, err
+	}
+	if existing.Status != "waiting_local_directory" {
+		return db.AgentTaskQueue{}, sql.ErrNoRows
+	}
+	if s.TxStarter == nil {
+		return existing, nil
+	}
+	tx, err := s.TxStarter.BeginTx(ctx, nil)
+	if err != nil {
+		return existing, nil
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+UPDATE agent_task_queue
+SET wait_reason = ?,
+    prepare_lease_expires_at = datetime(now(), '+' || ? || ' seconds')
+WHERE id = ? AND status = 'waiting_local_directory'`, waitReason, leaseSecs, taskID); err != nil {
+		return existing, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return existing, nil
+	}
+	refreshed, err := s.Queries.GetAgentTask(ctx, taskID)
+	if err != nil {
+		return existing, nil
+	}
+	return refreshed, nil
 }
 
 // legacyLocalDirectoryWaitPrefix is how daemons before the display-name change
