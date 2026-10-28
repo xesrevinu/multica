@@ -9,13 +9,17 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/daemon/processtree"
 )
 
 const (
-	// worktrunkSwitchTimeout covers pre-start. bun install and the reflink of
-	// a primary checkout's target/ both finish before wt returns when those
-	// commands are pre-start hooks. gitTimeout is too short for that.
-	worktrunkSwitchTimeout = 15 * time.Minute
+	// WorktreePrepareTimeout covers `wt switch` including pre-start hooks
+	// (bun install, a reflink of target/, cp of node_modules). The daemon's
+	// prepare deadline uses the same budget so a legitimate hook cannot lose
+	// to the hard prepare timeout and leave those copies running.
+	WorktreePrepareTimeout = 15 * time.Minute
+	worktrunkSwitchTimeout = WorktreePrepareTimeout
 	worktrunkRemoveTimeout = 2 * time.Minute
 )
 
@@ -30,7 +34,7 @@ func worktrunkConfigPresent(gitRoot string) bool {
 
 // addWorktrunkWorktree creates the task worktree with `wt switch` and returns
 // the path wt chose. It does not pick a directory of its own.
-func addWorktrunkWorktree(gitRoot string, plan taskBranchPlan, taskID string, logger *slog.Logger) (path, branch string, created bool, err error) {
+func addWorktrunkWorktree(ctx context.Context, gitRoot string, plan taskBranchPlan, taskID string, logger *slog.Logger) (path, branch string, created bool, err error) {
 	if _, lookErr := exec.LookPath("wt"); lookErr != nil {
 		return "", "", false, fmt.Errorf("execenv: %s has .config/wt.toml, so its worktree has to be created with wt; wt is not on PATH: %w", gitRoot, lookErr)
 	}
@@ -46,7 +50,7 @@ func addWorktrunkWorktree(gitRoot string, plan taskBranchPlan, taskID string, lo
 			logger.Info("execenv: conversation branch is already checked out; forking a task branch",
 				"git_root", gitRoot, "branch", plan.name)
 		}
-		return createWorktrunkBranch(gitRoot, plan.altName(taskID), plan.base, logger)
+		return createWorktrunkBranch(ctx, gitRoot, plan.altName(taskID), plan.base, logger)
 	}
 	if plan.reset {
 		if out, ferr := runGit(gitRoot, "branch", "-f", plan.name, plan.base); ferr != nil {
@@ -58,24 +62,24 @@ func addWorktrunkWorktree(gitRoot string, plan taskBranchPlan, taskID string, lo
 		branchExists = true
 	}
 	if (plan.continues || plan.reset) && branchExists {
-		path, err = switchWorktrunk(gitRoot, plan.name, "", false, logger)
+		path, err = switchWorktrunk(ctx, gitRoot, plan.name, "", false, logger)
 		if err != nil && branchUnavailable(err.Error()) && plan.exclusive {
 			return "", "", false, branchOccupied(gitRoot, plan.name, err.Error())
 		}
 		if err != nil && branchUnavailable(err.Error()) {
-			return createWorktrunkBranch(gitRoot, plan.altName(taskID), plan.base, logger)
+			return createWorktrunkBranch(ctx, gitRoot, plan.altName(taskID), plan.base, logger)
 		}
 		if err != nil {
 			return "", "", false, err
 		}
 		return path, plan.name, !plan.continues, nil
 	}
-	path, err = switchWorktrunk(gitRoot, plan.name, plan.base, true, logger)
+	path, err = switchWorktrunk(ctx, gitRoot, plan.name, plan.base, true, logger)
 	if err != nil && branchUnavailable(err.Error()) && plan.exclusive {
 		return "", "", false, branchOccupied(gitRoot, plan.name, err.Error())
 	}
 	if err != nil && branchUnavailable(err.Error()) {
-		return createWorktrunkBranch(gitRoot, plan.altName(taskID), plan.base, logger)
+		return createWorktrunkBranch(ctx, gitRoot, plan.altName(taskID), plan.base, logger)
 	}
 	if err != nil {
 		return "", "", false, err
@@ -83,8 +87,8 @@ func addWorktrunkWorktree(gitRoot string, plan taskBranchPlan, taskID string, lo
 	return path, plan.name, true, nil
 }
 
-func createWorktrunkBranch(gitRoot, branch, base string, logger *slog.Logger) (string, string, bool, error) {
-	path, err := switchWorktrunk(gitRoot, branch, base, true, logger)
+func createWorktrunkBranch(ctx context.Context, gitRoot, branch, base string, logger *slog.Logger) (string, string, bool, error) {
+	path, err := switchWorktrunk(ctx, gitRoot, branch, base, true, logger)
 	if err != nil {
 		return "", "", false, err
 	}
@@ -94,7 +98,7 @@ func createWorktrunkBranch(gitRoot, branch, base string, logger *slog.Logger) (s
 // switchWorktrunk runs wt and returns the worktree directory that appeared.
 // A failed wt that still left a worktree has that directory removed before
 // the error is returned, so a hook failure does not occupy the branch.
-func switchWorktrunk(gitRoot, branch, base string, create bool, logger *slog.Logger) (string, error) {
+func switchWorktrunk(ctx context.Context, gitRoot, branch, base string, create bool, logger *slog.Logger) (string, error) {
 	before, err := worktreePathSet(gitRoot)
 	if err != nil {
 		return "", err
@@ -111,14 +115,14 @@ func switchWorktrunk(gitRoot, branch, base string, create bool, logger *slog.Log
 		}
 	}
 	args = append(args, branch)
-	out, runErr := runWorktrunk(worktrunkSwitchTimeout, args...)
+	out, runErr := runWorktrunk(ctx, worktrunkSwitchTimeout, args...)
 	after, listErr := worktreeBranches(gitRoot)
 	// Other tasks run wt in the same repository concurrently, so "new since
 	// before" is not "ours": pick the new worktree that has our branch.
 	added := addedWorktreeForBranch(before, after, branch)
 	if runErr != nil {
 		for _, path := range added {
-			if rmErr := removeViaWorktrunk(gitRoot, path, logger); rmErr != nil && logger != nil {
+			if rmErr := removeViaWorktrunk(ctx, gitRoot, path, logger); rmErr != nil && logger != nil {
 				logger.Warn("execenv: could not remove the worktree left by a failed wt switch",
 					"path", path, "error", rmErr)
 			}
@@ -178,7 +182,7 @@ func addedWorktreeForBranch(before map[string]struct{}, after map[string]string,
 	return added
 }
 
-func removeViaWorktrunk(gitRoot, worktreePath string, logger *slog.Logger) error {
+func removeViaWorktrunk(ctx context.Context, gitRoot, worktreePath string, logger *slog.Logger) error {
 	if _, lookErr := exec.LookPath("wt"); lookErr != nil {
 		return lookErr
 	}
@@ -186,7 +190,7 @@ func removeViaWorktrunk(gitRoot, worktreePath string, logger *slog.Logger) error
 	// waits for post-remove, which drops the copied zvec slot. --force removes
 	// a dirty tree. --yes runs those hooks without a prompt; the daemon has
 	// no terminal, and skipping them would leave the copied slot behind.
-	out, err := runWorktrunk(worktrunkRemoveTimeout, "-C", gitRoot, "remove", "--yes", "--no-delete-branch", "--force", "--foreground", worktreePath)
+	out, err := runWorktrunk(ctx, worktrunkRemoveTimeout, "-C", gitRoot, "remove", "--yes", "--no-delete-branch", "--force", "--foreground", worktreePath)
 	if err != nil {
 		return fmt.Errorf("wt remove %s: %s: %w", worktreePath, strings.TrimSpace(out), err)
 	}
@@ -196,13 +200,15 @@ func removeViaWorktrunk(gitRoot, worktreePath string, logger *slog.Logger) error
 	return nil
 }
 
-func runWorktrunk(timeout time.Duration, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+func runWorktrunk(ctx context.Context, timeout time.Duration, args ...string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "wt", args...)
+	cmd := exec.Command("wt", args...)
 	cmd.Env = worktrunkEnv(os.Environ())
-	cmd.WaitDelay = 5 * time.Second
-	out, err := cmd.CombinedOutput()
+	out, err := processtree.CombinedOutput(ctx, cmd, 5*time.Second)
 	return string(out), err
 }
 

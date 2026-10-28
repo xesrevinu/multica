@@ -1,10 +1,13 @@
 package execenv
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A checkout with .config/wt.toml is created and removed through wt, so the
@@ -68,7 +71,7 @@ fi
 
 	head := gitRun(t, repo, "rev-parse", "HEAD")
 	plan := taskBranchPlan{name: "agent/align-check", base: head}
-	path, branch, created, err := addWorktrunkWorktree(repo, plan, "task-1", worktreeTestLogger())
+	path, branch, created, err := addWorktrunkWorktree(t.Context(), repo, plan, "task-1", worktreeTestLogger())
 	if err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -110,5 +113,41 @@ fi
 	}
 	if !strings.Contains(string(log), "remove") || !strings.Contains(string(log), "--yes") || !strings.Contains(string(log), "--no-delete-branch") {
 		t.Fatalf("wt remove did not keep the branch:\n%s", log)
+	}
+}
+
+func TestRunWorktrunkCancelsWithPrepareContext(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "hook-survived")
+	bin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Fake wt starts a background sleeper, then blocks. Cancelling the
+	// prepare context must reap that tree instead of waiting out the 15m
+	// background timeout the old runWorktrunk used.
+	script := `#!/bin/sh
+(sleep 2; echo leaked > "$WT_MARKER") &
+sleep 30
+`
+	if err := os.WriteFile(filepath.Join(bin, "wt"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("WT_MARKER", marker)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err := runWorktrunk(ctx, worktrunkSwitchTimeout, "switch", "--yes")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("runWorktrunk error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("runWorktrunk took %s, want the prepare context to win", elapsed)
+	}
+	time.Sleep(2500 * time.Millisecond)
+	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+		t.Fatalf("wt hook survived prepare cancel, stat error = %v", statErr)
 	}
 }

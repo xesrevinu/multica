@@ -150,6 +150,9 @@ type Config struct {
 	OpenCodeIdleWatchdog        time.Duration // OpenCode-specific no-message window; 0 falls back to AgentIdleWatchdog and values above it cannot extend the global bound
 	AgentIdleWatchdog           time.Duration // force-stop a run when the backend goes silent this long with an empty queue (0 = disabled)
 	AgentToolWatchdog           time.Duration // force-stop a run when a single tool call stays in flight (silent) this long (0 = never force-stop during a tool call, which now also covers a live Cursor background shell); defaults to AgentIdleWatchdog, so operators tune one number unless they deliberately want a wider tool budget
+	// TaskPrepareTimeout is the dispatched → running hard deadline, including
+	// wt switch and pre-start hooks. 0 means use defaultTaskPrepareTimeout.
+	TaskPrepareTimeout time.Duration
 	ClaudeArgs                  []string
 	CodexArgs                   []string
 
@@ -281,6 +284,14 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	}
 	if overrides.AgentTimeout != nil {
 		agentTimeout = *overrides.AgentTimeout
+	}
+
+	taskPrepareTimeout, err := durationFromEnv("MULTICA_TASK_PREPARE_TIMEOUT", defaultTaskPrepareTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+	if taskPrepareTimeout <= 0 {
+		return Config{}, fmt.Errorf("MULTICA_TASK_PREPARE_TIMEOUT must be positive (got %s)", taskPrepareTimeout)
 	}
 
 	// MULTICA_AGENT_IDLE_WATCHDOG=0 disables the per-task idle watchdog. We
@@ -610,6 +621,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		OpenCodeIdleWatchdog:            openCodeIdleWatchdog,
 		AgentIdleWatchdog:               agentIdleWatchdog,
 		AgentToolWatchdog:               agentToolWatchdog,
+		TaskPrepareTimeout:              taskPrepareTimeout,
 		ClaudeArgs:                      claudeArgs,
 		CodexArgs:                       codexArgs,
 		ProfileCommandOverrides:         profileCommandOverrides,

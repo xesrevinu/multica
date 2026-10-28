@@ -4,15 +4,119 @@ package execenv
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
+
+const (
+	unixDetachedPrepareHelperMode = "unix-detached-prepare-helper"
+	unixDetachedPrepareWriterMode = "unix-detached-prepare-writer"
+)
+
+func unixTestArgsAfterDoubleDash() []string {
+	for i, arg := range os.Args {
+		if arg == "--" && i+1 < len(os.Args) {
+			return os.Args[i+1:]
+		}
+	}
+	return nil
+}
+
+// TestUnixDetachedPrepareHelperProcess is the production failure shape: a
+// prepare helper that starts a hook in a new session, then blocks. Killing
+// only the helper PGID left that hook (cp of node_modules) as PPID 1.
+func TestUnixDetachedPrepareHelperProcess(t *testing.T) {
+	args := unixTestArgsAfterDoubleDash()
+	if len(args) != 3 || args[0] != unixDetachedPrepareHelperMode {
+		return
+	}
+	var request preparationRequest
+	if err := json.NewDecoder(os.Stdin).Decode(&request); err != nil {
+		os.Exit(2)
+	}
+	child := exec.Command(os.Args[0], "-test.run=^TestUnixDetachedPrepareWriterProcess$", "--", unixDetachedPrepareWriterMode, args[1])
+	child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := child.Start(); err != nil {
+		os.Exit(3)
+	}
+	if err := os.WriteFile(args[2], []byte("ready"), 0o600); err != nil {
+		os.Exit(4)
+	}
+	for {
+		time.Sleep(time.Hour)
+	}
+}
+
+func TestUnixDetachedPrepareWriterProcess(t *testing.T) {
+	args := unixTestArgsAfterDoubleDash()
+	if len(args) != 2 || args[0] != unixDetachedPrepareWriterMode {
+		return
+	}
+	time.Sleep(2 * time.Second)
+	if err := os.WriteFile(args[1], []byte("leaked"), 0o600); err != nil {
+		os.Exit(2)
+	}
+}
+
+func TestPrepareIsolated_KillsNewSessionDescendant(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "old-attempt-marker")
+	ready := filepath.Join(dir, "descendant-ready")
+	command := []string{
+		os.Args[0],
+		"-test.run=^TestUnixDetachedPrepareHelperProcess$",
+		"--",
+		unixDetachedPrepareHelperMode,
+		marker,
+		ready,
+	}
+	params := PrepareParams{
+		WorkspacesRoot:  filepath.Join(dir, "workspaces"),
+		WorkspaceID:     "a05b0e10-ee7a-4603-a72d-a548b2390cb2",
+		WorkspaceSlug:   strings.Repeat("workspace", 20),
+		TaskID:          "12345678-1111-7222-8333-444444444444",
+		IssueIdentifier: strings.Repeat("issue", 20),
+		Provider:        "claude",
+		Task:            TaskContextForEnv{IssueID: "issue-unix-tree"},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := PrepareIsolated(ctx, command, params, nil)
+		result <- err
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			<-result
+			t.Fatal("helper did not start its detached descendant")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("PrepareIsolated error = %v, want context canceled", err)
+	}
+
+	time.Sleep(2500 * time.Millisecond)
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("timed-out helper descendant survived and wrote marker: %v", err)
+	}
+}
 
 // TestPrepareIsolated_PermanentFIFOBlockThenImmediateRetry is the lifecycle
 // regression for MUL-4923. The first real Codex Prepare blocks forever opening

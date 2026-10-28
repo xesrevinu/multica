@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -1210,6 +1211,96 @@ func TestIssueTasksStillSerialiseOnPathMutex(t *testing.T) {
 	<-blocked
 	if waitCalls.Load() == 0 {
 		t.Error("waiting task never reported waiting_local_directory to the server")
+	}
+	release()
+}
+
+func initGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	cmd := exec.Command("git", "init")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+}
+
+// TestGitRootPrepareLockQueuesAndMarksWaiting is the holt pile-up
+// regression: two worktree issues on one repo must queue in the daemon
+// parent (not race the helper file lock), pause the prepare deadline,
+// and surface waiting_local_directory.
+func TestGitRootPrepareLockQueuesAndMarksWaiting(t *testing.T) {
+	t.Parallel()
+
+	const daemonID = "d-mine"
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+
+	raw, err := json.Marshal(localDirectoryRef{
+		LocalPath:     repo,
+		DaemonID:      daemonID,
+		Label:         "holt",
+		ExecutionMode: localDirectoryModeWorktree,
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	resources := []ProjectResourceData{
+		{ID: "r1", ResourceType: localDirectoryResourceType, ResourceRef: raw},
+	}
+	first := Task{ID: "issue-task-1", IssueID: "issue-1", ProjectResources: resources}
+	second := Task{ID: "issue-task-2", IssueID: "issue-2", ProjectResources: resources}
+
+	var waitCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if strings.HasSuffix(req.URL.Path, "/wait-local-directory") {
+			waitCalls.Add(1)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	assignment, err := localDirectoryAssignmentForTask(first, daemonID)
+	if err != nil || assignment == nil {
+		t.Fatalf("assignment: %v %#v", err, assignment)
+	}
+
+	d := &Daemon{
+		cfg:                Config{DaemonID: daemonID},
+		client:             NewClient(srv.URL),
+		localPathLocks:     NewLocalPathLocker(),
+		logger:             slog.Default(),
+		cancelPollInterval: time.Hour,
+	}
+
+	ctx, deadline := newPausableDeadline(context.Background(), time.Hour, errTaskPrepareTimeout)
+	release, err := d.acquireGitRootPrepareLock(ctx, deadline, first, assignment, slog.Default())
+	if err != nil || release == nil {
+		t.Fatalf("first prepare lock: release_nil=%v err=%v", release == nil, err)
+	}
+
+	secondAssignment, err := localDirectoryAssignmentForTask(second, daemonID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitCtx, cancel := context.WithCancel(context.Background())
+	blocked := make(chan struct{})
+	go func() {
+		defer close(blocked)
+		secondRelease, _ := d.acquireGitRootPrepareLock(waitCtx, deadline, second, secondAssignment, slog.Default())
+		if secondRelease != nil {
+			secondRelease()
+		}
+	}()
+
+	select {
+	case <-blocked:
+		t.Fatal("second issue prepare did not wait for the git-root lock")
+	case <-time.After(200 * time.Millisecond):
+	}
+	cancel()
+	<-blocked
+	if waitCalls.Load() == 0 {
+		t.Error("waiting prepare never reported waiting_local_directory")
 	}
 	release()
 }

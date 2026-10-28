@@ -4226,10 +4226,12 @@ func (s *TaskService) ExtendTaskPrepareLease(ctx context.Context, taskID, runtim
 
 // MarkTaskWaitingLocalDirectory parks a dispatched task in the
 // waiting_local_directory state while the daemon waits for another in-flight
-// task to release the project_resource path lock. reason carries a short
-// human-readable hint (typically the contested path) that the UI surfaces
-// next to the status. Returns the updated row so the daemon can confirm the
-// transition and so the broadcast carries the up-to-date snapshot.
+// task to release a local_directory lock (path mutex or per-git-root
+// prepare). reason carries a short human-readable hint that the UI surfaces
+// next to the status. Idempotent when the row is already waiting: the
+// reason and prepare lease are refreshed. Returns the updated row so the
+// daemon can confirm the transition and so the broadcast carries the
+// up-to-date snapshot.
 func (s *TaskService) MarkTaskWaitingLocalDirectory(ctx context.Context, taskID string, reason string) (*db.AgentTaskQueue, error) {
 	reason = sanitizeWaitReason(reason)
 	task, err := s.Queries.MarkAgentTaskWaitingLocalDirectory(ctx, db.MarkAgentTaskWaitingLocalDirectoryParams{
