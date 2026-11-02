@@ -12,6 +12,13 @@ dist
 server/bin
 server/tmp
 
+# Copy-only image staging (scripts/stage-image.sh). The bare `dist` rule
+# above would otherwise drop .docker/stage/dist/server/multica-web.
+!.docker/
+!.docker/**
+!.docker/stage/dist/
+!.docker/stage/dist/**
+
 # Git
 .git
 .gitignore

@@ -1,4 +1,4 @@
-.PHONY: help makehelp dev dev-from-k8s server daemon cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree remove-worktree db-up db-down db-drop db-reset db-from-k8s selfhost selfhost-build selfhost-stop up down status list destroy gc env-exec api-dev web-dev
+.PHONY: help makehelp dev dev-from-k8s server daemon cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree remove-worktree db-up db-down db-drop db-reset db-from-k8s selfhost selfhost-build selfhost-stop image image-stage up down status list destroy gc env-exec api-dev web-dev
 
 MAIN_ENV_FILE ?= .env
 WORKTREE_ENV_FILE ?= .env.worktree
@@ -152,6 +152,18 @@ selfhost-stop: ## Stop the self-hosted Docker Compose stack
 	@echo "==> Stopping Multica services..."
 	$(COMPOSE) -f docker-compose.selfhost.yml down
 	@echo "✓ All services stopped."
+
+image-stage: ## Host-build linux server+web into .docker/stage (copy-only Dockerfile input)
+	@bash scripts/stage-image.sh
+
+image: image-stage ## Package the staged tree into multica-backend:local (and :$(VERSION))
+	@echo "==> docker build linux/arm64 multica-backend:$(VERSION)"
+	docker build --platform linux/arm64 \
+		-t "multica-backend:$(VERSION)" \
+		-t multica-backend:local \
+		-f Dockerfile .
+	@docker image inspect "multica-backend:$(VERSION)" >/dev/null
+	@echo "✓ multica-backend:$(VERSION) (SQLite + embedded web)"
 
 # ---------- Environments ----------
 ##@ Environments

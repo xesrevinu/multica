@@ -1,19 +1,19 @@
-# Development override: build the backend/web images from the current checkout
-# instead of pulling the official GHCR images.
-
+# Development override: package the host-built stage into one image.
+# Prefer: make image   (stage + docker build)
+# This file remains for `make selfhost-build` callers.
 services:
   backend:
-    image: multica-backend:dev
+    image: multica-backend:local
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        VERSION: ${VERSION:-dev}
-        COMMIT: ${COMMIT:-unknown}
-        DATE: ${DATE:-unknown}
-
+      platforms:
+        - linux/arm64
+  # Unified image embeds the web UI; no separate frontend build.
   frontend:
-    image: multica-web:dev
+    image: multica-backend:local
     build:
       context: .
-      dockerfile: Dockerfile.web
+      dockerfile: Dockerfile
+      platforms:
+        - linux/arm64
