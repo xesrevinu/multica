@@ -129,7 +129,7 @@ On Windows, set `$env:MULTICA_MODE="with-server"`, then run the PowerShell insta
 
 This pulls the official images from GHCR and requires Docker. See the
 [Self-Hosting Guide](SELF_HOSTING.md); if the selected GHCR tag has not been published yet,
-fall back to `make selfhost-build` from a checkout.
+build the single SQLite image with `make image` from a checkout.
 
 A self-hosted server sends one anonymous, deployment-level snapshot a day: the release version
 plus bucketed counts, with no names, content, or IDs. Set `DO_NOT_TRACK=1` on the API server to

@@ -1,4 +1,4 @@
-.PHONY: help makehelp dev dev-from-k8s server daemon cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree remove-worktree db-up db-down db-drop db-reset db-from-k8s selfhost selfhost-build selfhost-stop image image-stage up down status list destroy gc env-exec api-dev web-dev
+.PHONY: help makehelp dev dev-from-k8s server daemon cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree remove-worktree db-up db-down db-drop db-reset db-from-k8s image image-stage up down status list destroy gc env-exec api-dev web-dev
 
 MAIN_ENV_FILE ?= .env
 WORKTREE_ENV_FILE ?= .env.worktree
@@ -77,81 +77,10 @@ help: ## Show available make targets and common local workflows
 makehelp: help ## Alias for `make help`
 
 # ---------- Self-hosting (Docker Compose) ----------
-##@ Self-hosting
+##@ Images
 
-selfhost: ## Create .env if needed, then pull and start the official self-hosted images
-	$(REQUIRE_COMPOSE)
-	@if [ ! -f .env ]; then \
-		echo "==> Creating .env from .env.example..."; \
-		cp .env.example .env; \
-		JWT=$$(openssl rand -hex 32); \
-		PGPASS=$$(openssl rand -hex 24); \
-		VCSKEY=$$(openssl rand -base64 32); \
-		if [ "$$(uname)" = "Darwin" ]; then \
-			sed -i '' "s/^JWT_SECRET=.*/JWT_SECRET=$$JWT/" .env; \
-			sed -i '' "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$$PGPASS/" .env; \
-			sed -i '' -E "s#^(DATABASE_URL=postgres://[^:]+:)[^@]*(@.*)#\1$$PGPASS\2#" .env; \
-			sed -i '' "s#^MULTICA_VCS_SECRET_KEY=.*#MULTICA_VCS_SECRET_KEY=$$VCSKEY#" .env; \
-		else \
-			sed -i "s/^JWT_SECRET=.*/JWT_SECRET=$$JWT/" .env; \
-			sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$$PGPASS/" .env; \
-			sed -i -E "s#^(DATABASE_URL=postgres://[^:]+:)[^@]*(@.*)#\1$$PGPASS\2#" .env; \
-			sed -i "s#^MULTICA_VCS_SECRET_KEY=.*#MULTICA_VCS_SECRET_KEY=$$VCSKEY#" .env; \
-		fi; \
-		echo "==> Generated random JWT_SECRET, POSTGRES_PASSWORD, and MULTICA_VCS_SECRET_KEY"; \
-	fi
-	@echo "==> Pulling official Multica images..."
-	@if ! $(COMPOSE) -f docker-compose.selfhost.yml pull; then \
-		echo ""; \
-		echo "Official images for tag '$${MULTICA_IMAGE_TAG:-latest}' are not published yet."; \
-		echo "If this is before the first GHCR release, build from the current checkout:"; \
-		echo "  make selfhost-build"; \
-		exit 1; \
-	fi
-	@echo "==> Starting Multica via Docker Compose..."
-	$(COMPOSE) -f docker-compose.selfhost.yml up -d
-	@bash scripts/selfhost-wait.sh official
-
-selfhost-build: ## Build backend/web from the current checkout and start the self-hosted stack
-	$(REQUIRE_COMPOSE)
-	@if [ ! -f .env ]; then \
-		echo "==> Creating .env from .env.example..."; \
-		cp .env.example .env; \
-		JWT=$$(openssl rand -hex 32); \
-		PGPASS=$$(openssl rand -hex 24); \
-		VCSKEY=$$(openssl rand -base64 32); \
-		if [ "$$(uname)" = "Darwin" ]; then \
-			sed -i '' "s/^JWT_SECRET=.*/JWT_SECRET=$$JWT/" .env; \
-			sed -i '' "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$$PGPASS/" .env; \
-			sed -i '' -E "s#^(DATABASE_URL=postgres://[^:]+:)[^@]*(@.*)#\1$$PGPASS\2#" .env; \
-			sed -i '' "s#^MULTICA_VCS_SECRET_KEY=.*#MULTICA_VCS_SECRET_KEY=$$VCSKEY#" .env; \
-		else \
-			sed -i "s/^JWT_SECRET=.*/JWT_SECRET=$$JWT/" .env; \
-			sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$$PGPASS/" .env; \
-			sed -i -E "s#^(DATABASE_URL=postgres://[^:]+:)[^@]*(@.*)#\1$$PGPASS\2#" .env; \
-			sed -i "s#^MULTICA_VCS_SECRET_KEY=.*#MULTICA_VCS_SECRET_KEY=$$VCSKEY#" .env; \
-		fi; \
-		echo "==> Generated random JWT_SECRET, POSTGRES_PASSWORD, and MULTICA_VCS_SECRET_KEY"; \
-	fi
-	@echo "==> Building the web app on the host (copied into the image)..."
-	@target=""; \
-	if [ "$$(uname -s)" = "Darwin" ]; then \
-		case "$$(uname -m)" in \
-			arm64|aarch64) target=bun-linux-arm64 ;; \
-			x86_64) target=bun-linux-x64 ;; \
-		esac; \
-	fi; \
-	if [ -n "$$target" ]; then echo "==> Web server target $$target"; MULTICA_WEB_COMPILE_TARGET=$$target pnpm --filter @multica/web build; \
-	else pnpm --filter @multica/web build; fi
-	@echo "==> Building images from the current checkout..."
-	$(COMPOSE) -f docker-compose.selfhost.yml -f docker-compose.selfhost.build.yml up -d --build
-	@bash scripts/selfhost-wait.sh build
-
-selfhost-stop: ## Stop the self-hosted Docker Compose stack
-	$(REQUIRE_COMPOSE)
-	@echo "==> Stopping Multica services..."
-	$(COMPOSE) -f docker-compose.selfhost.yml down
-	@echo "✓ All services stopped."
+# Local deploy path: host-build → copy-only Dockerfile → one SQLite image.
+# (The old docker-compose.selfhost*.yml postgres/frontend stack was removed.)
 
 image-stage: ## Host-build linux server+web into .docker/stage (copy-only Dockerfile input)
 	@bash scripts/stage-image.sh

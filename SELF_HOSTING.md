@@ -1,3 +1,8 @@
+> **Note (this fork):** the `docker-compose.selfhost*.yml` stack was removed.
+> Package a single SQLite + embedded-web image with `make image`, then deploy
+> via Helm (`postgres.enabled=false`, `frontend.embedded=true`). Sections below
+> that mention Compose self-host are historical for upstream Multica.
+
 # Self-Hosting Guide
 
 Deploy Multica on your own infrastructure in minutes.
