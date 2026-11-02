@@ -1,16 +1,17 @@
 package agent
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -18,10 +19,11 @@ func chooseDirectInvocation(_, lookedUp string, args []string, _ *slog.Logger) (
 	return lookedUp, args
 }
 
-// gbotBackend runs one Multica task through grok-bot-cli. The Grok Bot gateway
-// has no workspace, project, or durable task API, so isolation lives in the
-// arguments: workspace id, checkout, task id, and a workspace-scoped session
-// file. The CLI owns idempotency and the unknown-delivery rule.
+// gbotBackend runs one Multica task through the gbot CLI. The Grok Bot surface
+// has no workspace or durable task API, so isolation is the CLI arguments:
+// workspace id, checkout, task id, and (by default) a session file under
+// MULTICA_ARTIFACT_ROOT. The CLI owns idempotency, scope reattach, and the
+// unknown-delivery rule — Multica always passes the current Multica task id.
 type gbotBackend struct {
 	cfg Config
 }
@@ -33,6 +35,7 @@ type gbotTaskResult struct {
 	SessionID   string `json:"sessionId"`
 	Reply       string `json:"reply"`
 	ExitCode    int    `json:"exitCode"`
+	FailureKind string `json:"failureKind"`
 }
 
 func (b *gbotBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
@@ -61,19 +64,15 @@ func (b *gbotBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 		return nil, err
 	}
 	issue := strings.TrimSpace(b.cfg.Env["MULTICA_ISSUE_IDENTIFIER"])
-	sessionFile := gbotSessionFile(b.cfg.Env, opts.WorkspaceID, bot, issue, b.cfg.TaskID)
-	// Persistent cloud thread: if a prior delivery was accepted and has not
-	// reached a terminal marker yet, reattach that same --task-id and re-poll.
-	// Minting a new Multica task id would post another continue into the busy
-	// thread (T5_rerun bounce).
-	taskID := gbotAttachTaskID(sessionFile, opts.WorkspaceID, bot, issue, b.cfg.TaskID)
+	// Always pass the current Multica task id. gbot reattaches in-flight
+	// deliveries by (workspace, bot, issue) scope so T5_rerun does not mint a
+	// second cloud continue into a busy thread.
 	args := []string{
 		"task", "run",
 		"--workspace-id", opts.WorkspaceID,
 		"--bot", bot,
-		"--task-id", taskID,
+		"--task-id", b.cfg.TaskID,
 		"--cwd", opts.Cwd,
-		"--session-file", sessionFile,
 		"--json",
 	}
 	if issue != "" {
@@ -90,32 +89,91 @@ func (b *gbotBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 	cmd.Dir = opts.Cwd
 	cmd.Env = buildEnv(b.cfg.Env)
 	cmd.WaitDelay = 10 * time.Second
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("gbot stdout pipe: %w", err)
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("gbot stderr pipe: %w", err)
+	}
+
 	b.cfg.logAgentCommand(cmd, newAgentCommandLogArgs(args))
 	messages := make(chan Message, 16)
 	results := make(chan Result, 1)
 	started := time.Now()
+
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, fmt.Errorf("gbot start: %w", err)
+	}
+
 	go func() {
 		defer cancel()
 		defer close(messages)
 		defer close(results)
-		err := cmd.Run()
-		results <- gbotResult(stdout.Bytes(), stderr.Bytes(), err, time.Since(started))
+
+		var stdoutBuf bytes.Buffer
+		var stderrBuf bytes.Buffer
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, _ = io.Copy(&stdoutBuf, stdoutPipe)
+		}()
+		go func() {
+			defer wg.Done()
+			forwardGbotStderr(stderrPipe, &stderrBuf, messages)
+		}()
+		wg.Wait()
+		err := cmd.Wait()
+		results <- gbotResult(stdoutBuf.Bytes(), stderrBuf.Bytes(), err, time.Since(started))
 	}()
+
 	messages <- Message{Type: MessageText, Content: prompt}
 	return &Session{Messages: messages, Result: results}, nil
+}
+
+// forwardGbotStderr copies stderr for diagnostics and turns heartbeat NDJSON
+// lines into MessageStatus so the daemon idle watchdog sees activity without
+// posting transcript spam. Orchestrator idle_min still uses server task
+// messages; gbot runs keep idle_min_by_backend gbot:-1 until that path exists.
+func forwardGbotStderr(r io.Reader, buf *bytes.Buffer, messages chan<- Message) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		buf.WriteString(line)
+		buf.WriteByte('\n')
+		var event struct {
+			Type   string `json:"type"`
+			TaskID string `json:"taskId"`
+		}
+		if json.Unmarshal([]byte(line), &event) != nil || event.Type != "heartbeat" {
+			continue
+		}
+		content := "gbot heartbeat"
+		if event.TaskID != "" {
+			content = "gbot heartbeat " + event.TaskID
+		}
+		select {
+		case messages <- Message{Type: MessageStatus, Content: content}:
+		default:
+			// Drop when the drain loop is behind; another heartbeat will follow.
+		}
+	}
 }
 
 func gbotResult(stdout, stderr []byte, runErr error, elapsed time.Duration) Result {
 	result := Result{Status: "failed", DurationMs: elapsed.Milliseconds()}
 	parsed := gbotTaskResult{}
 	raw := bytes.TrimSpace(stdout)
+	// New gbot --json prints one result object on stdout. Keep a last-object
+	// recovery only for mixed-version CLIs that still emit a banner (OX-220).
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		// gbot --json may still print a banner or progress line before the
-		// result document; recover the last JSON object when present so a
-		// completed marker is not lost as a bare "exit status 1".
 		if obj := lastJSONObject(raw); len(obj) == 0 || json.Unmarshal(obj, &parsed) != nil {
 			result.Error = gbotNoResultError(runErr, stderr, raw)
 			return result
@@ -128,7 +186,11 @@ func gbotResult(stdout, stderr []byte, runErr error, elapsed time.Duration) Resu
 		result.Status = "completed"
 	case "unknown":
 		result.Status = "failed"
-		result.Error = "gbot delivery is unknown; inspect the bot thread before retrying"
+		if parsed.FailureKind == "unknown_delivery" {
+			result.Error = "gbot failureKind=unknown_delivery; inspect the bot thread before retrying"
+		} else {
+			result.Error = "gbot delivery is unknown; inspect the bot thread before retrying"
+		}
 	default:
 		result.Status = "failed"
 		if parsed.Reply != "" {
@@ -181,96 +243,8 @@ func shortTail(s string, n int) string {
 }
 
 // GbotArtifactRootEnv overrides where gbot keeps run state outside checkouts.
+// Kept exported so tests and docs can set the same variable the CLI reads.
 const GbotArtifactRootEnv = "MULTICA_ARTIFACT_ROOT"
-
-// ArtifactRoot is the per-project state root, the sibling of the worktrunk
-// worktree root (~/.cursor/worktrees/<repo>): ~/.cursor/artifacts/<repo>.
-// Multica's own run state (gbot sessions) lives under the "multica" key.
-func ArtifactRoot(env map[string]string, project string) string {
-	base := strings.TrimSpace(env[GbotArtifactRootEnv])
-	if base == "" {
-		base = strings.TrimSpace(os.Getenv(GbotArtifactRootEnv))
-	}
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil || home == "" {
-			home = os.TempDir()
-		}
-		base = filepath.Join(home, ".cursor", "artifacts")
-	}
-	return filepath.Join(base, gbotSlug(project))
-}
-
-
-// gbotSessionState is the on-disk session written by grok-bot-cli.
-type gbotSessionState struct {
-	Version     int    `json:"version"`
-	TaskID      string `json:"taskId"`
-	WorkspaceID string `json:"workspaceId"`
-	Bot         string `json:"bot"`
-	Issue       string `json:"issue,omitempty"`
-	Delivery    string `json:"delivery"`
-	Status      string `json:"status,omitempty"`
-}
-
-// gbotAttachTaskID returns the session's task id when a prior delivery is still
-// in flight (accepted, no terminal status). Otherwise it returns wantTaskID so
-// a fresh Multica execution can mint a new cloud task id.
-func gbotAttachTaskID(sessionFile, workspaceID, bot, issue, wantTaskID string) string {
-	raw, err := os.ReadFile(sessionFile)
-	if err != nil {
-		return wantTaskID
-	}
-	var s gbotSessionState
-	if err := json.Unmarshal(raw, &s); err != nil || s.Version != 1 || s.TaskID == "" {
-		return wantTaskID
-	}
-	if s.WorkspaceID != workspaceID {
-		return wantTaskID
-	}
-	if s.Bot != "" && bot != "" && s.Bot != bot {
-		return wantTaskID
-	}
-	if issue != "" && s.Issue != "" && s.Issue != issue {
-		return wantTaskID
-	}
-	switch strings.ToLower(strings.TrimSpace(s.Status)) {
-	case "completed", "failed", "unknown":
-		return wantTaskID
-	}
-	if strings.ToLower(strings.TrimSpace(s.Delivery)) != "accepted" {
-		return wantTaskID
-	}
-	return s.TaskID
-}
-
-// gbotSessionFile keeps one session per issue (per task when there is no
-// issue) for one bot in one workspace. It lives outside the checkout so a
-// recycled worktree does not lose the continuation cursor.
-func gbotSessionFile(env map[string]string, workspaceID, bot, issue, taskID string) string {
-	key := issue
-	if key == "" {
-		key = "task-" + taskID
-	}
-	return filepath.Join(ArtifactRoot(env, "multica"), "gbot", gbotSlug(workspaceID), gbotSlug(bot), gbotSlug(key)+".session.json")
-}
-
-func gbotSlug(value string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(strings.TrimSpace(value)) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '.':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('-')
-		}
-	}
-	out := strings.Trim(b.String(), "-.")
-	if out == "" {
-		return "_"
-	}
-	return out
-}
 
 // checkBot fails the run when the named bot does not exist, instead of
 // delivering the task to some other bot.
