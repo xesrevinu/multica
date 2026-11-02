@@ -68,7 +68,7 @@ func (b *gbotBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 	// deliveries by (workspace, bot, issue) scope so T5_rerun does not mint a
 	// second cloud continue into a busy thread.
 	args := []string{
-		"task", "run",
+		"bot", "task", "run",
 		"--workspace-id", opts.WorkspaceID,
 		"--bot", bot,
 		"--task-id", b.cfg.TaskID,
@@ -251,20 +251,20 @@ const GbotArtifactRootEnv = "MULTICA_ARTIFACT_ROOT"
 func (b *gbotBackend) checkBot(ctx context.Context, execName, lookedUp, bot string) error {
 	checkCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	cmd, _, _ := b.cfg.commandAt(execName).execVia(checkCtx, chooseDirectInvocation, lookedUp, []string{"bots", "get", bot, "--json"}, b.cfg.Logger)
+	cmd, _, _ := b.cfg.commandAt(execName).execVia(checkCtx, chooseDirectInvocation, lookedUp, []string{"bot", "get", bot, "--json"}, b.cfg.Logger)
 	cmd.Env = buildEnv(b.cfg.Env)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("gbot bot %q not found or unreachable (gbot bots get failed: %v); create it with sync or fix `gbot:` on the agent", bot, err)
+		return fmt.Errorf("gbot bot %q not found or unreachable (gbot bot get failed: %v); create it with sync or fix `gbot:` on the agent", bot, err)
 	}
 	var rec struct {
 		ID   string `json:"id"`
 		Kind string `json:"kind"`
 	}
 	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &rec); err != nil || rec.ID == "" {
-		return fmt.Errorf("gbot bot %q not found: gbot bots get returned no record", bot)
+		return fmt.Errorf("gbot bot %q not found: gbot bot get returned no record", bot)
 	}
 	if rec.Kind == "group" {
 		return fmt.Errorf("gbot target %q is a group, not a bot", bot)

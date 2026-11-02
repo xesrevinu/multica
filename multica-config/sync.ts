@@ -15,7 +15,7 @@ interface AgentManifest {
   runtime: string;
   /** Grok bot name used when runtime is gbot. Becomes MULTICA_GBOT_BOT for that agent. */
   gbot?: string;
-  /** Creation-time persona of the persistent Grok Bot named by `gbot`. Sync writes it with `gbot bots upsert --instructions-file`. */
+  /** Creation-time persona of the persistent Grok Bot named by `gbot`. Sync writes it with `gbot bot upsert --instructions-file`. */
   gbot_instructions?: string;
   role?: string;
   description?: string;
@@ -3043,11 +3043,11 @@ function runGbot(args: string[]): { status: number; stdout: string; stderr: stri
 }
 
 export const gbotLookup: GbotLookup = (name) => {
-  const result = runGbot(["bots", "get", name, "--json"]);
+  const result = runGbot(["bot", "get", name, "--json"]);
   if (result.status !== 0) {
     const detail = `${result.stderr}${result.stdout}`;
     if (/No bot or group named|not found/i.test(detail)) return null;
-    throw new Error(`gbot bots get ${JSON.stringify(name)} failed: ${detail.trim().slice(0, 300)}`);
+    throw new Error(`gbot bot get ${JSON.stringify(name)} failed: ${detail.trim().slice(0, 300)}`);
   }
   const parsed = parseJSONObject(result.stdout.trim(), "gbot bot");
   return {
@@ -3108,10 +3108,10 @@ export function buildGbotPlans(
         diff: desired !== undefined ? [{ field: "instructions", from: "", to: desired }] : [],
         args: [],
         exec: () => {
-          const args = ["bots", "upsert", "--name", bot, "--json"];
+          const args = ["bot", "upsert", "--name", bot, "--json"];
           const full = desired !== undefined ? [...args, "--instructions-file", writeInstructions(bot, desired)] : args;
           const result = runGbot(full);
-          if (result.status !== 0) throw new Error(`gbot bots upsert ${bot} failed: ${result.stderr.trim().slice(0, 300)}`);
+          if (result.status !== 0) throw new Error(`gbot bot upsert ${bot} failed: ${result.stderr.trim().slice(0, 300)}`);
         },
       });
       continue;
@@ -3128,7 +3128,7 @@ export function buildGbotPlans(
       args: [],
       exec: () => {
         const result = runGbot([
-          "bots",
+          "bot",
           "upsert",
           "--name",
           bot,
@@ -3136,7 +3136,7 @@ export function buildGbotPlans(
           writeInstructions(bot, desired),
           "--json",
         ]);
-        if (result.status !== 0) throw new Error(`gbot bots upsert ${bot} failed: ${result.stderr.trim().slice(0, 300)}`);
+        if (result.status !== 0) throw new Error(`gbot bot upsert ${bot} failed: ${result.stderr.trim().slice(0, 300)}`);
       },
     });
   }

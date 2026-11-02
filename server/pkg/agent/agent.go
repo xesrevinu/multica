@@ -447,7 +447,7 @@ var launchHeaders = map[string]string{
 	"dsh":      "dsh --profile multica (stdio)",
 	"opencode": "opencode run (json)",
 	"pi":       "pi (json mode)",
-	"gbot":     "gbot task run",
+	"gbot":     "gbot bot task run",
 	"grok":     "grok agent stdio",
 	"yielded":  "yielded-agent",
 }

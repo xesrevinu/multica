@@ -42,7 +42,7 @@ func TestGbotIsADistinctRuntime(t *testing.T) {
 	if !IsSupportedType("gbot") {
 		t.Fatal("gbot is not a supported runtime")
 	}
-	if LaunchHeader("gbot") != "gbot task run" {
+	if LaunchHeader("gbot") != "gbot bot task run" {
 		t.Fatalf("header = %q", LaunchHeader("gbot"))
 	}
 	backend, err := New("gbot", Config{})
@@ -59,7 +59,7 @@ func writeFakeGbot(t *testing.T, botsGet string) (string, string) {
 	dir := t.TempDir()
 	argsLog := filepath.Join(dir, "args.log")
 	script := "#!/bin/sh\necho \"$@\" >> " + argsLog + "\n" +
-		"if [ \"$1\" = bots ]; then\n" + botsGet + "\nfi\n" +
+		"if [ \"$1\" = bot ] && [ \"$2\" = get ]; then\n" + botsGet + "\nfi\n" +
 		"echo '{\"type\":\"heartbeat\",\"taskId\":\"task-1\"}' >&2\n" +
 		"echo '{\"status\":\"completed\",\"sessionId\":\"m1\",\"reply\":\"ok\",\"exitCode\":0}'\n"
 	path := filepath.Join(dir, "gbot")
@@ -102,7 +102,7 @@ func TestGbotFailsWhenBotNotFound(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 	logged, _ := os.ReadFile(argsLog)
-	if strings.Contains(string(logged), "task run") {
+	if strings.Contains(string(logged), "bot task run") {
 		t.Fatalf("task was submitted to a missing bot: %s", logged)
 	}
 }
@@ -124,7 +124,7 @@ func TestGbotPassesScopeWithoutSessionFile(t *testing.T) {
 	logged, _ := os.ReadFile(argsLog)
 	text := string(logged)
 	for _, part := range []string{
-		"bots get Heavy Rust Master --json",
+		"bot get Heavy Rust Master --json",
 		"--bot Heavy Rust Master",
 		"--issue OX-7",
 		"--task-id task-1",
