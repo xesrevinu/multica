@@ -160,6 +160,34 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install JS deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Stage host linux binaries (copy-only image input)
+        run: |
+          arch="${{ matrix.platform }}"
+          arch="${arch#linux/}"
+          case "$arch" in
+            arm64) export GOARCH=arm64 MULTICA_WEB_COMPILE_TARGET=bun-linux-arm64 ;;
+            amd64) export GOARCH=amd64 MULTICA_WEB_COMPILE_TARGET=bun-linux-x64 ;;
+            *) echo "unsupported platform ${{ matrix.platform }}" >&2; exit 1 ;;
+          esac
+          export GOOS=linux
+          export VERSION='${{ needs.verify.outputs.tag_name }}'
+          export COMMIT='${{ github.sha }}'
+          bash scripts/stage-image.sh
+
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v6
@@ -171,9 +199,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=release-backend-${{ env.PLATFORM_PAIR }}
           cache-to: type=gha,mode=max,scope=release-backend-${{ env.PLATFORM_PAIR }}
-          build-args: |
-            VERSION=${{ needs.verify.outputs.tag_name }}
-            COMMIT=${{ github.sha }}
           outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/multica-backend,push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
@@ -296,12 +321,40 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install JS deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Stage host linux binaries (copy-only image input)
+        run: |
+          arch="${{ matrix.platform }}"
+          arch="${arch#linux/}"
+          case "$arch" in
+            arm64) export GOARCH=arm64 MULTICA_WEB_COMPILE_TARGET=bun-linux-arm64 ;;
+            amd64) export GOARCH=amd64 MULTICA_WEB_COMPILE_TARGET=bun-linux-x64 ;;
+            *) echo "unsupported platform ${{ matrix.platform }}" >&2; exit 1 ;;
+          esac
+          export GOOS=linux
+          export VERSION='${{ needs.verify.outputs.tag_name }}'
+          export COMMIT='${{ github.sha }}'
+          bash scripts/stage-image.sh
+
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile.web
+          file: Dockerfile
           pull: true
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}

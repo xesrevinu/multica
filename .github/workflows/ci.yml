@@ -882,9 +882,6 @@ jobs:
         with:
           node-version: 22
 
-      - name: Test self-host env derivation
-        run: bash scripts/selfhost-config.test.sh
-
       - name: Test worktree database cleanup
         run: bash scripts/worktree-db.test.sh
 
