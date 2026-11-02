@@ -4,6 +4,7 @@
 package execenv
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -78,12 +79,24 @@ type PrepareParams struct {
 	// Mutually exclusive with LocalWorkDir — the daemon picks one based on the
 	// resource's execution_mode.
 	LocalWorktree *LocalWorktreeParams
+	// ctx cancels wt switch and its hooks. Isolated prepare sets this from
+	// SIGTERM; the parent also KillTree's descendants. Not on the wire.
+	ctx context.Context
 	// CodexCustomArgs are the effective Codex CLI args this task launches with
 	// (daemon defaults + profile-fixed + per-agent custom_args). Only the
 	// Windows sandbox decision reads them, to honor a `-c windows.sandbox=...`
 	// override that never lands in config.toml (MUL-4957).
 	CodexCustomArgs []string
 	Task            TaskContextForEnv // context data for writing files
+}
+
+// BindPrepareContext attaches the caller's prepare deadline so wt switch
+// and its hooks stop when that deadline fires. Isolated prepare still
+// KillTree's descendants in the parent; this is the in-process path.
+func (p *PrepareParams) BindPrepareContext(ctx context.Context) {
+	if p != nil {
+		p.ctx = ctx
+	}
 }
 
 // TaskContextForEnv is the subset of task context used for writing context files.
@@ -324,6 +337,13 @@ func readablePathSegment(label, fallback, id string) string {
 // The workdir starts empty (no repo checkouts). The agent checks out repos
 // on demand via `multica repo checkout <url>`.
 func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
+	ctx := params.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, context.Cause(ctx)
+	}
 	if params.WorkspacesRoot == "" {
 		return nil, fmt.Errorf("execenv: workspaces root is required")
 	}
@@ -446,6 +466,7 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 		wtParams.ConversationKey, wtParams.ConversationID = localWorktreeConversation(params)
 		wtParams.WorkspaceID = params.WorkspaceID
 		wtParams.AgentID = params.Task.AgentID
+		wtParams.ctx = ctx
 		var err error
 		localWorktree, err = PrepareLocalWorktree(wtParams, logger)
 		if err != nil {

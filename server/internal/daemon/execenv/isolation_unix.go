@@ -3,13 +3,16 @@
 package execenv
 
 import (
-	"errors"
 	"os"
 	"os/exec"
 	"syscall"
+
+	"github.com/multica-ai/multica/server/internal/daemon/processtree"
 )
 
-type preparationProcessController struct{}
+type preparationProcessController struct {
+	pid int
+}
 
 func newPreparationProcessController(cmd *exec.Cmd) (*preparationProcessController, error) {
 	if cmd.SysProcAttr == nil {
@@ -19,21 +22,29 @@ func newPreparationProcessController(cmd *exec.Cmd) (*preparationProcessControll
 	return &preparationProcessController{}, nil
 }
 
-func (*preparationProcessController) attach(_ *exec.Cmd) error { return nil }
+func (c *preparationProcessController) attach(cmd *exec.Cmd) error {
+	if cmd.Process != nil {
+		c.pid = cmd.Process.Pid
+	}
+	return nil
+}
 
-func (*preparationProcessController) stop(cmd *exec.Cmd) error {
+func (c *preparationProcessController) stop(cmd *exec.Cmd) error {
 	if cmd.Process == nil {
 		return os.ErrProcessDone
 	}
-	// Kill the helper and any CLI it spawned. After SIGKILL is pending, a
-	// helper blocked in a kernel filesystem call cannot return to Go and
-	// perform another write when that call eventually unblocks.
-	err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	if errors.Is(err, syscall.ESRCH) {
-		return nil
-	}
-	return err
+	c.pid = cmd.Process.Pid
+	// Snapshot+kill while the helper is still the parent of its hooks.
+	// After SIGKILL those hooks are reparented to init; a later KillTree
+	// of a dead helper pid cannot find them.
+	return processtree.KillTree(c.pid)
 }
 
-func (*preparationProcessController) finish() error { return nil }
-func (*preparationProcessController) close()        {}
+func (c *preparationProcessController) finish() error {
+	if c.pid <= 1 {
+		return nil
+	}
+	return processtree.KillTree(c.pid)
+}
+
+func (*preparationProcessController) close() {}

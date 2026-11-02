@@ -529,10 +529,8 @@ func (c *Client) StartTask(ctx context.Context, task Task, capabilities ...strin
 // it has claimed a task whose project carries a local_directory resource
 // but the path mutex is held by another in-flight task. reason is a short
 // human-readable hint (e.g. "<path>") surfaced by the UI alongside the
-// status. Idempotent on the daemon's side — calling twice with the same
-// reason is a no-op once the row is already waiting_local_directory (the
-// underlying SQL filters on status='dispatched', so the second call is a
-// 400 the daemon swallows and proceeds to wait).
+// status. Idempotent: the server accepts dispatched and a re-mark while
+// already waiting_local_directory (same or updated reason).
 func (c *Client) MarkTaskWaitingLocalDirectory(ctx context.Context, taskID, reason string) error {
 	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/wait-local-directory", taskID), map[string]any{
 		"reason": reason,

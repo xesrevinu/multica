@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os/exec"
+	"os/signal"
 	"strings"
 	"time"
 )
@@ -222,6 +223,9 @@ func decodePreparationRequest(in io.Reader) (preparationRequest, error) {
 // can preserve them; malformed protocol input/output is returned as a process
 // error because the parent cannot safely interpret the result.
 func RunPreparationHelper(in io.Reader, out io.Writer, logger *slog.Logger) error {
+	ctx, stop := signal.NotifyContext(context.Background(), helperInterruptSignals...)
+	defer stop()
+
 	request, err := decodePreparationRequest(in)
 	if err != nil {
 		return fmt.Errorf("decode preparation request: %w", err)
@@ -233,7 +237,9 @@ func RunPreparationHelper(in io.Reader, out io.Writer, logger *slog.Logger) erro
 		if request.Prepare == nil || request.Reuse != nil {
 			return errors.New("invalid prepare request")
 		}
-		env, err := Prepare(*request.Prepare, logger)
+		prep := *request.Prepare
+		prep.ctx = ctx
+		env, err := Prepare(prep, logger)
 		response.Environment = env
 		if err != nil {
 			response.Error = err.Error()

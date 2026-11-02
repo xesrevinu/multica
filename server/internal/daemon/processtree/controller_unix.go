@@ -3,8 +3,6 @@
 package processtree
 
 import (
-	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
@@ -13,7 +11,9 @@ import (
 
 const processTreeFinishTimeout = 5 * time.Second
 
-type controller struct{}
+type controller struct {
+	tree *unixTree
+}
 
 func newController(cmd *exec.Cmd) (*controller, error) {
 	if cmd.SysProcAttr == nil {
@@ -25,54 +25,41 @@ func newController(cmd *exec.Cmd) (*controller, error) {
 
 func (*controller) attach(_ *exec.Cmd) error { return nil }
 
-func (*controller) interrupt(cmd *exec.Cmd) error {
+func (c *controller) capture(cmd *exec.Cmd) *unixTree {
+	if cmd.Process == nil {
+		return c.tree
+	}
+	if c.tree == nil {
+		c.tree = snapshotTree(cmd.Process.Pid)
+	} else {
+		c.tree.refresh()
+	}
+	return c.tree
+}
+
+func (c *controller) interrupt(cmd *exec.Cmd) error {
 	if cmd.Process == nil {
 		return os.ErrProcessDone
 	}
-	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil {
-		if errors.Is(err, syscall.ESRCH) {
-			return nil
-		}
-		return err
-	}
+	// Snapshot while the leader is alive, then SIGTERM the whole tree.
+	// A group-only SIGTERM lets setsid hooks (wt pre-start) survive, and
+	// once the leader dies those orphans are reparented to init.
+	c.capture(cmd).signal(syscall.SIGTERM)
 	return nil
 }
 
-func (*controller) stop(cmd *exec.Cmd) error {
-	if cmd.Process == nil {
+func (c *controller) stop(cmd *exec.Cmd) error {
+	if cmd.Process == nil && c.tree == nil {
 		return os.ErrProcessDone
 	}
-	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
-		if errors.Is(err, syscall.ESRCH) {
-			return nil
-		}
-		return cmd.Process.Kill()
-	}
-	return nil
+	return c.capture(cmd).kill()
 }
 
 func (c *controller) finish(cmd *exec.Cmd) error {
-	if cmd.Process == nil {
+	if c.tree == nil && cmd.Process == nil {
 		return nil
 	}
-	pid := cmd.Process.Pid
-	if err := syscall.Kill(-pid, 0); errors.Is(err, syscall.ESRCH) {
-		return nil
-	}
-	// A normally-exited leader can still leave a descendant holding inherited
-	// pipes or repository locks. Kill the remaining group before returning
-	// ownership of the repository to another operation.
-	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return err
-	}
-	deadline := time.Now().Add(processTreeFinishTimeout)
-	for time.Now().Before(deadline) {
-		if err := syscall.Kill(-pid, 0); errors.Is(err, syscall.ESRCH) {
-			return nil
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	return fmt.Errorf("process group %d still active after %s", pid, processTreeFinishTimeout)
+	return c.capture(cmd).kill()
 }
 
 func (*controller) close() {}
