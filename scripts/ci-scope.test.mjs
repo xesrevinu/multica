@@ -26,7 +26,7 @@ for (const [name, files, selected] of [
   ["native test compilation dependency", ["server/pkg/db/generated/issues.sql.go"], ["backend", "sqlc", "runtime"]],
   ["Go dependencies", ["server/go.mod", "server/go.sum"], ["backend", "runtime"]],
   ["Helm only", ["deploy/helm/multica/templates/deployment.yaml"], ["scripts"]],
-  ["container entrypoint", ["docker/entrypoint.sh"], ["scripts"]],
+  ["entrypoint test", ["scripts/entrypoint.test.sh"], ["scripts"]],
   ["selfhost config", [".env.example"], ["scripts", "installer"]],
   ["shell installer", ["scripts/install.sh"], ["scripts", "installer"]],
   ["PowerShell installer", ["scripts/install.ps1.test.ps1"], ["installer"]],
